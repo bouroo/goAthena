@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package gateway.v1;
+
+option go_package = "github.com/bouroo/goAthena/api/pb/gateway/v1;gatewayv1";
+
+// Gateway service contracts for routing between gateway and backend services.
+// TODO(DEL-01): define service messages and RPCs.

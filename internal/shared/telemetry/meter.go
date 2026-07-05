@@ -10,7 +10,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/sdk/metric"
 
-	"github.com/zercle/zercle-go-template/internal/config"
+	"github.com/bouroo/goAthena/internal/config"
 )
 
 // NewMeterProvider builds a Prometheus exporter-backed meter provider and

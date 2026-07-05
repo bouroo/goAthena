@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/zercle/zercle-go-template/internal/config"
-	"github.com/zercle/zercle-go-template/internal/shared/telemetry"
+	"github.com/bouroo/goAthena/internal/config"
+	"github.com/bouroo/goAthena/internal/shared/telemetry"
 )
 
 func TestNewLogger_JSON(t *testing.T) {

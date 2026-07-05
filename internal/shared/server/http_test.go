@@ -13,9 +13,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
-	"github.com/zercle/zercle-go-template/internal/config"
-	"github.com/zercle/zercle-go-template/internal/shared/server"
-	"github.com/zercle/zercle-go-template/internal/shared/telemetry"
+	"github.com/bouroo/goAthena/internal/config"
+	"github.com/bouroo/goAthena/internal/shared/server"
+	"github.com/bouroo/goAthena/internal/shared/telemetry"
 )
 
 func newTestConfig(t *testing.T) *config.Config {

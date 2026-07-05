@@ -1,28 +1,28 @@
 services:
-  postgres:
-    image: docker.io/library/postgres:18-alpine
-    container_name: zercle-template-postgres
+  mariadb:
+    image: docker.io/library/mariadb:11.4
+    container_name: goathena-mariadb
     environment:
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-app}
-      PGDATA: /var/lib/postgresql/data
+      MARIADB_ROOT_PASSWORD: ${DB_PASSWORD:-goathena}
+      MARIADB_DATABASE: ${DB_NAME:-goathena}
+      MARIADB_USER: ${DB_USER:-goathena}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-goathena}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mariadb_data:/var/lib/mysql
     ports:
-      - "5432:5432"
+      - "3306:3306"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-app}"]
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb-buffer-pool-size=1G"]
       interval: 5s
       timeout: 5s
       retries: 5
       start_period: 10s
     networks:
-      - zercle-template
+      - goathena
 
   valkey:
     image: docker.io/valkey/valkey:9-alpine
-    container_name: zercle-template-valkey
+    container_name: goathena-valkey
     command: valkey-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     environment:
       VALKEY_PASSWORD: ${VALKEY_PASSWORD:-}
@@ -36,7 +36,22 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - zercle-template
+      - goathena
+
+  nats:
+    image: docker.io/library/nats:2-alpine
+    container_name: goathena-nats
+    command: ["nats-server", "-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz | grep -q '\"status\":\"ok\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - goathena
 
   migrate:
     build:
@@ -44,59 +59,65 @@ services:
       dockerfile: Containerfile.migrate
     environment:
       APP_ENVIRONMENT: ${APP_ENVIRONMENT:-development}
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-postgres}
-      DB_NAME: ${DB_NAME:-app}
-      DB_SSL_MODE: disable
+      DB_DRIVER: mariadb
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_USER: ${DB_USER:-goathena}
+      DB_PASSWORD: ${DB_PASSWORD:-goathena}
+      DB_NAME: ${DB_NAME:-goathena}
+      DB_SSL_MODE: "false"
       VALKEY_HOST: valkey
       VALKEY_PORT: 6379
       VALKEY_PASSWORD: ${VALKEY_PASSWORD:-}
+      NATS_URL: nats://nats:4222
     depends_on:
-      postgres:
+      mariadb:
         condition: service_healthy
     networks:
-      - zercle-template
+      - goathena
 
-  server:
+  identity:
     build:
       context: .
       dockerfile: Containerfile
     environment:
       APP_ENVIRONMENT: ${APP_ENVIRONMENT:-development}
-      APP_NAME: ${APP_NAME:-zercle-go-template}
+      APP_NAME: ${APP_NAME:-goathena}
       HTTP_HOST: 0.0.0.0
       HTTP_PORT: 8080
       GRPC_HOST: 0.0.0.0
       GRPC_PORT: 50051
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-postgres}
-      DB_NAME: ${DB_NAME:-app}
-      DB_SSL_MODE: disable
+      DB_DRIVER: mariadb
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_USER: ${DB_USER:-goathena}
+      DB_PASSWORD: ${DB_PASSWORD:-goathena}
+      DB_NAME: ${DB_NAME:-goathena}
+      DB_SSL_MODE: "false"
       VALKEY_HOST: valkey
       VALKEY_PORT: 6379
       VALKEY_PASSWORD: ${VALKEY_PASSWORD:-}
+      NATS_URL: nats://nats:4222
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-zercle-go-template}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-goathena}
     ports:
       - "8080:8080"
       - "50051:50051"
     depends_on:
-      postgres:
+      mariadb:
         condition: service_healthy
       valkey:
+        condition: service_healthy
+      nats:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
     networks:
-      - zercle-template
+      - goathena
 
   otel-collector:
     image: docker.io/otel/opentelemetry-collector-contrib:0.114.0
-    container_name: zercle-template-otel-collector
+    container_name: goathena-otel-collector
     profiles:
       - observability
     command:
@@ -109,11 +130,11 @@ services:
       - "8888:8888"
       - "8889:8889"
     networks:
-      - zercle-template
+      - goathena
 
   prometheus:
     image: docker.io/prom/prometheus:v3.0.1
-    container_name: zercle-template-prometheus
+    container_name: goathena-prometheus
     profiles:
       - observability
     command:
@@ -127,11 +148,11 @@ services:
     ports:
       - "9090:9090"
     networks:
-      - zercle-template
+      - goathena
 
   grafana:
     image: docker.io/grafana/grafana:11.4.0
-    container_name: zercle-template-grafana
+    container_name: goathena-grafana
     profiles:
       - observability
     environment:
@@ -143,14 +164,14 @@ services:
     ports:
       - "3000:3000"
     networks:
-      - zercle-template
+      - goathena
 
 volumes:
-  postgres_data:
+  mariadb_data:
   valkey_data:
   prometheus_data:
   grafana_data:
 
 networks:
-  zercle-template:
+  goathena:
     driver: bridge

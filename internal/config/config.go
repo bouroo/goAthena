@@ -26,14 +26,14 @@ type leafBinding struct {
 
 // Config is the single source of truth for application configuration.
 type Config struct {
-	App     AppConfig     `mapstructure:"app" yaml:"app" validate:"required"`
-	HTTP    HTTPConfig    `mapstructure:"http" yaml:"http" validate:"required"`
-	GRPC    GRPCConfig    `mapstructure:"grpc" yaml:"grpc" validate:"required"`
-	DB      DBConfig      `mapstructure:"db" yaml:"db" validate:"required"`
-	Valkey  ValkeyConfig  `mapstructure:"valkey" yaml:"valkey" validate:"required"`
-	OTel    OTelConfig    `mapstructure:"otel" yaml:"otel" validate:"required"`
-	Log     LogConfig     `mapstructure:"log" yaml:"log" validate:"required"`
-	Example ExampleConfig `mapstructure:"example" yaml:"example"`
+	App    AppConfig    `mapstructure:"app" yaml:"app" validate:"required"`
+	HTTP   HTTPConfig   `mapstructure:"http" yaml:"http" validate:"required"`
+	GRPC   GRPCConfig   `mapstructure:"grpc" yaml:"grpc" validate:"required"`
+	DB     DBConfig     `mapstructure:"db" yaml:"db" validate:"required"`
+	Valkey ValkeyConfig `mapstructure:"valkey" yaml:"valkey" validate:"required"`
+	NATS   NATSConfig   `mapstructure:"nats" yaml:"nats"`
+	OTel   OTelConfig   `mapstructure:"otel" yaml:"otel" validate:"required"`
+	Log    LogConfig    `mapstructure:"log" yaml:"log" validate:"required"`
 }
 
 // AppConfig holds process-level settings.
@@ -65,18 +65,19 @@ type GRPCConfig struct {
 	Port int    `mapstructure:"port" yaml:"port" env:"GRPC_PORT" validate:"required,min=1,max=65535"`
 }
 
-// DBConfig holds the PostgreSQL connection and pool settings.
+// DBConfig holds the connection and pool settings. Driver selects the GORM
+// dialector; SSLMode accepts both MariaDB/MySQL values (e.g. "false",
+// "skip-verify") and PostgreSQL values, so validation is intentionally
+// permissive.
 type DBConfig struct {
-	Host     string `mapstructure:"host" yaml:"host" env:"DB_HOST" validate:"required,hostname|ip"`
-	Port     int    `mapstructure:"port" yaml:"port" env:"DB_PORT" validate:"required,min=1,max=65535"`
-	Name     string `mapstructure:"name" yaml:"name" env:"DB_NAME" validate:"required"`
-	User     string `mapstructure:"user" yaml:"user" env:"DB_USER" validate:"required"`
-	Password string `mapstructure:"password" yaml:"password" env:"DB_PASSWORD" validate:"required"`
-	SSLMode  string `mapstructure:"ssl_mode" yaml:"ssl_mode" env:"DB_SSL_MODE" validate:"oneof=disable prefer require verify-ca verify-full"`
-	MaxConns int32  `mapstructure:"max_conns" yaml:"max_conns" env:"DB_MAX_CONNS" validate:"required,min=1"`
-	// MaxIdleConns is the maximum number of idle connections retained in the
-	// pool. Maps to database/sql SetMaxIdleConns (idle connection ceiling, not
-	// a floor).
+	Driver         string        `mapstructure:"driver" yaml:"driver" env:"DB_DRIVER" validate:"required,oneof=mariadb postgres"`
+	Host           string        `mapstructure:"host" yaml:"host" env:"DB_HOST" validate:"required,hostname|ip"`
+	Port           int           `mapstructure:"port" yaml:"port" env:"DB_PORT" validate:"required,min=1,max=65535"`
+	Name           string        `mapstructure:"name" yaml:"name" env:"DB_NAME" validate:"required"`
+	User           string        `mapstructure:"user" yaml:"user" env:"DB_USER" validate:"required"`
+	Password       string        `mapstructure:"password" yaml:"password" env:"DB_PASSWORD" validate:"required"`
+	SSLMode        string        `mapstructure:"ssl_mode" yaml:"ssl_mode" env:"DB_SSL_MODE" validate:"required"`
+	MaxConns       int32         `mapstructure:"max_conns" yaml:"max_conns" env:"DB_MAX_CONNS" validate:"required,min=1"`
 	MaxIdleConns   int32         `mapstructure:"max_idle_conns" yaml:"max_idle_conns" env:"DB_MAX_IDLE_CONNS" validate:"min=0"`
 	MaxConnIdle    time.Duration `mapstructure:"max_conn_idle" yaml:"max_conn_idle" env:"DB_MAX_CONN_IDLE" validate:"required,min=1s"`
 	MaxConnLife    time.Duration `mapstructure:"max_conn_life" yaml:"max_conn_life" env:"DB_MAX_CONN_LIFE" validate:"required,min=1s"`
@@ -92,6 +93,12 @@ type ValkeyConfig struct {
 	ConnectTimeout time.Duration `mapstructure:"connect_timeout" yaml:"connect_timeout" env:"VALKEY_CONNECT_TIMEOUT" validate:"omitempty,min=1s"`
 }
 
+// NATSConfig holds the NATS pub/sub connection settings.
+type NATSConfig struct {
+	URL            string        `mapstructure:"url" yaml:"url" env:"NATS_URL" validate:"required"`
+	ConnectTimeout time.Duration `mapstructure:"connect_timeout" yaml:"connect_timeout" env:"NATS_CONNECT_TIMEOUT" validate:"required,min=1s"`
+}
+
 // OTelConfig holds OpenTelemetry exporter settings.
 type OTelConfig struct {
 	Exporter    string  `mapstructure:"exporter" yaml:"exporter" env:"OTEL_EXPORTER" validate:"oneof=otlp none"`
@@ -104,37 +111,6 @@ type OTelConfig struct {
 type LogConfig struct {
 	Level  string `mapstructure:"level" yaml:"level" env:"LOG_LEVEL" validate:"oneof=trace debug info warn error fatal panic"`
 	Format string `mapstructure:"format" yaml:"format" env:"LOG_FORMAT" validate:"oneof=json console"`
-}
-
-// ExampleConfig is a feature toggle and settings for the stub feature.
-type ExampleConfig struct {
-	Enabled         bool  `mapstructure:"enabled" yaml:"enabled" env:"EXAMPLE_ENABLED"`
-	DefaultPageSize int32 `mapstructure:"default_page_size" yaml:"default_page_size" env:"EXAMPLE_DEFAULT_PAGE_SIZE"`
-	MaxPageSize     int32 `mapstructure:"max_page_size" yaml:"max_page_size" env:"EXAMPLE_MAX_PAGE_SIZE"`
-	MaxNameLength   int32 `mapstructure:"max_name_length" yaml:"max_name_length" env:"EXAMPLE_MAX_NAME_LENGTH"`
-}
-
-// exampleMaxPageSizeUpperBound caps EXAMPLE_MAX_PAGE_SIZE to a sane ceiling so
-// a misconfiguration cannot request unbounded result sets.
-const exampleMaxPageSizeUpperBound int32 = 1000
-
-// exampleMaxNameLengthUpperBound caps EXAMPLE_MAX_NAME_LENGTH to prevent
-// unreasonable storage/validation costs per name.
-const exampleMaxNameLengthUpperBound int32 = 4096
-
-// validateExamplePositivity returns an error if any of the example config
-// fields are less than 1, enforcing a minimum value when the feature is enabled.
-func validateExamplePositivity(cfg ExampleConfig) error {
-	if cfg.DefaultPageSize < 1 {
-		return fmt.Errorf("EXAMPLE_DEFAULT_PAGE_SIZE must be >= 1")
-	}
-	if cfg.MaxPageSize < 1 {
-		return fmt.Errorf("EXAMPLE_MAX_PAGE_SIZE must be >= 1")
-	}
-	if cfg.MaxNameLength < 1 {
-		return fmt.Errorf("EXAMPLE_MAX_NAME_LENGTH must be >= 1")
-	}
-	return nil
 }
 
 // validate is the package-level validator instance.
@@ -206,21 +182,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("DB_MAX_CONNS must be >= DB_MAX_IDLE_CONNS")
 	}
 
-	if c.Example.Enabled {
-		if err := validateExamplePositivity(c.Example); err != nil {
-			return err
-		}
-		if c.Example.DefaultPageSize > c.Example.MaxPageSize {
-			return fmt.Errorf("EXAMPLE_DEFAULT_PAGE_SIZE must be <= EXAMPLE_MAX_PAGE_SIZE")
-		}
-		if c.Example.MaxPageSize > exampleMaxPageSizeUpperBound {
-			return fmt.Errorf("EXAMPLE_MAX_PAGE_SIZE exceeds maximum allowed value %d", exampleMaxPageSizeUpperBound)
-		}
-		if c.Example.MaxNameLength > exampleMaxNameLengthUpperBound {
-			return fmt.Errorf("EXAMPLE_MAX_NAME_LENGTH exceeds maximum allowed value %d", exampleMaxNameLengthUpperBound)
-		}
-	}
-
 	return nil
 }
 
@@ -234,18 +195,30 @@ func (c *Config) GRPCAddr() string {
 	return net.JoinHostPort(c.GRPC.Host, strconv.Itoa(c.GRPC.Port))
 }
 
-// DBConnString returns a pgx-compatible DSN.
+// DBConnString returns a driver-appropriate DSN. For MariaDB the MySQL DSN
+// format "user:pass@tcp(host:port)/db?tls=..." is used; for PostgreSQL a
+// postgres:// URL is returned. golang-migrate expects the same formats.
 func (c *Config) DBConnString() string {
-	u := url.URL{
-		Scheme: "postgres",
-		User:   url.UserPassword(c.DB.User, c.DB.Password),
-		Host:   net.JoinHostPort(c.DB.Host, strconv.Itoa(c.DB.Port)),
-		Path:   "/" + c.DB.Name,
+	switch c.DB.Driver {
+	case "postgres":
+		u := url.URL{
+			Scheme: "postgres",
+			User:   url.UserPassword(c.DB.User, c.DB.Password),
+			Host:   net.JoinHostPort(c.DB.Host, strconv.Itoa(c.DB.Port)),
+			Path:   "/" + c.DB.Name,
+		}
+		q := u.Query()
+		q.Set("sslmode", c.DB.SSLMode)
+		u.RawQuery = q.Encode()
+		return u.String()
+	default: // "mariadb"
+		return fmt.Sprintf(
+			"%s:%s@tcp(%s:%d)/%s?parseTime=true&tls=%s",
+			c.DB.User, c.DB.Password,
+			c.DB.Host, c.DB.Port,
+			c.DB.Name, c.DB.SSLMode,
+		)
 	}
-	q := u.Query()
-	q.Set("sslmode", c.DB.SSLMode)
-	u.RawQuery = q.Encode()
-	return u.String()
 }
 
 // ValkeyAddr returns the Valkey server address.
@@ -259,7 +232,7 @@ const defaultHost = "0.0.0.0"
 // config file and environment.
 func setDefaults(v *viper.Viper) {
 	defaults := map[string]any{
-		"app.name":             "zercle-go-template",
+		"app.name":             "goathena",
 		"app.environment":      "development",
 		"app.host":             defaultHost,
 		"app.port":             8080,
@@ -279,7 +252,9 @@ func setDefaults(v *viper.Viper) {
 		"grpc.host": defaultHost,
 		"grpc.port": 50051,
 
-		"db.ssl_mode":        "disable",
+		"db.driver":          "mariadb",
+		"db.port":            3306,
+		"db.ssl_mode":        "false",
 		"db.max_conns":       10,
 		"db.max_idle_conns":  2,
 		"db.max_conn_idle":   30 * time.Minute,
@@ -289,17 +264,15 @@ func setDefaults(v *viper.Viper) {
 		"valkey.db":              0,
 		"valkey.connect_timeout": 5 * time.Second,
 
+		"nats.url":             "nats://localhost:4222",
+		"nats.connect_timeout": 5 * time.Second,
+
 		"otel.exporter":     "none",
-		"otel.service_name": "zercle-go-template",
+		"otel.service_name": "goathena",
 		"otel.sampling":     1.0,
 
 		"log.level":  "info",
 		"log.format": "json",
-
-		"example.enabled":           false,
-		"example.default_page_size": int32(20),
-		"example.max_page_size":     int32(100),
-		"example.max_name_length":   int32(255),
 	}
 
 	for key, value := range defaults {
@@ -331,6 +304,7 @@ func leafBindings() []leafBinding {
 		{"grpc.host", "GRPC_HOST"},
 		{"grpc.port", "GRPC_PORT"},
 
+		{"db.driver", "DB_DRIVER"},
 		{"db.host", "DB_HOST"},
 		{"db.port", "DB_PORT"},
 		{"db.name", "DB_NAME"},
@@ -349,6 +323,9 @@ func leafBindings() []leafBinding {
 		{"valkey.db", "VALKEY_DB"},
 		{"valkey.connect_timeout", "VALKEY_CONNECT_TIMEOUT"},
 
+		{"nats.url", "NATS_URL"},
+		{"nats.connect_timeout", "NATS_CONNECT_TIMEOUT"},
+
 		{"log.level", "LOG_LEVEL"},
 		{"log.format", "LOG_FORMAT"},
 
@@ -356,11 +333,6 @@ func leafBindings() []leafBinding {
 		{"otel.endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT"},
 		{"otel.service_name", "OTEL_SERVICE_NAME"},
 		{"otel.sampling", "OTEL_TRACES_SAMPLER_ARG"},
-
-		{"example.enabled", "EXAMPLE_ENABLED"},
-		{"example.default_page_size", "EXAMPLE_DEFAULT_PAGE_SIZE"},
-		{"example.max_page_size", "EXAMPLE_MAX_PAGE_SIZE"},
-		{"example.max_name_length", "EXAMPLE_MAX_NAME_LENGTH"},
 	}
 }
 

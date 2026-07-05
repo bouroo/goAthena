@@ -13,19 +13,67 @@ vars:
   BUILD_TIME:
     sh: date -u +%Y-%m-%dT%H:%M:%SZ
 
+  LDFLAGS: -s -w -X main.Version={{.GIT_VERSION | default "dev"}} -X main.CommitSHA={{.GIT_COMMIT | default "unknown"}} -X main.BuildTime={{.BUILD_TIME | default "unknown"}}
+
 tasks:
   build:
-    desc: Build the server binary
+    desc: Build all service binaries (gateway, identity, zone, migrate)
+    env:
+      CGO_ENABLED: "0"
+    deps:
+      - build-gateway
+      - build-identity
+      - build-zone
+      - build-migrate
+
+  build-gateway:
+    desc: Build the gateway service binary
     env:
       CGO_ENABLED: "0"
     cmds:
-      - go build -ldflags="-s -w -X main.Version={{.GIT_VERSION | default "dev"}} -X main.CommitSHA={{.GIT_COMMIT | default "unknown"}} -X main.BuildTime={{.BUILD_TIME | default "unknown"}}" -o {{.BIN_DIR}}/server ./cmd/server
+      - go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/gateway ./cmd/gateway
 
-  run:
-    desc: Run the server locally
-    deps: [build]
+  build-identity:
+    desc: Build the identity service binary
+    env:
+      CGO_ENABLED: "0"
     cmds:
-      - ./{{.BIN_DIR}}/server
+      - go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/identity ./cmd/identity
+
+  build-zone:
+    desc: Build the zone service binary
+    env:
+      CGO_ENABLED: "0"
+    cmds:
+      - go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/zone ./cmd/zone
+
+  build-migrate:
+    desc: Build the migrate binary
+    env:
+      CGO_ENABLED: "0"
+    cmds:
+      - go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/migrate ./cmd/migrate
+
+  run-gateway:
+    desc: Build and run the gateway service
+    deps:
+      - build-gateway
+    cmds:
+      - ./{{.BIN_DIR}}/gateway
+
+  run-identity:
+    desc: Build and run the identity service
+    deps:
+      - build-identity
+    cmds:
+      - ./{{.BIN_DIR}}/identity
+
+  run-zone:
+    desc: Build and run the zone service
+    deps:
+      - build-zone
+    cmds:
+      - ./{{.BIN_DIR}}/zone
 
   test:
     desc: Run all tests (default unit tag)
@@ -38,7 +86,7 @@ tasks:
       - go test -race -tags=unit -coverprofile={{.COVERAGE_OUT}} -coverpkg=./internal/...,./pkg/... ./internal/... ./pkg/...
 
   test-integration:
-    desc: Run integration tests (requires postgres + valkey)
+    desc: Run integration tests (requires mariadb + valkey + nats)
     cmds:
       - go test -v -race -tags=integration ./...
 
@@ -71,28 +119,27 @@ tasks:
       - git diff --exit-code go.mod go.sum
 
   generate:
-    desc: Generate mocks and protobuf code
+    desc: Generate mocks via go generate
     cmds:
       - go generate ./...
-      - task: proto
 
   proto:
     desc: Generate protobuf code
     cmds:
-      - |
-        protoc -I api/proto --go_out=api/pb --go_opt=paths=source_relative \
-               --go-grpc_out=api/pb --go-grpc_opt=paths=source_relative \
-               example/v1/example.proto
+      # TODO: add proto targets when RPCs are defined (gateway/identity/zone)
+      - echo "no proto sources compiled yet; this task will run protoc once gateway/identity/zone add theirs"
 
   migrate-up:
-    desc: Run database migrations
+    desc: Run database migrations (uses embedded migrations via the migrate binary)
     cmds:
-      - migrate -path internal/infrastructure/db/migrations -database "postgres://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME?sslmode=$DB_SSL_MODE" up
+      - task: build-migrate
+      - ./{{.BIN_DIR}}/migrate up
 
   migrate-down:
     desc: Rollback one database migration
     cmds:
-      - migrate -path internal/infrastructure/db/migrations -database "postgres://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME?sslmode=$DB_SSL_MODE" down 1
+      - task: build-migrate
+      - ./{{.BIN_DIR}}/migrate down 1
 
   migrate-create:
     desc: "Create a new migration: task migrate-create NAME=add_users"
@@ -100,9 +147,10 @@ tasks:
       - migrate create -ext sql -dir internal/infrastructure/db/migrations {{.NAME}}
 
   docker-build:
-    desc: Build server container image
+    desc: Build all service container images (gateway, identity, zone, migrate)
     cmds:
-      - docker build -f Containerfile -t zercle-go-template:latest .
+      # TODO: split Containerfile per service; for now build the migrate image
+      - docker build -f Containerfile.migrate -t goathena-migrate:latest .
 
   cover-html:
     desc: Render coverage report to HTML

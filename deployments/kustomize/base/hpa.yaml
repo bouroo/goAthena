@@ -1,12 +1,12 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: zercle-go-template
+  name: goathena
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: zercle-go-template
+    name: goathena
   minReplicas: 2
   maxReplicas: 10
   metrics:

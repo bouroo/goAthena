@@ -20,12 +20,12 @@ RUN addgroup -g 65534 -S appgroup && \
 
 COPY --from=builder /migrate /usr/local/bin/migrate
 COPY --from=builder /build/internal/infrastructure/db/migrations /migrations
-COPY --from=builder /build/configs/config.yaml /etc/zercle/config.yaml
+COPY --from=builder /build/configs/config.yaml /etc/goathena/config.yaml
 
-RUN chown -R appuser:appgroup /usr/local/bin/migrate /migrations /etc/zercle
+RUN chown -R appuser:appgroup /usr/local/bin/migrate /migrations /etc/goathena
 
 USER appuser:appgroup
 
-WORKDIR /etc/zercle
+WORKDIR /etc/goathena
 
 ENTRYPOINT ["migrate"]

@@ -11,8 +11,8 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/zercle/zercle-go-template/internal/config"
-	"github.com/zercle/zercle-go-template/internal/shared/middleware"
+	"github.com/bouroo/goAthena/internal/config"
+	"github.com/bouroo/goAthena/internal/shared/middleware"
 )
 
 func TestCORS_NilConfigAppliesPackageDefaults(t *testing.T) {

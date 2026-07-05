@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package identity.v1;
+
+option go_package = "github.com/bouroo/goAthena/api/pb/identity/v1;identityv1";
+
+// Identity service handles login, character CRUD, and warehouse operations.
+// TODO(DEL-02): define service messages and RPCs.

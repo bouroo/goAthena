@@ -137,7 +137,7 @@ goAthena/
 │   ├── packet/                       # packet structs, packet_db, PACKETVER
 │   ├── crypto/                       # stream decryption
 │   ├── script/                       # types, opcodes, scopes
-│   ├── map/                          # .gat/.rsw/.gnd loaders
+│   ├── romap/                        # .gat/.rsw/.gnd loaders
 │   ├── aoi/                          # tower-grid AOI engine
 │   └── pathfinding/                  # A*
 ├── api/{proto,pb}/                   # protobuf source + generated code
@@ -185,7 +185,7 @@ Reusable, publicly importable RO-domain packages with **zero `internal/` depende
 | `pkg/ro/packet` | Packet structures, `packet_db` parser, `PACKETVER` schema merge |
 | `pkg/ro/crypto` | Stream decryption (rolling pseudo-RNG) |
 | `pkg/ro/script` | Script types, opcodes, scope definitions |
-| `pkg/ro/map` | `.gat`/`.rsw`/`.gnd` file loaders → walkability/height grids |
+| `pkg/ro/romap` | `.gat`/`.rsw`/`.gnd` file loaders → walkability/height grids |
 | `pkg/ro/aoi` | Tower-grid AOI engine (18×18 cells, adaptive squeezing) |
 | `pkg/ro/pathfinding` | A* on walkability grid |
 

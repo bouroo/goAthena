@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: zercle-go-template-config
+  name: goathena-config
 data:
-  APP_NAME: "zercle-go-template"
+  APP_NAME: "goathena"
   APP_ENVIRONMENT: "production"
   HTTP_HOST: "0.0.0.0"
   HTTP_PORT: "8080"
@@ -14,5 +14,5 @@ data:
   VALKEY_PORT: "6379"
   LOG_LEVEL: "info"
   OTEL_EXPORTER: "none"
-  OTEL_SERVICE_NAME: "zercle-go-template"
+  OTEL_SERVICE_NAME: "goathena"
   OTEL_TRACES_SAMPLER_ARG: "1.0"

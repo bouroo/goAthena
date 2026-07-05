@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: zercle-go-template-migrate
+  name: goathena-migrate
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "5"
@@ -12,10 +12,10 @@ spec:
   template:
     metadata:
       labels:
-        app: zercle-go-template-migrate
+        app: goathena-migrate
     spec:
       restartPolicy: Never
-      serviceAccountName: zercle-go-template
+      serviceAccountName: goathena
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -25,39 +25,39 @@ spec:
           type: RuntimeDefault
       containers:
         - name: migrate
-          image: zercle-go-template-migrate:latest
+          image: goathena-migrate:latest
           command: ["/migrate"]
           args: ["-action=up"]
           env:
             - name: APP_DATABASE_HOST
               valueFrom:
                 configMapKeyRef:
-                  name: zercle-go-template-config
+                  name: goathena-config
                   key: DB_HOST
             - name: APP_DATABASE_PORT
               valueFrom:
                 configMapKeyRef:
-                  name: zercle-go-template-config
+                  name: goathena-config
                   key: DB_PORT
             - name: APP_DATABASE_NAME
               valueFrom:
                 configMapKeyRef:
-                  name: zercle-go-template-config
+                  name: goathena-config
                   key: DB_NAME
             - name: APP_DATABASE_SSL_MODE
               valueFrom:
                 configMapKeyRef:
-                  name: zercle-go-template-config
+                  name: goathena-config
                   key: DB_SSLMODE
             - name: APP_DATABASE_USER
               valueFrom:
                 secretKeyRef:
-                  name: zercle-go-template-secrets
+                  name: goathena-secrets
                   key: DB_USER
             - name: APP_DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: zercle-go-template-secrets
+                  name: goathena-secrets
                   key: DB_PASSWORD
           resources:
             requests:

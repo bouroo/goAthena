@@ -1,20 +1,22 @@
-// Command migrate is a self-contained database migration runner. It embeds SQL
-// migration files via go:embed and uses the golang-migrate library with the
-// iofs source driver.
+// Command migrate is a self-contained database migration runner. It reads SQL
+// files embedded in internal/infrastructure/db/migrations and uses the
+// golang-migrate library with the iofs source driver.
 package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strconv"
 
 	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/mysql"    // mysql driver registers "mysql://" DSNs
 	_ "github.com/golang-migrate/migrate/v4/database/postgres" // postgres driver registers "postgres://" DSNs
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
-	"github.com/zercle/zercle-go-template/internal/config"
-	"github.com/zercle/zercle-go-template/internal/infrastructure/db/migrations"
+	"github.com/bouroo/goAthena/internal/config"
+	"github.com/bouroo/goAthena/internal/infrastructure/db/migrations"
 )
 
 func main() {
@@ -24,6 +26,19 @@ func main() {
 // run parses arguments, builds a self-contained migrator, and executes the
 // requested command. It returns the process exit code.
 func run(args []string) (exitCode int) {
+	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	cmd, count, forceVersion, err := parseArgs(fs.Args())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		printUsage()
+		return 1
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
@@ -35,14 +50,7 @@ func run(args []string) (exitCode int) {
 		return 1
 	}
 
-	cmd, count, forceVersion, err := parseArgs(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		printUsage()
-		return 1
-	}
-
-	m, err := newMigrator(cfg.DBConnString())
+	m, err := newMigrator(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create migrator: %v\n", err)
 		return 1
@@ -73,19 +81,32 @@ func run(args []string) (exitCode int) {
 	}
 }
 
-// newMigrator builds a golang-migrate instance backed by the embedded SQL files.
-func newMigrator(dsn string) (*migrate.Migrate, error) {
+// newMigrator builds a golang-migrate instance backed by the SQL files
+// embedded in internal/infrastructure/db/migrations.
+func newMigrator(cfg *config.Config) (*migrate.Migrate, error) {
 	src, err := iofs.New(migrations.FS, ".")
 	if err != nil {
 		return nil, fmt.Errorf("create migration source: %w", err)
 	}
 
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
+	m, err := migrate.NewWithSourceInstance("iofs", src, migratorDSN(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("create migrator: %w", err)
 	}
 
 	return m, nil
+}
+
+// migratorDSN converts the application DSN to the form expected by
+// golang-migrate. The library auto-detects the database type from the URL
+// scheme: "postgres://..." for PostgreSQL and "mysql://..." for MariaDB.
+// MariaDB's application DSN is a go-sql-driver/mysql DSN, so we wrap it with
+// the "mysql://" scheme.
+func migratorDSN(cfg *config.Config) string {
+	if cfg.DB.Driver == "mariadb" {
+		return "mysql://" + cfg.DBConnString()
+	}
+	return cfg.DBConnString()
 }
 
 func runUp(m *migrate.Migrate) int {
@@ -139,8 +160,9 @@ func printVersion(m *migrate.Migrate) int {
 	return 0
 }
 
-// parseArgs extracts the command and optional numeric arguments from os.Args.
-// Defaults are: command "up", down count 1. Force expects a version integer.
+// parseArgs extracts the command and optional numeric arguments from the
+// remaining positional args after flags. Defaults: command "up", down count 1.
+// Force expects a version integer.
 func parseArgs(args []string) (cmd string, count int, forceVersion int, err error) {
 	cmd = "up"
 	count = 1

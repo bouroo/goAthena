@@ -15,9 +15,9 @@ import (
 	echomw "github.com/labstack/echo/v5/middleware"
 	"github.com/rs/zerolog"
 
-	"github.com/zercle/zercle-go-template/internal/config"
-	"github.com/zercle/zercle-go-template/internal/shared/middleware"
-	"github.com/zercle/zercle-go-template/internal/shared/telemetry"
+	"github.com/bouroo/goAthena/internal/config"
+	"github.com/bouroo/goAthena/internal/shared/middleware"
+	"github.com/bouroo/goAthena/internal/shared/telemetry"
 )
 
 type echoValidator struct {

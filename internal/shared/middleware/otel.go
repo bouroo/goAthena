@@ -17,7 +17,7 @@ func OTel() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			echoCtx := c.Request().Context()
-			tracer := trace.SpanFromContext(echoCtx).TracerProvider().Tracer("github.com/zercle/zercle-go-template")
+			tracer := trace.SpanFromContext(echoCtx).TracerProvider().Tracer("github.com/bouroo/goAthena")
 
 			route := c.Path()
 			spanName := c.Request().Method

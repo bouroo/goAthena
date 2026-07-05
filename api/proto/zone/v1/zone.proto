@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package zone.v1;
+
+option go_package = "github.com/bouroo/goAthena/api/pb/zone/v1;zonev1";
+
+// Zone service contracts for map instance management and cross-zone transit.
+// TODO(DEL-03): define service messages and RPCs.
