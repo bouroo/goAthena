@@ -6,12 +6,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/zercle/zercle-go-template/internal/config"
+	"github.com/bouroo/goAthena/internal/config"
 )
 
 func TestLoad_ExplicitConfigFileMissingFails(t *testing.T) {
@@ -48,12 +49,13 @@ grpc:
   host: 127.0.0.1
   port: 7002
 db:
+  driver: mariadb
   host: 127.0.0.1
-  port: 5432
+  port: 3306
   name: testdb
   user: testuser
   password: testpass
-  ssl_mode: disable
+  ssl_mode: "false"
   max_conns: 5
   max_idle_conns: 1
   max_conn_idle: 10m
@@ -64,6 +66,9 @@ valkey:
   port: 6379
   password: ""
   db: 0
+nats:
+  url: nats://127.0.0.1:4222
+  connect_timeout: 3s
 log:
   level: debug
   format: console
@@ -85,10 +90,11 @@ otel:
 	require.Equal(t, "127.0.0.1", cfg.HTTP.Host)
 	require.Equal(t, 7001, cfg.HTTP.Port)
 	require.Equal(t, "127.0.0.1:7001", cfg.HTTPAddr())
+	require.Equal(t, "mariadb", cfg.DB.Driver)
 	require.Equal(t, "testdb", cfg.DB.Name)
 	require.Equal(t, int32(5), cfg.DB.MaxConns)
 	require.Equal(t, "127.0.0.1:6379", cfg.ValkeyAddr())
-	require.False(t, cfg.Example.Enabled)
+	require.Equal(t, "nats://127.0.0.1:4222", cfg.NATS.URL)
 }
 
 func TestLoad_OverridesFromEnv(t *testing.T) {
@@ -102,7 +108,7 @@ http:
   port: 1111
 db:
   host: 127.0.0.1
-  port: 5432
+  port: 3306
   name: db
   user: u
   password: p
@@ -123,8 +129,9 @@ otel:
 	t.Setenv("APP_NAME", "env-app")
 	t.Setenv("HTTP_PORT", "2222")
 	t.Setenv("DB_NAME", "envdb")
+	t.Setenv("DB_DRIVER", "postgres")
+	t.Setenv("NATS_URL", "nats://env-host:4222")
 	t.Setenv("OTEL_SERVICE_NAME", "env-service")
-	t.Setenv("EXAMPLE_ENABLED", "false")
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
@@ -133,8 +140,9 @@ otel:
 	require.Equal(t, "env-app", cfg.App.Name)
 	require.Equal(t, 2222, cfg.HTTP.Port)
 	require.Equal(t, "envdb", cfg.DB.Name)
+	require.Equal(t, "postgres", cfg.DB.Driver)
+	require.Equal(t, "nats://env-host:4222", cfg.NATS.URL)
 	require.Equal(t, "env-service", cfg.OTel.ServiceName)
-	require.False(t, cfg.Example.Enabled)
 }
 
 func TestLoad_SliceEnvVariable(t *testing.T) {
@@ -153,7 +161,7 @@ http:
   body_limit: 1M
 db:
   host: 127.0.0.1
-  port: 5432
+  port: 3306
   name: db
   user: u
   password: p
@@ -184,7 +192,7 @@ otel:
 	require.Equal(t, []string{"X-Custom"}, cfg.HTTP.CORSAllowHeaders)
 }
 
-func TestLoad_ExampleDefaults(t *testing.T) {
+func TestLoad_Defaults(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 
@@ -195,7 +203,7 @@ http:
   port: 8080
 db:
   host: 127.0.0.1
-  port: 5432
+  port: 3306
   name: db
   user: u
   password: p
@@ -217,15 +225,26 @@ otel:
 	require.NoError(t, err)
 	require.NoError(t, cfg.Validate())
 
-	require.Equal(t, int32(20), cfg.Example.DefaultPageSize)
-	require.Equal(t, int32(100), cfg.Example.MaxPageSize)
-	require.Equal(t, int32(255), cfg.Example.MaxNameLength)
+	require.Equal(t, "goathena", cfg.App.Name)
+	require.Equal(t, "mariadb", cfg.DB.Driver)
+	require.Equal(t, 3306, cfg.DB.Port)
+	require.Equal(t, "false", cfg.DB.SSLMode)
+	require.Equal(t, "nats://localhost:4222", cfg.NATS.URL)
 	require.Equal(t, 5*time.Second, cfg.HTTP.HealthProbeTimeout)
 }
 
 func TestValidate_InvalidEnvironment(t *testing.T) {
 	cfg := validConfig()
 	cfg.App.Environment = "invalid"
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "config validation failed")
+}
+
+func TestValidate_InvalidDBDriver(t *testing.T) {
+	cfg := validConfig()
+	cfg.DB.Driver = "sqlite"
 
 	err := cfg.Validate()
 	require.Error(t, err)
@@ -261,95 +280,36 @@ func TestValidate_InvalidOTLPURL(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestValidate_ExampleDefaultPageSizeExceedsMax(t *testing.T) {
-	cfg := validConfig()
-	cfg.Example.Enabled = true
-	cfg.Example.DefaultPageSize = 100
-	cfg.Example.MaxPageSize = 10
-
-	err := cfg.Validate()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "EXAMPLE_DEFAULT_PAGE_SIZE must be <= EXAMPLE_MAX_PAGE_SIZE")
-}
-
-func TestValidate_ExampleMaxPageSizeExceedsUpperBound(t *testing.T) {
-	cfg := validConfig()
-	cfg.Example.Enabled = true
-	cfg.Example.MaxPageSize = 100000
-
-	err := cfg.Validate()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "EXAMPLE_MAX_PAGE_SIZE exceeds")
-}
-
-func TestValidate_ExampleDisabledSkipsChecks(t *testing.T) {
-	cfg := validConfig()
-	cfg.Example.Enabled = false
-	cfg.Example.DefaultPageSize = 1000
-	cfg.Example.MaxPageSize = 10
-
-	require.NoError(t, cfg.Validate())
-}
-
-// TestValidate_ExampleDisabledAllowsZeroValues verifies that when the example
-// feature is disabled, zero-valued ExampleConfig fields do not fail validation.
-// This lets users delete the example: block from config.yaml without startup
-// failing on required,min=1 tags.
-func TestValidate_ExampleDisabledAllowsZeroValues(t *testing.T) {
-	t.Parallel()
-
-	cfg := validConfig()
-	cfg.Example.Enabled = false
-	cfg.Example.DefaultPageSize = 0
-	cfg.Example.MaxPageSize = 0
-	cfg.Example.MaxNameLength = 0
-
-	require.NoError(t, cfg.Validate())
-}
-
-// TestValidate_ExampleEnabledRejectsZeroValues verifies that explicit validation
-// rejects zero-valued ExampleConfig fields when the feature is enabled.
-func TestValidate_ExampleEnabledRejectsZeroValues(t *testing.T) {
-	t.Parallel()
-
-	cfg := validConfig()
-	cfg.Example.Enabled = true
-	cfg.Example.DefaultPageSize = 0
-
-	err := cfg.Validate()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "EXAMPLE_DEFAULT_PAGE_SIZE must be >= 1")
-}
-
-// TestValidate_ExampleEnabledRejectsNegativeValues verifies that explicit validation
-// rejects negative-valued ExampleConfig fields when the feature is enabled,
-// confirming the min=1 positivity guarantee.
-func TestValidate_ExampleEnabledRejectsNegativeValues(t *testing.T) {
-	t.Parallel()
-
-	cfg := validConfig()
-	cfg.Example.Enabled = true
-	cfg.Example.DefaultPageSize = -1
-
-	err := cfg.Validate()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "EXAMPLE_DEFAULT_PAGE_SIZE must be >= 1")
-}
-
 func TestValidate_AcceptsValidConfig(t *testing.T) {
 	cfg := validConfig()
 	require.NoError(t, cfg.Validate())
 }
 
-func TestDBConnString(t *testing.T) {
+func TestDBConnString_MariaDB(t *testing.T) {
 	cfg := validConfig()
+	cfg.DB.Driver = "mariadb"
 	cfg.DB.Password = "p@ss w#rd"
+	cfg.DB.SSLMode = "false"
+
+	dsn := cfg.DBConnString()
+
+	require.True(t, strings.HasPrefix(dsn, "goathena:p@ss w#rd@tcp(127.0.0.1:3306)/app?"),
+		"unexpected DSN: %s", dsn)
+	require.Contains(t, dsn, "parseTime=true")
+	require.Contains(t, dsn, "tls=false")
+}
+
+func TestDBConnString_Postgres(t *testing.T) {
+	cfg := validConfig()
+	cfg.DB.Driver = "postgres"
+	cfg.DB.Password = "p@ss w#rd"
+	cfg.DB.SSLMode = "disable"
 
 	dsn := cfg.DBConnString()
 
 	parsed, err := url.Parse(dsn)
 	require.NoError(t, err)
-	require.Equal(t, "postgres", parsed.User.Username())
+	require.Equal(t, "goathena", parsed.User.Username())
 	password, hasPassword := parsed.User.Password()
 	require.True(t, hasPassword)
 	require.Equal(t, "p@ss w#rd", password)
@@ -386,12 +346,13 @@ func validConfig() *config.Config {
 			Port: 50051,
 		},
 		DB: config.DBConfig{
+			Driver:         "mariadb",
 			Host:           "127.0.0.1",
-			Port:           5432,
+			Port:           3306,
 			Name:           "app",
-			User:           "postgres",
-			Password:       "postgres",
-			SSLMode:        "disable",
+			User:           "goathena",
+			Password:       "goathena",
+			SSLMode:        "false",
 			MaxConns:       10,
 			MaxIdleConns:   2,
 			MaxConnIdle:    30 * time.Minute,
@@ -403,6 +364,10 @@ func validConfig() *config.Config {
 			Port: 6379,
 			DB:   0,
 		},
+		NATS: config.NATSConfig{
+			URL:            "nats://127.0.0.1:4222",
+			ConnectTimeout: 5 * time.Second,
+		},
 		OTel: config.OTelConfig{
 			Exporter:    "none",
 			Endpoint:    "http://localhost:4318",
@@ -412,12 +377,6 @@ func validConfig() *config.Config {
 		Log: config.LogConfig{
 			Level:  "info",
 			Format: "json",
-		},
-		Example: config.ExampleConfig{
-			Enabled:         true,
-			DefaultPageSize: 20,
-			MaxPageSize:     100,
-			MaxNameLength:   255,
 		},
 	}
 }

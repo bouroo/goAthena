@@ -1,6 +1,6 @@
 version: 2
 
-project_name: zercle-go-template
+project_name: goathena
 
 before:
   hooks:
@@ -8,9 +8,9 @@ before:
     - go generate ./...
 
 builds:
-  - id: server
-    main: ./cmd/server
-    binary: server
+  - id: migrate
+    main: ./cmd/migrate
+    binary: migrate
     goos:
       - linux
       - darwin
@@ -42,4 +42,4 @@ changelog:
       - '^ci:'
 
 kos: []
-# Docker images are handled by goreleaser docker pipe if desired; keep minimal single binary for template.
+# Docker images are handled by goreleaser docker pipe if desired; keep minimal single binary for now (gateway/identity/zone arrive in the next task).

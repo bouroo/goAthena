@@ -1,23 +1,24 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: zercle-go-template
+  name: goathena
   annotations:
-    nginx.ingress.kubernetes.io/rate-limit: "100"
+    traefik.ingress.kubernetes.io/router.middlewares: default-rate-limit@kubernetescrd
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts:
-        - api.example.com
-      secretName: tls-secret
+        - api.goathena.local
+      secretName: goathena-tls
   rules:
-    - host: api.example.com
+    - host: api.goathena.local
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: zercle-go-template
+                name: identity
                 port:
                   number: 8080

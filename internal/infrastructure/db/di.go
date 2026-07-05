@@ -1,4 +1,5 @@
-// Package db wires PostgreSQL infrastructure into the DI container.
+// Package db wires database (MariaDB/MySQL or PostgreSQL) infrastructure into
+// the DI container.
 package db
 
 import (
@@ -8,11 +9,11 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/samber/do/v2"
 
-	"github.com/zercle/zercle-go-template/internal/config"
-	"github.com/zercle/zercle-go-template/internal/shared/telemetry"
+	"github.com/bouroo/goAthena/internal/config"
+	"github.com/bouroo/goAthena/internal/shared/telemetry"
 )
 
-// Register provides *gorm.DB and registers the PostgreSQL readiness checker.
+// Register provides *gorm.DB and registers the database readiness checker.
 // The ctx drives the initial DB construction so startup cancellation and
 // connect timeouts propagate.
 func Register(ctx context.Context, c do.Injector) error {

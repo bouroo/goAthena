@@ -80,20 +80,21 @@ jobs:
     timeout-minutes: 20
     needs: unit
     services:
-      postgres:
-        image: docker.io/library/postgres:18-alpine
+      mariadb:
+        image: docker.io/library/mariadb:11.4
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: zercle_template_test
+          MARIADB_ROOT_PASSWORD: goathena
+          MARIADB_DATABASE: goathena_test
+          MARIADB_USER: goathena
+          MARIADB_PASSWORD: goathena
         ports:
-          - 5432:5432
+          - 3306:3306
         options: >-
-          --health-cmd "pg_isready -U postgres -d zercle_template_test"
+          --health-cmd "healthcheck.sh --connect"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-          --health-start-period 10s
+          --health-start-period 30s
       valkey:
         image: docker.io/valkey/valkey:9-alpine
         ports:
@@ -113,22 +114,24 @@ jobs:
       - run: go generate ./...
       - name: Run migrations
         env:
+          DB_DRIVER: mariadb
           DB_HOST: localhost
-          DB_PORT: 5432
-          DB_NAME: zercle_template_test
-          DB_USER: postgres
-          DB_PASSWORD: postgres
-          DB_SSL_MODE: disable
+          DB_PORT: 3306
+          DB_NAME: goathena_test
+          DB_USER: goathena
+          DB_PASSWORD: goathena
+          DB_SSL_MODE: "false"
         run: |
           go run ./cmd/migrate up
       - name: Run integration tests
         env:
+          DB_DRIVER: mariadb
           DB_HOST: localhost
-          DB_PORT: 5432
-          DB_NAME: zercle_template_test
-          DB_USER: postgres
-          DB_PASSWORD: postgres
-          DB_SSL_MODE: disable
+          DB_PORT: 3306
+          DB_NAME: goathena_test
+          DB_USER: goathena
+          DB_PASSWORD: goathena
+          DB_SSL_MODE: "false"
           VALKEY_HOST: localhost
           VALKEY_PORT: 6379
           VALKEY_DB: 0
@@ -146,6 +149,5 @@ jobs:
         with:
           go-version: "stable"
           cache: true
-      - run: go build -ldflags="-s -w" -o bin/server ./cmd/server
       - run: go build -ldflags="-s -w" -o bin/migrate ./cmd/migrate
-      - run: docker build -f Containerfile -t zercle-go-template:ci .
+      - run: docker build -f Containerfile -t goathena:ci .

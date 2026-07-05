@@ -1,5 +1,5 @@
 app:
-  name: zercle-go-template
+  name: goathena
   environment: development
   host: 0.0.0.0
   port: 8080
@@ -32,12 +32,13 @@ grpc:
   port: 50051
 
 db:
+  driver: mariadb
   host: localhost
-  port: 5432
-  name: app
-  user: postgres
-  password: postgres
-  ssl_mode: disable
+  port: 3306
+  name: goathena
+  user: goathena
+  password: goathena
+  ssl_mode: "false"
   max_conns: 10
   max_idle_conns: 2
   max_conn_idle: 30m
@@ -50,6 +51,10 @@ valkey:
   password: ""
   db: 0
 
+nats:
+  url: nats://localhost:4222
+  connect_timeout: 5s
+
 log:
   level: info
   format: json
@@ -57,11 +62,5 @@ log:
 otel:
   exporter: none
   endpoint: http://localhost:4318
-  service_name: zercle-go-template
+  service_name: goathena
   sampling: 1.0
-
-example:
-  enabled: true
-  default_page_size: 20
-  max_page_size: 100
-  max_name_length: 255

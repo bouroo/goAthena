@@ -11,5 +11,5 @@ commonLabels:
   app.kubernetes.io/instance: development
 
 replicas:
-  - name: zercle-go-template
+  - name: goathena
     count: 1

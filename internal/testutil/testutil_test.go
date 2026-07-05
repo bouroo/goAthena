@@ -13,8 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/zercle/zercle-go-template/internal/testutil"
-	"github.com/zercle/zercle-go-template/internal/testutil/fixtures"
+	"github.com/bouroo/goAthena/internal/testutil"
 )
 
 func TestNewRequest_JSON(t *testing.T) {
@@ -46,13 +45,6 @@ func TestDecodeJSON(t *testing.T) {
 	var dst map[string]string
 	testutil.DecodeJSON(t, rec, &dst)
 	assert.Equal(t, "value", dst["key"])
-}
-
-func TestFixtures_NewItem(t *testing.T) {
-	item := fixtures.NewItem("fixture")
-	assert.Equal(t, "fixture", item.Name)
-	assert.NotZero(t, item.ID)
-	assert.NotZero(t, item.CreatedAt)
 }
 
 func TestNewRequest_NilBody(t *testing.T) {

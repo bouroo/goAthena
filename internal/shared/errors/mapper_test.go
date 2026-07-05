@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	sharederrors "github.com/zercle/zercle-go-template/internal/shared/errors"
+	sharederrors "github.com/bouroo/goAthena/internal/shared/errors"
 )
 
 var errDomainSentinel = errors.New("domain: widget not found")

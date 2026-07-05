@@ -7,8 +7,8 @@ import (
 	"github.com/samber/do/v2"
 	"google.golang.org/grpc"
 
-	"github.com/zercle/zercle-go-template/internal/config"
-	"github.com/zercle/zercle-go-template/internal/shared/telemetry"
+	"github.com/bouroo/goAthena/internal/config"
+	"github.com/bouroo/goAthena/internal/shared/telemetry"
 )
 
 // Register wires *echo.Echo, *grpc.Server, and the Application orchestrator

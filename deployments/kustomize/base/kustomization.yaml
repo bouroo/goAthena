@@ -5,5 +5,7 @@ resources:
   - service.yaml
   - configmap.yaml
   - secret.yaml
+  - ingress.yaml
+  - middleware.yaml
 commonLabels:
-  app.kubernetes.io/name: zercle-go-template
+  app.kubernetes.io/name: goathena

@@ -12,7 +12,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 
-	sharederrors "github.com/zercle/zercle-go-template/internal/shared/errors"
+	sharederrors "github.com/bouroo/goAthena/internal/shared/errors"
 )
 
 // NewGRPC builds and returns a *grpc.Server with OTel StatsHandler, panic
