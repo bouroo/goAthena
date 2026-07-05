@@ -26,14 +26,15 @@ type leafBinding struct {
 
 // Config is the single source of truth for application configuration.
 type Config struct {
-	App    AppConfig    `mapstructure:"app" yaml:"app" validate:"required"`
-	HTTP   HTTPConfig   `mapstructure:"http" yaml:"http" validate:"required"`
-	GRPC   GRPCConfig   `mapstructure:"grpc" yaml:"grpc" validate:"required"`
-	DB     DBConfig     `mapstructure:"db" yaml:"db" validate:"required"`
-	Valkey ValkeyConfig `mapstructure:"valkey" yaml:"valkey" validate:"required"`
-	NATS   NATSConfig   `mapstructure:"nats" yaml:"nats"`
-	OTel   OTelConfig   `mapstructure:"otel" yaml:"otel" validate:"required"`
-	Log    LogConfig    `mapstructure:"log" yaml:"log" validate:"required"`
+	App     AppConfig     `mapstructure:"app" yaml:"app" validate:"required"`
+	HTTP    HTTPConfig    `mapstructure:"http" yaml:"http" validate:"required"`
+	GRPC    GRPCConfig    `mapstructure:"grpc" yaml:"grpc" validate:"required"`
+	DB      DBConfig      `mapstructure:"db" yaml:"db" validate:"required"`
+	Valkey  ValkeyConfig  `mapstructure:"valkey" yaml:"valkey" validate:"required"`
+	NATS    NATSConfig    `mapstructure:"nats" yaml:"nats"`
+	Gateway GatewayConfig `mapstructure:"gateway" yaml:"gateway" validate:"required"`
+	OTel    OTelConfig    `mapstructure:"otel" yaml:"otel" validate:"required"`
+	Log     LogConfig     `mapstructure:"log" yaml:"log" validate:"required"`
 }
 
 // AppConfig holds process-level settings.
@@ -105,6 +106,27 @@ type OTelConfig struct {
 	Endpoint    string  `mapstructure:"endpoint" yaml:"endpoint" env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	ServiceName string  `mapstructure:"service_name" yaml:"service_name" env:"OTEL_SERVICE_NAME" validate:"required"`
 	Sampling    float64 `mapstructure:"sampling" yaml:"sampling" env:"OTEL_TRACES_SAMPLER_ARG" validate:"min=0,max=1"`
+}
+
+// GatewayConfig configures the ingress gateway service (DEL-01).
+type GatewayConfig struct {
+	TCP       TCPConfig `mapstructure:"tcp" yaml:"tcp" validate:"required"`
+	WS        WSConfig  `mapstructure:"ws" yaml:"ws" validate:"required"`
+	Packetver int       `mapstructure:"packetver" yaml:"packetver" env:"GATEWAY_PACKETVER" validate:"min=20000000,max=20260000"`
+}
+
+// TCPConfig holds the gnet TCP listener settings for the kRO ingress port.
+type TCPConfig struct {
+	Addr string `mapstructure:"addr" yaml:"addr" env:"GATEWAY_TCP_ADDR" validate:"required"`
+}
+
+// WSConfig holds the HTTP/WebSocket listener settings for the roBrowser
+// ingress port. Path is the URL path on which the upgrade handler is
+// mounted (e.g. "/ws/"); the HTTP server only accepts WebSocket upgrades
+// at that path and returns 404 for everything else.
+type WSConfig struct {
+	Addr string `mapstructure:"addr" yaml:"addr" env:"GATEWAY_WS_ADDR" validate:"required"`
+	Path string `mapstructure:"path" yaml:"path" env:"GATEWAY_WS_PATH" validate:"required"`
 }
 
 // LogConfig holds the zerolog settings.
@@ -267,6 +289,11 @@ func setDefaults(v *viper.Viper) {
 		"nats.url":             "nats://localhost:4222",
 		"nats.connect_timeout": 5 * time.Second,
 
+		"gateway.tcp.addr":  ":6900",
+		"gateway.ws.addr":   ":6901",
+		"gateway.ws.path":   "/ws/",
+		"gateway.packetver": 20130807,
+
 		"otel.exporter":     "none",
 		"otel.service_name": "goathena",
 		"otel.sampling":     1.0,
@@ -325,6 +352,11 @@ func leafBindings() []leafBinding {
 
 		{"nats.url", "NATS_URL"},
 		{"nats.connect_timeout", "NATS_CONNECT_TIMEOUT"},
+
+		{"gateway.tcp.addr", "GATEWAY_TCP_ADDR"},
+		{"gateway.ws.addr", "GATEWAY_WS_ADDR"},
+		{"gateway.ws.path", "GATEWAY_WS_PATH"},
+		{"gateway.packetver", "GATEWAY_PACKETVER"},
 
 		{"log.level", "LOG_LEVEL"},
 		{"log.format", "LOG_FORMAT"},

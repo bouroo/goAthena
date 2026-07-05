@@ -4,5 +4,31 @@ package zone.v1;
 
 option go_package = "github.com/bouroo/goAthena/api/pb/zone/v1;zonev1";
 
-// Zone service contracts for map instance management and cross-zone transit.
-// TODO(DEL-03): define service messages and RPCs.
+// ZoneService manages map instances, entity state, and cross-zone transit.
+// The gateway forwards decoded map-server packets here.
+//
+// Map entry reference: rathena/src/map/clif.cpp clif_parse_WantToConnection
+service ZoneService {
+  // EnterZone processes a client's map-server entry (CZ_ENTER 0x0072 /
+  // WantToConnection). Validates the session and assigns the player to a
+  // map instance.
+  rpc EnterZone(EnterZoneRequest) returns (EnterZoneResponse);
+}
+
+message EnterZoneRequest {
+  uint32 account_id = 1;
+  uint32 char_id = 2;
+  fixed64 login_id1 = 3;    // from identity.Authenticate
+  uint32 client_tick = 4;
+  string sex = 5;
+  uint32 packetver = 6;
+  string client_ip = 7;
+}
+
+message EnterZoneResponse {
+  bool success = 1;
+  string map_name = 2;
+  uint32 map_x = 3;
+  uint32 map_y = 4;
+  string error = 5;         // human-readable error when success == false
+}

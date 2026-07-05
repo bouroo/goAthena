@@ -55,6 +55,14 @@ nats:
   url: nats://localhost:4222
   connect_timeout: 5s
 
+gateway:
+  tcp:
+    addr: ":6900"
+  ws:
+    addr: ":6901"
+    path: "/ws/"
+  packetver: 20130807
+
 log:
   level: info
   format: json
