@@ -23,6 +23,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	injector := do.New()
+	defer func() {
+		_ = injector.Shutdown()
+	}()
 	do.ProvideValue(injector, cfg)
 
 	if err := telemetry.Register(ctx, injector); err != nil {

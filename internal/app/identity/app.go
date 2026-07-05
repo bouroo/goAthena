@@ -28,13 +28,22 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	injector := do.New()
+	var logger *zerolog.Logger
+	defer func() {
+		report := injector.Shutdown()
+		if report != nil && !report.Succeed && logger != nil {
+			logger.Error().Err(report).Msg("injector shutdown error")
+		}
+	}()
+
 	do.ProvideValue(injector, cfg)
 
 	if err := telemetry.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register telemetry: %w", err)
 	}
 
-	logger, err := do.Invoke[*zerolog.Logger](injector)
+	var err error
+	logger, err = do.Invoke[*zerolog.Logger](injector)
 	if err != nil {
 		return fmt.Errorf("resolve logger: %w", err)
 	}
@@ -61,13 +70,6 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// TODO(DEL-02): wire identity feature (login, char CRUD, warehouse locking).
 
 	application := server.NewApplication(injector, cfg, logger)
-
-	defer func() {
-		report := injector.Shutdown()
-		if report != nil && !report.Succeed {
-			logger.Error().Err(report).Msg("injector shutdown error")
-		}
-	}()
 
 	if err := application.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("run application: %w", err)

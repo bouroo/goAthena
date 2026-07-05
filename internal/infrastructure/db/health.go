@@ -14,9 +14,13 @@ type gormChecker struct {
 	db *gorm.DB
 }
 
-// Name returns the dependency name reported in health output.
-func (gormChecker) Name() string {
-	return DriverPostgres
+// Name returns the dependency name reported in health output, reflecting the
+// actual database driver in use.
+func (c gormChecker) Name() string {
+	if c.db != nil && c.db.Dialector != nil {
+		return c.db.Name()
+	}
+	return "database"
 }
 
 // Check verifies the database is reachable by pinging the connection pool.

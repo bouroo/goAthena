@@ -27,7 +27,7 @@ spec:
         - name: migrate
           image: goathena-migrate:latest
           command: ["/migrate"]
-          args: ["-action=up"]
+          args: ["up"]
           env:
             - name: APP_DATABASE_HOST
               valueFrom:

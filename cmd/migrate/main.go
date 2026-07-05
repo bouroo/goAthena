@@ -5,7 +5,6 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"strconv"
@@ -26,13 +25,7 @@ func main() {
 // run parses arguments, builds a self-contained migrator, and executes the
 // requested command. It returns the process exit code.
 func run(args []string) (exitCode int) {
-	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-
-	cmd, count, forceVersion, err := parseArgs(fs.Args())
+	cmd, count, forceVersion, err := parseArgs(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		printUsage()
