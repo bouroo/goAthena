@@ -4,5 +4,20 @@ package gateway.v1;
 
 option go_package = "github.com/bouroo/goAthena/api/pb/gateway/v1;gatewayv1";
 
-// Gateway service contracts for routing between gateway and backend services.
-// TODO(DEL-01): define service messages and RPCs.
+// GatewayService exposes management RPCs for the ingress gateway.
+// Client packet routing is outbound (gateway calls identity/zone); this
+// service is for control-plane operations.
+service GatewayService {
+  // GetStatus returns gateway runtime metrics.
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+}
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  uint32 active_connections = 1;
+  uint64 packets_received = 2;
+  uint64 packets_forwarded = 3;
+  uint32 decrypt_errors = 4;
+  string version = 5;
+}
