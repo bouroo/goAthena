@@ -193,7 +193,7 @@ These are importable by external tooling (load testers, packet analyzers, replay
 
 ## Reference: rAthena
 
-The canonical rAthena C/C++ source is checked out outside this repo at `/Users/ar687138/Documents/personal/bouroo/rathena/`. It is the system of record for legacy RO behavior — packet formats, the script dialect, map file formats, the DB schema, and game-data YAMLs. Read it for reference; do not copy or vendor it.
+The canonical rAthena C/C++ source is located at [rathena](https://github.com/rathena/rathena). It is the system of record for legacy RO behavior — packet formats, the script dialect, map file formats, the DB schema, and game-data YAMLs. Read it for reference; do not copy or vendor it.
 
 Quick map:
 
