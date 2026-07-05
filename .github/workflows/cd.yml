@@ -50,6 +50,11 @@ jobs:
           echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
           echo "build_time=${BUILD_TIME}" >> $GITHUB_OUTPUT
 
+      - name: Set image name
+        id: image
+        run: |
+          echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
@@ -71,9 +76,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ steps.image.outputs.name }}:${{ steps.meta.outputs.version }}
+            ghcr.io/${{ steps.image.outputs.name }}:latest
+            ghcr.io/${{ steps.image.outputs.name }}:${{ github.ref_name }}
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
             COMMIT_SHA=${{ steps.meta.outputs.commit_sha }}
