@@ -8,7 +8,7 @@ Verify anything here against `Taskfile.yml`, `.golangci.yml`, `.github/workflows
 The canonical rAthena C/C++ source is checked out **outside this repo** at:
 
 ```
-/Users/ar687138/Documents/personal/bouroo/rathena/
+../rathena/
 ```
 
 This is the system of record for legacy RO behavior — packet formats, the script dialect, map file formats, the DB schema, and game-data YAMLs. When implementing a Go equivalent, read the corresponding rAthena file first and treat its semantics as correct unless an explicit design decision (recorded in `.agents/plans/go-athena-emulator/decision-log.md`) says otherwise. Do **not** copy or vendor rAthena source into this repo — read it for reference only.
