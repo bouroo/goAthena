@@ -44,6 +44,8 @@ linters:
       min-occurrences: 3
     gocyclo:
       min-complexity: 15
+    exhaustive:
+      default-signifies-exhaustive: true
     testifylint:
       disable:
         - float-compare

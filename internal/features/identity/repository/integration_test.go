@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	valkeygo "github.com/valkey-io/valkey-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	valkeygo "github.com/valkey-io/valkey-go"
 
 	"github.com/bouroo/goAthena/internal/features/identity/domain"
 )

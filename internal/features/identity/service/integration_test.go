@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	valkeygo "github.com/valkey-io/valkey-go"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	valkeygo "github.com/valkey-io/valkey-go"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
