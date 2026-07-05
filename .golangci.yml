@@ -60,6 +60,7 @@ linters:
       - api/pb$
       - internal/features/example/repository/mock$
       - internal/features/example/service/mock$
+      - internal/features/identity/repository/mock$
     rules:
       - linters:
           - revive
