@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, template-v2]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+          cache: true
+      - name: Verify modules
+        run: |
+          go mod verify
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          args: --timeout=5m
+      - name: Check formatting
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "Unformatted files:"
+            gofmt -s -l .
+            exit 1
+          fi
+
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: lint
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+          cache: true
+      - run: go mod download
+      - run: go generate ./...
+      - run: go test -race -tags=unit -coverprofile=coverage.out -coverpkg=./internal/...,./pkg/... -covermode=atomic ./internal/... ./pkg/...
+      - name: Coverage gate
+        run: |
+          total=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Coverage: $total%"
+          if awk -v t="$total" 'BEGIN { exit !(t < 60.0) }'; then
+            echo "Coverage below 60% threshold"
+            exit 1
+          fi
+      - uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.out
+          fail_ci_if_error: false
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 7
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: unit
+    services:
+      postgres:
+        image: docker.io/library/postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: zercle_template_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d zercle_template_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 10s
+      valkey:
+        image: docker.io/valkey/valkey:9-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+          cache: true
+      - run: go mod download
+      - run: go generate ./...
+      - name: Run migrations
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_NAME: zercle_template_test
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_SSL_MODE: disable
+        run: |
+          go run ./cmd/migrate up
+      - name: Run integration tests
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_NAME: zercle_template_test
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_SSL_MODE: disable
+          VALKEY_HOST: localhost
+          VALKEY_PORT: 6379
+          VALKEY_DB: 0
+          APP_ENVIRONMENT: test
+        run: go test -race -tags=integration ./...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [lint, unit]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+          cache: true
+      - run: go build -ldflags="-s -w" -o bin/server ./cmd/server
+      - run: go build -ldflags="-s -w" -o bin/migrate ./cmd/migrate
+      - run: docker build -f Containerfile -t zercle-go-template:ci .

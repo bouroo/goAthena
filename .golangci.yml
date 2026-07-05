@@ -1,0 +1,95 @@
+version: "2"
+run:
+  tests: true
+  timeout: 5m
+linters:
+  enable:
+    - bodyclose
+    - errcheck
+    - errorlint
+    - exhaustive
+    - forcetypeassert
+    - goconst
+    - gocritic
+    - gocyclo
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - modernize
+    - nestif
+    - nilerr
+    - prealloc
+    - revive
+    - sqlclosecheck
+    - staticcheck
+    - testifylint
+    - thelper
+    - tparallel
+    - unconvert
+    - unused
+    - wrapcheck
+  disable:
+    - lll
+  settings:
+    dupl:
+      threshold: 20
+    errcheck:
+      check-type-assertions: true
+    funlen:
+      lines: 120
+      statements: 80
+    goconst:
+      min-len: 2
+      min-occurrences: 3
+    gocyclo:
+      min-complexity: 15
+    testifylint:
+      disable:
+        - float-compare
+    wrapcheck:
+      ignore-sig-regexps:
+        - "github.com/labstack/echo/v5.HTTPError"
+        - 'github.com/labstack/echo/v5\.Context\.JSON'
+        - 'github.com/zercle/zercle-go-template/internal/shared/errors\.GRPCErr'
+        - 'google.golang.org/grpc/status\.Error'
+  exclusions:
+    generated: lax
+    paths:
+      - examples$
+      - api/pb$
+      - internal/features/example/repository/mock$
+      - internal/features/example/service/mock$
+    rules:
+      - linters:
+          - revive
+        text: "^unused-parameter:"
+      - linters:
+          - revive
+        text: "^package-comments:"
+      - linters:
+          - errcheck
+        text: 'Error return value of `.*\.Body\.Close` is not checked'
+      - linters:
+          - dupl
+          - goconst
+          - funlen
+          - errcheck
+          - forcetypeassert
+          - revive
+          - wrapcheck
+        path: '_test\.go$'
+      - linters:
+          - revive
+        path: "tests/"
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - api/pb$
