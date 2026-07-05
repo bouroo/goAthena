@@ -90,11 +90,11 @@ jobs:
         ports:
           - 3306:3306
         options: >-
-          --health-cmd "healthcheck.sh --connect --innodb-buffer-pool-size=1G"
+          --health-cmd "healthcheck.sh --connect"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-          --health-start-period 10s
+          --health-start-period 30s
       valkey:
         image: docker.io/valkey/valkey:9-alpine
         ports:
