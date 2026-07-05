@@ -25,12 +25,21 @@ func rathenaNPCPath(t *testing.T, elems ...string) string {
 
 func rathenaKafrasPath(t *testing.T) string {
 	t.Helper()
-	return rathenaNPCPath(t, "re", "kafras")
+	p := rathenaNPCPath(t, "re", "kafras")
+	if _, err := os.Stat(p); err != nil {
+		t.Skipf("rathena npc corpus not available at %s: %v", p, err)
+	}
+	return p
 }
 
 func rathenaKafrasFile(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(rathenaKafrasPath(t), "kafras.txt")
+	dir := rathenaKafrasPath(t)
+	f := filepath.Join(dir, "kafras.txt")
+	if _, err := os.Stat(f); err != nil {
+		t.Skipf("rathena kafras.txt not available at %s: %v", f, err)
+	}
+	return f
 }
 
 func TestLoadFileKafra(t *testing.T) {

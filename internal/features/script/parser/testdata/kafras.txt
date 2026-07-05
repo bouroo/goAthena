@@ -1,0 +1,9 @@
+
+// Dewata
+//============================================================
+dewata,202,184,6	script	Kafra Employee::kaf_dewata	4_F_KAFRA1,{
+	cutin "kafra_01",2;
+	callfunc "F_Kafra",0,10,1,40,700;
+	savepoint "dewata",206,174,1,1;
+	callfunc "F_KafEnd",0,1,"on Dewata Island";
+}
