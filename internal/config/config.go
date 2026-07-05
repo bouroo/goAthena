@@ -26,15 +26,16 @@ type leafBinding struct {
 
 // Config is the single source of truth for application configuration.
 type Config struct {
-	App     AppConfig     `mapstructure:"app" yaml:"app" validate:"required"`
-	HTTP    HTTPConfig    `mapstructure:"http" yaml:"http" validate:"required"`
-	GRPC    GRPCConfig    `mapstructure:"grpc" yaml:"grpc" validate:"required"`
-	DB      DBConfig      `mapstructure:"db" yaml:"db" validate:"required"`
-	Valkey  ValkeyConfig  `mapstructure:"valkey" yaml:"valkey" validate:"required"`
-	NATS    NATSConfig    `mapstructure:"nats" yaml:"nats"`
-	Gateway GatewayConfig `mapstructure:"gateway" yaml:"gateway" validate:"required"`
-	OTel    OTelConfig    `mapstructure:"otel" yaml:"otel" validate:"required"`
-	Log     LogConfig     `mapstructure:"log" yaml:"log" validate:"required"`
+	App      AppConfig      `mapstructure:"app" yaml:"app" validate:"required"`
+	HTTP     HTTPConfig     `mapstructure:"http" yaml:"http" validate:"required"`
+	GRPC     GRPCConfig     `mapstructure:"grpc" yaml:"grpc" validate:"required"`
+	DB       DBConfig       `mapstructure:"db" yaml:"db" validate:"required"`
+	Valkey   ValkeyConfig   `mapstructure:"valkey" yaml:"valkey" validate:"required"`
+	NATS     NATSConfig     `mapstructure:"nats" yaml:"nats"`
+	Gateway  GatewayConfig  `mapstructure:"gateway" yaml:"gateway" validate:"required"`
+	Identity IdentityConfig `mapstructure:"identity" yaml:"identity" validate:"required"`
+	OTel     OTelConfig     `mapstructure:"otel" yaml:"otel" validate:"required"`
+	Log      LogConfig      `mapstructure:"log" yaml:"log" validate:"required"`
 }
 
 // AppConfig holds process-level settings.
@@ -127,6 +128,17 @@ type TCPConfig struct {
 type WSConfig struct {
 	Addr string `mapstructure:"addr" yaml:"addr" env:"GATEWAY_WS_ADDR" validate:"required"`
 	Path string `mapstructure:"path" yaml:"path" env:"GATEWAY_WS_PATH" validate:"required"`
+}
+
+// IdentityConfig configures the identity service (DEL-02). UseMD5Passwords
+// is the deployment-wide `use_md5_passwds` bit (loginclif.cpp:279-281) and
+// must match the encoding declared on every LoginRequest.Method; the
+// service rejects mismatches with AuthRejected (login.cpp:233).
+// MaxChars caps the character roster (effective = max(account.character_slots,
+// MIN_CHARS)); the default of 15 matches PACKETVER >= 20100413.
+type IdentityConfig struct {
+	UseMD5Passwords bool `mapstructure:"use_md5_passwords" yaml:"use_md5_passwords" env:"IDENTITY_USE_MD5_PASSWORDS"`
+	MaxChars        int  `mapstructure:"max_chars" yaml:"max_chars" env:"IDENTITY_MAX_CHARS" validate:"min=0,max=15"`
 }
 
 // LogConfig holds the zerolog settings.
@@ -294,6 +306,9 @@ func setDefaults(v *viper.Viper) {
 		"gateway.ws.path":   "/ws/",
 		"gateway.packetver": 20130807,
 
+		"identity.use_md5_passwords": false,
+		"identity.max_chars":         15,
+
 		"otel.exporter":     "none",
 		"otel.service_name": "goathena",
 		"otel.sampling":     1.0,
@@ -357,6 +372,9 @@ func leafBindings() []leafBinding {
 		{"gateway.ws.addr", "GATEWAY_WS_ADDR"},
 		{"gateway.ws.path", "GATEWAY_WS_PATH"},
 		{"gateway.packetver", "GATEWAY_PACKETVER"},
+
+		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},
+		{"identity.max_chars", "IDENTITY_MAX_CHARS"},
 
 		{"log.level", "LOG_LEVEL"},
 		{"log.format", "LOG_FORMAT"},

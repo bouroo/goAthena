@@ -14,6 +14,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/app/common"
 	"github.com/bouroo/goAthena/internal/config"
+	identitydi "github.com/bouroo/goAthena/internal/features/identity/di"
 	"github.com/bouroo/goAthena/internal/infrastructure/db"
 	"github.com/bouroo/goAthena/internal/infrastructure/messaging/valkey"
 	"github.com/bouroo/goAthena/internal/shared/server"
@@ -68,6 +69,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// TODO(DEL-02): wire identity feature (login, char CRUD, warehouse locking).
+	if err := identitydi.Register(injector); err != nil {
+		return fmt.Errorf("register identity feature: %w", err)
+	}
 
 	application := server.NewApplication(injector, cfg, logger)
 

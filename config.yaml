@@ -63,6 +63,10 @@ gateway:
     path: "/ws/"
   packetver: 20130807
 
+identity:
+  use_md5_passwords: false
+  max_chars: 15
+
 log:
   level: info
   format: json
