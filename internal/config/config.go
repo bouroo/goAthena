@@ -34,6 +34,7 @@ type Config struct {
 	NATS     NATSConfig     `mapstructure:"nats" yaml:"nats"`
 	Gateway  GatewayConfig  `mapstructure:"gateway" yaml:"gateway" validate:"required"`
 	Identity IdentityConfig `mapstructure:"identity" yaml:"identity" validate:"required"`
+	Zone     ZoneConfig     `mapstructure:"zone" yaml:"zone" validate:"required"`
 	OTel     OTelConfig     `mapstructure:"otel" yaml:"otel" validate:"required"`
 	Log      LogConfig      `mapstructure:"log" yaml:"log" validate:"required"`
 }
@@ -145,6 +146,20 @@ type IdentityConfig struct {
 type LogConfig struct {
 	Level  string `mapstructure:"level" yaml:"level" env:"LOG_LEVEL" validate:"oneof=trace debug info warn error fatal panic"`
 	Format string `mapstructure:"format" yaml:"format" env:"LOG_FORMAT" validate:"oneof=json console"`
+}
+
+// ZoneConfig configures the zone service (DEL-03). TickRate drives the
+// physics loop (50 ms = 20 Hz in production; ≤10 ms upper bound enforced).
+// MapDir is the on-disk root of the .gat/.rsw map files; DefaultMap is the
+// initial map loaded at startup when no zone is provided. MoveSpeed is the
+// baseline ms-per-cell used when an entity has no status data. ShutdownGrace
+// is the cooldown before Agones Shutdown after the last player leaves.
+type ZoneConfig struct {
+	TickRate      time.Duration `mapstructure:"tick_rate" yaml:"tick_rate" env:"ZONE_TICK_RATE" validate:"required,min=10ms"`
+	MapDir        string        `mapstructure:"map_dir" yaml:"map_dir" env:"ZONE_MAP_DIR" validate:"required"`
+	DefaultMap    string        `mapstructure:"default_map" yaml:"default_map" env:"ZONE_DEFAULT_MAP"`
+	MoveSpeed     int           `mapstructure:"move_speed" yaml:"move_speed" env:"ZONE_MOVE_SPEED" validate:"min=50,max=1000"`
+	ShutdownGrace time.Duration `mapstructure:"shutdown_grace" yaml:"shutdown_grace" env:"ZONE_SHUTDOWN_GRACE" validate:"min=0"`
 }
 
 // validate is the package-level validator instance.
@@ -309,6 +324,12 @@ func setDefaults(v *viper.Viper) {
 		"identity.use_md5_passwords": false,
 		"identity.max_chars":         15,
 
+		"zone.tick_rate":      50 * time.Millisecond,
+		"zone.map_dir":        "./data/maps",
+		"zone.default_map":    "prontera",
+		"zone.move_speed":     150,
+		"zone.shutdown_grace": 30 * time.Second,
+
 		"otel.exporter":     "none",
 		"otel.service_name": "goathena",
 		"otel.sampling":     1.0,
@@ -375,6 +396,12 @@ func leafBindings() []leafBinding {
 
 		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},
 		{"identity.max_chars", "IDENTITY_MAX_CHARS"},
+
+		{"zone.tick_rate", "ZONE_TICK_RATE"},
+		{"zone.map_dir", "ZONE_MAP_DIR"},
+		{"zone.default_map", "ZONE_DEFAULT_MAP"},
+		{"zone.move_speed", "ZONE_MOVE_SPEED"},
+		{"zone.shutdown_grace", "ZONE_SHUTDOWN_GRACE"},
 
 		{"log.level", "LOG_LEVEL"},
 		{"log.format", "LOG_FORMAT"},
