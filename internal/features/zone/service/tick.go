@@ -228,14 +228,11 @@ func (tl *TickLoop) addEntity(ctx context.Context, e *domain.Entity) (bool, erro
 	}
 
 	tl.mu.Lock()
+	defer tl.mu.Unlock()
 	if _, exists := tl.entities[e.ID]; exists {
-		tl.mu.Unlock()
 		return false, fmt.Errorf("%w: id=%d", ErrEntityExists, e.ID)
 	}
 	wasEmpty := len(tl.entities) == 0
-	tl.entities[e.ID] = e
-	tl.mu.Unlock()
-
 	aoiEnt := &aoi.Entity{
 		ID:   aoi.EntityID(e.ID),
 		Type: toAOIType(e.Type),
@@ -243,11 +240,9 @@ func (tl *TickLoop) addEntity(ctx context.Context, e *domain.Entity) (bool, erro
 		Y:    e.Y,
 	}
 	if err := tl.grid.AddEntity(aoiEnt); err != nil {
-		tl.mu.Lock()
-		delete(tl.entities, e.ID)
-		tl.mu.Unlock()
 		return false, fmt.Errorf("zone: AOI add: %w", err)
 	}
+	tl.entities[e.ID] = e
 	return wasEmpty, nil
 }
 
@@ -267,13 +262,12 @@ func (tl *TickLoop) removeEntity(ctx context.Context, id domain.EntityID) error 
 	delete(tl.entities, id)
 	isEmpty := len(tl.entities) == 0
 	onEmpty := tl.onEmpty
-	tl.mu.Unlock()
-
 	if err := tl.grid.RemoveEntity(aoi.EntityID(id)); err != nil {
 		tl.logger.Warn().Err(err).
 			Uint32("entity_id", uint32(id)).
 			Msg("zone: AOI remove failed")
 	}
+	tl.mu.Unlock()
 
 	if isEmpty && hadPlayers && onEmpty != nil {
 		onEmpty()
@@ -317,10 +311,22 @@ func (tl *TickLoop) moveEntity(ctx context.Context, id domain.EntityID, x, y int
 
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
-	e.TargetX = x
-	e.TargetY = y
-	e.Path = path
-	e.NextMoveTick = tl.tickNum + moveInterval(e.MoveSpeed, int(tl.tickRate/time.Millisecond))
+	cur, ok := tl.entities[id]
+	if !ok {
+		return fmt.Errorf("%w: id=%d", ErrEntityMissing, id)
+	}
+	if cur.X != sx || cur.Y != sy {
+		tl.logger.Debug().
+			Uint32("entity_id", uint32(id)).
+			Int("from_x", sx).Int("from_y", sy).
+			Int("cur_x", cur.X).Int("cur_y", cur.Y).
+			Msg("zone: discarding stale path; entity moved during compute")
+		return nil
+	}
+	cur.TargetX = x
+	cur.TargetY = y
+	cur.Path = path
+	cur.NextMoveTick = tl.tickNum + moveInterval(cur.MoveSpeed, int(tl.tickRate/time.Millisecond))
 	return nil
 }
 

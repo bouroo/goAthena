@@ -27,26 +27,31 @@ import (
 // lives on the WSHandler. Read loops for each connection run in their own
 // goroutines; WSHandler is safe to use with concurrent connections.
 type WSHandler struct {
-	db      *packet.DB
-	handler domain.PacketHandler
-	logger  zerolog.Logger
-	addr    string
-	path    string
-	nextID  atomic.Uint64
-	server  *http.Server
+	db             *packet.DB
+	handler        domain.PacketHandler
+	logger         zerolog.Logger
+	addr           string
+	path           string
+	allowedOrigins []string
+	nextID         atomic.Uint64
+	server         *http.Server
 }
 
 // NewWSHandler constructs an HTTP/WebSocket upgrade handler. The packet
 // DB and PacketHandler must already be configured; WSHandler does not own
 // their lifecycle. addr is the listen address (e.g. ":6901") and path is
-// the URL path that triggers the upgrade (e.g. "/ws/").
-func NewWSHandler(db *packet.DB, handler domain.PacketHandler, addr, path string, logger zerolog.Logger) *WSHandler {
+// the URL path that triggers the upgrade (e.g. "/ws/"). allowedOrigins is
+// the CSWSH origin allowlist applied to the upgrade; when empty, origin
+// verification is disabled and a warning is logged per connection (dev
+// default). Production deployments must pass a non-empty allowlist.
+func NewWSHandler(db *packet.DB, handler domain.PacketHandler, addr, path string, logger zerolog.Logger, allowedOrigins []string) *WSHandler {
 	return &WSHandler{
-		db:      db,
-		handler: handler,
-		addr:    addr,
-		path:    path,
-		logger:  logger.With().Str("component", "gateway.ws").Logger(),
+		db:             db,
+		handler:        handler,
+		addr:           addr,
+		path:           path,
+		allowedOrigins: allowedOrigins,
+		logger:         logger.With().Str("component", "gateway.ws").Logger(),
 	}
 }
 
@@ -110,14 +115,20 @@ func (h *WSHandler) rejectNonUpgrade(w http.ResponseWriter, _ *http.Request) {
 // contain one or more complete packets, or a partial packet — the codec's
 // internal buffer handles framing.
 func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// roBrowser runs in the user's browser; the origin is the page
-		// that loaded it (often file:// or any dev/staging host). Phase 1
-		// is intra-VPC / local-only and we have no Origin allowlist to
-		// enforce yet, so skip cross-origin verification. Production
-		// deployments will configure this via the gateway config block.
-		InsecureSkipVerify: true,
-	})
+	opts := &websocket.AcceptOptions{}
+	if len(h.allowedOrigins) > 0 {
+		// Enforce origin allowlist — prevents CSWSH.
+		opts.OriginPatterns = h.allowedOrigins
+	} else {
+		// No allowlist configured (dev/local default). Log a warning on
+		// each connection so production misconfiguration is visible.
+		// Production deployments MUST set gateway.ws.allowed_origins.
+		h.logger.Warn().
+			Str("remote", r.RemoteAddr).
+			Msg("ws accepting connection with no origin allowlist configured; set gateway.ws.allowed_origins in production")
+		opts.InsecureSkipVerify = true
+	}
+	conn, err := websocket.Accept(w, r, opts)
 	if err != nil {
 		// Accept already wrote an error response on the wire.
 		h.logger.Debug().Err(err).Msg("ws upgrade failed")

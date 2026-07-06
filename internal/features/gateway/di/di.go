@@ -68,7 +68,7 @@ func Register(c do.Injector) error {
 		if err != nil {
 			return nil, err
 		}
-		return handler.NewWSHandler(db, pktHandler, cfg.Gateway.WS.Addr, cfg.Gateway.WS.Path, *logger), nil
+		return handler.NewWSHandler(db, pktHandler, cfg.Gateway.WS.Addr, cfg.Gateway.WS.Path, *logger, cfg.Gateway.WS.AllowedOrigins), nil
 	})
 
 	return nil

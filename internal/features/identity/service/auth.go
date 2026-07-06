@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // G501: MD5 is mandated by the rAthena passwdenc=1 wire protocol.
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/hex"
@@ -223,15 +224,23 @@ func authErrorFromState(state uint32) domain.AuthError {
 // login.cpp:446 — strcmp against user_pass (plain).
 // loginclif.cpp:279-281 — MD5(plaintext) hex before compare (MD5 mode).
 func verifyPassword(stored, given string, encoding domain.PasswordEncoding) bool {
+	var givenCred string
 	switch encoding {
 	case domain.PassEncodingMD5:
 		hash := md5.Sum([]byte(given)) //nolint:gosec // G401: required by the rAthena passwdenc=1 protocol.
-		givenHash := hex.EncodeToString(hash[:])
-		return subtle.ConstantTimeCompare([]byte(stored), []byte(givenHash)) == 1
+		givenCred = hex.EncodeToString(hash[:])
 	case domain.PassEncodingPlain:
-		return subtle.ConstantTimeCompare([]byte(stored), []byte(given)) == 1
+		givenCred = given
+	default:
+		return false
 	}
-	return false
+	// Normalize both sides to a fixed 32-byte digest before constant-time
+	// comparison. subtle.ConstantTimeCompare short-circuits on length
+	// mismatch, which would leak the stored credential length via timing;
+	// SHA-256 ensures both operands are always 32 bytes.
+	storedDigest := sha256.Sum256([]byte(stored))
+	givenDigest := sha256.Sum256([]byte(givenCred))
+	return subtle.ConstantTimeCompare(storedDigest[:], givenDigest[:]) == 1
 }
 
 // randomUint32 draws a uniform random uint32 from crypto/rand, retrying

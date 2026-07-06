@@ -61,6 +61,7 @@ gateway:
   ws:
     addr: ":6901"
     path: "/ws/"
+    allowed_origins: []
   packetver: 20130807
 
 identity:

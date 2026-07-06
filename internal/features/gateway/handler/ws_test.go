@@ -59,7 +59,7 @@ func TestNewWSHandler_StoresConfig(t *testing.T) {
 	rec := newWSRecordingHandler()
 	logger := newTestLogger(t)
 
-	h := NewWSHandler(db, rec, ":0", "/ws/", logger)
+	h := NewWSHandler(db, rec, ":0", "/ws/", logger, nil)
 
 	if h.db != db {
 		t.Fatalf("db pointer not stored")
@@ -78,7 +78,7 @@ func TestWSHandler_RejectNonUpgrade_Returns404(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger)
+	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -101,7 +101,7 @@ func TestWSHandler_RejectsPlainUpgradeRequest(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger)
+	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -125,7 +125,7 @@ func TestWSHandler_AcceptsBinaryCALoginAndDispatches(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger)
+	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -167,7 +167,7 @@ func TestWSHandler_MultiplePacketsInOneBinaryMessage(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger)
+	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -207,7 +207,7 @@ func TestWSHandler_PartialPacketAcrossMessages_BufferedUntilComplete(t *testing.
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger)
+	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -260,7 +260,7 @@ func TestWSHandler_NonBinaryMessage_ClosesConnection(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger)
+	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -295,7 +295,7 @@ func TestWSHandler_StopWithoutStart_IsNoop(t *testing.T) {
 	db := packet.NewLoginServerDB()
 	rec := newWSRecordingHandler()
 	logger := newTestLogger(t)
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger)
+	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
 
 	if err := h.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop without Start err = %v, want nil", err)
@@ -310,7 +310,7 @@ func TestWSHandler_StartStopRealPort(t *testing.T) {
 	db := packet.NewLoginServerDB()
 	rec := newWSRecordingHandler()
 	logger := zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.Disabled)
-	h := NewWSHandler(db, rec, addr, "/ws/", logger)
+	h := NewWSHandler(db, rec, addr, "/ws/", logger, nil)
 
 	if err := h.Start(context.Background()); err != nil {
 		t.Skipf("port %s not bindable in this environment: %v", addr, err)
@@ -324,6 +324,111 @@ func TestWSHandler_StartStopRealPort(t *testing.T) {
 	if err := waitForWS404(addr, 2*time.Second); err != nil {
 		t.Fatalf("ws server not responding: %v", err)
 	}
+}
+
+// TestWSHandler_RejectsDisallowedOrigin exercises the CSWSH origin allowlist:
+// a request with an Origin header that does not match any pattern must be
+// rejected with HTTP 403.
+func TestWSHandler_RejectsDisallowedOrigin(t *testing.T) {
+	db := packet.NewLoginServerDB()
+	rec := newWSRecordingHandler()
+	logger := newTestLogger(t)
+
+	mux := http.NewServeMux()
+	h := NewWSHandler(db, rec, "unused", "/ws/", logger, []string{"https://allowed.example.com"})
+	mux.HandleFunc(h.path, h.ServeHTTP)
+	mux.HandleFunc("/", h.rejectNonUpgrade)
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wsURL := wsTestURL(t, srv.URL) + h.path
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	_, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPClient: srv.Client(),
+		HTTPHeader: http.Header{"Origin": []string{"https://evil.example.com"}},
+	})
+	if err == nil {
+		t.Fatalf("ws dial with disallowed origin succeeded; want 403")
+	}
+	if resp == nil {
+		t.Fatalf("ws dial error = %v with nil response", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("ws dial status = %d, want %d", resp.StatusCode, http.StatusForbidden)
+	}
+}
+
+// TestWSHandler_AcceptsAllowedOrigin verifies that a request with an Origin
+// header matching an allowlist entry upgrades successfully and dispatches
+// packets.
+func TestWSHandler_AcceptsAllowedOrigin(t *testing.T) {
+	db := packet.NewLoginServerDB()
+	rec := newWSRecordingHandler()
+	logger := newTestLogger(t)
+
+	mux := http.NewServeMux()
+	h := NewWSHandler(db, rec, "unused", "/ws/", logger, []string{"https://allowed.example.com"})
+	mux.HandleFunc(h.path, h.ServeHTTP)
+	mux.HandleFunc("/", h.rejectNonUpgrade)
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wsURL := wsTestURL(t, srv.URL) + h.path
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	client, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPClient: srv.Client(),
+		HTTPHeader: http.Header{"Origin": []string{"https://allowed.example.com"}},
+	})
+	if err != nil {
+		t.Fatalf("ws dial with allowed origin: %v", err)
+	}
+	defer func() { _ = client.Close(websocket.StatusNormalClosure, "") }()
+
+	frame := buildCALogin(t, "roBrowser", "secret")
+	if err := client.Write(ctx, websocket.MessageBinary, frame); err != nil {
+		t.Fatalf("ws write: %v", err)
+	}
+
+	got := rec.wait(t, 3*time.Second)
+	if got.cmd != packet.HeaderCALOGIN {
+		t.Fatalf("cmd = 0x%04x, want 0x%04x", got.cmd, packet.HeaderCALOGIN)
+	}
+}
+
+// TestWSHandler_EmptyOriginsAcceptsAll preserves the dev/default behavior:
+// when allowedOrigins is empty the handler must accept connections
+// regardless of Origin (this is what existing tests rely on).
+func TestWSHandler_EmptyOriginsAcceptsAll(t *testing.T) {
+	db := packet.NewLoginServerDB()
+	rec := newWSRecordingHandler()
+	logger := newTestLogger(t)
+
+	mux := http.NewServeMux()
+	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
+	mux.HandleFunc(h.path, h.ServeHTTP)
+	mux.HandleFunc("/", h.rejectNonUpgrade)
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wsURL := wsTestURL(t, srv.URL) + h.path
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	client, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPClient: srv.Client(),
+		HTTPHeader: http.Header{"Origin": []string{"https://anywhere.example.com"}},
+	})
+	if err != nil {
+		t.Fatalf("ws dial with no allowlist: %v", err)
+	}
+	defer func() { _ = client.Close(websocket.StatusNormalClosure, "") }()
 }
 
 // wsTestURL converts an http:// test-server URL to its ws:// equivalent.

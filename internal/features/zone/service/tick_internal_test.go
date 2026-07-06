@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/features/zone/domain"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
+	"github.com/bouroo/goAthena/pkg/ro/pathfinding"
 	"github.com/bouroo/goAthena/pkg/ro/romap"
 )
 
@@ -223,4 +225,180 @@ func waitDone(done, deadline <-chan struct{}) error {
 	case <-deadline:
 		return context.DeadlineExceeded
 	}
+}
+
+// barrierGrid wraps a pathfinding.Grid and blocks the first Walkable call
+// for a specific cell until the test releases it. Used to inject a
+// deterministic delay inside moveEntity's RLock→compute→Lock window so
+// tests can mutate the entity while computePath is running.
+type barrierGrid struct {
+	inner   pathfinding.Grid
+	blockX  int
+	blockY  int
+	arrived chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	blocked bool
+}
+
+func newBarrierGrid(inner pathfinding.Grid, x, y int) *barrierGrid {
+	return &barrierGrid{
+		inner:   inner,
+		blockX:  x,
+		blockY:  y,
+		arrived: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (g *barrierGrid) Width() int  { return g.inner.Width() }
+func (g *barrierGrid) Height() int { return g.inner.Height() }
+
+func (g *barrierGrid) Walkable(x, y int) bool {
+	if x == g.blockX && y == g.blockY {
+		g.mu.Lock()
+		if g.blocked {
+			g.mu.Unlock()
+			return g.inner.Walkable(x, y)
+		}
+		g.blocked = true
+		g.mu.Unlock()
+		g.arrived <- struct{}{}
+		<-g.release
+	}
+	return g.inner.Walkable(x, y)
+}
+
+func TestMoveEntity_DiscardStalePathWhenEntityMovedDuringCompute(t *testing.T) {
+	t.Parallel()
+	tl := newTickLoop(t, 100, 100, 10*time.Millisecond)
+	ctx := context.Background()
+
+	e := &domain.Entity{ID: 1, Type: domain.EntityPlayer, X: 10, Y: 10, MoveSpeed: 150}
+	_, err := tl.addEntity(ctx, e)
+	require.NoError(t, err)
+
+	// Install a barrier on the pathfinder's grid that blocks the first
+	// Walkable(10,10) call. That call happens inside computePath, which
+	// runs AFTER moveEntity's RLock release and BEFORE its write Lock —
+	// the exact window where the entity's position can change.
+	bg := newBarrierGrid(pathfinding.FromMapData(tl.mapData), 10, 10)
+	tl.pf = pathfinding.New(bg)
+
+	moveDone := make(chan error, 1)
+	go func() { moveDone <- tl.moveEntity(ctx, 1, 20, 10) }()
+
+	select {
+	case <-bg.arrived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("moveEntity did not reach the barrier within 2s")
+	}
+
+	// MoveEntity has released its RLock and is blocked inside computePath.
+	// Mutate the entity's position to simulate a concurrent tick advance.
+	tl.mu.Lock()
+	e.X = 15
+	e.Y = 10
+	tl.mu.Unlock()
+
+	// Release moveEntity; it will re-acquire the Lock, see the position
+	// mismatch, and discard the stale path.
+	close(bg.release)
+
+	select {
+	case err := <-moveDone:
+		require.NoError(t, err, "discarded stale path should not be an error")
+	case <-time.After(2 * time.Second):
+		t.Fatal("moveEntity did not return within 2s after barrier release")
+	}
+
+	tl.mu.RLock()
+	targetX, targetY, pathLen := e.TargetX, e.TargetY, len(e.Path)
+	tl.mu.RUnlock()
+
+	assert.Equal(t, 0, targetX, "stale TargetX should not be assigned")
+	assert.Equal(t, 0, targetY, "stale TargetY should not be assigned")
+	assert.Equal(t, 0, pathLen, "stale Path should not be assigned")
+}
+
+func TestMoveEntity_ReturnsErrorAfterEntityRemoved(t *testing.T) {
+	t.Parallel()
+	tl := newTickLoop(t, 100, 100, 10*time.Millisecond)
+	ctx := context.Background()
+
+	e := &domain.Entity{ID: 42, Type: domain.EntityPlayer, X: 10, Y: 10, MoveSpeed: 150}
+	_, err := tl.addEntity(ctx, e)
+	require.NoError(t, err)
+
+	require.NoError(t, tl.removeEntity(ctx, 42))
+
+	err = tl.moveEntity(ctx, 42, 20, 10)
+	require.Error(t, err, "moveEntity after removeEntity should return an error")
+	assert.True(t, errors.Is(err, ErrEntityMissing),
+		"expected ErrEntityMissing, got: %v", err)
+}
+
+func TestAddRemoveEntity_NoGridLeakUnderConcurrency(t *testing.T) {
+	t.Parallel()
+	tl := newTickLoop(t, 100, 100, 10*time.Millisecond)
+	ctx := context.Background()
+
+	const id domain.EntityID = 7
+	const iterations = 100
+
+	var wg sync.WaitGroup
+	for i := 0; i < iterations; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			e := &domain.Entity{
+				ID:        id,
+				Type:      domain.EntityPlayer,
+				X:         5 + (i % 10),
+				Y:         5 + (i % 10),
+				MoveSpeed: 150,
+			}
+			_, _ = tl.addEntity(ctx, e)
+		}()
+		go func() {
+			defer wg.Done()
+			_ = tl.removeEntity(ctx, id)
+		}()
+	}
+	wg.Wait()
+
+	tl.mu.RLock()
+	inMap := tl.entities[id] != nil
+	tl.mu.RUnlock()
+
+	_, _, _, inGrid := tl.Grid().EntityLocation(aoi.EntityID(id))
+
+	assert.Equal(t, inMap, inGrid,
+		"grid/map desync: inMap=%v, inGrid=%v", inMap, inGrid)
+}
+
+func TestAddEntity_HoldsLockThroughGridInsert(t *testing.T) {
+	t.Parallel()
+	tl := newTickLoop(t, 100, 100, 10*time.Millisecond)
+	ctx := context.Background()
+
+	e := &domain.Entity{ID: 99, Type: domain.EntityMob, X: 20, Y: 20, MoveSpeed: 150}
+	_, err := tl.addEntity(ctx, e)
+	require.NoError(t, err)
+
+	got, err := tl.getEntity(ctx, 99)
+	require.NoError(t, err, "entity should be in tl.entities after addEntity")
+	assert.Equal(t, domain.EntityID(99), got.ID)
+
+	_, _, _, ok := tl.Grid().EntityLocation(aoi.EntityID(99))
+	assert.True(t, ok, "entity should be in AOI grid after addEntity")
+
+	require.NoError(t, tl.removeEntity(ctx, 99))
+
+	_, err = tl.getEntity(ctx, 99)
+	require.Error(t, err, "entity should not be in tl.entities after removeEntity")
+	assert.True(t, errors.Is(err, ErrEntityMissing))
+
+	_, _, _, ok = tl.Grid().EntityLocation(aoi.EntityID(99))
+	assert.False(t, ok, "entity should not be in AOI grid after removeEntity")
 }

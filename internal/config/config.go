@@ -126,9 +126,19 @@ type TCPConfig struct {
 // ingress port. Path is the URL path on which the upgrade handler is
 // mounted (e.g. "/ws/"); the HTTP server only accepts WebSocket upgrades
 // at that path and returns 404 for everything else.
+//
+// AllowedOrigins is the CSWSH (Cross-Site WebSocket Hijacking) origin
+// allowlist passed to websocket.AcceptOptions.OriginPatterns. Entries
+// follow coder/websocket glob semantics (path.Match, case-insensitive);
+// scheme-prefixed patterns (e.g. "https://example.com") match the full
+// "scheme://host"; bare host patterns (e.g. "*.example.com") match the
+// origin host. When empty, origin verification is disabled and a warning
+// is logged per connection — preserve backward-compatible dev behavior
+// while making production misconfiguration visible.
 type WSConfig struct {
-	Addr string `mapstructure:"addr" yaml:"addr" env:"GATEWAY_WS_ADDR" validate:"required"`
-	Path string `mapstructure:"path" yaml:"path" env:"GATEWAY_WS_PATH" validate:"required"`
+	Addr           string   `mapstructure:"addr" yaml:"addr" env:"GATEWAY_WS_ADDR" validate:"required"`
+	Path           string   `mapstructure:"path" yaml:"path" env:"GATEWAY_WS_PATH" validate:"required"`
+	AllowedOrigins []string `mapstructure:"allowed_origins" yaml:"allowed_origins" env:"GATEWAY_WS_ALLOWED_ORIGINS"`
 }
 
 // IdentityConfig configures the identity service (DEL-02). UseMD5Passwords
@@ -316,10 +326,11 @@ func setDefaults(v *viper.Viper) {
 		"nats.url":             "nats://localhost:4222",
 		"nats.connect_timeout": 5 * time.Second,
 
-		"gateway.tcp.addr":  ":6900",
-		"gateway.ws.addr":   ":6901",
-		"gateway.ws.path":   "/ws/",
-		"gateway.packetver": 20130807,
+		"gateway.tcp.addr":           ":6900",
+		"gateway.ws.addr":            ":6901",
+		"gateway.ws.path":            "/ws/",
+		"gateway.ws.allowed_origins": []string{},
+		"gateway.packetver":          20130807,
 
 		"identity.use_md5_passwords": false,
 		"identity.max_chars":         15,
@@ -392,6 +403,7 @@ func leafBindings() []leafBinding {
 		{"gateway.tcp.addr", "GATEWAY_TCP_ADDR"},
 		{"gateway.ws.addr", "GATEWAY_WS_ADDR"},
 		{"gateway.ws.path", "GATEWAY_WS_PATH"},
+		{"gateway.ws.allowed_origins", "GATEWAY_WS_ALLOWED_ORIGINS"},
 		{"gateway.packetver", "GATEWAY_PACKETVER"},
 
 		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},
