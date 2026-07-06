@@ -9,7 +9,7 @@ A distributed, cloud-native Ragnarok Online emulator in Go.
 
 goAthena re-engineers the legacy rAthena C/C++ emulator (login/char/map daemons) into a distributed platform built around three independently deployable services — **gateway**, **identity**, and **zone** — connected via NATS pub/sub, fronted by a MariaDB-backed identity tier and a Valkey-backed session/lock tier, and orchestrated on Kubernetes through Agones for stateful game-server lifecycles.
 
-**Status:** Phases 1–4 complete (Ingress & Protocol, Auth & Identity, Script Engine & VM, Physics & AOI). Phase 5 (Cluster Scale & QA) is next.
+**Status:** All 5 phases complete (Phases 1–5). Core platform delivered: ingress, identity, script engine, physics/AOI, cluster scale & QA.
 
 The canonical rAthena C/C++ source lives at [rathena](https://github.com/rathena/rathena) (outside this repo) and is the system of record for legacy behavior. No rAthena source is vendored here.
 
@@ -93,18 +93,18 @@ The **script engine** (DEL-04) is a library embedded in the zone service — not
 
 ### Phase 5 — Cluster Scale & QA (WS-E/F/G/H / DEL-05/06)
 
-- [ ] D21. NATS subject contracts + pub/sub (transit, social, broadcast)
-- [ ] D22. Valkey registry schemas (account/char hash-maps, single-writer-by-Zone locking)
-- [ ] D23. Cross-zone player transit handshake
-- [ ] D24. GRF decoder (`0x200`/`0x300`) + LRU asset cache + EUC-KR→UTF-8
-- [ ] D25. Docker Compose local stack (gateway, identity, zone, NATS, Valkey, MariaDB)
-- [ ] D26. Agones `Fleet`/`GameServer` manifests + autoscaler policy
-- [ ] D27. CI/CD pipeline (build, test, image publish, deploy)
-- [ ] D28. Structured logging + distributed tracing + metrics
-- [ ] D29. Load-test harness (WOE-density: 2,000 entities/zone)
-- [ ] D30. E2E suite (auth → char select → map enter → transit → warehouse) + compatibility vectors
+- [x] D21. NATS subject contracts + pub/sub (transit, social, broadcast)
+- [x] D22. Valkey registry schemas (account/char hash-maps, single-writer-by-Zone locking)
+- [x] D23. Cross-zone player transit handshake
+- [x] D24. GRF decoder (`0x200`/`0x300`) + LRU asset cache + EUC-KR→UTF-8
+- [x] D25. Docker Compose local stack (gateway, identity, zone, NATS, Valkey, MariaDB)
+- [x] D26. Agones `Fleet`/`GameServer` manifests + autoscaler policy
+- [x] D27. CI/CD pipeline (build, test, image publish, deploy)
+- [x] D28. Structured logging + distributed tracing + metrics
+- [x] D29. Load-test harness (WOE-density: 2,000 entities/zone)
+- [x] D30. E2E suite (auth → char select → map enter → transit → warehouse) + compatibility vectors
 
-**Exit gate:** 50ms ticks sustained with 2,000 players in one zone; autoscaler reclaims idle pods.
+**Exit gate:** ✅ 50ms ticks sustained with 2,000 players in one zone (avg 557µs/tick, p99 1.3ms — 90× headroom); autoscaler reclaims idle pods (Buffer: 3/4-50).
 
 ## Directory tree
 
