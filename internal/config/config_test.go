@@ -368,6 +368,23 @@ func validConfig() *config.Config {
 			URL:            "nats://127.0.0.1:4222",
 			ConnectTimeout: 5 * time.Second,
 		},
+		Zone: config.ZoneConfig{
+			TickRate:      50 * time.Millisecond,
+			MapDir:        "./data/maps",
+			DefaultMap:    "prontera",
+			MoveSpeed:     150,
+			ShutdownGrace: 30 * time.Second,
+		},
+		Gateway: config.GatewayConfig{
+			TCP: config.TCPConfig{
+				Addr: ":6900",
+			},
+			WS: config.WSConfig{
+				Addr: ":6901",
+				Path: "/ws/",
+			},
+			Packetver: 20130807,
+		},
 		OTel: config.OTelConfig{
 			Exporter:    "none",
 			Endpoint:    "http://localhost:4318",

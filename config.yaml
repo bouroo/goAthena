@@ -55,6 +55,26 @@ nats:
   url: nats://localhost:4222
   connect_timeout: 5s
 
+gateway:
+  tcp:
+    addr: ":6900"
+  ws:
+    addr: ":6901"
+    path: "/ws/"
+    allowed_origins: []
+  packetver: 20130807
+
+identity:
+  use_md5_passwords: false
+  max_chars: 15
+
+zone:
+  tick_rate: 50ms
+  map_dir: ./data/maps
+  default_map: prontera
+  move_speed: 150
+  shutdown_grace: 30s
+
 log:
   level: info
   format: json

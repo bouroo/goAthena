@@ -26,14 +26,17 @@ type leafBinding struct {
 
 // Config is the single source of truth for application configuration.
 type Config struct {
-	App    AppConfig    `mapstructure:"app" yaml:"app" validate:"required"`
-	HTTP   HTTPConfig   `mapstructure:"http" yaml:"http" validate:"required"`
-	GRPC   GRPCConfig   `mapstructure:"grpc" yaml:"grpc" validate:"required"`
-	DB     DBConfig     `mapstructure:"db" yaml:"db" validate:"required"`
-	Valkey ValkeyConfig `mapstructure:"valkey" yaml:"valkey" validate:"required"`
-	NATS   NATSConfig   `mapstructure:"nats" yaml:"nats"`
-	OTel   OTelConfig   `mapstructure:"otel" yaml:"otel" validate:"required"`
-	Log    LogConfig    `mapstructure:"log" yaml:"log" validate:"required"`
+	App      AppConfig      `mapstructure:"app" yaml:"app" validate:"required"`
+	HTTP     HTTPConfig     `mapstructure:"http" yaml:"http" validate:"required"`
+	GRPC     GRPCConfig     `mapstructure:"grpc" yaml:"grpc" validate:"required"`
+	DB       DBConfig       `mapstructure:"db" yaml:"db" validate:"required"`
+	Valkey   ValkeyConfig   `mapstructure:"valkey" yaml:"valkey" validate:"required"`
+	NATS     NATSConfig     `mapstructure:"nats" yaml:"nats"`
+	Gateway  GatewayConfig  `mapstructure:"gateway" yaml:"gateway" validate:"required"`
+	Identity IdentityConfig `mapstructure:"identity" yaml:"identity" validate:"required"`
+	Zone     ZoneConfig     `mapstructure:"zone" yaml:"zone" validate:"required"`
+	OTel     OTelConfig     `mapstructure:"otel" yaml:"otel" validate:"required"`
+	Log      LogConfig      `mapstructure:"log" yaml:"log" validate:"required"`
 }
 
 // AppConfig holds process-level settings.
@@ -107,10 +110,66 @@ type OTelConfig struct {
 	Sampling    float64 `mapstructure:"sampling" yaml:"sampling" env:"OTEL_TRACES_SAMPLER_ARG" validate:"min=0,max=1"`
 }
 
+// GatewayConfig configures the ingress gateway service (DEL-01).
+type GatewayConfig struct {
+	TCP       TCPConfig `mapstructure:"tcp" yaml:"tcp" validate:"required"`
+	WS        WSConfig  `mapstructure:"ws" yaml:"ws" validate:"required"`
+	Packetver int       `mapstructure:"packetver" yaml:"packetver" env:"GATEWAY_PACKETVER" validate:"min=20000000,max=20260000"`
+}
+
+// TCPConfig holds the gnet TCP listener settings for the kRO ingress port.
+type TCPConfig struct {
+	Addr string `mapstructure:"addr" yaml:"addr" env:"GATEWAY_TCP_ADDR" validate:"required"`
+}
+
+// WSConfig holds the HTTP/WebSocket listener settings for the roBrowser
+// ingress port. Path is the URL path on which the upgrade handler is
+// mounted (e.g. "/ws/"); the HTTP server only accepts WebSocket upgrades
+// at that path and returns 404 for everything else.
+//
+// AllowedOrigins is the CSWSH (Cross-Site WebSocket Hijacking) origin
+// allowlist passed to websocket.AcceptOptions.OriginPatterns. Entries
+// follow coder/websocket glob semantics (path.Match, case-insensitive);
+// scheme-prefixed patterns (e.g. "https://example.com") match the full
+// "scheme://host"; bare host patterns (e.g. "*.example.com") match the
+// origin host. When empty, origin verification is disabled and a warning
+// is logged per connection — preserve backward-compatible dev behavior
+// while making production misconfiguration visible.
+type WSConfig struct {
+	Addr           string   `mapstructure:"addr" yaml:"addr" env:"GATEWAY_WS_ADDR" validate:"required"`
+	Path           string   `mapstructure:"path" yaml:"path" env:"GATEWAY_WS_PATH" validate:"required"`
+	AllowedOrigins []string `mapstructure:"allowed_origins" yaml:"allowed_origins" env:"GATEWAY_WS_ALLOWED_ORIGINS"`
+}
+
+// IdentityConfig configures the identity service (DEL-02). UseMD5Passwords
+// is the deployment-wide `use_md5_passwds` bit (loginclif.cpp:279-281) and
+// must match the encoding declared on every LoginRequest.Method; the
+// service rejects mismatches with AuthRejected (login.cpp:233).
+// MaxChars caps the character roster (effective = max(account.character_slots,
+// MIN_CHARS)); the default of 15 matches PACKETVER >= 20100413.
+type IdentityConfig struct {
+	UseMD5Passwords bool `mapstructure:"use_md5_passwords" yaml:"use_md5_passwords" env:"IDENTITY_USE_MD5_PASSWORDS"`
+	MaxChars        int  `mapstructure:"max_chars" yaml:"max_chars" env:"IDENTITY_MAX_CHARS" validate:"min=0,max=15"`
+}
+
 // LogConfig holds the zerolog settings.
 type LogConfig struct {
 	Level  string `mapstructure:"level" yaml:"level" env:"LOG_LEVEL" validate:"oneof=trace debug info warn error fatal panic"`
 	Format string `mapstructure:"format" yaml:"format" env:"LOG_FORMAT" validate:"oneof=json console"`
+}
+
+// ZoneConfig configures the zone service (DEL-03). TickRate drives the
+// physics loop (50 ms = 20 Hz in production; ≤10 ms upper bound enforced).
+// MapDir is the on-disk root of the .gat/.rsw map files; DefaultMap is the
+// initial map loaded at startup when no zone is provided. MoveSpeed is the
+// baseline ms-per-cell used when an entity has no status data. ShutdownGrace
+// is the cooldown before Agones Shutdown after the last player leaves.
+type ZoneConfig struct {
+	TickRate      time.Duration `mapstructure:"tick_rate" yaml:"tick_rate" env:"ZONE_TICK_RATE" validate:"required,min=10ms"`
+	MapDir        string        `mapstructure:"map_dir" yaml:"map_dir" env:"ZONE_MAP_DIR" validate:"required"`
+	DefaultMap    string        `mapstructure:"default_map" yaml:"default_map" env:"ZONE_DEFAULT_MAP"`
+	MoveSpeed     int           `mapstructure:"move_speed" yaml:"move_speed" env:"ZONE_MOVE_SPEED" validate:"min=50,max=1000"`
+	ShutdownGrace time.Duration `mapstructure:"shutdown_grace" yaml:"shutdown_grace" env:"ZONE_SHUTDOWN_GRACE" validate:"min=0"`
 }
 
 // validate is the package-level validator instance.
@@ -267,6 +326,21 @@ func setDefaults(v *viper.Viper) {
 		"nats.url":             "nats://localhost:4222",
 		"nats.connect_timeout": 5 * time.Second,
 
+		"gateway.tcp.addr":           ":6900",
+		"gateway.ws.addr":            ":6901",
+		"gateway.ws.path":            "/ws/",
+		"gateway.ws.allowed_origins": []string{},
+		"gateway.packetver":          20130807,
+
+		"identity.use_md5_passwords": false,
+		"identity.max_chars":         15,
+
+		"zone.tick_rate":      50 * time.Millisecond,
+		"zone.map_dir":        "./data/maps",
+		"zone.default_map":    "prontera",
+		"zone.move_speed":     150,
+		"zone.shutdown_grace": 30 * time.Second,
+
 		"otel.exporter":     "none",
 		"otel.service_name": "goathena",
 		"otel.sampling":     1.0,
@@ -325,6 +399,21 @@ func leafBindings() []leafBinding {
 
 		{"nats.url", "NATS_URL"},
 		{"nats.connect_timeout", "NATS_CONNECT_TIMEOUT"},
+
+		{"gateway.tcp.addr", "GATEWAY_TCP_ADDR"},
+		{"gateway.ws.addr", "GATEWAY_WS_ADDR"},
+		{"gateway.ws.path", "GATEWAY_WS_PATH"},
+		{"gateway.ws.allowed_origins", "GATEWAY_WS_ALLOWED_ORIGINS"},
+		{"gateway.packetver", "GATEWAY_PACKETVER"},
+
+		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},
+		{"identity.max_chars", "IDENTITY_MAX_CHARS"},
+
+		{"zone.tick_rate", "ZONE_TICK_RATE"},
+		{"zone.map_dir", "ZONE_MAP_DIR"},
+		{"zone.default_map", "ZONE_DEFAULT_MAP"},
+		{"zone.move_speed", "ZONE_MOVE_SPEED"},
+		{"zone.shutdown_grace", "ZONE_SHUTDOWN_GRACE"},
 
 		{"log.level", "LOG_LEVEL"},
 		{"log.format", "LOG_FORMAT"},

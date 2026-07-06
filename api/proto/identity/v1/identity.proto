@@ -4,5 +4,91 @@ package identity.v1;
 
 option go_package = "github.com/bouroo/goAthena/api/pb/identity/v1;identityv1";
 
-// Identity service handles login, character CRUD, and warehouse operations.
-// TODO(DEL-02): define service messages and RPCs.
+// IdentityService handles login authentication, character CRUD, and warehouse
+// operations. The gateway forwards decoded kRO login packets here as structured
+// RPCs.
+//
+// Login handshake reference: rathena/src/login/loginclif.cpp
+service IdentityService {
+  // Authenticate processes a client login (CA_LOGIN* variants 0x64/0x1dd/0x1fa/0x27c/...).
+  // Returns auth result + char-server list on success (AC_ACCEPT_LOGIN 0xac4).
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+
+  // GetCharacterList returns the character list for an authenticated account
+  // (HC_ACCEPT_ENTER 0x6b). Called after the client connects to the char server.
+  rpc GetCharacterList(GetCharacterListRequest) returns (GetCharacterListResponse);
+}
+
+// AuthMethod identifies which CA_LOGIN variant the client sent.
+enum AuthMethod {
+  AUTH_METHOD_UNSPECIFIED = 0;
+  AUTH_METHOD_PASSWORD = 1;       // CA_LOGIN 0x0064 (plaintext password)
+  AUTH_METHOD_MD5 = 2;            // CA_LOGIN2 0x01dd (MD5 password)
+  AUTH_METHOD_MD5_SALTED = 3;     // CA_LOGIN3/4 0x01fa/0x027c
+  AUTH_METHOD_PCBANG = 4;         // CA_LOGIN_PCBANG 0x0277
+  AUTH_METHOD_CHANNEL = 5;        // CA_LOGIN_CHANNEL 0x02b0
+  AUTH_METHOD_SSO = 6;            // CA_SSO_LOGIN_REQ 0x0825
+}
+
+message AuthenticateRequest {
+  string username = 1;
+  bytes password = 2;        // plaintext (AUTH_METHOD_PASSWORD) or MD5 digest
+  uint32 client_type = 3;   // kRO client type code
+  uint32 packetver = 4;     // client PACKETVER date (e.g. 20130807)
+  string client_ip = 5;
+  AuthMethod method = 6;
+  bytes md5_salt = 7;       // salt from CA_REQ_HASH/AC_ACK_HASH exchange (if applicable)
+}
+
+enum AuthResult {
+  AUTH_RESULT_UNSPECIFIED = 0;
+  AUTH_RESULT_OK = 1;
+  AUTH_RESULT_REJECTED = 2;          // AC_REFUSE_LOGIN — wrong credentials
+  AUTH_RESULT_BANNED = 3;
+  AUTH_RESULT_ALREADY_LOGGED_IN = 4;
+  AUTH_RESULT_SERVER_CLOSED = 5;     // SC_NOTIFY_BAN
+}
+
+message AuthenticateResponse {
+  AuthResult result = 1;
+  uint32 error_code = 2;     // kRO-specific error code (0-15, 99-104)
+  uint32 account_id = 3;
+  fixed64 login_id1 = 4;    // session token minted on success
+  fixed64 login_id2 = 5;
+  string last_ip = 6;
+  string last_login = 7;
+  string sex = 8;           // "M", "F", or "S"
+  string token = 9;         // web auth token (PACKETVER >= 20170315)
+  repeated CharServerInfo char_servers = 10;
+}
+
+message CharServerInfo {
+  string ip = 1;
+  uint32 port = 2;
+  string name = 3;
+  uint32 users = 4;
+  uint32 server_type = 5;
+  string new_display = 6;
+}
+
+message GetCharacterListRequest {
+  uint32 account_id = 1;
+  fixed64 login_id1 = 2;   // from AuthenticateResponse
+  string sex = 3;
+}
+
+message CharacterInfo {
+  uint32 char_id = 1;
+  uint32 slot = 2;
+  string name = 3;
+  uint32 class_id = 4;
+  uint32 base_level = 5;
+  uint32 job_level = 6;
+}
+
+message GetCharacterListResponse {
+  repeated CharacterInfo characters = 1;
+  uint32 total_slots = 2;
+  uint32 premium_start = 3;
+  uint32 premium_end = 4;
+}

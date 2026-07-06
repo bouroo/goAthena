@@ -61,10 +61,27 @@ func TestRun_ShutdownOnContextCancel(t *testing.T) {
 		NATS:   config.NATSConfig{URL: "nats://127.0.0.1:4222", ConnectTimeout: 5 * time.Second},
 		OTel:   config.OTelConfig{Exporter: "none", ServiceName: "test", Sampling: 1.0},
 		Log:    config.LogConfig{Level: "info", Format: "json"},
+		Gateway: config.GatewayConfig{
+			TCP: config.TCPConfig{Addr: "127.0.0.1:16910"},
+			WS:  config.WSConfig{Addr: "127.0.0.1:16911", Path: "/ws/"},
+		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, cfg)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
 	cancel()
 
-	require.NoError(t, Run(ctx, cfg))
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("gateway did not shut down within 10s")
+	}
 }
