@@ -33,18 +33,18 @@ ARG COMMIT_SHA=unknown
 ARG BUILD_TIME=unknown
 
 RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w \
-      -X github.com/bouroo/goAthena/internal/app/common.Version=${VERSION} \
-      -X github.com/bouroo/goAthena/internal/app/common.CommitSHA=${COMMIT_SHA} \
-      -X github.com/bouroo/goAthena/internal/app/common.BuildTime=${BUILD_TIME}" \
-    -o /out/service ./cmd/${BINARY}
+  -ldflags="-s -w \
+  -X github.com/bouroo/goAthena/internal/app/common.Version=${VERSION} \
+  -X github.com/bouroo/goAthena/internal/app/common.CommitSHA=${COMMIT_SHA} \
+  -X github.com/bouroo/goAthena/internal/app/common.BuildTime=${BUILD_TIME}" \
+  -o /out/service ./cmd/${BINARY}
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/healthcheck ./cmd/healthcheck
 
 # -----------------------------------------------------------------------------
 # Runtime
 # -----------------------------------------------------------------------------
-FROM gcr.io/distroless/base-debian12:nonroot AS runtime
+FROM gcr.io/distroless/base-debian13:nonroot AS runtime
 
 ARG BINARY=identity
 
