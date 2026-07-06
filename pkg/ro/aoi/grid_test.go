@@ -264,10 +264,16 @@ func TestQueryVisible_ReturnsEntitiesInRadius(t *testing.T) {
 	gm := NewGridManager(100, 100)
 	// 7 entities within ±15 cells of (50, 50); 2 deliberately outside.
 	points := []struct{ x, y int }{
-		{50, 50}, {55, 50}, {50, 55}, {40, 40}, {60, 60},
-		{35, 50}, {50, 35},
+		{50, 50},
+		{55, 50},
+		{50, 55},
+		{40, 40},
+		{60, 60},
+		{35, 50},
+		{50, 35},
 		// out of range
-		{20, 20}, {70, 70},
+		{20, 20},
+		{70, 70},
 	}
 	for i, p := range points {
 		require.NoError(t, gm.AddEntity(newEntity(EntityID(i+1), EntityPlayer, p.x, p.y)))

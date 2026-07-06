@@ -1,0 +1,20 @@
+apiVersion: autoscaling.agones.dev/v1
+kind: FleetAutoscaler
+metadata:
+  name: zone-fleet-autoscaler
+  namespace: goathena
+  labels:
+    app.kubernetes.io/name: goathena
+    app.kubernetes.io/component: zone
+spec:
+  fleetName: zone-fleet
+  policy:
+    type: Buffer
+    buffer:
+      bufferSize: 3
+      minReplicas: 4
+      maxReplicas: 50
+  sync:
+    type: FixedInterval
+    fixedInterval:
+      seconds: 30

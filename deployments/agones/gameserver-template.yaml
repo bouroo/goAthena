@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zone-map-data
+  namespace: goathena
+  labels:
+    app.kubernetes.io/name: goathena
+    app.kubernetes.io/component: zone
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 5Gi
