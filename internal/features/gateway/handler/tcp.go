@@ -5,6 +5,7 @@ package handler
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/panjf2000/gnet/v2"
@@ -28,7 +29,7 @@ type TCPHandler struct {
 	db      *packet.DB
 	handler domain.PacketHandler
 	logger  zerolog.Logger
-	nextID  uint64 // monotonic connection id; incremented under no contention — see OnOpen
+	nextID  atomic.Uint64 // monotonic connection id; safe under gnet's concurrent event loops
 	engine  gnet.Engine
 }
 
@@ -69,8 +70,7 @@ func (h *TCPHandler) OnShutdown(eng gnet.Engine) {
 // guarantee uniqueness across restarts but does guarantee uniqueness
 // within a process — which is what handlers need.
 func (h *TCPHandler) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
-	id := h.nextID
-	h.nextID++
+	id := h.nextID.Add(1)
 
 	decoder := netcodec.NewLoginDecoder(h.db)
 	c.SetContext(&connState{

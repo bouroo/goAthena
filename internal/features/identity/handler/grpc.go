@@ -43,6 +43,9 @@ func (h *grpcHandler) Authenticate(
 	ctx context.Context,
 	req *identityv1.AuthenticateRequest,
 ) (*identityv1.AuthenticateResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
 	encoding := mapAuthMethod(req.GetMethod())
 
 	ip, err := netip.ParseAddr(req.GetClientIp())
@@ -92,6 +95,9 @@ func (h *grpcHandler) GetCharacterList(
 	ctx context.Context,
 	req *identityv1.GetCharacterListRequest,
 ) (*identityv1.GetCharacterListResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
 	chars, err := h.svc.ListCharacters(ctx, req.GetAccountId())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list characters: %v", err)

@@ -197,3 +197,20 @@ func bytesEqual(a, b []byte) bool {
 	}
 	return true
 }
+
+func TestTCPHandler_NextID_IsMonotonicAndUnique(t *testing.T) {
+	t.Parallel()
+	h := &TCPHandler{}
+	seen := make(map[uint64]struct{}, 1000)
+	for i := 0; i < 1000; i++ {
+		id := h.nextID.Add(1)
+		if _, dup := seen[id]; dup {
+			t.Fatalf("duplicate id %d at iteration %d", id, i)
+		}
+		seen[id] = struct{}{}
+	}
+	first := (&TCPHandler{}).nextID.Add(1)
+	if first != 1 {
+		t.Fatalf("first id from zero-value handler = %d, want 1", first)
+	}
+}

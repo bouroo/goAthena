@@ -106,7 +106,7 @@ func NewIdentityService(
 // On success a Session is persisted with the AUTH_TIMEOUT TTL and the
 // account's last_ip / logincount are updated.
 func (s *identityService) Login(ctx context.Context, req domain.LoginRequest) (*domain.LoginResponse, error) {
-	if req.Method == domain.PassEncodingMD5 != s.useMD5 {
+	if (req.Method == domain.PassEncodingMD5) != s.useMD5 {
 		return nil, &LoginError{
 			Code: domain.AuthRejected,
 			Msg:  "passwdenc/use_md5_passwds mismatch",

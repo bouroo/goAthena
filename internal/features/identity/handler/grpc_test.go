@@ -296,3 +296,31 @@ func TestGetCharacterList_Error(t *testing.T) {
 	assert.Equal(t, codes.Internal, st.Code())
 	assert.Contains(t, st.Message(), "list characters")
 }
+
+func TestAuthenticate_NilRequest_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	h := handler.NewGRPCHandler(svc)
+
+	resp, err := h.Authenticate(context.Background(), nil)
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestGetCharacterList_NilRequest_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	h := handler.NewGRPCHandler(svc)
+
+	resp, err := h.GetCharacterList(context.Background(), nil)
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}

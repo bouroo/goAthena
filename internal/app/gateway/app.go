@@ -95,8 +95,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		// Best-effort shutdown: log and continue. gnet may never have
 		// reached OnBoot (engine is empty) when ctx is cancelled before
 		// the engine boots — that is not an error worth surfacing.
-		if stopErr := tcpHandler.Engine().Stop(context.Background()); stopErr != nil {
-			logger.Warn().Err(stopErr).Msg("gnet Engine.Stop returned error")
+		if eng := tcpHandler.Engine(); eng != (gnet.Engine{}) {
+			if stopErr := eng.Stop(context.Background()); stopErr != nil {
+				logger.Warn().Err(stopErr).Msg("gnet Engine.Stop returned error")
+			}
 		}
 		if stopErr := wsHandler.Stop(shutdownCtx); stopErr != nil {
 			logger.Warn().Err(stopErr).Msg("ws server shutdown returned error")
