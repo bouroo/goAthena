@@ -68,7 +68,20 @@ func TestRun_ShutdownOnContextCancel(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, cfg)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
 	cancel()
 
-	require.NoError(t, Run(ctx, cfg))
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("gateway did not shut down within 10s")
+	}
 }
