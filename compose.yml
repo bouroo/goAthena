@@ -116,7 +116,7 @@ services:
       - "8080:8080"
       - "50051:50051"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz | grep -qi 'ok'"]
+      test: ["CMD", "/healthcheck", "-url", "http://localhost:8080/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -171,7 +171,7 @@ services:
       - "8081:8081"
       - "50052:50052"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/healthz | grep -qi 'ok'"]
+      test: ["CMD", "/healthcheck", "-url", "http://localhost:8081/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -230,7 +230,7 @@ services:
       - "8082:8082"
       - "7121:7121"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/healthz | grep -qi 'ok'"]
+      test: ["CMD", "/healthcheck", "-url", "http://localhost:8082/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5

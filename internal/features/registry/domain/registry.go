@@ -96,6 +96,12 @@ type Store interface {
 	// distinguish "not present" from transport errors via the error.
 	HGetAll(ctx context.Context, key string) (map[string]string, error)
 
+	// HGetAllMulti retrieves multiple hash keys in a single batched
+	// round-trip. The returned map is keyed by the input key; a missing
+	// key yields an empty map (not an error). Use this instead of
+	// looping HGetAll to avoid N+1 latency on bulk lookups.
+	HGetAllMulti(ctx context.Context, keys []string) (map[string]map[string]string, error)
+
 	// Del removes the given keys. Missing keys are not an error.
 	Del(ctx context.Context, keys ...string) error
 

@@ -89,6 +89,21 @@ func (mr *MockStoreMockRecorder) HGetAll(ctx, key any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HGetAll", reflect.TypeOf((*MockStore)(nil).HGetAll), ctx, key)
 }
 
+// HGetAllMulti mocks base method.
+func (m *MockStore) HGetAllMulti(ctx context.Context, keys []string) (map[string]map[string]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HGetAllMulti", ctx, keys)
+	ret0, _ := ret[0].(map[string]map[string]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// HGetAllMulti indicates an expected call of HGetAllMulti.
+func (mr *MockStoreMockRecorder) HGetAllMulti(ctx, keys any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HGetAllMulti", reflect.TypeOf((*MockStore)(nil).HGetAllMulti), ctx, keys)
+}
+
 // HSet mocks base method.
 func (m *MockStore) HSet(ctx context.Context, key string, fields map[string]string) error {
 	m.ctrl.T.Helper()

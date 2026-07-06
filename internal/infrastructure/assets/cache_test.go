@@ -75,7 +75,16 @@ func TestCacheClear(t *testing.T) {
 func TestCacheZeroBudget(t *testing.T) {
 	c := NewCache(0)
 	c.Put("a", []byte("anything"))
-	assert.Equal(t, 0, c.Len(), "zero budget should reject all puts")
+	assert.Equal(t, 1, c.Len(), "zero budget means unlimited (no eviction)")
+	_, ok := c.Get("a")
+	assert.True(t, ok)
+}
+
+func TestCacheNegativeBudget(t *testing.T) {
+	c := NewCache(-1)
+	c.Put("a", []byte("anything"))
+	c.Put("b", []byte("more stuff"))
+	assert.Equal(t, 2, c.Len(), "negative budget means unlimited (no eviction)")
 }
 
 func TestCacheConcurrent(t *testing.T) {

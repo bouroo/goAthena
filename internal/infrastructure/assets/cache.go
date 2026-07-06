@@ -22,9 +22,6 @@ type cacheEntry struct {
 // NewCache constructs an LRU cache bounded by maxBytes total payload size.
 // A non-positive maxBytes disables the budget (no eviction on size).
 func NewCache(maxBytes int64) *Cache {
-	if maxBytes < 0 {
-		maxBytes = 0
-	}
 	return &Cache{
 		maxBytes: maxBytes,
 		ll:       list.New(),
@@ -64,10 +61,12 @@ func (c *Cache) Put(key string, value []byte) {
 		c.usedBytes += int64(len(value))
 	}
 
-	for c.maxBytes >= 0 && c.usedBytes > c.maxBytes {
-		c.evictOldest()
-		if c.ll.Len() == 0 {
-			break
+	if c.maxBytes > 0 {
+		for c.usedBytes > c.maxBytes {
+			c.evictOldest()
+			if c.ll.Len() == 0 {
+				break
+			}
 		}
 	}
 }

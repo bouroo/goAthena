@@ -75,6 +75,25 @@ func (f *fakeStore) HGetAll(_ context.Context, key string) (map[string]string, e
 	return out, nil
 }
 
+func (f *fakeStore) HGetAllMulti(_ context.Context, keys []string) (map[string]map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]map[string]string, len(keys))
+	for _, key := range keys {
+		h, ok := f.hashes[key]
+		if !ok {
+			out[key] = map[string]string{}
+			continue
+		}
+		cp := make(map[string]string, len(h))
+		for k, v := range h {
+			cp[k] = v
+		}
+		out[key] = cp
+	}
+	return out, nil
+}
+
 func (f *fakeStore) Del(_ context.Context, keys ...string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -50,6 +50,14 @@ func TestTransitRequestSubject_SanitizesDots(t *testing.T) {
 		"dots in target zone must be replaced so subject hierarchy stays unambiguous")
 }
 
+func TestTransitRequestSubject_SanitizesWildcards(t *testing.T) {
+	t.Parallel()
+
+	got := natsinfra.TransitRequestSubject("zone*evil")
+	assert.Equal(t, "zone.transit.request.zone_evil", got,
+		"asterisk wildcard must be replaced to prevent wildcard injection")
+}
+
 func TestTransitInboxSubject(t *testing.T) {
 	t.Parallel()
 

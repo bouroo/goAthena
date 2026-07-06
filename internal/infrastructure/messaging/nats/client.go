@@ -149,8 +149,9 @@ func (c *Client) Publish(ctx context.Context, subject string, data []byte) error
 
 // PublishRequest publishes a request and waits for a reply. The reply
 // timeout is taken from ctx if it carries a deadline; otherwise the
-// default (defaultRequestTimeout) is used. It returns the reply payload
-// or an error wrapping nats.ErrTimeout on timeout.
+// default (defaultRequestTimeout) is applied so the request cannot hang
+// indefinitely. It returns the reply payload or an error wrapping
+// nats.ErrTimeout on timeout.
 func (c *Client) PublishRequest(ctx context.Context, subject string, data []byte) ([]byte, error) {
 	if c == nil || c.nc == nil {
 		return nil, fmt.Errorf("nats: request %q: client is nil", subject)
@@ -158,13 +159,14 @@ func (c *Client) PublishRequest(ctx context.Context, subject string, data []byte
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("nats: request %q: %w", subject, err)
 	}
-	timeout := defaultRequestTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining > 0 && remaining < timeout {
-			timeout = remaining
-		}
+	// If the caller did not set a deadline, apply the default request
+	// timeout so the request cannot hang indefinitely.
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultRequestTimeout)
+		defer cancel()
 	}
-	msg, err := c.nc.Request(subject, data, timeout)
+	msg, err := c.nc.RequestWithContext(ctx, subject, data)
 	if err != nil {
 		return nil, fmt.Errorf("nats: request %q: %w", subject, err)
 	}

@@ -87,14 +87,15 @@ func GuildSubject(guildID uint32) string {
 	return SubjectGuildPrefix + "." + strconv.FormatUint(uint64(guildID), 10)
 }
 
-// sanitizeToken replaces NATS-token delimiters ("." and ">") with "_" so a
-// caller-supplied id cannot create a new subject level or a wildcard scope.
-// All current callers pass either a UUID fragment (RFC 4122 hex + "-", no
-// dots) or a uint32 (no dots); this is a defensive net for future id
-// formats (e.g. FQDN-style zone ids).
+// sanitizeToken replaces NATS wildcard and delimiter characters (".", ">", "*")
+// with "_" so a caller-supplied id cannot create a new subject level, match
+// across token boundaries, or inject a wildcard scope. All current callers
+// pass either a UUID fragment (RFC 4122 hex + "-", no dots) or a uint32 (no
+// dots); this is a defensive net for future id formats (e.g. FQDN-style
+// zone ids).
 func sanitizeToken(s string) string {
 	if s == "" {
 		return ""
 	}
-	return strings.NewReplacer(".", "_", ">", "_").Replace(s)
+	return strings.NewReplacer(".", "_", ">", "_", "*", "_").Replace(s)
 }

@@ -129,6 +129,42 @@ func (s *valkeyStore) HGetAll(ctx context.Context, key string) (map[string]strin
 	return pairs, nil
 }
 
+func (s *valkeyStore) HGetAllMulti(ctx context.Context, keys []string) (map[string]map[string]string, error) {
+	if len(keys) == 0 {
+		return map[string]map[string]string{}, nil
+	}
+	commands := make([]valkeygo.Completed, len(keys))
+	for i, key := range keys {
+		commands[i] = s.client.B().Hgetall().Key(key).Build()
+	}
+	results := s.client.DoMulti(ctx, commands...)
+
+	out := make(map[string]map[string]string, len(keys))
+	for i, resp := range results {
+		key := keys[i]
+		if err := resp.Error(); err != nil {
+			if valkeygo.IsValkeyNil(err) {
+				out[key] = map[string]string{}
+				continue
+			}
+			return nil, fmt.Errorf("valkey hgetallmulti %s: %w", key, err)
+		}
+		pairs, err := resp.AsStrMap()
+		if err != nil {
+			if valkeygo.IsValkeyNil(err) {
+				out[key] = map[string]string{}
+				continue
+			}
+			return nil, fmt.Errorf("valkey hgetallmulti %s decode: %w", key, err)
+		}
+		if pairs == nil {
+			pairs = map[string]string{}
+		}
+		out[key] = pairs
+	}
+	return out, nil
+}
+
 func (s *valkeyStore) Del(ctx context.Context, keys ...string) error {
 	if len(keys) == 0 {
 		return nil
@@ -312,18 +348,35 @@ func (r *registry) ListCharactersOnZone(ctx context.Context, zoneID string) ([]d
 	if err != nil {
 		return nil, fmt.Errorf("registry: list zone %s: %w", zoneID, err)
 	}
-	out := make([]domain.CharacterLocation, 0, len(members))
+	if len(members) == 0 {
+		return []domain.CharacterLocation{}, nil
+	}
+
+	charIDs := make([]uint32, 0, len(members))
+	keys := make([]string, 0, len(members))
 	for _, m := range members {
 		charID, err := strconv.ParseUint(m, 10, 32)
 		if err != nil {
 			continue
 		}
-		loc, err := r.lookupLocation(ctx, uint32(charID))
+		charIDs = append(charIDs, uint32(charID))
+		keys = append(keys, charLocationKey(uint32(charID)))
+	}
+
+	batch, err := r.store.HGetAllMulti(ctx, keys)
+	if err != nil {
+		return nil, fmt.Errorf("registry: batch lookup zone %s: %w", zoneID, err)
+	}
+
+	out := make([]domain.CharacterLocation, 0, len(charIDs))
+	for i, charID := range charIDs {
+		fields := batch[keys[i]]
+		if len(fields) == 0 {
+			continue
+		}
+		loc, err := fieldsToLocation(charID, fields)
 		if err != nil {
-			if errors.Is(err, domain.ErrCharacterNotFound) {
-				continue
-			}
-			return nil, err
+			return nil, fmt.Errorf("registry: decode character %d: %w", charID, err)
 		}
 		out = append(out, loc)
 	}
