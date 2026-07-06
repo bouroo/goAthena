@@ -183,6 +183,51 @@ func TestGRFCloseIdempotent(t *testing.T) {
 	assert.Nil(t, g.file)
 }
 
+func TestGRFRejectsOversizedCompressedSize(t *testing.T) {
+	g, err := Open(writeGRF02xx(t, map[string][]byte{
+		"data/readme.txt": []byte("hello world"),
+	}))
+	require.NoError(t, err)
+	defer g.Close()
+
+	e, ok := g.entries["data/readme.txt"]
+	require.True(t, ok)
+	e.compressedSize = e.rawSizeAligned + 1024
+
+	_, err = g.ReadFile("data/readme.txt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "compressed size")
+}
+
+func TestGRFRejectsOversizedTableSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "huge.grf")
+
+	var hdr [grfHeaderSize]byte
+	copy(hdr[:15], grfMagic)
+	binary.LittleEndian.PutUint32(hdr[0x1e:], 0)
+	binary.LittleEndian.PutUint32(hdr[0x22:], 0)
+	binary.LittleEndian.PutUint32(hdr[0x26:], 7)
+	binary.LittleEndian.PutUint32(hdr[0x2a:], grfVersion02xx<<8)
+
+	var eheader [8]byte
+	binary.LittleEndian.PutUint32(eheader[:], 2)
+	binary.LittleEndian.PutUint32(eheader[4:], 300*1024*1024)
+
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	_, err = f.Write(hdr[:])
+	require.NoError(t, err)
+	_, err = f.Write(eheader[:])
+	require.NoError(t, err)
+	_, err = f.Write([]byte{0x78, 0x9c})
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, err = Open(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum")
+}
+
 func TestDESRoundTrip(t *testing.T) {
 	original := []byte("ABCDEFGH")
 	enc := append([]byte(nil), original...)

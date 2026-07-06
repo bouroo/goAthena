@@ -305,6 +305,29 @@ func TestAcquireZoneLock_FirstHolderWins(t *testing.T) {
 	assert.True(t, errors.Is(err, domain.ErrLockHeld))
 }
 
+func TestListCharactersOnZone_SkipsCorruptedEntry(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	ctx := context.Background()
+	r := service.NewRegistry(store, service.WithClock(fixedClock(time.Now())))
+
+	require.NoError(t, r.RegisterCharacter(ctx, domain.CharacterLocation{
+		CharID: 1, AccountID: 10, ZoneID: "zone-a", MapName: "prontera",
+	}))
+	require.NoError(t, r.RegisterCharacter(ctx, domain.CharacterLocation{
+		CharID: 2, AccountID: 11, ZoneID: "zone-a", MapName: "prontera",
+	}))
+
+	store.mu.Lock()
+	store.hashes["char:location:1"]["account_id"] = "not-a-number"
+	store.mu.Unlock()
+
+	got, err := r.ListCharactersOnZone(ctx, "zone-a")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, uint32(2), got[0].CharID)
+}
+
 func TestReleaseZoneLock_OnlyOwnerCanRelease(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()

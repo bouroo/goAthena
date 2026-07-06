@@ -62,6 +62,16 @@ func (c *Cache) Put(key string, value []byte) {
 	}
 
 	if c.maxBytes > 0 {
+		// If the single item exceeds the budget, remove it and return.
+		// This prevents evicting the entire cache for one oversized entry.
+		if int64(len(value)) > c.maxBytes {
+			if el, ok := c.items[key]; ok {
+				c.ll.Remove(el)
+				delete(c.items, key)
+				c.usedBytes -= int64(len(value))
+			}
+			return
+		}
 		for c.usedBytes > c.maxBytes {
 			c.evictOldest()
 			if c.ll.Len() == 0 {

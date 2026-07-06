@@ -102,3 +102,15 @@ func TestCacheConcurrent(t *testing.T) {
 	wg.Wait()
 	assert.Greater(t, c.Len(), 0)
 }
+
+func TestCacheOversizedItemRejected(t *testing.T) {
+	c := NewCache(10)
+	c.Put("a", []byte("12345"))
+	c.Put("big", []byte("this is way too long for the budget"))
+
+	_, ok := c.Get("big")
+	assert.False(t, ok, "oversized item must not be retained")
+	_, ok = c.Get("a")
+	assert.True(t, ok, "previously-cached entry must survive an oversized insert")
+	assert.Equal(t, 1, c.Len())
+}

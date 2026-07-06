@@ -23,6 +23,8 @@ const (
 	fileFlagEncryptHeader = 0x04
 
 	desBlocksHeader = 20
+
+	maxGRFTableSize = 256 * 1024 * 1024 // 256 MB — guards against malicious GRF headers
 )
 
 var (
@@ -222,6 +224,9 @@ func (g *GRF) parse02xx() error {
 	}
 	defer func() { _ = zr.Close() }()
 
+	if eSize > maxGRFTableSize {
+		return fmt.Errorf("grf: decompressed table size %d exceeds maximum %d", eSize, maxGRFTableSize)
+	}
 	table := make([]byte, eSize)
 	if _, err := io.ReadFull(zr, table); err != nil {
 		return fmt.Errorf("decompress table: %w", err)
@@ -269,6 +274,10 @@ func (g *GRF) readEntry(e *grfEntry) ([]byte, error) {
 	buf := make([]byte, bufSize)
 	if _, err := g.file.ReadAt(buf, int64(e.offset)); err != nil {
 		return nil, fmt.Errorf("grf: read %q at %d: %w", e.name, e.offset, err)
+	}
+
+	if int64(e.compressedSize) > int64(len(buf)) {
+		return nil, fmt.Errorf("grf: compressed size %d exceeds buffer size %d for %q", e.compressedSize, len(buf), e.name)
 	}
 
 	if err := grfDecode(buf, e.flags, int(e.compressedSize)); err != nil {

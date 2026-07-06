@@ -311,11 +311,11 @@ func (r *registry) UnregisterCharacter(ctx context.Context, charID uint32) error
 		return err
 	}
 	charIDStr := strconv.FormatUint(uint64(charID), 10)
-	if err := r.store.Del(ctx, charLocationKey(charID)); err != nil {
-		return fmt.Errorf("registry: unregister character %d: %w", charID, err)
-	}
 	if err := r.store.SRem(ctx, zoneCharsKey(loc.ZoneID), charIDStr); err != nil {
 		return fmt.Errorf("registry: unregister character %d from zone %s: %w", charID, loc.ZoneID, err)
+	}
+	if err := r.store.Del(ctx, charLocationKey(charID)); err != nil {
+		return fmt.Errorf("registry: unregister character %d: %w", charID, err)
 	}
 	return nil
 }
@@ -376,7 +376,7 @@ func (r *registry) ListCharactersOnZone(ctx context.Context, zoneID string) ([]d
 		}
 		loc, err := fieldsToLocation(charID, fields)
 		if err != nil {
-			return nil, fmt.Errorf("registry: decode character %d: %w", charID, err)
+			continue
 		}
 		out = append(out, loc)
 	}

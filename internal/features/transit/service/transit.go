@@ -133,7 +133,7 @@ func (t *transit) InitiateTransit(ctx context.Context, req domain.TransitRequest
 		return nil, fmt.Errorf("transit: decode ack from %s for char %d: %w", req.TargetZone, req.Snapshot.CharID, err)
 	}
 	if !ack.Accepted {
-		return ack, fmt.Errorf("transit: target %s rejected char %d: %w: %s",
+		return nil, fmt.Errorf("transit: target %s rejected char %d: %w: %s",
 			req.TargetZone, req.Snapshot.CharID, domain.ErrTransitRejected, ack.Reason)
 	}
 	return ack, nil
