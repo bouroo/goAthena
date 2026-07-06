@@ -59,12 +59,32 @@ func TestRun_ShutdownOnContextCancel(t *testing.T) {
 		},
 		Valkey: config.ValkeyConfig{Host: "127.0.0.1", Port: 6379, DB: 0},
 		NATS:   config.NATSConfig{URL: "nats://127.0.0.1:4222", ConnectTimeout: 5 * time.Second},
-		OTel:   config.OTelConfig{Exporter: "none", ServiceName: "test", Sampling: 1.0},
-		Log:    config.LogConfig{Level: "info", Format: "json"},
+		Zone: config.ZoneConfig{
+			TickRate:      50 * time.Millisecond,
+			MapDir:        "./data/maps",
+			DefaultMap:    "prontera",
+			MoveSpeed:     150,
+			ShutdownGrace: 30 * time.Second,
+		},
+		OTel: config.OTelConfig{Exporter: "none", ServiceName: "test", Sampling: 1.0},
+		Log:  config.LogConfig{Level: "info", Format: "json"},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg) }()
+
+	// Allow boot to complete (telemetry + tick loop + Agones Ready).
+	time.Sleep(200 * time.Millisecond)
+
 	cancel()
 
-	require.NoError(t, Run(ctx, cfg))
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return within 3s after context cancel")
+	}
 }

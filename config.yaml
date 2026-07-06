@@ -67,6 +67,13 @@ identity:
   use_md5_passwords: false
   max_chars: 15
 
+zone:
+  tick_rate: 50ms
+  map_dir: ./data/maps
+  default_map: prontera
+  move_speed: 150
+  shutdown_grace: 30s
+
 log:
   level: info
   format: json
