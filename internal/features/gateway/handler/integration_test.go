@@ -41,7 +41,7 @@ func newRecordingHandler() *recordingHandler {
 	}, 16)}
 }
 
-func (h *recordingHandler) HandlePacket(_ context.Context, info domain.ConnectionInfo, cmd uint16, frame []byte) error {
+func (h *recordingHandler) HandlePacket(_ context.Context, info domain.ConnectionInfo, _ domain.Responder, cmd uint16, frame []byte) error {
 	cp := make([]byte, len(frame))
 	copy(cp, frame)
 	h.mu.Lock()

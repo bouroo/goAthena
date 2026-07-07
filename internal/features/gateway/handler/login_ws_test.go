@@ -1,0 +1,298 @@
+//go:build unit
+
+// WS-driven end-to-end login test. This file spawns a real
+// *handler.WSHandler in-process, dials it with a coder/websocket client
+// as a roBrowser-style peer, sends a real CA_LOGIN frame, and asserts
+// that the dispatch handler emits a real AC_ACCEPT_LOGIN reply on the
+// WebSocket. It is the L3 evidence for the M1b increment.
+package handler
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/rs/zerolog"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
+	"github.com/bouroo/goAthena/internal/features/gateway/domain"
+	"github.com/bouroo/goAthena/pkg/ro/packet"
+)
+
+// loginFakeIdentityClient is a hand-rolled stand-in for
+// identityv1.IdentityServiceClient. Tests configure the two fn fields
+// to control the Authenticate / GetCharacterList responses. We
+// deliberately avoid mockgen: a tiny fake keeps the test
+// self-contained and trivially diffable against the gRPC interface.
+type loginFakeIdentityClient struct {
+	authFn  func(context.Context, *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error)
+	charsFn func(context.Context, *identityv1.GetCharacterListRequest) (*identityv1.GetCharacterListResponse, error)
+}
+
+func (f *loginFakeIdentityClient) Authenticate(ctx context.Context, req *identityv1.AuthenticateRequest, _ ...grpc.CallOption) (*identityv1.AuthenticateResponse, error) {
+	if f.authFn == nil {
+		return nil, status.Error(codes.Unimplemented, "no auth fn")
+	}
+	return f.authFn(ctx, req)
+}
+
+func (f *loginFakeIdentityClient) GetCharacterList(ctx context.Context, req *identityv1.GetCharacterListRequest, _ ...grpc.CallOption) (*identityv1.GetCharacterListResponse, error) {
+	if f.charsFn == nil {
+		return nil, status.Error(codes.Unimplemented, "no chars fn")
+	}
+	return f.charsFn(ctx, req)
+}
+
+// wsDispatchAdapter mirrors service.DispatchHandler for the WS path so
+// this test exercises the full real WSHandler → processBytes →
+// domain.PacketHandler → identity client → AC_ACCEPT_LOGIN → WS write
+// round trip. The shape intentionally tracks service/dispatch.go; if
+// that file's wire mapping changes, mirror the change here.
+type wsDispatchAdapter struct {
+	identity  identityv1.IdentityServiceClient
+	packetver uint32
+	logger    zerolog.Logger
+}
+
+func (a *wsDispatchAdapter) HandlePacket(ctx context.Context, conn domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
+	if cmd != packet.HeaderCALOGIN {
+		return nil
+	}
+	req, parseErr := packet.ParseCALogin(frame)
+	if parseErr != nil {
+		a.logger.Warn().Err(parseErr).Msg("malformed CA_LOGIN; dropping")
+		return nil
+	}
+
+	gResp, err := a.identity.Authenticate(ctx, &identityv1.AuthenticateRequest{
+		Username:  req.Username,
+		Password:  []byte(req.Password),
+		Packetver: a.packetver,
+		ClientIp:  conn.RemoteIP,
+		Method:    identityv1.AuthMethod_AUTH_METHOD_PASSWORD,
+	})
+	if err != nil {
+		a.logger.Error().Err(err).Msg("identity Authenticate RPC failed")
+		return wsSendRefuse(resp, 99)
+	}
+	if gResp.GetResult() != identityv1.AuthResult_AUTH_RESULT_OK {
+		return wsSendRefuse(resp, gResp.GetErrorCode())
+	}
+
+	accept := packet.AcceptLoginResponse{
+		LoginID1:  uint32(gResp.GetLoginId1()),
+		AID:       gResp.GetAccountId(),
+		LoginID2:  uint32(gResp.GetLoginId2()),
+		LastLogin: gResp.GetLastLogin(),
+		Sex:       wsSexByte(gResp.GetSex()),
+		Token:     gResp.GetToken(),
+	}
+	for _, cs := range gResp.GetCharServers() {
+		if cs == nil {
+			continue
+		}
+		accept.CharServers = append(accept.CharServers, packet.CharServer{
+			IP:    wsParseIPv4(cs.GetIp()),
+			Port:  wsClampUint16(cs.GetPort()),
+			Name:  cs.GetName(),
+			Users: wsClampUint16(cs.GetUsers()),
+			Type:  wsClampUint16(cs.GetServerType()),
+		})
+	}
+	return encodeAcceptAndSend(resp, accept)
+}
+
+// wsSendRefuse encodes an AC_REFUSE_LOGIN onto resp.
+func wsSendRefuse(resp domain.Responder, code uint32) error {
+	refuse := packet.RefuseLoginResponse{Error: code}
+	var buf bytes.Buffer
+	if err := refuse.Encode(&buf); err != nil {
+		return err
+	}
+	return resp.SendPacket(buf.Bytes())
+}
+
+// encodeAcceptAndSend writes the AcceptLoginResponse through the
+// Responder port, matching the production path in service/dispatch.go.
+func encodeAcceptAndSend(resp domain.Responder, accept packet.AcceptLoginResponse) error {
+	var buf bytes.Buffer
+	if err := accept.Encode(&buf); err != nil {
+		return err
+	}
+	return resp.SendPacket(buf.Bytes())
+}
+
+func wsSexByte(s string) uint8 {
+	switch s {
+	case "F":
+		return 0
+	case "M":
+		return 1
+	case "S":
+		return 2
+	default:
+		return 0
+	}
+}
+
+// wsParseIPv4 converts a dotted-quad string to network byte order
+// uint32; returns 0 on parse failure. Tiny dotted-quad parser kept
+// inline to avoid an extra netip import for one function.
+func wsParseIPv4(s string) uint32 {
+	if s == "" {
+		return 0
+	}
+	var b [4]byte
+	dot := 0
+	digit := func(c byte) bool { return c >= '0' && c <= '9' }
+	num := uint32(0)
+	hasDigit := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '.' {
+			if !hasDigit || dot >= 3 || num > 255 {
+				return 0
+			}
+			b[dot] = byte(num)
+			dot++
+			num = 0
+			hasDigit = false
+			continue
+		}
+		if !digit(c) {
+			return 0
+		}
+		num = num*10 + uint32(c-'0')
+		hasDigit = true
+	}
+	if dot != 3 || !hasDigit || num > 255 {
+		return 0
+	}
+	b[3] = byte(num)
+	return binary.BigEndian.Uint32(b[:])
+}
+
+// wsClampUint16 saturates a uint32 into uint16.
+func wsClampUint16(v uint32) uint16 {
+	if v > 0xffff {
+		return 0
+	}
+	return uint16(v) //nolint:gosec // guarded above
+}
+
+// TestWSHandler_LoginRoundTrip_ReturnsACAcceptLogin is the headline
+// M1b evidence. A real WSHandler is mounted on an httptest server, a
+// coder/websocket client dials ws://.../ws/, sends a 55-byte CA_LOGIN
+// binary message, and reads the response. The response must be a
+// binary WebSocket message whose first two bytes are 0xc4 0x0a
+// (AC_ACCEPT_LOGIN), with a PacketLength of 224 (one 160-byte
+// char-server entry padded onto the 64-byte fixed header) and the
+// AID encoded in the spot the dispatch adapter configured.
+func TestWSHandler_LoginRoundTrip_ReturnsACAcceptLogin(t *testing.T) {
+	adapter := &wsDispatchAdapter{
+		identity: &loginFakeIdentityClient{
+			authFn: func(_ context.Context, _ *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error) {
+				return &identityv1.AuthenticateResponse{
+					Result:    identityv1.AuthResult_AUTH_RESULT_OK,
+					AccountId: 99,
+					LoginId1:  0xdead,
+					LoginId2:  0xbeef,
+					Sex:       "M",
+					Token:     "tok",
+					CharServers: []*identityv1.CharServerInfo{
+						{Ip: "10.0.0.10", Port: 6121, Name: "CharRO", ServerType: 0},
+					},
+				}, nil
+			},
+		},
+		packetver: 20250604,
+		logger:    zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.Disabled),
+	}
+
+	db := packet.NewLoginServerDB()
+	h := NewWSHandler(db, adapter, "unused", "/ws/",
+		zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.Disabled), nil)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(h.path, h.ServeHTTP)
+	mux.HandleFunc("/", h.rejectNonUpgrade)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wsURL := wsURLFromTestServer(t, srv.URL) + h.path
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPClient: srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("ws dial: %v", err)
+	}
+	defer func() { _ = client.Close(websocket.StatusNormalClosure, "") }()
+
+	frame := make([]byte, 55)
+	binary.LittleEndian.PutUint16(frame[0:2], packet.HeaderCALOGIN)
+	binary.LittleEndian.PutUint32(frame[2:6], 20250604)
+	copy(frame[6:30], "browseruser")
+	copy(frame[30:54], "browserpass")
+	frame[54] = 0
+
+	if err := client.Write(ctx, websocket.MessageBinary, frame); err != nil {
+		t.Fatalf("ws write: %v", err)
+	}
+
+	readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer readCancel()
+	msgType, data, err := client.Read(readCtx)
+	if err != nil {
+		t.Fatalf("ws read: %v", err)
+	}
+	if msgType != websocket.MessageBinary {
+		t.Fatalf("response msg type = %s, want binary", msgType.String())
+	}
+	if len(data) < 4 {
+		t.Fatalf("response too short: %d bytes", len(data))
+	}
+	if data[0] != 0xc4 || data[1] != 0x0a {
+		t.Fatalf("response first two bytes = %x, want 0xc4 0x0a (AC_ACCEPT_LOGIN)", data[:2])
+	}
+	// Expected wire length for one char-server entry: 64 + 160 = 224.
+	if len(data) != 224 {
+		t.Fatalf("response length = %d, want 224 (64 + 160)", len(data))
+	}
+	if got := binary.LittleEndian.Uint16(data[2:4]); got != 224 {
+		t.Fatalf("response packetLength = %d, want 224", got)
+	}
+	if got := binary.LittleEndian.Uint32(data[8:12]); got != 99 {
+		t.Fatalf("response AID = %d, want 99", got)
+	}
+}
+
+// wsURLFromTestServer converts an http:// test-server URL to ws://.
+func wsURLFromTestServer(t *testing.T, httpURL string) string {
+	t.Helper()
+	u, err := url.Parse(httpURL)
+	if err != nil {
+		t.Fatalf("parse test server url %q: %v", httpURL, err)
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	default:
+		t.Fatalf("unexpected test server scheme %q", u.Scheme)
+	}
+	return u.String()
+}
