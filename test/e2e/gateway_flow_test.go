@@ -44,17 +44,6 @@ const acceptEnterHeaderSize = 27
 // (rathena/src/common/packets.hpp:31-105 — name at offset 108).
 const acceptEnterCharNameOffset = 108
 
-// sexByteFromString converts a one-letter sex string ("M"/"F") to the
-// kRO wire byte (1=male, 0=female). Mirrors the inverse of the
-// dispatcher's sexString helper in internal/features/gateway/service/
-// dispatch.go.
-func sexByteFromString(s string) uint8 {
-	if s == "M" {
-		return 1
-	}
-	return 0
-}
-
 // feedAndNext drains bytes available from conn under the supplied
 // deadline, feeds them into dec, and returns the next fully framed
 // packet (cmd, frame). It returns an error if the deadline elapses or
@@ -133,6 +122,9 @@ func stageCALogin(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline t
 		t.Fatalf("CA_LOGIN response cmd = 0x%04x, want 0x%04x (AC_ACCEPT_LOGIN); frame=% x",
 			cmd, packet.HeaderACACCEPTLOGIN, frame)
 	}
+	if len(frame) < 47 {
+		t.Fatalf("AC_ACCEPT_LOGIN frame too short: got %d bytes, want at least 47", len(frame))
+	}
 	// AC_ACCEPT_LOGIN layout (modern, PACKETVER >= 20170315):
 	//   [0:2]   cmd 0x0ac4
 	//   [2:4]   packetLength (uint16 LE)
@@ -210,6 +202,9 @@ func stageCHSelectChar(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadl
 	if cmd != packet.HeaderHCNOTIFYZONESVR {
 		t.Fatalf("CH_SELECT_CHAR response cmd = 0x%04x, want 0x%04x (HC_NOTIFY_ZONESVR); frame=% x",
 			cmd, packet.HeaderHCNOTIFYZONESVR, frame)
+	}
+	if len(frame) < 28 {
+		t.Fatalf("HC_NOTIFY_ZONESVR frame too short: got %d bytes, want at least 28", len(frame))
 	}
 	// HC_NOTIFY_ZONESVR layout (PACKETVER >= 20170315):
 	//   [0:2]    cmd 0x0ac5
