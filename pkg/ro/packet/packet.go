@@ -12,6 +12,8 @@
 // deferred to P1.2b.
 package packet
 
+import "maps"
+
 // Direction indicates whether a packet is client→server or server→client.
 type Direction int
 
@@ -104,4 +106,15 @@ func (db *DB) Has(cmd uint16) bool {
 // Size returns the number of registered packet definitions.
 func (db *DB) Size() int {
 	return len(db.entries)
+}
+
+// Merge copies every definition from other into db. Already-present IDs are
+// overwritten with the same leniency as Register (no panic, no duplicate
+// insertion). Merge does not clear other, so callers may continue to use it
+// after merging.
+//
+// This is how the gateway combines the login-server and char-server packet
+// sets into one DB without forcing each subsystem to know the other's IDs.
+func (db *DB) Merge(other *DB) {
+	maps.Copy(db.entries, other.entries)
 }
