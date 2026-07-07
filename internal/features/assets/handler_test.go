@@ -52,6 +52,7 @@ func newTestHandler(t *testing.T) (*AssetHandler, *stubReader) {
 		"data/sprite/x.spr":     []byte("spr-data"),
 		"data/sprite/y.act":     []byte("act-data"),
 		"data/file.bin":         []byte("binary"),
+		"data/v1.2/sprite.png":  {0x89, 0x50, 0x4E, 0x47},
 	}}
 	return NewAssetHandler(stub, logger), stub
 }
@@ -153,6 +154,8 @@ func TestAssetHandler_ContentType(t *testing.T) {
 		{"/assets/data/sprite/x.spr", "application/octet-stream", "8"},
 		{"/assets/data/sprite/y.act", "application/octet-stream", "8"},
 		{"/assets/data/file.bin", "application/octet-stream", "6"},
+		// directory with a dot must still resolve the file extension.
+		{"/assets/data/v1.2/sprite.png", "image/png", "4"},
 	}
 
 	for _, tc := range cases {
@@ -196,23 +199,54 @@ func TestAssetHandler_MethodNotAllowed(t *testing.T) {
 	h.ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	require.Equal(t, "GET, HEAD, OPTIONS", rr.Header().Get("Allow"))
 	require.Equal(t, "*", rr.Header().Get("Access-Control-Allow-Origin"))
 }
 
 func TestAssetHandler_PathTraversalRejected(t *testing.T) {
 	t.Parallel()
 
-	h, stub := newTestHandler(t)
-	stub.files["data/safe.bin"] = []byte("ok")
+	h, _ := newTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/assets/data/../safe.bin", nil)
 	rr := httptest.NewRecorder()
 
 	h.ServeHTTP(rr, req)
 
-	// path.Clean collapses ../ → "safe.bin"; the stub doesn't have it
-	// at that name, so we expect 404 (not 200).
 	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestAssetHandler_PathTraversal(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"unix_relative_parent", "/assets/../../../etc/passwd"},
+		{"unix_relative_parent_deep", "/assets/foo/../../../../etc/passwd"},
+		{"windows_backslash", "/assets/..\\..\\etc\\passwd"},
+		{"bare_dotdot", "/assets/.."},
+		{"mixed_slash", "/assets/data/.././../../etc/shadow"},
+		{"encoded_not_decoded", "/assets/%2e%2e/etc/passwd"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h, _ := newTestHandler(t)
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			rr := httptest.NewRecorder()
+
+			h.ServeHTTP(rr, req)
+
+			require.NotEqual(t, http.StatusOK, rr.Code,
+				"traversal path %q must not return 200", tc.path)
+			require.NotContains(t, rr.Body.String(), "root:x:",
+				"traversal path %q leaked /etc/passwd contents", tc.path)
+		})
+	}
 }
 
 func TestAssetHandler_ReadError(t *testing.T) {
@@ -241,26 +275,33 @@ func (e *errorReader) ReadFile(_ string) ([]byte, error) {
 
 func (e *errorReader) HasFile(_ string) bool { return true }
 
-func TestResolveGRFPath(t *testing.T) {
+func TestSanitizePath(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		in   string
-		want string
+		in     string
+		want   string
+		wantOk bool
 	}{
-		{"/assets/", ""},
-		{"/assets", ""},
-		{"/assets/data/sprite/abc.spr", "data/sprite/abc.spr"},
-		{"/assets/data/../safe.bin", "safe.bin"},
-		{"/other/data/x.png", ""},
-		{"/assets//double//slash.lua", "double/slash.lua"},
+		{"/assets/", "", false},
+		{"/assets", "", false},
+		{"/assets/data/sprite/abc.spr", "data/sprite/abc.spr", true},
+		{"/assets/data/../safe.bin", "", false},
+		{"/assets/../../../etc/passwd", "", false},
+		{"/assets/..", "", false},
+		{"/other/data/x.png", "", false},
+		{"/assets//double//slash.lua", "double/slash.lua", true},
+		{"/assets/..\\..\\etc", "", false},
+		{"/assets/data/v1.2/sprite.png", "data/v1.2/sprite.png", true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
 			t.Parallel()
 
-			require.Equal(t, tc.want, resolveGRFPath(tc.in))
+			got, ok := sanitizePath(tc.in)
+			require.Equal(t, tc.wantOk, ok)
+			require.Equal(t, tc.want, got)
 		})
 	}
 }
@@ -287,6 +328,8 @@ func TestContentTypeFor(t *testing.T) {
 		"a.act":  "application/octet-stream",
 		"a.bin":  "application/octet-stream",
 		"a":      "application/octet-stream",
+		// Dots inside directory segments must not affect extension parsing.
+		"data/v1.2/sprite.png": "image/png",
 	}
 
 	for name, want := range cases {

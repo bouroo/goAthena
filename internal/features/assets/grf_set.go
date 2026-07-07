@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+
+	"github.com/rs/zerolog"
 
 	infraassets "github.com/bouroo/goAthena/internal/infrastructure/assets"
 )
@@ -19,8 +22,10 @@ var ErrNotFound = errors.New("assets: file not found")
 // GRFSet manages multiple GRF archives opened from a single directory.
 // Files are searched in lexicographic order; the first match wins.
 type GRFSet struct {
-	archives []*infraassets.GRF
-	cache    *infraassets.Cache
+	archives      []*infraassets.GRF
+	cache         *infraassets.Cache
+	maxCacheBytes int64
+	logger        *zerolog.Logger
 }
 
 // OpenGRFSet opens all .grf files in dir and returns a GRFSet. The
@@ -38,7 +43,7 @@ func OpenGRFSet(dir string, maxCacheBytes int64) (*GRFSet, error) {
 		if e.IsDir() {
 			continue
 		}
-		if ext := filepath.Ext(e.Name()); ext != ".grf" {
+		if ext := strings.ToLower(filepath.Ext(e.Name())); ext != ".grf" {
 			continue
 		}
 		names = append(names, e.Name())
@@ -62,14 +67,26 @@ func OpenGRFSet(dir string, maxCacheBytes int64) (*GRFSet, error) {
 	}
 
 	return &GRFSet{
-		archives: archives,
-		cache:    infraassets.NewCache(maxCacheBytes),
+		archives:      archives,
+		cache:         infraassets.NewCache(maxCacheBytes),
+		maxCacheBytes: maxCacheBytes,
 	}, nil
+}
+
+// AttachLogger wires a logger so ReadFile can emit a debug line when a
+// payload is too large to cache. Optional; nil disables logging.
+func (gs *GRFSet) AttachLogger(logger zerolog.Logger) {
+	l := logger.With().Str("component", "assets").Logger()
+	gs.logger = &l
 }
 
 // ReadFile returns the decompressed contents of name, searching each
 // archive in order. Results are cached in the LRU. Returns ErrNotFound
 // when no archive contains the file.
+//
+// Payloads larger than the cache budget are intentionally not cached:
+// the LRU eviction loop would otherwise drop every other entry to make
+// room for one oversized file, wasting the budget.
 func (gs *GRFSet) ReadFile(name string) ([]byte, error) {
 	if gs.cache != nil {
 		if data, ok := gs.cache.Get(name); ok {
@@ -87,8 +104,16 @@ func (gs *GRFSet) ReadFile(name string) ([]byte, error) {
 			lastErr = err
 			continue
 		}
-		if gs.cache != nil {
+		if gs.cache != nil && (gs.maxCacheBytes <= 0 || int64(len(data)) <= gs.maxCacheBytes) {
 			gs.cache.Put(name, data)
+		} else if gs.cache != nil && gs.maxCacheBytes > 0 {
+			if gs.logger != nil {
+				gs.logger.Debug().
+					Str("path", name).
+					Int("size", len(data)).
+					Int64("budget", gs.maxCacheBytes).
+					Msg("skip cache: payload exceeds budget")
+			}
 		}
 		return data, nil
 	}
@@ -119,4 +144,11 @@ func (gs *GRFSet) Close() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Shutdown releases all GRF file handles. It satisfies
+// do.ShutdownerWithError so samber/do/v2 calls it during
+// injector.Shutdown().
+func (gs *GRFSet) Shutdown() error {
+	return gs.Close()
 }

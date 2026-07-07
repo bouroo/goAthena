@@ -32,7 +32,9 @@ func Register(c do.Injector) error {
 		return fmt.Errorf("open grf set: %w", err)
 	}
 
+	set.AttachLogger(*logger)
 	handler := NewAssetHandler(set, *logger)
+	do.ProvideValue(c, set)
 	do.ProvideValue(c, handler)
 
 	logger.Info().

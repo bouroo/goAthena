@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/rs/zerolog"
@@ -50,12 +51,13 @@ func (h *AssetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD, OPTIONS")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	name := resolveGRFPath(r.URL.Path)
-	if name == "" {
+	name, ok := sanitizePath(r.URL.Path)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
@@ -100,28 +102,38 @@ func (h *AssetHandler) setCORS(w http.ResponseWriter) {
 	hdr.Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
-// resolveGRFPath strips the /assets/ mount prefix and cleans the
-// remaining path. Returns an empty string when the request is for the
-// mount root itself (no file requested).
-func resolveGRFPath(urlPath string) string {
+// sanitizePath strips the /assets/ mount prefix and returns a cleaned
+// GRF-relative path. The second return value is false when the request
+// targets the mount root itself, when the prefix is missing, or when
+// the path contains a directory-traversal segment (".." or "..\").
+//
+// Any ".." sequence anywhere in the path is rejected outright so the
+// value cannot be used to escape the archive namespace regardless of
+// downstream normalization quirks.
+func sanitizePath(rawPath string) (string, bool) {
 	const prefix = "/assets/"
-	if !strings.HasPrefix(urlPath, prefix) {
-		return ""
+	if !strings.HasPrefix(rawPath, prefix) {
+		return "", false
 	}
-	rest := strings.TrimPrefix(urlPath, prefix)
+	rest := strings.TrimPrefix(rawPath, prefix)
 	rest = strings.TrimPrefix(rest, "/")
-	rest = path.Clean(rest)
-	if rest == "." || rest == "/" || rest == "" {
-		return ""
+
+	if strings.Contains(rest, "..") {
+		return "", false
 	}
-	return rest
+
+	cleaned := path.Clean(rest)
+	if cleaned == "." || cleaned == "/" || cleaned == "" {
+		return "", false
+	}
+	return cleaned, true
 }
 
 // contentTypeFor returns a Content-Type header value for the GRF
 // file extension. Unknown extensions fall through to
 // application/octet-stream so the browser still caches them.
 func contentTypeFor(name string) string {
-	switch strings.ToLower(filepathExt(name)) {
+	switch strings.ToLower(filepath.Ext(name)) {
 	case ".png":
 		return "image/png"
 	case ".jpg", ".jpeg":
@@ -150,13 +162,3 @@ func contentTypeFor(name string) string {
 // assetMaxAgeSeconds is the Cache-Control max-age sent with successful
 // responses. Exposed as a constant for tests.
 const assetMaxAgeSeconds = 86400
-
-// filepathExt extracts the extension of name without an allocation
-// when name has no extension.
-func filepathExt(name string) string {
-	i := strings.LastIndex(name, ".")
-	if i < 0 {
-		return ""
-	}
-	return name[i:]
-}
