@@ -210,3 +210,77 @@ func TestParseCZRequestMove(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCZRequestTime(t *testing.T) {
+	t.Parallel()
+
+	// Known 6-byte frame: cmd 0x007e, clientTick = 0xDEADBEEF.
+	goodFrame := func() []byte {
+		f := make([]byte, sizeCZRequestTime)
+		writeLE16(f[0:], HeaderCZREQUESTTIME)
+		writeLE32(f[2:], 0xDEADBEEF)
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZRequestTimeRequest
+	}{
+		{
+			name:    "valid known frame",
+			frame:   goodFrame,
+			wantErr: false,
+			want: CZRequestTimeRequest{
+				ClientTick: 0xDEADBEEF,
+			},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZRequestTime-1),
+			wantErr:    true,
+			wantErrSub: "5",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, sizeCZRequestTime)
+				writeLE16(f[0:], HeaderCZENTER) // 0x0072 instead of 0x007e
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZRequestTime(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZRequestTime() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZRequestTime() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseCZRequestTime() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}

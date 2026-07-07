@@ -7,22 +7,30 @@ package packet
 // shuffle files. Until codegen lands (deferred to P1.2b) we hand-register the
 // minimal set required for the M3a map-server handshake:
 //
-//	ZC_ACCEPT_ENTER  (S→C, sent on successful CZ_ENTER)
-//	ZC_REFUSE_ENTER  (S→C, sent on rejected CZ_ENTER)
+//	ZC_ACCEPT_ENTER      (S→C, sent on successful CZ_ENTER)
+//	ZC_REFUSE_ENTER      (S→C, sent on rejected CZ_ENTER)
 //	ZC_NOTIFY_PLAYERMOVE (S→C, sent on accepted CZ_REQUEST_MOVE)
-//	ZC_SPAWN_UNIT    (S→C, sent after ZC_ACCEPT_ENTER for own entity)
-//	CZ_ENTER         (C→S, client requests to enter the map server)
-//	CZ_REQUEST_MOVE  (C→S, client requests a single step in a cardinal dir)
+//	ZC_SPAWN_UNIT        (S→C, sent after ZC_ACCEPT_ENTER for own entity)
+//	ZC_MAPPROPERTY_R2    (S→C, sent on CZ_NOTIFY_ACTORINIT after map load)
+//	ZC_NOTIFY_TIME       (S→C, sent on CZ_REQUEST_TIME ping)
+//	CZ_ENTER             (C→S, client requests to enter the map server)
+//	CZ_REQUEST_MOVE      (C→S, client requests a single step in a cardinal dir)
+//	CZ_NOTIFY_ACTORINIT  (C→S, client signals map load complete)
+//	CZ_REQUEST_TIME      (C→S, client requests server tick for latency)
 const (
 	// C→S — client → map server.
-	HeaderCZENTER       uint16 = 0x0072 // rathena/src/map/clif.cpp:10642 (CZ_ENTER)
-	HeaderCZREQUESTMOVE uint16 = 0x0085 // rathena/src/map/clif.cpp:11374 (CZ_REQUEST_MOVE)
+	HeaderCZENTER           uint16 = 0x0072 // rathena/src/map/clif.cpp:10642 (CZ_ENTER)
+	HeaderCZREQUESTMOVE     uint16 = 0x0085 // rathena/src/map/clif.cpp:11374 (CZ_REQUEST_MOVE)
+	HeaderCZNOTIFYACTORINIT uint16 = 0x007d // rathena/src/map/clif.cpp:10744 (CZ_NOTIFY_ACTORINIT / LoadEndAck)
+	HeaderCZREQUESTTIME     uint16 = 0x007e // rathena/src/map/clif.cpp:11198 (CZ_REQUEST_TIME / TickSend)
 
 	// S→C — map server → client.
 	HeaderZCACCEPTENTER      uint16 = 0x02eb // rathena/src/map/packets.hpp:571 (ZC_ACCEPT_ENTER, PACKETVER >= 20160330 branch)
 	HeaderZCREFUSEENTER      uint16 = 0x0074 // rathena/src/map/packets.hpp:590 (ZC_REFUSE_ENTER)
 	HeaderZCNOTIFYPLAYERMOVE uint16 = 0x0087 // rathena/src/map/packets.hpp (ZC_NOTIFY_PLAYERMOVE)
 	HeaderZCSPAWNUNIT        uint16 = 0x09fe // rathena/src/map/packets.hpp ZC_SPAWN_UNIT (PACKETVER >= 20150513 branch)
+	HeaderZCMAPPROPERTYR2    uint16 = 0x099b // rathena/src/map/clif.cpp:6869 (ZC_MAPPROPERTY_R2, PACKETVER >= 20121010)
+	HeaderZCNOTIFYTIME       uint16 = 0x007f // rathena/src/map/clif.cpp:11186 (ZC_NOTIFY_TIME)
 )
 
 // Fixed on-wire byte lengths derived from the packed struct layouts in
@@ -64,6 +72,18 @@ const (
 	// sizeSpawnUnitName is the on-wire name field width in
 	// ZC_SPAWN_UNIT (rathena/src/map/packets.hpp ZC_SPAWN_UNIT::name).
 	sizeSpawnUnitName = 24
+	// sizeCZNotifyActorInit = int16 packetType = 2 (cmd-only packet, no payload).
+	// rathena/src/map/clif.cpp:10744-10746.
+	sizeCZNotifyActorInit = 2
+	// sizeCZRequestTime = int16 packetType + uint32 clientTick = 2+4 = 6
+	// (rathena/src/map/clif.cpp:11198-11206).
+	sizeCZRequestTime = 6
+	// sizeZCMapPropertyR2 = int16 packetType + int16 propertyType + uint32 flags = 2+2+4 = 8
+	// (rathena/src/map/clif.cpp:6869-6902, PACKETVER >= 20121010 branch).
+	sizeZCMapPropertyR2 = 8
+	// sizeZCNotifyTime = int16 packetType + uint32 time = 2+4 = 6
+	// (rathena/src/map/clif.cpp:11186-11193).
+	sizeZCNotifyTime = 6
 )
 
 // NewMapServerDB returns a packet database pre-populated with all known
@@ -94,6 +114,18 @@ func NewMapServerDB() *DB {
 		Length:    sizeCZRequestMove,
 		Direction: DirectionClientToServer,
 	})
+	db.Register(Definition{
+		ID:        HeaderCZNOTIFYACTORINIT,
+		Name:      "CZ_NOTIFY_ACTORINIT",
+		Length:    sizeCZNotifyActorInit,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQUESTTIME,
+		Name:      "CZ_REQUEST_TIME",
+		Length:    sizeCZRequestTime,
+		Direction: DirectionClientToServer,
+	})
 
 	// --- S→C: map server → client.
 	db.Register(Definition{
@@ -118,6 +150,18 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCSPAWNUNIT,
 		Name:      "ZC_SPAWN_UNIT",
 		Length:    sizeZCSpawnUnit,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCMAPPROPERTYR2,
+		Name:      "ZC_MAPPROPERTY_R2",
+		Length:    sizeZCMapPropertyR2,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCNOTIFYTIME,
+		Name:      "ZC_NOTIFY_TIME",
+		Length:    sizeZCNotifyTime,
 		Direction: DirectionServerToClient,
 	})
 

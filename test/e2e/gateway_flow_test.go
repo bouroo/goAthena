@@ -31,6 +31,12 @@ const (
 	// zcNotifyPlayerMoveSize is the fixed length of ZC_NOTIFY_PLAYERMOVE
 	// (rathena/src/map/packets.hpp).
 	zcNotifyPlayerMoveSize = 12
+	// zcMapPropertyR2Size is the fixed length of ZC_MAPPROPERTY_R2
+	// (rathena/src/map/clif.cpp:6869-6902).
+	zcMapPropertyR2Size = 8
+	// zcNotifyTimeSize is the fixed length of ZC_NOTIFY_TIME
+	// (rathena/src/map/clif.cpp:11186-11193).
+	zcNotifyTimeSize = 6
 )
 
 // acceptEnterHeaderSize is the fixed prefix length of HC_ACCEPT_ENTER
@@ -316,6 +322,70 @@ func stageCZRequestMove(t *testing.T, conn net.Conn, dec *netcodec.Decoder, dead
 	t.Logf("CZ_REQUEST_MOVE ok: moved to (%d,%d)", gotDestX, gotDestY)
 }
 
+// stageCZNotifyActorInit sends CZ_NOTIFY_ACTORINIT (cmd-only, 2 bytes)
+// and asserts ZC_MAPPROPERTY_R2 carries MAPPROPERTY_NOTHING (type=0,
+// flags=0). The client sends this once after the map finishes
+// loading; without the response some client forks hang on a black
+// screen.
+func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration) {
+	t.Helper()
+	// CZ_NOTIFY_ACTORINIT is cmd-only (2 bytes, no payload).
+	buf := make([]byte, 2)
+	binary.LittleEndian.PutUint16(buf, packet.HeaderCZNOTIFYACTORINIT)
+	if _, err := conn.Write(buf); err != nil {
+		t.Fatalf("write CZ_NOTIFY_ACTORINIT: %v", err)
+	}
+
+	cmd, propFrame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_MAPPROPERTY_R2: %v", err)
+	}
+	if cmd != packet.HeaderZCMAPPROPERTYR2 {
+		t.Fatalf("CZ_NOTIFY_ACTORINIT response cmd = 0x%04x, want 0x%04x (ZC_MAPPROPERTY_R2); frame=% x",
+			cmd, packet.HeaderZCMAPPROPERTYR2, propFrame)
+	}
+	if len(propFrame) != zcMapPropertyR2Size {
+		t.Fatalf("ZC_MAPPROPERTY_R2 length = %d, want %d",
+			len(propFrame), zcMapPropertyR2Size)
+	}
+	// propertyType at [2:4] = 0 (MAPPROPERTY_NOTHING), flags at
+	// [4:8] = 0 — no maps carry PVP/GVG flags yet.
+	if pt := binary.LittleEndian.Uint16(propFrame[2:4]); pt != 0 {
+		t.Errorf("ZC_MAPPROPERTY_R2 propertyType = %d, want 0 (MAPPROPERTY_NOTHING)", pt)
+	}
+	if flags := binary.LittleEndian.Uint32(propFrame[4:8]); flags != 0 {
+		t.Errorf("ZC_MAPPROPERTY_R2 flags = 0x%x, want 0", flags)
+	}
+	t.Logf("CZ_NOTIFY_ACTORINIT ok: propertyType=0 flags=0")
+}
+
+// stageCZRequestTime sends CZ_REQUEST_TIME and asserts ZC_NOTIFY_TIME
+// arrives with a non-zero server tick.
+func stageCZRequestTime(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration) {
+	t.Helper()
+	const clientTick uint32 = 12345
+	if err := (packet.CZRequestTimeRequest{ClientTick: clientTick}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_REQUEST_TIME: %v", err)
+	}
+
+	cmd, timeFrame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_NOTIFY_TIME: %v", err)
+	}
+	if cmd != packet.HeaderZCNOTIFYTIME {
+		t.Fatalf("CZ_REQUEST_TIME response cmd = 0x%04x, want 0x%04x (ZC_NOTIFY_TIME); frame=% x",
+			cmd, packet.HeaderZCNOTIFYTIME, timeFrame)
+	}
+	if len(timeFrame) != zcNotifyTimeSize {
+		t.Fatalf("ZC_NOTIFY_TIME length = %d, want %d",
+			len(timeFrame), zcNotifyTimeSize)
+	}
+	if srvTick := binary.LittleEndian.Uint32(timeFrame[2:6]); srvTick == 0 {
+		t.Errorf("ZC_NOTIFY_TIME server tick = 0, want non-zero (unix millis)")
+	}
+	t.Logf("CZ_REQUEST_TIME ok: client_tick=%d", clientTick)
+}
+
 // TestE2E_GatewayFullFlow_TCP speaks the raw kRO binary packet protocol
 // over a single TCP connection to the running gateway and exercises the
 // full login → char → map → move round-trip across every real
@@ -363,6 +433,8 @@ func TestE2E_GatewayFullFlow_TCP(t *testing.T) {
 	slot0GID := stageCHEnter(t, conn, dec, ioDeadline, aid, loginID1, sexByte, charID, charName)
 	stageCHSelectChar(t, conn, dec, ioDeadline)
 	spawnX, spawnY := stageCZEnter(t, conn, dec, ioDeadline, aid, slot0GID, loginID1, sexByte, charName)
+	stageCZNotifyActorInit(t, conn, dec, ioDeadline)
+	stageCZRequestTime(t, conn, dec, ioDeadline)
 	stageCZRequestMove(t, conn, dec, ioDeadline, spawnX, spawnY)
 }
 

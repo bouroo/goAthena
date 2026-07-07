@@ -15,14 +15,19 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		length    int
 		direction Direction
 	}
-	// 2 C→S + 3 S→C, all fixed-length = 5 entries total.
+	// 4 C→S + 6 S→C, all fixed-length = 10 entries total.
 	checks := []expect{
 		{HeaderCZENTER, "CZ_ENTER", sizeCZEnter, DirectionClientToServer},
 		{HeaderCZREQUESTMOVE, "CZ_REQUEST_MOVE", sizeCZRequestMove, DirectionClientToServer},
+		{HeaderCZNOTIFYACTORINIT, "CZ_NOTIFY_ACTORINIT", sizeCZNotifyActorInit, DirectionClientToServer},
+		{HeaderCZREQUESTTIME, "CZ_REQUEST_TIME", sizeCZRequestTime, DirectionClientToServer},
 
 		{HeaderZCREFUSEENTER, "ZC_REFUSE_ENTER", sizeZCRefuseEnter, DirectionServerToClient},
 		{HeaderZCACCEPTENTER, "ZC_ACCEPT_ENTER", sizeZCAcceptEnter, DirectionServerToClient},
 		{HeaderZCNOTIFYPLAYERMOVE, "ZC_NOTIFY_PLAYERMOVE", sizeZCNotifyPlayerMove, DirectionServerToClient},
+		{HeaderZCSPAWNUNIT, "ZC_SPAWN_UNIT", sizeZCSpawnUnit, DirectionServerToClient},
+		{HeaderZCMAPPROPERTYR2, "ZC_MAPPROPERTY_R2", sizeZCMapPropertyR2, DirectionServerToClient},
+		{HeaderZCNOTIFYTIME, "ZC_NOTIFY_TIME", sizeZCNotifyTime, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -32,7 +37,7 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 			continue
 		}
 		if def.Name != c.name {
-			t.Errorf("Lookup(0x%04x).Name = %q, want %q", c.cmd, def.Name, c.name)
+			t.Errorf("Lookup(0x%04x).Name = %q, want %q", c.cmd, c.name, def.Name)
 		}
 		if def.Length != c.length {
 			t.Errorf("Lookup(0x%04x).Length = %d, want %d", c.cmd, def.Length, c.length)
@@ -47,8 +52,8 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewMapServerDB()
-	// 2 C→S + 4 S→C = 6.
-	const want = 6
+	// 4 C→S + 6 S→C = 10.
+	const want = 10
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -65,10 +70,14 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 	}{
 		{HeaderCZENTER, sizeCZEnter},
 		{HeaderCZREQUESTMOVE, sizeCZRequestMove},
+		{HeaderCZNOTIFYACTORINIT, sizeCZNotifyActorInit},
+		{HeaderCZREQUESTTIME, sizeCZRequestTime},
 		{HeaderZCACCEPTENTER, sizeZCAcceptEnter},
 		{HeaderZCREFUSEENTER, sizeZCRefuseEnter},
 		{HeaderZCNOTIFYPLAYERMOVE, sizeZCNotifyPlayerMove},
 		{HeaderZCSPAWNUNIT, sizeZCSpawnUnit},
+		{HeaderZCMAPPROPERTYR2, sizeZCMapPropertyR2},
+		{HeaderZCNOTIFYTIME, sizeZCNotifyTime},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

@@ -136,3 +136,43 @@ func (r CZRequestMoveRequest) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// CZRequestTimeRequest is the parsed CZ_REQUEST_TIME (0x007e) packet.
+// The client sends this periodically to request the server's tick for
+// latency estimation.
+//
+// Layout: [2:cmd=0x007e][4:clientTick].
+// Source: rathena/src/map/clif.cpp:11198-11206.
+type CZRequestTimeRequest struct {
+	// ClientTick is the client's monotonic tick at the moment it
+	// issued the request (rAthena's `client_tick`). Echoed only for
+	// logging; the gateway does not need to round-trip it.
+	ClientTick uint32
+}
+
+// ParseCZRequestTime decodes a CZ_REQUEST_TIME frame.
+func ParseCZRequestTime(frame []byte) (CZRequestTimeRequest, error) {
+	if len(frame) < sizeCZRequestTime {
+		return CZRequestTimeRequest{}, fmt.Errorf("packet: parse CZ_REQUEST_TIME: frame too short: got %d bytes, want %d", len(frame), sizeCZRequestTime)
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQUESTTIME {
+		return CZRequestTimeRequest{}, fmt.Errorf("packet: parse CZ_REQUEST_TIME: unexpected cmd 0x%04x", cmd)
+	}
+	return CZRequestTimeRequest{
+		ClientTick: binary.LittleEndian.Uint32(frame[2:6]),
+	}, nil
+}
+
+// Encode writes the CZ_REQUEST_TIME packet to w.
+func (r CZRequestTimeRequest) Encode(w io.Writer) error {
+	buf := make([]byte, sizeCZRequestTime)
+	// int16 packetType = 0x007e (HeaderCZREQUESTTIME).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQUESTTIME)
+	// uint32 clientTick at offset 2.
+	binary.LittleEndian.PutUint32(buf[2:], r.ClientTick)
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_REQUEST_TIME: %w", err)
+	}
+	return nil
+}

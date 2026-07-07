@@ -351,3 +351,79 @@ func (r SpawnUnitResponse) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// MapPropertyResponse is the ZC_MAPPROPERTY_R2 packet (0x099b, 8 bytes).
+// It tells the client the map's property type (PVP, GVG, normal) and
+// feature flags. For normal maps PropertyType=0 (MAPPROPERTY_NOTHING)
+// and Flags=0.
+//
+// Layout: [2:cmd=0x099b][2:propertyType][4:flags].
+// Source: rathena/src/map/clif.cpp:6869-6902.
+type MapPropertyResponse struct {
+	// PropertyType is the map property class (rAthena's MAPPROPERTY_*
+	// enum: 0 = MAPPROPERTY_NOTHING, 1 = PVP, 2 = GVG, 3 = GVG_TE,
+	// etc.). The gateway advertises NOTHING for every map today —
+	// map flag computation from zone config is deferred.
+	PropertyType uint16
+	// Flags is the cumulative bitmask of feature toggles
+	// (PARTY, GUILD, WHISPER, etc. — rAthena's
+	// MAPPROPERTY_PARTY / MAPPROPERTY_GUILD / etc. flags).
+	// Always 0 today; the gateway has no map flag data yet.
+	Flags uint32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 8).
+func (r MapPropertyResponse) Size() int {
+	return sizeZCMapPropertyR2
+}
+
+// Encode writes the ZC_MAPPROPERTY_R2 packet to w.
+func (r MapPropertyResponse) Encode(w io.Writer) error {
+	buf := make([]byte, sizeZCMapPropertyR2)
+	// int16 packetType = 0x099b (HeaderZCMAPPROPERTYR2).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCMAPPROPERTYR2)
+	// int16 propertyType at offset 2.
+	binary.LittleEndian.PutUint16(buf[2:], r.PropertyType)
+	// uint32 flags at offset 4.
+	binary.LittleEndian.PutUint32(buf[4:], r.Flags)
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_MAPPROPERTY_R2: %w", err)
+	}
+	return nil
+}
+
+// NotifyTimeResponse is the ZC_NOTIFY_TIME packet (0x007f, 6 bytes).
+// It carries the server's current tick so the client can estimate
+// round-trip latency. rAthena uses gettick() (monotonic); the gateway
+// uses unix millis (low 32 bits) as a stateless equivalent.
+//
+// Layout: [2:cmd=0x007f][4:time].
+// Source: rathena/src/map/clif.cpp:11186-11193.
+type NotifyTimeResponse struct {
+	// Time is the server tick at the moment of the reply — unix
+	// millis low 32 bits (rAthena's `gettick()` is monotonic; the
+	// client only uses this for latency estimation, so an
+	// epoch-relative value is the pragmatic equivalent for a
+	// stateless gateway).
+	Time uint32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 6).
+func (r NotifyTimeResponse) Size() int {
+	return sizeZCNotifyTime
+}
+
+// Encode writes the ZC_NOTIFY_TIME packet to w.
+func (r NotifyTimeResponse) Encode(w io.Writer) error {
+	buf := make([]byte, sizeZCNotifyTime)
+	// int16 packetType = 0x007f (HeaderZCNOTIFYTIME).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYTIME)
+	// uint32 time at offset 2.
+	binary.LittleEndian.PutUint32(buf[2:], r.Time)
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_NOTIFY_TIME: %w", err)
+	}
+	return nil
+}

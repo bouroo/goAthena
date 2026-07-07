@@ -1020,6 +1020,138 @@ func buildCZEnter(accountID, charID, authCode, clientTime uint32, sex uint8) []b
 	return frame
 }
 
+// CZ_NOTIFY_ACTORINIT (0x007d, 2 bytes — cmd-only) dispatch tests.
+
+func TestDispatchHandler_CZNotifyActorInit_EncodesZCMapPropertyR2(t *testing.T) {
+	t.Parallel()
+
+	// No zone/identity calls expected — the handler responds with a
+	// fixed MAPPROPERTY_NOTHING frame.
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// CZ_NOTIFY_ACTORINIT is cmd-only (2 bytes).
+	frame := make([]byte, 2)
+	binary.LittleEndian.PutUint16(frame[0:], packet.HeaderCZNOTIFYACTORINIT)
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZNOTIFYACTORINIT, frame); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	const wantLen = 8
+	if len(out) != wantLen {
+		t.Fatalf("ZC_MAPPROPERTY_R2 length = %d, want %d", len(out), wantLen)
+	}
+
+	// Opcode at [0:2] = 0x099b LE.
+	if out[0] != 0x9b || out[1] != 0x09 {
+		t.Fatalf("opcode = %02x %02x, want 9b 09 (LE 0x099b)", out[0], out[1])
+	}
+	// propertyType at [2:4] = uint16 LE = 0 (MAPPROPERTY_NOTHING).
+	if pt := binary.LittleEndian.Uint16(out[2:4]); pt != 0 {
+		t.Errorf("propertyType = %d, want 0 (MAPPROPERTY_NOTHING)", pt)
+	}
+	// flags at [4:8] = uint32 LE = 0.
+	if flags := binary.LittleEndian.Uint32(out[4:8]); flags != 0 {
+		t.Errorf("flags = 0x%x, want 0", flags)
+	}
+}
+
+// CZ_REQUEST_TIME (0x007e, 6 bytes) dispatch tests.
+
+func TestDispatchHandler_CZRequestTime_Success_EncodesZCNotifyTime(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	req := packet.CZRequestTimeRequest{ClientTick: 0x12345678}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQUEST_TIME: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQUESTTIME, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	const wantLen = 6
+	if len(out) != wantLen {
+		t.Fatalf("ZC_NOTIFY_TIME length = %d, want %d", len(out), wantLen)
+	}
+
+	// Opcode at [0:2] = 0x007f LE.
+	if out[0] != 0x7f || out[1] != 0x00 {
+		t.Fatalf("opcode = %02x %02x, want 7f 00 (LE 0x007f)", out[0], out[1])
+	}
+	// time at [2:6] = uint32 LE — assert non-zero (real unix millis).
+	if t1 := binary.LittleEndian.Uint32(out[2:6]); t1 == 0 {
+		t.Errorf("time = 0, want non-zero (millis since epoch)")
+	}
+}
+
+func TestDispatchHandler_CZRequestTime_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 2-byte frame is too short for CZ_REQUEST_TIME (size = 6) — must
+	// be dropped silently without writing any reply.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQUESTTIME, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+func TestDispatchHandler_CZRequestTime_NoPriorEnter_StillReplies(t *testing.T) {
+	t.Parallel()
+
+	// CZ_REQUEST_TIME has no AID dependency — the handler replies
+	// even if the client never CZ_ENTERed, because the server-tick
+	// ping is independent of zone state.
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1} // AccountID deliberately 0
+
+	req := packet.CZRequestTimeRequest{ClientTick: 0}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQUEST_TIME: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQUESTTIME, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 6 {
+		t.Fatalf("ZC_NOTIFY_TIME length = %d, want 6 (no AccountID check)", len(out))
+	}
+	if out[0] != 0x7f || out[1] != 0x00 {
+		t.Errorf("opcode = %02x %02x, want 7f 00", out[0], out[1])
+	}
+}
+
 func TestClampMapCoord(t *testing.T) {
 	t.Parallel()
 
