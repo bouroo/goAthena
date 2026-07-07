@@ -97,7 +97,7 @@ func TestDispatchHandler_AcceptLogin_EncodesAccept(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+	h := NewDispatchHandler(fake, nil, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 
 	conn := domain.ConnectionInfo{ID: 1, RemoteIP: "10.0.0.5:4321"}
 	resp := &bufResponder{}
@@ -150,7 +150,7 @@ func TestDispatchHandler_RefusedLogin_EncodesRefuse(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+	h := NewDispatchHandler(fake, nil, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "wrongpw")
 
@@ -176,7 +176,7 @@ func TestDispatchHandler_IdentityDown_RefusesWithSentinel99(t *testing.T) {
 			return nil, status.Error(codes.Unavailable, "identity service unreachable")
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+	h := NewDispatchHandler(fake, nil, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "pw")
 
@@ -199,7 +199,7 @@ func TestDispatchHandler_NilResponse_RefusesWithSentinel99(t *testing.T) {
 			return nil, nil
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+	h := NewDispatchHandler(fake, nil, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "pw")
 
@@ -225,7 +225,7 @@ func TestDispatchHandler_CancelledContext_NoRefuseSent(t *testing.T) {
 			return nil, status.Error(codes.Canceled, "client gone")
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+	h := NewDispatchHandler(fake, nil, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "pw")
 
@@ -250,7 +250,7 @@ func TestDispatchHandler_MalformedFrame_NoReplyNoError(t *testing.T) {
 			return &identityv1.AuthenticateResponse{}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+	h := NewDispatchHandler(fake, nil, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 
 	// 10 bytes — well short of the 55-byte CA_LOGIN; ParseCALogin must
@@ -280,7 +280,7 @@ func TestDispatchHandler_PassesClientIPStrippedToAuthenticate(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+	h := NewDispatchHandler(fake, nil, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "alice", "pw")
 
@@ -437,7 +437,7 @@ func TestDispatchHandler_CHEnter_ClampsTotalSlotsAboveMax(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+	h := NewDispatchHandler(fake, nil, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 
 	if err := h.HandlePacket(context.Background(), domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCHENTER, chEnterFrame(1)); err != nil {
@@ -469,4 +469,37 @@ func chEnterFrame(accountID uint32) []byte {
 	binary.LittleEndian.PutUint16(frame[0:2], packet.HeaderCHENTER)
 	binary.LittleEndian.PutUint32(frame[2:6], accountID)
 	return frame
+}
+
+func TestClampMapCoord(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   uint32
+		want int16
+	}{
+		{"origin", 0, 0},
+		{"typical_prontera", 512, 512},
+		{"boundary", 1000, 1000},
+		{"just_over_int16_max", 32768, 1000},
+		{"buggy_zone_response", 40000, 1000},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := clampMapCoord(tc.in); got != tc.want {
+				t.Errorf("clampMapCoord(%d) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	// Regression guard: a value above int16 max must not silently
+	// wrap to a negative coordinate — that is the exact bug this
+	// clamp exists to prevent.
+	if got := clampMapCoord(40000); got < 0 {
+		t.Fatalf("clampMapCoord(40000) = %d, must not be negative; the int16 overflow regression has returned", got)
+	}
 }

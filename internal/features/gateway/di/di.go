@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
+	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/config"
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
 	"github.com/bouroo/goAthena/internal/features/gateway/handler"
@@ -18,26 +19,33 @@ import (
 )
 
 // Register wires the gateway feature (packet codec, identity gRPC
-// client, dispatch handler, TCP/WS ingress) into the DI container.
+// client, zone gRPC client, dispatch handler, TCP/WS ingress) into the
+// DI container.
 //
 // Resolved dependencies (single instances, lazy on first Invoke):
 //   - *grpc.ClientConn: a lazy connection to the identity service.
 //   - identityv1.IdentityServiceClient: the typed client built on the
 //     connection above.
-//   - *packet.DB: the merged login-server + char-server packet database.
-//   - domain.PacketHandler: M2b dispatch handler that handles CA_LOGIN,
-//     CH_ENTER, and CH_SELECT_CHAR.
+//   - zonev1.ZoneServiceClient: the typed client for forwarding
+//     map-server packets (CZ_ENTER, CZ_REQUEST_MOVE) to the zone
+//     service.
+//   - *packet.DB: the merged login-server + char-server + map-server
+//     packet database.
+//   - domain.PacketHandler: M3b dispatch handler that handles CA_LOGIN,
+//     CH_ENTER, CH_SELECT_CHAR, CZ_ENTER, and CZ_REQUEST_MOVE.
 //   - *handler.TCPHandler: the gnet EventHandler for kRO TCP ingress.
 //   - *handler.WSHandler: the HTTP/WebSocket upgrade handler for the
 //     roBrowser ingress.
 func Register(c do.Injector) error {
 	do.Provide(c, func(_ do.Injector) (*packet.DB, error) {
-		// Merge char-server packet defs into the login-server DB so the
-		// codec can decode HC_ACCEPT_ENTER / HC_NOTIFY_ZONESVR / etc.
-		// on the wire without the dispatch layer caring which side
-		// they're on.
+		// Merge char-server and map-server packet defs into the
+		// login-server DB so the codec can decode every packet the
+		// rAthena handshake (CA_LOGIN → CH_ENTER → CH_SELECT_CHAR →
+		// CZ_ENTER) emits on the wire without the dispatch layer
+		// caring which side they're on.
 		db := packet.NewLoginServerDB()
 		db.Merge(packet.NewCharServerDB())
+		db.Merge(packet.NewMapServerDB())
 		return db, nil
 	})
 
@@ -62,8 +70,21 @@ func Register(c do.Injector) error {
 		return identityv1.NewIdentityServiceClient(conn), nil
 	})
 
+	// Zone gRPC client — built on its own lazy connection. We do NOT
+	// register a second *grpc.ClientConn in the DI container because
+	// the identity connection already occupies that type slot (samber/
+	// do/v2 stores providers by exact type, not by parameter), so the
+	// zone client opens its connection inline. The cost is a second
+	// grpc.ClientConn per process; both use idle transport so the
+	// memory delta is negligible.
+	do.Provide(c, buildZoneClient)
+
 	do.Provide(c, func(i do.Injector) (domain.PacketHandler, error) {
 		identityClient, err := do.Invoke[identityv1.IdentityServiceClient](i)
+		if err != nil {
+			return nil, err
+		}
+		zoneClient, err := do.Invoke[zonev1.ZoneServiceClient](i)
 		if err != nil {
 			return nil, err
 		}
@@ -75,7 +96,7 @@ func Register(c do.Injector) error {
 		if err != nil {
 			return nil, err
 		}
-		return buildDispatchHandler(identityClient, cfg, *logger)
+		return buildDispatchHandler(identityClient, zoneClient, cfg, *logger)
 	})
 
 	do.Provide(c, func(i do.Injector) (*handler.TCPHandler, error) {
@@ -117,13 +138,30 @@ func Register(c do.Injector) error {
 	return nil
 }
 
-// buildDispatchHandler wires the M2b dispatch handler from resolved
-// config + identity client + logger. Extracted from Register to keep
-// the gocyclo budget under 15; the host→IPv4 resolution step is the
-// only piece that can fail at startup, so it bubbles up as a wrapped
-// error that surfaces a misconfigured gateway.map_addr immediately.
+// buildZoneClient constructs a lazy zone gRPC client. Extracted from
+// Register to keep the gocyclo budget under 15.
+func buildZoneClient(i do.Injector) (zonev1.ZoneServiceClient, error) {
+	cfg, err := do.Invoke[*config.Config](i)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := grpc.NewClient(cfg.Gateway.ZoneAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, fmt.Errorf("dial zone gRPC at %s: %w", cfg.Gateway.ZoneAddr, err)
+	}
+	return zonev1.NewZoneServiceClient(conn), nil
+}
+
+// buildDispatchHandler wires the M3b dispatch handler from resolved
+// config + identity client + zone client + logger. Extracted from
+// Register to keep the gocyclo budget under 15; the host→IPv4
+// resolution step is the only piece that can fail at startup, so it
+// bubbles up as a wrapped error that surfaces a misconfigured
+// gateway.map_addr immediately.
 func buildDispatchHandler(
 	identityClient identityv1.IdentityServiceClient,
+	zoneClient zonev1.ZoneServiceClient,
 	cfg *config.Config,
 	logger zerolog.Logger,
 ) (*service.DispatchHandler, error) {
@@ -137,6 +175,7 @@ func buildDispatchHandler(
 	}
 	return service.NewDispatchHandler(
 		identityClient,
+		zoneClient,
 		cfg.Gateway.Packetver,
 		logger,
 		cfg.Zone.DefaultMap,
