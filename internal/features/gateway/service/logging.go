@@ -35,7 +35,7 @@ func NewLoggingHandler(logger zerolog.Logger) *LoggingHandler {
 
 // HandlePacket records the packet at info level. The Responder is
 // ignored — LoggingHandler does not reply.
-func (h *LoggingHandler) HandlePacket(_ context.Context, info domain.ConnectionInfo, _ domain.Responder, cmd uint16, frame []byte) error {
+func (h *LoggingHandler) HandlePacket(_ context.Context, info *domain.ConnectionInfo, _ domain.Responder, cmd uint16, frame []byte) error {
 	h.logger.Info().
 		Uint64("conn", info.ID).
 		Str("remote", info.RemoteIP).

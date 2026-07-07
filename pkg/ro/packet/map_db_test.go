@@ -15,13 +15,14 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		length    int
 		direction Direction
 	}
-	// 2 C→S + 2 S→C, all fixed-length = 4 entries total.
+	// 2 C→S + 3 S→C, all fixed-length = 5 entries total.
 	checks := []expect{
 		{HeaderCZENTER, "CZ_ENTER", sizeCZEnter, DirectionClientToServer},
 		{HeaderCZREQUESTMOVE, "CZ_REQUEST_MOVE", sizeCZRequestMove, DirectionClientToServer},
 
 		{HeaderZCREFUSEENTER, "ZC_REFUSE_ENTER", sizeZCRefuseEnter, DirectionServerToClient},
 		{HeaderZCACCEPTENTER, "ZC_ACCEPT_ENTER", sizeZCAcceptEnter, DirectionServerToClient},
+		{HeaderZCNOTIFYPLAYERMOVE, "ZC_NOTIFY_PLAYERMOVE", sizeZCNotifyPlayerMove, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -46,8 +47,8 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewMapServerDB()
-	// 2 C→S + 2 S→C = 4.
-	const want = 4
+	// 2 C→S + 3 S→C = 5.
+	const want = 5
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -66,6 +67,7 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderCZREQUESTMOVE, sizeCZRequestMove},
 		{HeaderZCACCEPTENTER, sizeZCAcceptEnter},
 		{HeaderZCREFUSEENTER, sizeZCRefuseEnter},
+		{HeaderZCNOTIFYPLAYERMOVE, sizeZCNotifyPlayerMove},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

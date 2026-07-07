@@ -17,8 +17,9 @@ const (
 	HeaderCZREQUESTMOVE uint16 = 0x0085 // rathena/src/map/clif.cpp:11374 (CZ_REQUEST_MOVE)
 
 	// S→C — map server → client.
-	HeaderZCACCEPTENTER uint16 = 0x02eb // rathena/src/map/packets.hpp:571 (ZC_ACCEPT_ENTER, PACKETVER >= 20160330 branch)
-	HeaderZCREFUSEENTER uint16 = 0x0074 // rathena/src/map/packets.hpp:590 (ZC_REFUSE_ENTER)
+	HeaderZCACCEPTENTER      uint16 = 0x02eb // rathena/src/map/packets.hpp:571 (ZC_ACCEPT_ENTER, PACKETVER >= 20160330 branch)
+	HeaderZCREFUSEENTER      uint16 = 0x0074 // rathena/src/map/packets.hpp:590 (ZC_REFUSE_ENTER)
+	HeaderZCNOTIFYPLAYERMOVE uint16 = 0x0087 // rathena/src/map/packets.hpp (ZC_NOTIFY_PLAYERMOVE)
 )
 
 // Fixed on-wire byte lengths derived from the packed struct layouts in
@@ -41,6 +42,10 @@ const (
 	// (rathena/src/map/clif.cpp:11374; the WalkToXY handler calls RFIFOPOS
 	// at packet_db[..].pos[0], which is at offset 2 right after the cmd).
 	sizeCZRequestMove = 5
+	// sizeZCNotifyPlayerMove = int16 packetType + uint32 moveStartTime +
+	// uint8 srcPos[3] + uint8 destPos[3] = 2+4+3+3 = 12
+	// (rathena/src/map/packets.hpp ZC_NOTIFY_PLAYERMOVE).
+	sizeZCNotifyPlayerMove = 12
 )
 
 // NewMapServerDB returns a packet database pre-populated with all known
@@ -83,6 +88,12 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCACCEPTENTER,
 		Name:      "ZC_ACCEPT_ENTER",
 		Length:    sizeZCAcceptEnter,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCNOTIFYPLAYERMOVE,
+		Name:      "ZC_NOTIFY_PLAYERMOVE",
+		Length:    sizeZCNotifyPlayerMove,
 		Direction: DirectionServerToClient,
 	})
 

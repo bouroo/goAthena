@@ -112,7 +112,7 @@ func NewDispatchHandler(
 // truncated or corrupt packet by dropping it without closing the
 // connection, since the client will retry after re-reading the
 // addressbook.
-func (h *DispatchHandler) HandlePacket(ctx context.Context, conn domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
+func (h *DispatchHandler) HandlePacket(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
 	switch cmd {
 	case packet.HeaderCALOGIN:
 		return h.handleCALogin(ctx, conn, resp, frame)
@@ -136,7 +136,7 @@ func (h *DispatchHandler) HandlePacket(ctx context.Context, conn domain.Connecti
 // handleCALogin forwards CA_LOGIN to identity.Authenticate and encodes
 // the reply. Extracted from the M1b switch to keep HandlePacket's
 // dispatch table readable.
-func (h *DispatchHandler) handleCALogin(ctx context.Context, conn domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+func (h *DispatchHandler) handleCALogin(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCALogin(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -256,7 +256,7 @@ func (h *DispatchHandler) handleCALogin(ctx context.Context, conn domain.Connect
 // On identity failure the gateway falls back to HC_REFUSE_ENTER (cmd
 // 0x006c) with the gRPC status code; on nil/transport errors the
 // server-closed sentinel (99) is used.
-func (h *DispatchHandler) handleCHEnter(ctx context.Context, conn domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+func (h *DispatchHandler) handleCHEnter(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCHEnter(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -377,7 +377,7 @@ func (h *DispatchHandler) handleCHEnter(ctx context.Context, conn domain.Connect
 // when the zone will resolve the char from the AID + slot on its
 // own). M3 will track the selected character explicitly and substitute
 // the real CID + the char's last-saved map.
-func (h *DispatchHandler) handleCHSelectChar(_ context.Context, conn domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+func (h *DispatchHandler) handleCHSelectChar(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCHSelectChar(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -431,7 +431,7 @@ func (h *DispatchHandler) handleCHSelectChar(_ context.Context, conn domain.Conn
 // Reference: rathena/src/map/clif.cpp:10642 (clif_parse_WantToConnection)
 // and the corresponding map_send_zip0088_accept_enter / clif_authfail
 // emission sites.
-func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZEnter(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -500,6 +500,13 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn domain.Connect
 		return sendMapRefuse(resp)
 	}
 
+	// Cache the authenticated AID on the connection so the post-enter
+	// packet stream (CZ_REQUEST_MOVE, chat, etc.) can attribute
+	// packets to the zone entity without re-deriving the AID from the
+	// wire (CZ_REQUEST_MOVE carries only dest x/y). Cleared on
+	// connection close by gnet dropping connState.
+	conn.AccountID = req.AccountID
+
 	accept := packet.MapAcceptEnterResponse{
 		StartTime: uint32(time.Now().Unix()), //nolint:gosec // low 32 bits of unix time per rAthena startTime convention
 		PosX:      clampMapCoord(zResp.GetMapX()),
@@ -539,13 +546,19 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn domain.Connect
 	return nil
 }
 
-// handleCZRequestMove accepts and logs a client movement request.
-// Forwarding movement to the zone service requires a zone.Move RPC
-// that does not exist yet — it is scheduled for M4+ once the AOI and
-// pathfinding kernels land. Until then the gateway logs the request
-// and keeps the connection alive so a misbehaving client does not get
-// torn down by a silent-drop pattern.
-func (h *DispatchHandler) handleCZRequestMove(_ context.Context, conn domain.ConnectionInfo, _ domain.Responder, frame []byte) error {
+// handleCZRequestMove forwards CZ_REQUEST_MOVE to zone.MoveEntity and
+// encodes the broadcast packet ZC_NOTIFY_PLAYERMOVE 0x0087 so the
+// client can interpolate the sprite from the source cell to the
+// destination cell. The source cell comes from the zone's
+// GetEntity call (the entity's current X/Y before MoveEntity updates
+// the path); the destination is the cell the path targets.
+//
+// Wire failures (identity/zone gRPC errors, missing account_id on a
+// not-yet-entered connection, zone-side MoveEntity rejection) are
+// logged and swallowed — rAthena treats a dropped move packet as a
+// harmless transient the client will retry after the next tick, not a
+// reason to tear the connection down.
+func (h *DispatchHandler) handleCZRequestMove(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZRequestMove(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -555,11 +568,108 @@ func (h *DispatchHandler) handleCZRequestMove(_ context.Context, conn domain.Con
 			Msg("malformed CZ_REQUEST_MOVE; dropping packet")
 		return nil
 	}
+
+	if conn.AccountID == 0 {
+		// CZ_REQUEST_MOVE without a preceding CZ_ENTER: the client
+		// has not authenticated against the zone yet, so we have no
+		// entity to attribute the move to. Drop silently rather than
+		// panic on a zero AID at the zone boundary.
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Int16("dest_x", req.DestX).
+			Int16("dest_y", req.DestY).
+			Msg("CZ_REQUEST_MOVE without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	if h.zone == nil {
+		// DI misconfiguration or a test harness that did not wire the
+		// zone client — surface a debug log rather than panic on a
+		// nil-deref inside the gRPC stub. The next CZ_REQUEST_MOVE
+		// will get the same treatment.
+		h.logger.Error().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Msg("zone client not configured; dropping CZ_REQUEST_MOVE")
+		return nil
+	}
+
+	zResp, err := h.zone.MoveEntity(ctx, &zonev1.MoveEntityRequest{
+		AccountId: conn.AccountID,
+		DestX:     uint32(req.DestX), //nolint:gosec // map cell position (int16 → uint32)
+		DestY:     uint32(req.DestY), //nolint:gosec // map cell position (int16 → uint32)
+	})
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint32("aid", conn.AccountID).
+				Msg("zone call cancelled (client gone)")
+			_ = err
+			return nil
+		}
+		st, _ := status.FromError(err)
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Str("grpc_code", st.Code().String()).
+			Msg("zone MoveEntity RPC failed; dropping move")
+		return nil
+	}
+	if zResp == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Msg("zone returned nil MoveEntity response; dropping move")
+		return nil
+	}
+	if !zResp.GetSuccess() {
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Int16("dest_x", req.DestX).
+			Int16("dest_y", req.DestY).
+			Str("error", zResp.GetError()).
+			Msg("zone rejected move")
+		return nil
+	}
+
+	notify := packet.MapNotifyPlayerMoveResponse{
+		MoveStartTime: uint32(time.Now().UnixMilli()), //nolint:gosec // low 32 bits of unix millis per rAthena moveStartTime convention
+		SrcX:          clampMapCoord(zResp.GetSrcX()),
+		SrcY:          clampMapCoord(zResp.GetSrcY()),
+		DestX:         clampMapCoord(zResp.GetDestX()),
+		DestY:         clampMapCoord(zResp.GetDestY()),
+	}
+
+	var buf bytes.Buffer
+	if err := notify.Encode(&buf); err != nil {
+		// MapNotifyPlayerMoveResponse.Encode cannot fail in practice
+		// (no variable-width fields), but we still bubble the error
+		// up rather than silently swallow it — wrapcheck requires
+		// every external error be wrapped.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Msg("encode ZC_NOTIFY_PLAYERMOVE failed; dropping move")
+		return nil
+	}
+
 	h.logger.Debug().
 		Uint64("conn", conn.ID).
-		Int16("dest_x", req.DestX).
-		Int16("dest_y", req.DestY).
-		Msg("movement request received (zone forwarding is M4+ scope)")
+		Uint32("aid", conn.AccountID).
+		Int16("src_x", notify.SrcX).
+		Int16("src_y", notify.SrcY).
+		Int16("dest_x", notify.DestX).
+		Int16("dest_y", notify.DestY).
+		Msg("move broadcast")
+
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_NOTIFY_PLAYERMOVE: %w", err)
+	}
 	return nil
 }
 

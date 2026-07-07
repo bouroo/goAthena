@@ -7,10 +7,18 @@ import "context"
 // ConnectionInfo describes a single accepted TCP connection. It is built
 // once at OnOpen time and threaded through the PacketHandler so handlers
 // can log the peer and timestamp without re-querying gnet.Conn.
+//
+// AccountID is the only mutable field: the dispatch handler sets it after
+// a successful CZ_ENTER so subsequent CZ_REQUEST_MOVE packets can be
+// attributed to the right zone entity without re-deriving the AID from
+// the wire (the move packet carries no AID). The handler chain takes the
+// info by pointer so mutations persist across packets on the same
+// connection.
 type ConnectionInfo struct {
-	ID       uint64
-	RemoteIP string
-	OpenedAt int64 // unix nanos
+	ID        uint64
+	RemoteIP  string
+	OpenedAt  int64  // unix nanos
+	AccountID uint32 // set by handleCZEnter on successful map enter
 }
 
 // Responder sends serialized packets back to the client. Each transport
@@ -34,6 +42,10 @@ type Responder interface {
 // handler errors as fatal and tears the connection down. Handlers that
 // want the connection to stay open after a transient backend failure must
 // log the cause and return nil.
+//
+// conn is passed by pointer so handlers can persist per-connection state
+// (e.g. AccountID after CZ_ENTER) across successive packets on the same
+// connection.
 type PacketHandler interface {
-	HandlePacket(ctx context.Context, conn ConnectionInfo, resp Responder, cmd uint16, frame []byte) error
+	HandlePacket(ctx context.Context, conn *ConnectionInfo, resp Responder, cmd uint16, frame []byte) error
 }

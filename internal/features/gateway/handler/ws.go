@@ -199,7 +199,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := processBytes(readCtx, decoder, data, info, &wsResponder{conn: conn, ctx: readCtx}, h.handler); err != nil {
+		if err := processBytes(readCtx, decoder, data, &info, &wsResponder{conn: conn, ctx: readCtx}, h.handler); err != nil {
 			h.logger.Warn().
 				Err(err).
 				Uint64("conn", id).
