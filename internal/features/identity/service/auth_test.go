@@ -437,3 +437,80 @@ func TestLoginError_ErrorString(t *testing.T) {
 	assert.Contains(t, err.Error(), "6")
 	assert.Contains(t, err.Error(), "test")
 }
+
+func TestGetCharacter_HappyPath(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	accRepo := mocks.NewMockAccountRepository(ctrl)
+	chrRepo := mocks.NewMockCharacterRepository(ctrl)
+	sessRepo := mocks.NewMockSessionRepository(ctrl)
+
+	want := &domain.CharacterSummary{
+		CharID:    150001,
+		AccountID: 2000000,
+		Name:      "alpha",
+		Class:     7,
+		BaseLevel: 50,
+		JobLevel:  25,
+		HP:        1234,
+		MaxHP:     2000,
+		SP:        100,
+		MaxSP:     200,
+		Hair:      5,
+		HairColor: 2,
+		Weapon:    1101,
+		Sex:       domain.SexMale,
+	}
+	chrRepo.EXPECT().
+		GetByID(gomock.Any(), uint32(2000000), uint32(150001)).
+		Return(want, nil)
+
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	got, err := svc.GetCharacter(context.Background(), 2000000, 150001)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, want, got)
+}
+
+func TestGetCharacter_NotFound_PropagatesSentinel(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	accRepo := mocks.NewMockAccountRepository(ctrl)
+	chrRepo := mocks.NewMockCharacterRepository(ctrl)
+	sessRepo := mocks.NewMockSessionRepository(ctrl)
+
+	chrRepo.EXPECT().
+		GetByID(gomock.Any(), uint32(2000000), uint32(150001)).
+		Return(nil, domain.ErrCharacterNotFound)
+
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	got, err := svc.GetCharacter(context.Background(), 2000000, 150001)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.ErrorIs(t, err, domain.ErrCharacterNotFound,
+		"the handler maps ErrCharacterNotFound onto success=false; the service must propagate it unmodified")
+}
+
+func TestGetCharacter_RepoError_PropagatesUnchanged(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	accRepo := mocks.NewMockAccountRepository(ctrl)
+	chrRepo := mocks.NewMockCharacterRepository(ctrl)
+	sessRepo := mocks.NewMockSessionRepository(ctrl)
+
+	repoErr := errors.New("db down")
+	chrRepo.EXPECT().
+		GetByID(gomock.Any(), uint32(2000000), uint32(150001)).
+		Return(nil, repoErr)
+
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	got, err := svc.GetCharacter(context.Background(), 2000000, 150001)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	// The service is a pass-through for non-sentinel errors so the
+	// handler can rely on the repository's wrap-with-context. The
+	// real repository layer is exercised in
+	// TestCharacterRepository_GetByID/other_DB_error_is_wrapped.
+	assert.ErrorIs(t, err, repoErr)
+	assert.NotErrorIs(t, err, domain.ErrCharacterNotFound)
+}

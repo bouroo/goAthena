@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -57,6 +58,39 @@ func (r *characterRepo) ListByAccount(ctx context.Context, accountID uint32, max
 		out = append(out, charModelToDomain(&models[i]))
 	}
 	return out, nil
+}
+
+// GetByID fetches a single character by (accountID, charID). The
+// compound key is the canonical rAthena ownership predicate: char_id
+// alone is not unique to an account (rAthena mints a fresh id range
+// per account, but a misconfigured DB or a client-supplied charID from
+// another account must not read across the boundary), so we always
+// pin both.
+//
+// Returns domain.ErrCharacterNotFound when no row matches; the
+// service layer treats that as a soft failure (the gateway falls back
+// to a zero-filled spawn packet) rather than a hard gRPC error.
+func (r *characterRepo) GetByID(ctx context.Context, accountID, charID uint32) (*domain.CharacterSummary, error) {
+	if accountID == 0 || charID == 0 {
+		// Defensive: a zero key can never match a real rAthena row
+		// (auto-increment starts at 150000+), so the query is doomed
+		// to miss. Fail fast with the sentinel error before paying
+		// for a round-trip.
+		return nil, fmt.Errorf("get character (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound)
+	}
+	var model CharModel
+	err := r.db.WithContext(ctx).
+		Select(charSelectColumns).
+		Where("account_id = ? AND char_id = ?", accountID, charID).
+		Take(&model).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("get character (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound)
+		}
+		return nil, fmt.Errorf("get character (account=%d, char=%d): %w", accountID, charID, err)
+	}
+	out := charModelToDomain(&model)
+	return &out, nil
 }
 
 // charModelToDomain maps a CharModel row to its domain summary.

@@ -22,6 +22,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	IdentityService_Authenticate_FullMethodName     = "/identity.v1.IdentityService/Authenticate"
 	IdentityService_GetCharacterList_FullMethodName = "/identity.v1.IdentityService/GetCharacterList"
+	IdentityService_GetCharacter_FullMethodName     = "/identity.v1.IdentityService/GetCharacter"
 )
 
 // IdentityServiceClient is the client API for IdentityService service.
@@ -40,6 +41,11 @@ type IdentityServiceClient interface {
 	// GetCharacterList returns the character list for an authenticated account
 	// (HC_ACCEPT_ENTER 0x6b). Called after the client connects to the char server.
 	GetCharacterList(ctx context.Context, in *GetCharacterListRequest, opts ...grpc.CallOption) (*GetCharacterListResponse, error)
+	// GetCharacter returns the full character detail (name, class, level,
+	// HP, hair, equipment, sex) for a single character on an authenticated
+	// account. The gateway calls this on CZ_ENTER to populate the entity
+	// spawn packet (ZC_SPAWN_UNIT 0x09fe) with real character data.
+	GetCharacter(ctx context.Context, in *GetCharacterRequest, opts ...grpc.CallOption) (*GetCharacterResponse, error)
 }
 
 type identityServiceClient struct {
@@ -70,6 +76,16 @@ func (c *identityServiceClient) GetCharacterList(ctx context.Context, in *GetCha
 	return out, nil
 }
 
+func (c *identityServiceClient) GetCharacter(ctx context.Context, in *GetCharacterRequest, opts ...grpc.CallOption) (*GetCharacterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCharacterResponse)
+	err := c.cc.Invoke(ctx, IdentityService_GetCharacter_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IdentityServiceServer is the server API for IdentityService service.
 // All implementations must embed UnimplementedIdentityServiceServer
 // for forward compatibility.
@@ -86,6 +102,11 @@ type IdentityServiceServer interface {
 	// GetCharacterList returns the character list for an authenticated account
 	// (HC_ACCEPT_ENTER 0x6b). Called after the client connects to the char server.
 	GetCharacterList(context.Context, *GetCharacterListRequest) (*GetCharacterListResponse, error)
+	// GetCharacter returns the full character detail (name, class, level,
+	// HP, hair, equipment, sex) for a single character on an authenticated
+	// account. The gateway calls this on CZ_ENTER to populate the entity
+	// spawn packet (ZC_SPAWN_UNIT 0x09fe) with real character data.
+	GetCharacter(context.Context, *GetCharacterRequest) (*GetCharacterResponse, error)
 	mustEmbedUnimplementedIdentityServiceServer()
 }
 
@@ -101,6 +122,9 @@ func (UnimplementedIdentityServiceServer) Authenticate(context.Context, *Authent
 }
 func (UnimplementedIdentityServiceServer) GetCharacterList(context.Context, *GetCharacterListRequest) (*GetCharacterListResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCharacterList not implemented")
+}
+func (UnimplementedIdentityServiceServer) GetCharacter(context.Context, *GetCharacterRequest) (*GetCharacterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCharacter not implemented")
 }
 func (UnimplementedIdentityServiceServer) mustEmbedUnimplementedIdentityServiceServer() {}
 func (UnimplementedIdentityServiceServer) testEmbeddedByValue()                         {}
@@ -159,6 +183,24 @@ func _IdentityService_GetCharacterList_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IdentityService_GetCharacter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCharacterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).GetCharacter(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_GetCharacter_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).GetCharacter(ctx, req.(*GetCharacterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IdentityService_ServiceDesc is the grpc.ServiceDesc for IdentityService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -173,6 +215,10 @@ var IdentityService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCharacterList",
 			Handler:    _IdentityService_GetCharacterList_Handler,
+		},
+		{
+			MethodName: "GetCharacter",
+			Handler:    _IdentityService_GetCharacter_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

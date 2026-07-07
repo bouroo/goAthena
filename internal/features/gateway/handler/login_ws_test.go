@@ -36,6 +36,7 @@ import (
 type loginFakeIdentityClient struct {
 	authFn  func(context.Context, *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error)
 	charsFn func(context.Context, *identityv1.GetCharacterListRequest) (*identityv1.GetCharacterListResponse, error)
+	charFn  func(context.Context, *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error)
 }
 
 func (f *loginFakeIdentityClient) Authenticate(ctx context.Context, req *identityv1.AuthenticateRequest, _ ...grpc.CallOption) (*identityv1.AuthenticateResponse, error) {
@@ -50,6 +51,20 @@ func (f *loginFakeIdentityClient) GetCharacterList(ctx context.Context, req *ide
 		return nil, status.Error(codes.Unimplemented, "no chars fn")
 	}
 	return f.charsFn(ctx, req)
+}
+
+func (f *loginFakeIdentityClient) GetCharacter(ctx context.Context, req *identityv1.GetCharacterRequest, _ ...grpc.CallOption) (*identityv1.GetCharacterResponse, error) {
+	if f.charFn == nil {
+		// Login/char-list tests do not exercise the spawn path —
+		// return success=false so the dispatch test (if any) falls
+		// back to a zero-filled spawn rather than blocking on
+		// Unimplemented.
+		return &identityv1.GetCharacterResponse{
+			Success: false,
+			Error:   "no getCharacter fn installed",
+		}, nil
+	}
+	return f.charFn(ctx, req)
 }
 
 // wsDispatchAdapter mirrors service.DispatchHandler for the WS path so

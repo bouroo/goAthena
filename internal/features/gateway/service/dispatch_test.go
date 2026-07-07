@@ -23,13 +23,14 @@ import (
 // fakeIdentityClient is a hand-written, in-process stand-in for
 // identityv1.IdentityServiceClient. It records the most recent request
 // and returns whatever the test installed via authenticateFn /
-// characterListFn. We intentionally avoid mockgen here to keep the
-// service tests self-contained and trivially diffable against the gRPC
-// interface.
+// characterListFn / getCharacterFn. We intentionally avoid mockgen
+// here to keep the service tests self-contained and trivially diffable
+// against the gRPC interface.
 type fakeIdentityClient struct {
 	mu              sync.Mutex
 	authenticateFn  func(context.Context, *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error)
 	characterListFn func(context.Context, *identityv1.GetCharacterListRequest) (*identityv1.GetCharacterListResponse, error)
+	getCharacterFn  func(context.Context, *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error)
 }
 
 func (f *fakeIdentityClient) Authenticate(ctx context.Context, req *identityv1.AuthenticateRequest, _ ...grpc.CallOption) (*identityv1.AuthenticateResponse, error) {
@@ -48,6 +49,23 @@ func (f *fakeIdentityClient) GetCharacterList(ctx context.Context, req *identity
 	f.mu.Unlock()
 	if fn == nil {
 		return nil, status.Error(codes.Unimplemented, "no chars fn installed")
+	}
+	return fn(ctx, req)
+}
+
+func (f *fakeIdentityClient) GetCharacter(ctx context.Context, req *identityv1.GetCharacterRequest, _ ...grpc.CallOption) (*identityv1.GetCharacterResponse, error) {
+	f.mu.Lock()
+	fn := f.getCharacterFn
+	f.mu.Unlock()
+	if fn == nil {
+		// A missing fn means the test did not set up the spawn
+		// fallback. Return success=false so the gateway falls back
+		// to a zero-filled spawn rather than aborting the handshake
+		// with an Unimplemented error.
+		return &identityv1.GetCharacterResponse{
+			Success: false,
+			Error:   "no getCharacter fn installed",
+		}, nil
 	}
 	return fn(ctx, req)
 }
@@ -693,7 +711,42 @@ func TestDispatchHandler_CZEnter_Success_CachesAccountID(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604,
+	identity := &fakeIdentityClient{
+		getCharacterFn: func(_ context.Context, req *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+			// M7a: verify the gateway forwards the parsed
+			// (accountID, charID) from the CZ_ENTER frame to
+			// identity.GetCharacter.
+			if req.GetAccountId() != 4242 || req.GetCharId() != 9001 {
+				t.Errorf("GetCharacter req = (aid=%d, cid=%d), want (4242, 9001)",
+					req.GetAccountId(), req.GetCharId())
+			}
+			return &identityv1.GetCharacterResponse{
+				Success: true,
+				Character: &identityv1.CharacterDetail{
+					CharId:       9001,
+					Name:         "alpha",
+					ClassId:      7, // swordsman
+					BaseLevel:    50,
+					JobLevel:     25,
+					Hp:           1234,
+					MaxHp:        2000,
+					Sp:           100,
+					MaxSp:        200,
+					Hair:         5,
+					HairColor:    3,
+					ClothesColor: 1,
+					Weapon:       1101,
+					Shield:       0,
+					HeadTop:      0,
+					HeadMid:      0,
+					HeadBottom:   0,
+					Robe:         0,
+					Sex:          1,
+				},
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, zone, 20250604,
 		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 
 	resp := &bufResponder{}
@@ -742,9 +795,13 @@ func TestDispatchHandler_CZEnter_Success_CachesAccountID(t *testing.T) {
 	}
 
 	// (2) ZC_SPAWN_UNIT: cmd 0x09fe LE at [0:2] + packetLength=107 at
-	// [2:4] + objectType=0 (PC) at [4] + AID=4242 at [5:9] + GID=4242
-	// at [9:13] + posDir at [63:66] = (150, 200, 0) + xSize=5 +
-	// ySize=5 + name = 24 NUL bytes at [83:107].
+	// [2:4] + objectType=0 (PC) at [4] + AID=4242 at [5:9] + GID=9001
+	// (M7a: charID, not AID) at [9:13] + speed/bodyState/healthState
+	// at [13:19] + job=7 at [23:25] + head=5 (hair style) at [25:27] +
+	// weapon=1101 at [27:31] + shield=0 at [31:35] + posDir at
+	// [63:66] = (150, 200, 0) + clevel=50 at [68:70] + maxHP=2000 at
+	// [72:76] + HP=1234 at [76:80] + name "alpha" at [83:88] (5 bytes,
+	// null-padded to 24).
 	spawn := out[wantAcceptLen:]
 	if spawn[0] != 0xfe || spawn[1] != 0x09 {
 		t.Errorf("ZC_SPAWN_UNIT opcode = %02x %02x, want fe 09 (LE 0x09fe)", spawn[0], spawn[1])
@@ -758,13 +815,30 @@ func TestDispatchHandler_CZEnter_Success_CachesAccountID(t *testing.T) {
 	if aid := binary.LittleEndian.Uint32(spawn[5:9]); aid != 4242 {
 		t.Errorf("ZC_SPAWN_UNIT AID = %d, want 4242 (conn.AccountID)", aid)
 	}
-	if gid := binary.LittleEndian.Uint32(spawn[9:13]); gid != 4242 {
-		t.Errorf("ZC_SPAWN_UNIT GID = %d, want 4242 (AID for self-spawn)", gid)
+	if gid := binary.LittleEndian.Uint32(spawn[9:13]); gid != 9001 {
+		t.Errorf("ZC_SPAWN_UNIT GID = %d, want 9001 (M7a: charID, not AID)", gid)
 	}
-	// Sex byte at [62] must echo the CZ_ENTER sex byte (1 = male from
-	// buildCZEnter's last arg).
+	// Job at [23:25] (int16 LE) = 7 (swordsman).
+	if job := int16(binary.LittleEndian.Uint16(spawn[23:25])); job != 7 {
+		t.Errorf("ZC_SPAWN_UNIT job = %d, want 7 (swordsman)", job)
+	}
+	// Head at [25:27] (uint16 LE) = 5 (hair style).
+	if head := binary.LittleEndian.Uint16(spawn[25:27]); head != 5 {
+		t.Errorf("ZC_SPAWN_UNIT head = %d, want 5 (hair style from identity)", head)
+	}
+	// Weapon at [27:31] (uint32 LE) = 1101.
+	if weapon := binary.LittleEndian.Uint32(spawn[27:31]); weapon != 1101 {
+		t.Errorf("ZC_SPAWN_UNIT weapon = %d, want 1101", weapon)
+	}
+	// Shield at [31:35] (uint32 LE) = 0.
+	if shield := binary.LittleEndian.Uint32(spawn[31:35]); shield != 0 {
+		t.Errorf("ZC_SPAWN_UNIT shield = %d, want 0", shield)
+	}
+	// Sex byte at [62] must echo the identity CharacterDetail sex
+	// byte (1 = male) — this is the proto-mapped value, not the
+	// CZ_ENTER request byte.
 	if spawn[62] != 1 {
-		t.Errorf("ZC_SPAWN_UNIT sex = %d, want 1 (from CZ_ENTER request)", spawn[62])
+		t.Errorf("ZC_SPAWN_UNIT sex = %d, want 1 (from identity CharacterDetail)", spawn[62])
 	}
 	// posDir at [63:66] must unpack to the zone-reported (150, 200) with
 	// dir=0 (the handler hardcodes Dir=0 on the spawn too).
@@ -777,12 +851,138 @@ func TestDispatchHandler_CZEnter_Success_CachesAccountID(t *testing.T) {
 	if spawn[66] != 5 || spawn[67] != 5 {
 		t.Errorf("ZC_SPAWN_UNIT xSize/ySize = %d/%d, want 5/5", spawn[66], spawn[67])
 	}
-	// Name field at [83:107] must be 24 NUL bytes (Name="" in M6c).
-	for i := 83; i < 107; i++ {
+	// CLevel at [68:70] (int16 LE) = 50.
+	if clevel := int16(binary.LittleEndian.Uint16(spawn[68:70])); clevel != 50 {
+		t.Errorf("ZC_SPAWN_UNIT clevel = %d, want 50 (identity base_level)", clevel)
+	}
+	// MaxHP at [72:76] (int32 LE) = 2000.
+	if maxhp := int32(binary.LittleEndian.Uint32(spawn[72:76])); maxhp != 2000 {
+		t.Errorf("ZC_SPAWN_UNIT maxHP = %d, want 2000 (identity max_hp)", maxhp)
+	}
+	// HP at [76:80] (int32 LE) = 1234.
+	if hp := int32(binary.LittleEndian.Uint32(spawn[76:80])); hp != 1234 {
+		t.Errorf("ZC_SPAWN_UNIT HP = %d, want 1234 (identity hp)", hp)
+	}
+	// Name at [83:107]: "alpha" (5 bytes) followed by 19 NULs.
+	if got := string(spawn[83:88]); got != "alpha" {
+		t.Errorf("ZC_SPAWN_UNIT name = %q, want %q", got, "alpha")
+	}
+	for i := 88; i < 107; i++ {
 		if spawn[i] != 0 {
-			t.Errorf("ZC_SPAWN_UNIT name byte at [%d] = 0x%02x, want 0x00 (M6c sends empty name)",
+			t.Errorf("ZC_SPAWN_UNIT name tail byte at [%d] = 0x%02x, want 0x00",
 				i, spawn[i])
 		}
+	}
+}
+
+func TestDispatchHandler_CZEnter_IdentityFails_FallsBackToZeroSpawn(t *testing.T) {
+	t.Parallel()
+
+	zone := &fakeZoneClient{
+		enterFn: func(_ context.Context, _ *zonev1.EnterZoneRequest, _ ...grpc.CallOption) (*zonev1.EnterZoneResponse, error) {
+			return &zonev1.EnterZoneResponse{
+				Success: true,
+				MapName: "prontera",
+				MapX:    150,
+				MapY:    200,
+			}, nil
+		},
+	}
+	identity := &fakeIdentityClient{
+		getCharacterFn: func(_ context.Context, _ *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+			return nil, status.Error(codes.Unavailable, "identity down")
+		},
+	}
+	h := NewDispatchHandler(identity, zone, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZENTER,
+		buildCZEnter(4242, 9001, 0xdead0000, 0xbeef0000, 1)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil (identity failure must not abort map enter)", err)
+	}
+
+	// Both packets must still be emitted — ZC_ACCEPT_ENTER followed by
+	// the zero-fallback ZC_SPAWN_UNIT. The player is already in the
+	// map; a missing or default sprite is preferable to a torn
+	// connection.
+	out := resp.buf.Bytes()
+	const wantAcceptLen = 13
+	const wantSpawnLen = 107
+	if len(out) != wantAcceptLen+wantSpawnLen {
+		t.Fatalf("responder length = %d, want %d", len(out), wantAcceptLen+wantSpawnLen)
+	}
+	spawn := out[wantAcceptLen:]
+	// AID/GID still populated from the (cancelled-or-not) CZ_ENTER
+	// data; only the character-specific fields are zero-filled.
+	if aid := binary.LittleEndian.Uint32(spawn[5:9]); aid != 4242 {
+		t.Errorf("ZC_SPAWN_UNIT AID = %d, want 4242", aid)
+	}
+	if gid := binary.LittleEndian.Uint32(spawn[9:13]); gid != 9001 {
+		t.Errorf("ZC_SPAWN_UNIT GID = %d, want 9001 (charID)", gid)
+	}
+	// CLevel / MaxHP / HP must fall back to the pre-M7a defaults
+	// (1/1/1) so the client renders a usable sprite instead of a
+	// (job=0, hp=0) blank.
+	if clevel := int16(binary.LittleEndian.Uint16(spawn[68:70])); clevel != 1 {
+		t.Errorf("ZC_SPAWN_UNIT fallback clevel = %d, want 1", clevel)
+	}
+	if maxhp := int32(binary.LittleEndian.Uint32(spawn[72:76])); maxhp != 1 {
+		t.Errorf("ZC_SPAWN_UNIT fallback maxHP = %d, want 1", maxhp)
+	}
+	if hp := int32(binary.LittleEndian.Uint32(spawn[76:80])); hp != 1 {
+		t.Errorf("ZC_SPAWN_UNIT fallback HP = %d, want 1", hp)
+	}
+	// Name must be the empty string (24 NUL bytes).
+	for i := 83; i < 107; i++ {
+		if spawn[i] != 0 {
+			t.Errorf("ZC_SPAWN_UNIT fallback name byte at [%d] = 0x%02x, want 0x00",
+				i, spawn[i])
+		}
+	}
+}
+
+func TestDispatchHandler_CZEnter_IdentitySuccessFalse_FallsBackToZeroSpawn(t *testing.T) {
+	t.Parallel()
+
+	zone := &fakeZoneClient{
+		enterFn: func(_ context.Context, _ *zonev1.EnterZoneRequest, _ ...grpc.CallOption) (*zonev1.EnterZoneResponse, error) {
+			return &zonev1.EnterZoneResponse{
+				Success: true,
+				MapName: "prontera",
+				MapX:    150,
+				MapY:    200,
+			}, nil
+		},
+	}
+	identity := &fakeIdentityClient{
+		getCharacterFn: func(_ context.Context, _ *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+			return &identityv1.GetCharacterResponse{
+				Success: false,
+				Error:   "character not found",
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, zone, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZENTER,
+		buildCZEnter(4242, 9001, 0xdead0000, 0xbeef0000, 1)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil (success=false must not abort map enter)", err)
+	}
+
+	out := resp.buf.Bytes()
+	const wantAcceptLen = 13
+	const wantSpawnLen = 107
+	if len(out) != wantAcceptLen+wantSpawnLen {
+		t.Fatalf("responder length = %d, want %d", len(out), wantAcceptLen+wantSpawnLen)
+	}
+	spawn := out[wantAcceptLen:]
+	if hp := int32(binary.LittleEndian.Uint32(spawn[76:80])); hp != 1 {
+		t.Errorf("ZC_SPAWN_UNIT success=false fallback HP = %d, want 1", hp)
 	}
 }
 

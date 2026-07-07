@@ -63,4 +63,12 @@ type IdentityService interface {
 	// account, ordered by slot. The handler serializes this into
 	// HC_ACCEPT_ENTER 0x6b (char_clif.cpp:408-430).
 	ListCharacters(ctx context.Context, accountID uint32) ([]CharacterSummary, error)
+	// GetCharacter returns the full character detail (name, class, level,
+	// HP, hair, equipment, sex) for a single character on an
+	// authenticated account. Returns ErrCharacterNotFound (wrapped, with
+	// a domain message) when the (accountID, charID) pair does not match
+	// any row; the handler maps that onto success=false. accountID or
+	// charID == 0 is rejected with ErrCharacterNotFound so callers can't
+	// accidentally query the all-zeros key.
+	GetCharacter(ctx context.Context, accountID, charID uint32) (*CharacterSummary, error)
 }

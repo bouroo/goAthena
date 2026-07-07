@@ -205,6 +205,23 @@ func (s *identityService) ListCharacters(ctx context.Context, accountID uint32) 
 	return chrs, nil
 }
 
+// GetCharacter returns the full character detail (name, class, level,
+// HP, hair, equipment, sex) for a single character on an authenticated
+// account. The gateway calls this on CZ_ENTER to populate the entity
+// spawn packet (ZC_SPAWN_UNIT 0x09fe) with real character data.
+//
+// domain.ErrCharacterNotFound is preserved in the error chain so the
+// handler can map it onto success=false via errors.Is; the wrap with
+// the (accountID, charID) context gives log triage the call site
+// without changing the sentinel's identity in the chain.
+func (s *identityService) GetCharacter(ctx context.Context, accountID, charID uint32) (*domain.CharacterSummary, error) {
+	char, err := s.characters.GetByID(ctx, accountID, charID)
+	if err != nil {
+		return nil, fmt.Errorf("get character (account=%d, char=%d): %w", accountID, charID, err)
+	}
+	return char, nil
+}
+
 // authErrorFromState maps acc.state (login.cpp:372-375) to the wire code.
 // state=0 means OK and is handled by the caller; any non-zero state maps
 // to state-1, clamped to the AuthError range to avoid wrap-around on
