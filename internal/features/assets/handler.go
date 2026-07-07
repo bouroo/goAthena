@@ -1,14 +1,17 @@
 package assets
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"image/png"
 	"net/http"
 	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/rs/zerolog"
+	"golang.org/x/image/bmp"
 )
 
 // FileReader is the read interface for the asset handler. GRFSet
@@ -80,6 +83,14 @@ func (h *AssetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctype := contentTypeFor(name)
+	if strings.ToLower(filepath.Ext(name)) == ".bmp" {
+		if pngData, convErr := convertBMPToPNG(data); convErr == nil {
+			data = pngData
+			ctype = "image/png"
+		} else {
+			h.logger.Warn().Err(convErr).Str("path", name).Msg("bmp to png conversion failed, serving raw bmp")
+		}
+	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", assetMaxAgeSeconds))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
@@ -162,3 +173,18 @@ func contentTypeFor(name string) string {
 // assetMaxAgeSeconds is the Cache-Control max-age sent with successful
 // responses. Exposed as a constant for tests.
 const assetMaxAgeSeconds = 86400
+
+// convertBMPToPNG decodes BMP bytes and re-encodes them as PNG. Returns
+// the PNG bytes. Fails when the input is not a valid BMP.
+func convertBMPToPNG(bmpData []byte) ([]byte, error) {
+	img, err := bmp.Decode(bytes.NewReader(bmpData))
+	if err != nil {
+		return nil, fmt.Errorf("decode bmp: %w", err)
+	}
+	var buf bytes.Buffer
+	enc := png.Encoder{CompressionLevel: png.BestSpeed}
+	if err := enc.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("encode png: %w", err)
+	}
+	return buf.Bytes(), nil
+}
