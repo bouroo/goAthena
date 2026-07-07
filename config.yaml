@@ -64,6 +64,7 @@ gateway:
     allowed_origins: []
   packetver: 20250604
   identity_addr: "localhost:50051"
+  zone_addr: "localhost:50052"
   map_addr: "localhost:5121"
 
 identity:

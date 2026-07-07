@@ -1,12 +1,15 @@
 // Package service contains use-case implementations for the gateway
 // feature (WS-A). DispatchHandler is the production handler that
-// forwards the kRO packet stream to the identity service over gRPC
-// and encodes the reply back to the client via the supplied Responder.
+// forwards the kRO packet stream to the identity and zone services
+// over gRPC and encodes the reply back to the client via the supplied
+// Responder.
 //
-// Wire surface (per M2b):
+// Wire surface (per M3b):
 //   - CA_LOGIN (0x0064)            → identity.Authenticate → AC_ACCEPT_LOGIN / AC_REFUSE_LOGIN
 //   - CH_ENTER (0x0065)            → identity.GetCharacterList → 4-byte AID echo + HC_ACCEPT_ENTER
 //   - CH_SELECT_CHAR (0x0066)      → HC_NOTIFY_ZONESVR (zone redirect to DefaultMap)
+//   - CZ_ENTER (0x0072)             → zone.EnterZone → ZC_ACCEPT_ENTER
+//   - CZ_REQUEST_MOVE (0x0085)      → debug-logged (M4+ will forward to zone)
 //   - everything else              → debug-logged, connection kept alive.
 
 package service
@@ -20,11 +23,13 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"time"
 
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc/status"
 
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
+	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
@@ -43,11 +48,14 @@ const ErrIdentityUnavailableRefuse = uint32(99)
 const maxCharListCount = 255
 
 // DispatchHandler is a domain.PacketHandler that bridges the kRO TCP /
-// WebSocket ingress to the identity gRPC service. It is the M2b
-// handler: it covers the full CA_LOGIN → CH_ENTER → CH_SELECT_CHAR
-// path the rAthena char_clif handshake expects.
+// WebSocket ingress to the identity and zone gRPC services. It is the
+// M3b handler: it covers the full CA_LOGIN → CH_ENTER → CH_SELECT_CHAR
+// → CZ_ENTER path the rAthena clif handshake expects, plus the
+// CZ_REQUEST_MOVE log-only stub that the zone Move RPC will consume in
+// M4+.
 type DispatchHandler struct {
 	identity  identityv1.IdentityServiceClient
+	zone      zonev1.ZoneServiceClient
 	packetver uint32
 	logger    zerolog.Logger
 
@@ -73,8 +81,15 @@ type DispatchHandler struct {
 // order IPv4 uint32 — see resolveZoneIPv4 for the literal/hostname
 // resolution path. Sourced from config (zone.default_map /
 // gateway.map_addr) via the DI provider.
+//
+// zone is the zone gRPC client used by the map-phase handlers
+// (CZ_ENTER → zone.EnterZone). Passing nil for zone is allowed in
+// tests that do not exercise the map path; the map-phase handlers
+// check for nil and refuse the client with a generic ZC_REFUSE_ENTER
+// error rather than panic.
 func NewDispatchHandler(
 	identity identityv1.IdentityServiceClient,
+	zone zonev1.ZoneServiceClient,
 	packetver int,
 	logger zerolog.Logger,
 	defaultMap string,
@@ -83,6 +98,7 @@ func NewDispatchHandler(
 ) *DispatchHandler {
 	return &DispatchHandler{
 		identity:   identity,
+		zone:       zone,
 		packetver:  uint32(packetver), //nolint:gosec // validated upstream by config.min/max=20260000
 		logger:     logger.With().Str("component", "gateway.dispatch").Logger(),
 		defaultMap: defaultMap,
@@ -104,6 +120,10 @@ func (h *DispatchHandler) HandlePacket(ctx context.Context, conn domain.Connecti
 		return h.handleCHEnter(ctx, conn, resp, frame)
 	case packet.HeaderCHSELECTCHAR:
 		return h.handleCHSelectChar(ctx, conn, resp, frame)
+	case packet.HeaderCZENTER:
+		return h.handleCZEnter(ctx, conn, resp, frame)
+	case packet.HeaderCZREQUESTMOVE:
+		return h.handleCZRequestMove(ctx, conn, resp, frame)
 	default:
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
@@ -400,6 +420,149 @@ func (h *DispatchHandler) handleCHSelectChar(_ context.Context, conn domain.Conn
 	return nil
 }
 
+// handleCZEnter forwards CZ_ENTER to zone.EnterZone and encodes the
+// reply. On success the client receives a ZC_ACCEPT_ENTER carrying the
+// map name + spawn position from the zone; on failure the gateway
+// sends ZC_REFUSE_ENTER with error code 0 (rAthena's generic "server
+// closed" refuse for map-server entry — there's no fine-grained
+// client-visible code book on the map side the way HC_REFUSE_ENTER
+// has on the char side).
+//
+// Reference: rathena/src/map/clif.cpp:10642 (clif_parse_WantToConnection)
+// and the corresponding map_send_zip0088_accept_enter / clif_authfail
+// emission sites.
+func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZEnter(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_ENTER; dropping packet")
+		return nil
+	}
+
+	if h.zone == nil {
+		// DI misconfiguration or a test harness that did not wire the
+		// zone client — surface a generic refuse rather than panic on
+		// a nil-deref inside the gRPC stub.
+		h.logger.Error().
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Uint32("cid", req.CharID).
+			Msg("zone client not configured; refusing map enter")
+		return sendMapRefuse(resp)
+	}
+
+	zReq := &zonev1.EnterZoneRequest{
+		AccountId:  req.AccountID,
+		CharId:     req.CharID,
+		LoginId1:   uint64(req.AuthCode),
+		ClientTick: req.ClientTime,
+		Sex:        sexString(req.Sex),
+		Packetver:  h.packetver,
+		ClientIp:   splitHost(conn.RemoteIP),
+	}
+
+	zResp, err := h.zone.EnterZone(ctx, zReq)
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint32("aid", req.AccountID).
+				Msg("zone call cancelled (client gone)")
+			_ = err
+			return nil
+		}
+		st, _ := status.FromError(err)
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Str("grpc_code", st.Code().String()).
+			Msg("zone EnterZone RPC failed; refusing map enter")
+		return sendMapRefuse(resp)
+	}
+	if zResp == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Msg("zone returned nil EnterZone response; refusing map enter")
+		return sendMapRefuse(resp)
+	}
+	if !zResp.GetSuccess() {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Str("error", zResp.GetError()).
+			Msg("zone refused map enter")
+		return sendMapRefuse(resp)
+	}
+
+	accept := packet.MapAcceptEnterResponse{
+		StartTime: uint32(time.Now().Unix()), //nolint:gosec // low 32 bits of unix time per rAthena startTime convention
+		PosX:      int16(zResp.GetMapX()),    //nolint:gosec // map coords are 0-512
+		PosY:      int16(zResp.GetMapY()),    //nolint:gosec // map coords are 0-512
+		Dir:       0,
+		XSize:     5,
+		YSize:     5,
+		Font:      0,
+	}
+
+	var buf bytes.Buffer
+	if err := accept.Encode(&buf); err != nil {
+		// MapAcceptEnterResponse.Encode cannot fail in practice (no
+		// variable-width fields), but we still bubble the error up
+		// rather than silently swallow it — wrapcheck requires every
+		// external error be wrapped.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Msg("encode ZC_ACCEPT_ENTER failed; refusing map enter")
+		return sendMapRefuse(resp)
+	}
+
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("aid", req.AccountID).
+		Uint32("cid", req.CharID).
+		Str("map", zResp.GetMapName()).
+		Uint32("pos_x", zResp.GetMapX()).
+		Uint32("pos_y", zResp.GetMapY()).
+		Msg("map enter accepted")
+
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_ACCEPT_ENTER: %w", err)
+	}
+	return nil
+}
+
+// handleCZRequestMove accepts and logs a client movement request.
+// Forwarding movement to the zone service requires a zone.Move RPC
+// that does not exist yet — it is scheduled for M4+ once the AOI and
+// pathfinding kernels land. Until then the gateway logs the request
+// and keeps the connection alive so a misbehaving client does not get
+// torn down by a silent-drop pattern.
+func (h *DispatchHandler) handleCZRequestMove(_ context.Context, conn domain.ConnectionInfo, _ domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZRequestMove(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_REQUEST_MOVE; dropping packet")
+		return nil
+	}
+	h.logger.Debug().
+		Uint64("conn", conn.ID).
+		Int16("dest_x", req.DestX).
+		Int16("dest_y", req.DestY).
+		Msg("movement request received (zone forwarding is M4+ scope)")
+	return nil
+}
+
 // sendRefuse encodes an AC_REFUSE_LOGIN frame and sends it. Encode
 // errors are not possible with the empty-string UnblockTime we send on
 // every internal refusal path, so we treat any returned error as a fatal
@@ -436,6 +599,26 @@ func sendCharRefuse(resp domain.Responder, code uint32) error {
 	}
 	if err := resp.SendPacket(buf.Bytes()); err != nil {
 		return fmt.Errorf("send HC_REFUSE_ENTER: %w", err)
+	}
+	return nil
+}
+
+// sendMapRefuse encodes a ZC_REFUSE_ENTER frame (cmd 0x0074, 3 bytes)
+// and sends it. The map-server refuse code book is intentionally
+// minimal in rAthena — most refusals land on error code 0
+// (rAthena's map_authfail default) because the failure reasons
+// (session expired, zone down, slot full) are surfaced through the
+// client UI's reconnect prompt rather than a fine-grained code. We
+// always refuse with 0; callers that want more diagnostic detail log
+// the reason before invoking.
+func sendMapRefuse(resp domain.Responder) error {
+	refuse := packet.MapRefuseEnterResponse{Error: 0}
+	var buf bytes.Buffer
+	if err := refuse.Encode(&buf); err != nil {
+		return fmt.Errorf("encode ZC_REFUSE_ENTER: %w", err)
+	}
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_REFUSE_ENTER: %w", err)
 	}
 	return nil
 }

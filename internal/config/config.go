@@ -124,7 +124,16 @@ type GatewayConfig struct {
 	WS           WSConfig  `mapstructure:"ws" yaml:"ws" validate:"required"`
 	Packetver    int       `mapstructure:"packetver" yaml:"packetver" env:"GATEWAY_PACKETVER" validate:"min=20000000,max=20260000"`
 	IdentityAddr string    `mapstructure:"identity_addr" yaml:"identity_addr" env:"GATEWAY_IDENTITY_ADDR" validate:"required"`
-	MapAddr      string    `mapstructure:"map_addr" yaml:"map_addr" env:"GATEWAY_MAP_ADDR" validate:"required"`
+	// ZoneAddr is the gRPC endpoint of the zone service (DEL-03). The
+	// gateway forwards decoded map-server packets (CZ_ENTER,
+	// CZ_REQUEST_MOVE) here.
+	ZoneAddr string `mapstructure:"zone_addr" yaml:"zone_addr" env:"GATEWAY_ZONE_ADDR" validate:"required"`
+	// MapAddr is the "host:port" address of the zone service that the gateway
+	// advertises to the client in HC_NOTIFY_ZONESVR (cmd 0x0ac5). It is not the
+	// gateway's own listening address — it is the destination the client opens
+	// a new TCP connection to after CH_SELECT_CHAR. Defaults to "localhost:5121"
+	// (the Thai Classic map port).
+	MapAddr string `mapstructure:"map_addr" yaml:"map_addr" env:"GATEWAY_MAP_ADDR" validate:"required"`
 }
 
 // TCPConfig holds the gnet TCP listener settings for the kRO ingress port.
@@ -342,6 +351,7 @@ func setDefaults(v *viper.Viper) {
 		"gateway.ws.allowed_origins": []string{},
 		"gateway.packetver":          20250604,
 		"gateway.identity_addr":      "localhost:50051",
+		"gateway.zone_addr":          "localhost:50052",
 		"gateway.map_addr":           "localhost:5121",
 
 		"identity.use_md5_passwords": false,
@@ -418,6 +428,7 @@ func leafBindings() []leafBinding {
 		{"gateway.ws.allowed_origins", "GATEWAY_WS_ALLOWED_ORIGINS"},
 		{"gateway.packetver", "GATEWAY_PACKETVER"},
 		{"gateway.identity_addr", "GATEWAY_IDENTITY_ADDR"},
+		{"gateway.zone_addr", "GATEWAY_ZONE_ADDR"},
 		{"gateway.map_addr", "GATEWAY_MAP_ADDR"},
 
 		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},

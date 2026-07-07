@@ -66,6 +66,7 @@ func TestRun_ShutdownOnContextCancel(t *testing.T) {
 			WS:           config.WSConfig{Addr: "127.0.0.1:16911", Path: "/ws/"},
 			Packetver:    20250604,
 			IdentityAddr: "127.0.0.1:50051",
+			ZoneAddr:     "127.0.0.1:50052",
 			MapAddr:      "127.0.0.1:5121",
 		},
 	}
