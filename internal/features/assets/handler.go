@@ -182,7 +182,8 @@ func convertBMPToPNG(bmpData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decode bmp: %w", err)
 	}
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
+	enc := png.Encoder{CompressionLevel: png.BestSpeed}
+	if err := enc.Encode(&buf, img); err != nil {
 		return nil, fmt.Errorf("encode png: %w", err)
 	}
 	return buf.Bytes(), nil
