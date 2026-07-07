@@ -75,18 +75,7 @@ func Register(c do.Injector) error {
 		if err != nil {
 			return nil, err
 		}
-		zoneHost, zonePort, err := service.SplitMapAddr(cfg.Gateway.MapAddr)
-		if err != nil {
-			return nil, fmt.Errorf("split gateway.map_addr %q: %w", cfg.Gateway.MapAddr, err)
-		}
-		return service.NewDispatchHandler(
-			identityClient,
-			cfg.Gateway.Packetver,
-			*logger,
-			cfg.Zone.DefaultMap,
-			zoneHost,
-			zonePort,
-		), nil
+		return buildDispatchHandler(identityClient, cfg, *logger)
 	})
 
 	do.Provide(c, func(i do.Injector) (*handler.TCPHandler, error) {
@@ -126,4 +115,32 @@ func Register(c do.Injector) error {
 	})
 
 	return nil
+}
+
+// buildDispatchHandler wires the M2b dispatch handler from resolved
+// config + identity client + logger. Extracted from Register to keep
+// the gocyclo budget under 15; the host→IPv4 resolution step is the
+// only piece that can fail at startup, so it bubbles up as a wrapped
+// error that surfaces a misconfigured gateway.map_addr immediately.
+func buildDispatchHandler(
+	identityClient identityv1.IdentityServiceClient,
+	cfg *config.Config,
+	logger zerolog.Logger,
+) (*service.DispatchHandler, error) {
+	zoneHost, zonePort, err := service.SplitMapAddr(cfg.Gateway.MapAddr)
+	if err != nil {
+		return nil, fmt.Errorf("split gateway.map_addr %q: %w", cfg.Gateway.MapAddr, err)
+	}
+	zoneIP, err := service.ResolveZoneIPv4(zoneHost)
+	if err != nil {
+		return nil, fmt.Errorf("resolve gateway.map_addr host %q: %w", zoneHost, err)
+	}
+	return service.NewDispatchHandler(
+		identityClient,
+		cfg.Gateway.Packetver,
+		logger,
+		cfg.Zone.DefaultMap,
+		zoneIP,
+		zonePort,
+	), nil
 }

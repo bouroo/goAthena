@@ -1,7 +1,6 @@
 package packet
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -164,102 +163,18 @@ func (c CharacterInfo) Size() int {
 // Encode writes one packed CHARACTER_INFO entry to w. Returns a wrapped
 // error (sentinel + %w) if Name exceeds 24 bytes or MapName exceeds 16
 // bytes; in that case no bytes are written to w.
+//
+// delegates the field-by-field serialization to encodeInto so the
+// HC_ACCEPT_ENTER loop and the standalone Encode stay byte-for-byte
+// identical.
 func (c CharacterInfo) Encode(w io.Writer) error {
 	if err := c.validate(); err != nil {
 		return err
 	}
-
 	buf := make([]byte, CharacterInfoSize)
-	pos := 0
-
-	binary.LittleEndian.PutUint32(buf[pos:], c.GID)
-	pos += 4
-	binary.LittleEndian.PutUint64(buf[pos:], uint64(c.Exp)) //nolint:gosec // wire is 64-bit, sign-preserving via two's complement reinterpret
-	pos += 8
-	binary.LittleEndian.PutUint32(buf[pos:], uint32(c.Money)) //nolint:gosec // wire is 32-bit, sign-preserving via two's complement reinterpret
-	pos += 4
-	binary.LittleEndian.PutUint64(buf[pos:], uint64(c.JobExp)) //nolint:gosec // wire is 64-bit, sign-preserving via two's complement reinterpret
-	pos += 8
-	binary.LittleEndian.PutUint32(buf[pos:], uint32(c.JobLevel)) //nolint:gosec // wire is 32-bit, sign-preserving via two's complement reinterpret
-	pos += 4
-	binary.LittleEndian.PutUint32(buf[pos:], uint32(c.BodyState)) //nolint:gosec // wire is 32-bit
-	pos += 4
-	binary.LittleEndian.PutUint32(buf[pos:], uint32(c.HealthState)) //nolint:gosec // wire is 32-bit
-	pos += 4
-	binary.LittleEndian.PutUint32(buf[pos:], uint32(c.EffectState)) //nolint:gosec // wire is 32-bit
-	pos += 4
-	binary.LittleEndian.PutUint32(buf[pos:], uint32(c.Virtue)) //nolint:gosec // wire is 32-bit
-	pos += 4
-	binary.LittleEndian.PutUint32(buf[pos:], uint32(c.Honor)) //nolint:gosec // wire is 32-bit
-	pos += 4
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.JobPoint)) //nolint:gosec // wire is 16-bit, sign-preserving via two's complement reinterpret
-	pos += 2
-	binary.LittleEndian.PutUint64(buf[pos:], uint64(c.HP)) //nolint:gosec // wire is 64-bit
-	pos += 8
-	binary.LittleEndian.PutUint64(buf[pos:], uint64(c.MaxHP)) //nolint:gosec // wire is 64-bit
-	pos += 8
-	binary.LittleEndian.PutUint64(buf[pos:], uint64(c.SP)) //nolint:gosec // wire is 64-bit
-	pos += 8
-	binary.LittleEndian.PutUint64(buf[pos:], uint64(c.MaxSP)) //nolint:gosec // wire is 64-bit
-	pos += 8
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.Speed)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.Job)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.Head)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.Body)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.Weapon)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.Level)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.SPPoint)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.Accessory)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.Shield)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.Accessory2)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.Accessory3)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.HeadPalette)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.BodyPalette)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	writeFixedString(buf[pos:pos+nameSlot], c.Name)
-	pos += nameSlot
-	buf[pos] = c.Str
-	pos++
-	buf[pos] = c.Agi
-	pos++
-	buf[pos] = c.Vit
-	pos++
-	buf[pos] = c.Int
-	pos++
-	buf[pos] = c.Dex
-	pos++
-	buf[pos] = c.Luk
-	pos++
-	buf[pos] = c.CharNum
-	pos++
-	buf[pos] = c.HairColor
-	pos++
-	binary.LittleEndian.PutUint16(buf[pos:], uint16(c.IsChangedCharName)) //nolint:gosec // wire is 16-bit
-	pos += 2
-	writeFixedString(buf[pos:pos+charMapNameSlot], c.MapName)
-	pos += charMapNameSlot
-	binary.LittleEndian.PutUint32(buf[pos:], uint32(c.DelRevDate)) //nolint:gosec // wire is 32-bit
-	pos += 4
-	binary.LittleEndian.PutUint32(buf[pos:], uint32(c.RobePalette)) //nolint:gosec // wire is 32-bit
-	pos += 4
-	binary.LittleEndian.PutUint32(buf[pos:], uint32(c.ChrSlotChangeCnt)) //nolint:gosec // wire is 32-bit
-	pos += 4
-	binary.LittleEndian.PutUint32(buf[pos:], uint32(c.ChrNameChangeCnt)) //nolint:gosec // wire is 32-bit
-	pos += 4
-	buf[pos] = c.Sex
-
+	if err := c.encodeInto(buf[:0]); err != nil {
+		return err
+	}
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CHARACTER_INFO: %w", err)
 	}

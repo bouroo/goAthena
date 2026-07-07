@@ -37,7 +37,7 @@ import (
 type wsCharDispatchAdapter struct {
 	identity   identityv1.IdentityServiceClient
 	defaultMap string
-	zoneHost   string
+	zoneIP     uint32
 	zonePort   uint16
 	logger     zerolog.Logger
 }
@@ -124,6 +124,13 @@ func wsCharSendRefuse(resp domain.Responder, code uint8) error {
 // buildCHEnter crafts the 17-byte CH_ENTER frame the rAthena client
 // sends right after the char-server connection opens (rathena/src/
 // common/packets.hpp PACKET_CH_ENTER).
+//
+// wsCharIPv4Loopback is the network-byte-order uint32 form of
+// 127.0.0.1 (0x7f000001). service.DispatchHandler now stores the
+// resolved uint32 directly so the test adapter mirrors that — no
+// hostname parsing happens inside the WSHandler pipeline.
+const wsCharIPv4Loopback uint32 = 0x7f000001
+
 func buildCHEnter(accountID, loginID1, loginID2 uint32, sex uint8) []byte {
 	const size = 17
 	frame := make([]byte, size)
@@ -162,7 +169,7 @@ func TestWSHandler_CHEnter_RoundTrip_HCAcceptEnter(t *testing.T) {
 	adapter := &wsCharDispatchAdapter{
 		identity:   fake,
 		defaultMap: "prontera",
-		zoneHost:   "127.0.0.1",
+		zoneIP:     wsCharIPv4Loopback,
 		zonePort:   5121,
 		logger:     zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.Disabled),
 	}

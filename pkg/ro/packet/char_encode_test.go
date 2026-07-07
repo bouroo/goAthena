@@ -388,3 +388,87 @@ func TestAcceptEnterResponse_Size(t *testing.T) {
 		t.Errorf("Size() with 2 chars = %d, want %d", got, acceptEnterHeaderSize+2*CharacterInfoSize)
 	}
 }
+
+// TestAcceptEnterResponse_Encode_PacketLengthOverflow asserts that
+// AcceptEnterResponse with enough Characters to push the total packet
+// length past uint16 max (65535) returns the ErrPacketTooLong sentinel
+// from Encode without writing any bytes.
+//
+// Math: 27 (header) + N*175 (chars) > 65535 → N > (65535-27)/175 =
+// 374.51. So 375 characters overflows by exactly 27 bytes
+// (27 + 375*175 = 65652). The test uses 375 as the smallest count
+// that triggers the guard.
+func TestAcceptEnterResponse_Encode_PacketLengthOverflow(t *testing.T) {
+	t.Parallel()
+
+	const overflowCount = 375 // 27 + 375*175 = 65652 > 65535
+	wantLen := acceptEnterHeaderSize + overflowCount*CharacterInfoSize
+	if wantLen <= 0xffff {
+		t.Fatalf("test setup wrong: wantLen=%d must exceed uint16 max for the overflow guard to fire", wantLen)
+	}
+
+	chars := make([]CharacterInfo, overflowCount)
+	for i := range chars {
+		// Short ASCII name + mapName so per-entry validate passes.
+		chars[i] = CharacterInfo{
+			GID:     uint32(i + 1),
+			Name:    "n",
+			MapName: "m",
+		}
+	}
+
+	resp := AcceptEnterResponse{
+		Total:      0, // under uint16-overflow guard; Total byte is irrelevant once validate fails
+		Characters: chars,
+	}
+
+	var buf bytes.Buffer
+	err := resp.Encode(&buf)
+	if err == nil {
+		t.Fatalf("Encode err = nil, want error (Size()=%d exceeds uint16 max)", resp.Size())
+	}
+	if !errors.Is(err, ErrPacketTooLong) {
+		t.Errorf("Encode err = %v, want errors.Is(.., ErrPacketTooLong)", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("partial output written: %d bytes (want 0 on guard failure)", buf.Len())
+	}
+}
+
+// TestAcceptEnterResponse_Encode_AtUint16Boundary confirms the
+// overflow guard does NOT fire one byte below the limit. The encoded
+// length must be < 65536 — 65535 itself fits in uint16 and remains
+// encodable.
+func TestAcceptEnterResponse_Encode_AtUint16Boundary(t *testing.T) {
+	t.Parallel()
+
+	// Smallest N that produces Size() == 65535 exactly: N*175 + 27 == 65535
+	// → N == (65535-27)/175 == 374.51 — not integer; pick 374
+	// (27 + 374*175 = 65477, well below 65535) as the largest safe
+	// count to keep the test fast and obvious.
+	const safeCount = 374
+	chars := make([]CharacterInfo, safeCount)
+	for i := range chars {
+		chars[i] = CharacterInfo{
+			GID:     uint32(i + 1),
+			Name:    "n",
+			MapName: "m",
+		}
+	}
+
+	resp := AcceptEnterResponse{
+		Total:      0, // under-slot value; boundary test cares only about Size
+		Characters: chars,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v at safe size %d, want nil", err, resp.Size())
+	}
+	if got := buf.Len(); got != resp.Size() {
+		t.Errorf("Encode wrote %d bytes, want %d", got, resp.Size())
+	}
+	if got := resp.Size(); got >= 0x10000 {
+		t.Errorf("Size() = %d, want < 65536 for boundary test", got)
+	}
+}

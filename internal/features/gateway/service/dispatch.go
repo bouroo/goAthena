@@ -54,9 +54,13 @@ type DispatchHandler struct {
 	// defaultMap is the initial map name advertised in HC_NOTIFY_ZONESVR
 	// after CH_SELECT_CHAR. Sourced from zone.default_map.
 	defaultMap string
-	// zoneHost is the IPv4 host written into the HC_NOTIFY_ZONESVR IP
-	// slot (network-byte-order uint32). Sourced from gateway.map_addr.
-	zoneHost string
+	// zoneIP is the IPv4 host written into the HC_NOTIFY_ZONESVR IP slot
+	// (network-byte-order uint32). Pre-resolved at construction time by
+	// resolveZoneIPv4 so a config like "localhost:5121" produces a real
+	// advertised IP rather than the 0.0.0.0 parseIPv4("localhost")
+	// silently returned before the review fix. Sourced from
+	// gateway.map_addr.
+	zoneIP uint32
 	// zonePort is the TCP port written into HC_NOTIFY_ZONESVR. Sourced
 	// from gateway.map_addr.
 	zonePort uint16
@@ -64,15 +68,17 @@ type DispatchHandler struct {
 
 // NewDispatchHandler constructs a dispatch-backed PacketHandler.
 //
-// defaultMap, zoneHost, and zonePort feed the HC_NOTIFY_ZONESVR frame
-// emitted after CH_SELECT_CHAR. They are sourced from config
-// (zone.default_map / gateway.map_addr) and split by the DI provider.
+// defaultMap, zoneIP, and zonePort feed the HC_NOTIFY_ZONESVR frame
+// emitted after CH_SELECT_CHAR. zoneIP is a pre-resolved network-byte-
+// order IPv4 uint32 — see resolveZoneIPv4 for the literal/hostname
+// resolution path. Sourced from config (zone.default_map /
+// gateway.map_addr) via the DI provider.
 func NewDispatchHandler(
 	identity identityv1.IdentityServiceClient,
 	packetver int,
 	logger zerolog.Logger,
 	defaultMap string,
-	zoneHost string,
+	zoneIP uint32,
 	zonePort uint16,
 ) *DispatchHandler {
 	return &DispatchHandler{
@@ -80,7 +86,7 @@ func NewDispatchHandler(
 		packetver:  uint32(packetver), //nolint:gosec // validated upstream by config.min/max=20260000
 		logger:     logger.With().Str("component", "gateway.dispatch").Logger(),
 		defaultMap: defaultMap,
-		zoneHost:   zoneHost,
+		zoneIP:     zoneIP,
 		zonePort:   zonePort,
 	}
 }
@@ -308,7 +314,8 @@ func (h *DispatchHandler) handleCHEnter(ctx context.Context, conn domain.Connect
 		})
 	}
 
-	total := uint8(listResp.GetTotalSlots()) //nolint:gosec // wire slot is 8-bit
+	totalSlots := min(listResp.GetTotalSlots(), maxCharListCount)
+	total := uint8(totalSlots) //nolint:gosec // clamped to maxCharListCount=255 above
 	if total == 0 {
 		total = uint8(len(entries)) //nolint:gosec // capped to maxCharListCount above
 	}
@@ -364,7 +371,7 @@ func (h *DispatchHandler) handleCHSelectChar(_ context.Context, conn domain.Conn
 	notify := packet.NotifyZoneServerResponse{
 		CID:     0, // M2b: no per-connection char state — see doc comment.
 		MapName: h.defaultMap,
-		IP:      parseIPv4(h.zoneHost),
+		IP:      h.zoneIP,
 		Port:    h.zonePort,
 		Domain:  "",
 	}
@@ -548,4 +555,52 @@ func SplitMapAddr(addr string) (string, uint16, error) {
 		return "", 0, fmt.Errorf("parse map addr port %q: %w", portStr, err)
 	}
 	return host, uint16(portInt), nil //nolint:gosec // ParseUint bitSize=16 caps at 0xffff
+}
+
+// resolveZoneIPv4 converts the gateway.map_addr host portion into the
+// network-byte-order uint32 the HC_NOTIFY_ZONESVR IP slot needs.
+//
+// Accepts both IP literals ("127.0.0.1") and hostnames ("localhost");
+// the latter is resolved via the system DNS resolver and the first
+// returned IPv4 wins. IPv4-mapped IPv6 addresses are normalized to the
+// embedded IPv4 (same convention as parseIPv4). An unresolvable host —
+// including the bare hostname "localhost" on a system that has no
+// loopback entry — returns a wrapped error so the DI layer can fail
+// fast at startup rather than silently advertising 0.0.0.0.
+//
+// Called once at construction time; not per-packet.
+func resolveZoneIPv4(host string) (uint32, error) {
+	if host == "" {
+		return 0, fmt.Errorf("resolve zone IPv4: host is empty")
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		addr = addr.Unmap()
+		if addr.Is4() {
+			b := addr.As4()
+			return binary.BigEndian.Uint32(b[:]), nil
+		}
+		return 0, fmt.Errorf("resolve zone IPv4 %q: not an IPv4 address", host)
+	}
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		return 0, fmt.Errorf("resolve zone IPv4 %q: %w", host, err)
+	}
+	for _, a := range addrs {
+		addr, perr := netip.ParseAddr(a)
+		if perr != nil {
+			continue
+		}
+		addr = addr.Unmap()
+		if addr.Is4() {
+			b := addr.As4()
+			return binary.BigEndian.Uint32(b[:]), nil
+		}
+	}
+	return 0, fmt.Errorf("resolve zone IPv4 %q: no A records returned", host)
+}
+
+// ResolveZoneIPv4 is the exported alias of resolveZoneIPv4 for the DI
+// layer; see resolveZoneIPv4 for the semantics.
+func ResolveZoneIPv4(host string) (uint32, error) {
+	return resolveZoneIPv4(host)
 }

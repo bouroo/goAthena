@@ -19,6 +19,13 @@ var (
 	// ErrExtensionTooLong is returned when the HC_ACCEPT_ENTER extension
 	// slot exceeds 20 bytes (packets.hpp:240-251).
 	ErrExtensionTooLong = errors.New("packet: extension exceeds 20 bytes")
+	// ErrPacketTooLong is returned when the encoded HC_ACCEPT_ENTER
+	// packet length exceeds the int16 packetLength slot (uint16 max =
+	// 65535). The caller has to cap len(Characters) before encoding;
+	// without this guard a large roster would silently truncate the
+	// packetLength field and the client would mis-read the trailing
+	// CHARACTER_INFO entries.
+	ErrPacketTooLong = errors.New("packet: encoded length exceeds uint16")
 )
 
 // RefuseEnterResponse encodes an HC_REFUSE_ENTER packet (command 0x006c).
@@ -299,6 +306,9 @@ func (c CharacterInfo) encodeInto(dst []byte) error {
 func (r AcceptEnterResponse) validate() error {
 	if len(r.Extension) > acceptEnterExtensionSlot {
 		return fmt.Errorf("packet: encode HC_ACCEPT_ENTER: %w", ErrExtensionTooLong)
+	}
+	if n := r.Size(); n > 0xffff {
+		return fmt.Errorf("packet: encode HC_ACCEPT_ENTER: packet length %d exceeds uint16 max %d: %w", n, 0xffff, ErrPacketTooLong)
 	}
 	for i, ch := range r.Characters {
 		if err := ch.validate(); err != nil {

@@ -97,7 +97,7 @@ func TestDispatchHandler_AcceptLogin_EncodesAccept(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", "127.0.0.1", 5121)
+	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 
 	conn := domain.ConnectionInfo{ID: 1, RemoteIP: "10.0.0.5:4321"}
 	resp := &bufResponder{}
@@ -150,7 +150,7 @@ func TestDispatchHandler_RefusedLogin_EncodesRefuse(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", "127.0.0.1", 5121)
+	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "wrongpw")
 
@@ -176,7 +176,7 @@ func TestDispatchHandler_IdentityDown_RefusesWithSentinel99(t *testing.T) {
 			return nil, status.Error(codes.Unavailable, "identity service unreachable")
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", "127.0.0.1", 5121)
+	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "pw")
 
@@ -199,7 +199,7 @@ func TestDispatchHandler_NilResponse_RefusesWithSentinel99(t *testing.T) {
 			return nil, nil
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", "127.0.0.1", 5121)
+	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "pw")
 
@@ -225,7 +225,7 @@ func TestDispatchHandler_CancelledContext_NoRefuseSent(t *testing.T) {
 			return nil, status.Error(codes.Canceled, "client gone")
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", "127.0.0.1", 5121)
+	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "pw")
 
@@ -250,7 +250,7 @@ func TestDispatchHandler_MalformedFrame_NoReplyNoError(t *testing.T) {
 			return &identityv1.AuthenticateResponse{}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", "127.0.0.1", 5121)
+	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 
 	// 10 bytes — well short of the 55-byte CA_LOGIN; ParseCALogin must
@@ -280,7 +280,7 @@ func TestDispatchHandler_PassesClientIPStrippedToAuthenticate(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", "127.0.0.1", 5121)
+	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "alice", "pw")
 
@@ -366,4 +366,107 @@ func TestSexToByte(t *testing.T) {
 			t.Errorf("sexToByte(%q) = %d, want %d", tc.in, got, tc.want)
 		}
 	}
+}
+
+func TestResolveZoneIPv4_Literal(t *testing.T) {
+	t.Parallel()
+
+	got, err := resolveZoneIPv4("127.0.0.1")
+	if err != nil {
+		t.Fatalf("resolveZoneIPv4(127.0.0.1) err = %v, want nil", err)
+	}
+	// 127.0.0.1 → big-endian uint32 = 0x7f000001 = 2130706433.
+	if got != 0x7f000001 {
+		t.Errorf("resolveZoneIPv4(127.0.0.1) = 0x%x, want 0x7f000001", got)
+	}
+}
+
+func TestResolveZoneIPv4_LocalhostHostname(t *testing.T) {
+	t.Parallel()
+
+	got, err := resolveZoneIPv4("localhost")
+	if err != nil {
+		t.Fatalf("resolveZoneIPv4(localhost) err = %v, want nil "+
+			"(every CI host must resolve localhost)", err)
+	}
+	// On every system we run CI on, localhost resolves to 127.0.0.1
+	// via /etc/hosts — the test asserts that, not the precise uint32,
+	// so a future DNS-only env where localhost returns ::1 (IPv6-only)
+	// would fail with a wrapped error from the IPv4 filter below.
+	if got == 0 {
+		t.Errorf("resolveZoneIPv4(localhost) = 0, want a non-zero IPv4 (got the old parseIPv4('localhost') bug)")
+	}
+	wantLoopback := uint32(0x7f000001)
+	if got != wantLoopback {
+		t.Errorf("resolveZoneIPv4(localhost) = 0x%x, want 0x%x (127.0.0.1)", got, wantLoopback)
+	}
+}
+
+func TestResolveZoneIPv4_Unresolvable(t *testing.T) {
+	t.Parallel()
+
+	// ".invalid" is reserved by RFC 6761 §6.4 as a guaranteed-unresolvable
+	// TLD. No DNS server may return A records for it, so the lookup must
+	// fail deterministically without depending on network state.
+	_, err := resolveZoneIPv4("nonexistent.invalid")
+	if err == nil {
+		t.Fatal("resolveZoneIPv4(nonexistent.invalid) err = nil, want error")
+	}
+}
+
+func TestResolveZoneIPv4_Empty(t *testing.T) {
+	t.Parallel()
+
+	if _, err := resolveZoneIPv4(""); err == nil {
+		t.Fatal("resolveZoneIPv4(\"\") err = nil, want error")
+	}
+}
+
+func TestDispatchHandler_CHEnter_ClampsTotalSlotsAboveMax(t *testing.T) {
+	t.Parallel()
+
+	// Identity returns TotalSlots=300 — values above 255 must be
+	// clamped to maxCharListCount (255), NOT silently truncated via
+	// uint8 overflow (which would produce 300 mod 256 = 44, an
+	// under-reported character budget that breaks the char-select UI).
+	fake := &fakeIdentityClient{
+		characterListFn: func(_ context.Context, _ *identityv1.GetCharacterListRequest) (*identityv1.GetCharacterListResponse, error) {
+			return &identityv1.GetCharacterListResponse{
+				Characters: []*identityv1.CharacterInfo{}, // zero chars exercises len fallback path
+				TotalSlots: 300,
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+	resp := &bufResponder{}
+
+	if err := h.HandlePacket(context.Background(), domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCHENTER, chEnterFrame(1)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) < 9 {
+		t.Fatalf("output length = %d, want ≥ 9 (4-byte AID echo + HC_ACCEPT_ENTER header)", len(out))
+	}
+	// Layout: [0:4] headerless AID echo, [4:6] cmd 0x6b 0x00,
+	// [6:8] packetLength (uint16 LE), [8] total. The old truncation
+	// bug wrote `total := uint8(300)` here, which overflows to 44
+	// (300 mod 256) — the test asserts the clamp-to-255 behaviour.
+	total := out[8]
+	if total != maxCharListCount {
+		t.Errorf("HC_ACCEPT_ENTER total byte = %d, want %d (clamped from 300); got %d "+
+			"would mean the old uint8 truncation bug regressed", total, maxCharListCount, total)
+	}
+	if total == 44 {
+		t.Fatalf("total byte = 44 — the previous uint8(300) overflow truncation bug regressed")
+	}
+}
+
+// chEnterFrame builds a minimal 17-byte CH_ENTER frame for tests that
+// only care about the response, not the request parse.
+func chEnterFrame(accountID uint32) []byte {
+	frame := make([]byte, 17)
+	binary.LittleEndian.PutUint16(frame[0:2], packet.HeaderCHENTER)
+	binary.LittleEndian.PutUint32(frame[2:6], accountID)
+	return frame
 }
