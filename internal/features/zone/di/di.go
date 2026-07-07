@@ -11,6 +11,8 @@ package di
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -36,7 +38,7 @@ func Register(c do.Injector) error {
 	logger := do.MustInvoke[*zerolog.Logger](c)
 	ag := do.MustInvoke[agones.Lifecycle](c)
 
-	md, err := loadMap(cfg.Zone.DefaultMap)
+	md, err := loadMap(cfg.Zone.MapDir, cfg.Zone.DefaultMap)
 	if err != nil {
 		// Don't hard-fail: surface a clear log and substitute a synthetic
 		// 100x100 all-walkable map so the zone can boot in dev/CI without
@@ -170,10 +172,26 @@ func abs(x int) int {
 	return x
 }
 
-// loadMap attempts to load the named map. Real implementation will
-// read .gat/.rsw from cfg.Zone.MapDir; for Phase 4 we return an error
-// to trigger the synthetic fallback. The full disk loader will land in
-// a follow-up unit.
-func loadMap(_ string) (*romap.MapData, error) {
-	return nil, fmt.Errorf("disk map loader not yet implemented (P4.6)")
+// loadMap reads .gat and .rsw files for the named map from mapDir and
+// parses them via romap.LoadMap. The .rsw file is optional (soft-fail):
+// if it is missing or unreadable, the map loads without water-level data.
+// The .gat file is required: a missing or malformed .gat is a hard error.
+func loadMap(mapDir, name string) (*romap.MapData, error) {
+	gatPath := filepath.Join(mapDir, name+".gat")
+	gat, err := os.ReadFile(gatPath) // #nosec G304 -- mapDir is server config, name is the configured default map
+	if err != nil {
+		return nil, fmt.Errorf("read %s.gat: %w", name, err)
+	}
+
+	var rsw []byte
+	rswPath := filepath.Join(mapDir, name+".rsw")
+	if rsw, err = os.ReadFile(rswPath); err != nil { // #nosec G304 -- see above
+		rsw = nil
+	}
+
+	md, err := romap.LoadMap(name, gat, rsw)
+	if err != nil {
+		return nil, fmt.Errorf("load %s: %w", name, err)
+	}
+	return md, nil
 }
