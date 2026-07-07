@@ -185,8 +185,8 @@ func loadMap(mapDir, name string) (*romap.MapData, error) {
 
 	var rsw []byte
 	rswPath := filepath.Join(mapDir, name+".rsw")
-	if rsw, err = os.ReadFile(rswPath); err != nil { // #nosec G304 -- see above
-		rsw = nil
+	if rswData, rswErr := os.ReadFile(rswPath); rswErr == nil { // #nosec G304 -- see above
+		rsw = rswData
 	}
 
 	md, err := romap.LoadMap(name, gat, rsw)
