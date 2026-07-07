@@ -470,3 +470,36 @@ func chEnterFrame(accountID uint32) []byte {
 	binary.LittleEndian.PutUint32(frame[2:6], accountID)
 	return frame
 }
+
+func TestClampMapCoord(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   uint32
+		want int16
+	}{
+		{"origin", 0, 0},
+		{"typical_prontera", 512, 512},
+		{"boundary", 1000, 1000},
+		{"just_over_int16_max", 32768, 1000},
+		{"buggy_zone_response", 40000, 1000},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := clampMapCoord(tc.in); got != tc.want {
+				t.Errorf("clampMapCoord(%d) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	// Regression guard: a value above int16 max must not silently
+	// wrap to a negative coordinate — that is the exact bug this
+	// clamp exists to prevent.
+	if got := clampMapCoord(40000); got < 0 {
+		t.Fatalf("clampMapCoord(40000) = %d, must not be negative; the int16 overflow regression has returned", got)
+	}
+}

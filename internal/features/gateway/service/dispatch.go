@@ -502,8 +502,8 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn domain.Connect
 
 	accept := packet.MapAcceptEnterResponse{
 		StartTime: uint32(time.Now().Unix()), //nolint:gosec // low 32 bits of unix time per rAthena startTime convention
-		PosX:      int16(zResp.GetMapX()),    //nolint:gosec // map coords are 0-512
-		PosY:      int16(zResp.GetMapY()),    //nolint:gosec // map coords are 0-512
+		PosX:      clampMapCoord(zResp.GetMapX()),
+		PosY:      clampMapCoord(zResp.GetMapY()),
 		Dir:       0,
 		XSize:     5,
 		YSize:     5,
@@ -722,6 +722,18 @@ func clampUint16(v uint32) uint16 {
 		return 0
 	}
 	return uint16(v) //nolint:gosec // guarded by the > 0xffff check above
+}
+
+// clampMapCoord saturates a uint32 map coordinate from the zone
+// service into the int16 wire slot. RO maps are at most ~512 cells;
+// values above 1000 indicate a zone-service bug and are clamped to
+// 1000 rather than silently wrapping negative via an unchecked int16
+// cast.
+func clampMapCoord(v uint32) int16 {
+	if v > 1000 {
+		return 1000
+	}
+	return int16(v) //nolint:gosec // guarded by the > 1000 check above
 }
 
 // SplitMapAddr splits "host:port" into its parts. Exported so the DI
