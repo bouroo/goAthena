@@ -69,6 +69,11 @@ func TestRun_ShutdownOnContextCancel(t *testing.T) {
 			ZoneAddr:     "127.0.0.1:50052",
 			MapAddr:      "127.0.0.1:5121",
 		},
+		Assets: config.AssetsConfig{
+			Enabled:    false,
+			GRFDir:     "./data/grf",
+			MaxCacheMB: 256,
+		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

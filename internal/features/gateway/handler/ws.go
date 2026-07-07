@@ -33,6 +33,7 @@ type WSHandler struct {
 	addr           string
 	path           string
 	allowedOrigins []string
+	assetsHandler  http.Handler
 	nextID         atomic.Uint64
 	server         *http.Server
 }
@@ -55,6 +56,17 @@ func NewWSHandler(db *packet.DB, handler domain.PacketHandler, addr, path string
 	}
 }
 
+// WithAssetsHandler mounts an optional HTTP handler at /assets/ on the
+// WS HTTP server. Used by the gateway composition root to attach the
+// GRF-backed asset server when assets.enabled is true. The handler is
+// only wired into the mux once Start() runs, so this can be called
+// before or after construction completes. Returns the receiver for
+// chaining.
+func (h *WSHandler) WithAssetsHandler(handler http.Handler) *WSHandler {
+	h.assetsHandler = handler
+	return h
+}
+
 // Start builds the http.Server (mounting the upgrade handler at path and
 // a 404 elsewhere) and begins serving on addr. ListenAndServe blocks
 // until the server stops, so Start runs it in a goroutine and returns
@@ -62,6 +74,9 @@ func NewWSHandler(db *packet.DB, handler domain.PacketHandler, addr, path string
 func (h *WSHandler) Start(_ context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc(h.path, h.ServeHTTP)
+	if h.assetsHandler != nil {
+		mux.Handle("/assets/", h.assetsHandler)
+	}
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
 	h.server = &http.Server{
