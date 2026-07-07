@@ -385,6 +385,7 @@ func validConfig() *config.Config {
 			},
 			Packetver:    20250604,
 			IdentityAddr: "localhost:50051",
+			MapAddr:      "localhost:5121",
 		},
 		OTel: config.OTelConfig{
 			Exporter:    "none",

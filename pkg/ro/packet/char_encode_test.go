@@ -4,6 +4,7 @@ package packet
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"testing"
 )
@@ -228,5 +229,246 @@ func TestNotifyZoneServerResponse_Size(t *testing.T) {
 
 	if got := (NotifyZoneServerResponse{}).Size(); got != sizeHCNotifyZone {
 		t.Errorf("Size() = %d, want %d", got, sizeHCNotifyZone)
+	}
+}
+
+// TestAcceptEnterResponse_Encode_ZeroChars asserts the 27-byte header-only
+// layout for an account with no characters.
+func TestAcceptEnterResponse_Encode_ZeroChars(t *testing.T) {
+	t.Parallel()
+
+	resp := AcceptEnterResponse{
+		Total:        9,
+		PremiumStart: 0,
+		PremiumEnd:   0,
+		Extension:    "",
+		Characters:   nil,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v, want nil", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != acceptEnterHeaderSize {
+		t.Fatalf("len = %d, want %d", len(got), acceptEnterHeaderSize)
+	}
+	// Header bytes: little-endian 0x006b → 0x6b 0x00.
+	if got[0] != 0x6b || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want 6b 00", got[0], got[1])
+	}
+	if pl := binary.LittleEndian.Uint16(got[2:4]); pl != acceptEnterHeaderSize {
+		t.Errorf("packetLength = %d, want %d", pl, acceptEnterHeaderSize)
+	}
+	if got[4] != 9 {
+		t.Errorf("total byte = %d, want 9", got[4])
+	}
+}
+
+// TestAcceptEnterResponse_Encode_OneChar asserts 27 + 175 = 202 bytes and
+// the embedded CHARACTER_INFO starts at offset 27.
+func TestAcceptEnterResponse_Encode_OneChar(t *testing.T) {
+	t.Parallel()
+
+	ch := CharacterInfo{
+		GID:      42,
+		Name:     "Hero",
+		MapName:  "prontera",
+		Level:    99,
+		Job:      7, // Knight-class placeholder
+		JobLevel: 50,
+		CharNum:  0,
+		Str:      9,
+		Agi:      9,
+		Vit:      9,
+		Int:      9,
+		Dex:      9,
+		Luk:      9,
+		Sex:      1,
+	}
+	resp := AcceptEnterResponse{
+		Total:      1,
+		Characters: []CharacterInfo{ch},
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v, want nil", err)
+	}
+	got := buf.Bytes()
+
+	wantLen := acceptEnterHeaderSize + CharacterInfoSize
+	if len(got) != wantLen {
+		t.Fatalf("len = %d, want %d (header %d + 1*%d char)", len(got), wantLen, acceptEnterHeaderSize, CharacterInfoSize)
+	}
+	if pl := binary.LittleEndian.Uint16(got[2:4]); int(pl) != wantLen {
+		t.Errorf("packetLength = %d, want %d", pl, wantLen)
+	}
+	if got[0] != 0x6b || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want 6b 00", got[0], got[1])
+	}
+	// The embedded CHARACTER_INFO starts at offset 27; its GID occupies
+	// [27:31] little-endian.
+	if g := binary.LittleEndian.Uint32(got[acceptEnterHeaderSize : acceptEnterHeaderSize+4]); g != 42 {
+		t.Errorf("embedded GID at [%d:%d] = %d, want 42",
+			acceptEnterHeaderSize, acceptEnterHeaderSize+4, g)
+	}
+}
+
+// TestAcceptEnterResponse_Encode_TwoChars asserts 27 + 2*175 = 377 bytes.
+func TestAcceptEnterResponse_Encode_TwoChars(t *testing.T) {
+	t.Parallel()
+
+	resp := AcceptEnterResponse{
+		Total: 2,
+		Characters: []CharacterInfo{
+			{GID: 1, Name: "A", MapName: "prontera", Sex: 1},
+			{GID: 2, Name: "B", MapName: "geffen", Sex: 0},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v, want nil", err)
+	}
+	got := buf.Bytes()
+
+	wantLen := acceptEnterHeaderSize + 2*CharacterInfoSize
+	if len(got) != wantLen {
+		t.Fatalf("len = %d, want %d (header %d + 2*%d char)", len(got), wantLen, acceptEnterHeaderSize, CharacterInfoSize)
+	}
+	if pl := binary.LittleEndian.Uint16(got[2:4]); int(pl) != wantLen {
+		t.Errorf("packetLength = %d, want %d", pl, wantLen)
+	}
+	// GID of the first embedded character.
+	if g := binary.LittleEndian.Uint32(got[acceptEnterHeaderSize : acceptEnterHeaderSize+4]); g != 1 {
+		t.Errorf("first embedded GID = %d, want 1", g)
+	}
+	// GID of the second embedded character at offset 27 + 175.
+	secondStart := acceptEnterHeaderSize + CharacterInfoSize
+	if g := binary.LittleEndian.Uint32(got[secondStart : secondStart+4]); g != 2 {
+		t.Errorf("second embedded GID at offset %d = %d, want 2", secondStart, g)
+	}
+}
+
+// TestAcceptEnterResponse_Encode_ExtensionOverflow asserts a too-long
+// extension string fails with the sentinel error and writes zero bytes.
+func TestAcceptEnterResponse_Encode_ExtensionOverflow(t *testing.T) {
+	t.Parallel()
+
+	resp := AcceptEnterResponse{
+		Extension: string(bytes.Repeat([]byte("E"), acceptEnterExtensionSlot+1)),
+	}
+
+	var buf bytes.Buffer
+	err := resp.Encode(&buf)
+	if err == nil {
+		t.Fatalf("Encode err = nil, want error")
+	}
+	if !errors.Is(err, ErrExtensionTooLong) {
+		t.Errorf("Encode err = %v, want errors.Is(.., ErrExtensionTooLong)", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("partial output written: %d bytes (want 0 on error)", buf.Len())
+	}
+}
+
+// TestAcceptEnterResponse_Size verifies Size with 0, 1, and N characters.
+func TestAcceptEnterResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	if got := (AcceptEnterResponse{}).Size(); got != acceptEnterHeaderSize {
+		t.Errorf("Size() with 0 chars = %d, want %d", got, acceptEnterHeaderSize)
+	}
+	if got := (AcceptEnterResponse{Characters: []CharacterInfo{{}}}).Size(); got != acceptEnterHeaderSize+CharacterInfoSize {
+		t.Errorf("Size() with 1 char = %d, want %d", got, acceptEnterHeaderSize+CharacterInfoSize)
+	}
+	if got := (AcceptEnterResponse{Characters: []CharacterInfo{{}, {}}}).Size(); got != acceptEnterHeaderSize+2*CharacterInfoSize {
+		t.Errorf("Size() with 2 chars = %d, want %d", got, acceptEnterHeaderSize+2*CharacterInfoSize)
+	}
+}
+
+// TestAcceptEnterResponse_Encode_PacketLengthOverflow asserts that
+// AcceptEnterResponse with enough Characters to push the total packet
+// length past uint16 max (65535) returns the ErrPacketTooLong sentinel
+// from Encode without writing any bytes.
+//
+// Math: 27 (header) + N*175 (chars) > 65535 → N > (65535-27)/175 =
+// 374.51. So 375 characters overflows by exactly 27 bytes
+// (27 + 375*175 = 65652). The test uses 375 as the smallest count
+// that triggers the guard.
+func TestAcceptEnterResponse_Encode_PacketLengthOverflow(t *testing.T) {
+	t.Parallel()
+
+	const overflowCount = 375 // 27 + 375*175 = 65652 > 65535
+	wantLen := acceptEnterHeaderSize + overflowCount*CharacterInfoSize
+	if wantLen <= 0xffff {
+		t.Fatalf("test setup wrong: wantLen=%d must exceed uint16 max for the overflow guard to fire", wantLen)
+	}
+
+	chars := make([]CharacterInfo, overflowCount)
+	for i := range chars {
+		// Short ASCII name + mapName so per-entry validate passes.
+		chars[i] = CharacterInfo{
+			GID:     uint32(i + 1),
+			Name:    "n",
+			MapName: "m",
+		}
+	}
+
+	resp := AcceptEnterResponse{
+		Total:      0, // under uint16-overflow guard; Total byte is irrelevant once validate fails
+		Characters: chars,
+	}
+
+	var buf bytes.Buffer
+	err := resp.Encode(&buf)
+	if err == nil {
+		t.Fatalf("Encode err = nil, want error (Size()=%d exceeds uint16 max)", resp.Size())
+	}
+	if !errors.Is(err, ErrPacketTooLong) {
+		t.Errorf("Encode err = %v, want errors.Is(.., ErrPacketTooLong)", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("partial output written: %d bytes (want 0 on guard failure)", buf.Len())
+	}
+}
+
+// TestAcceptEnterResponse_Encode_AtUint16Boundary confirms the
+// overflow guard does NOT fire one byte below the limit. The encoded
+// length must be < 65536 — 65535 itself fits in uint16 and remains
+// encodable.
+func TestAcceptEnterResponse_Encode_AtUint16Boundary(t *testing.T) {
+	t.Parallel()
+
+	// Smallest N that produces Size() == 65535 exactly: N*175 + 27 == 65535
+	// → N == (65535-27)/175 == 374.51 — not integer; pick 374
+	// (27 + 374*175 = 65477, well below 65535) as the largest safe
+	// count to keep the test fast and obvious.
+	const safeCount = 374
+	chars := make([]CharacterInfo, safeCount)
+	for i := range chars {
+		chars[i] = CharacterInfo{
+			GID:     uint32(i + 1),
+			Name:    "n",
+			MapName: "m",
+		}
+	}
+
+	resp := AcceptEnterResponse{
+		Total:      0, // under-slot value; boundary test cares only about Size
+		Characters: chars,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v at safe size %d, want nil", err, resp.Size())
+	}
+	if got := buf.Len(); got != resp.Size() {
+		t.Errorf("Encode wrote %d bytes, want %d", got, resp.Size())
+	}
+	if got := resp.Size(); got >= 0x10000 {
+		t.Errorf("Size() = %d, want < 65536 for boundary test", got)
 	}
 }

@@ -64,6 +64,7 @@ gateway:
     allowed_origins: []
   packetver: 20250604
   identity_addr: "localhost:50051"
+  map_addr: "localhost:5121"
 
 identity:
   use_md5_passwords: false
