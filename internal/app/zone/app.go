@@ -93,9 +93,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	tickLoopSettle(tickLoop)
 
 	if err := agonesLifecycle.Ready(ctx); err != nil {
-		tickCancel()
-		<-tickDone
-		grpcServer.GracefulStop()
+		shutdown(ctx, grpcServer, grpcServeErr, tickCancel, tickDone, agonesLifecycle, logger)
 		// If the parent context is already cancelled we treat a Ready
 		// failure as a normal shutdown rather than a startup error.
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -110,21 +108,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	<-ctx.Done()
 	logger.Info().Msg("zone service shutting down")
 
-	stopServers(grpcServer, grpcServeErr, logger)
-	tickCancel()
-	select {
-	case <-tickDone:
-	case <-ctx.Done():
-		logger.Warn().Msg("zone: tick loop did not exit before shutdown deadline")
-	}
-
-	if err := agonesLifecycle.Shutdown(context.Background()); err != nil {
-		logger.Warn().Err(err).Msg("zone: agones shutdown failed")
-	}
-
-	if err := agonesLifecycle.Close(); err != nil {
-		logger.Warn().Err(err).Msg("zone: agones close failed")
-	}
+	shutdown(ctx, grpcServer, grpcServeErr, tickCancel, tickDone, agonesLifecycle, logger)
 
 	return nil
 }
@@ -187,6 +171,35 @@ func stopServers(grpcServer *grpc.Server, grpcServeErr <-chan error, logger *zer
 	default:
 		// GracefulStop returns before Serve does; the goroutine will
 		// exit on its own and publish into grpcServeErr.
+	}
+}
+
+// shutdown performs the zone service shutdown sequence: stop accepting
+// new gRPC traffic, cancel the tick loop, then signal Agones Shutdown
+// and close the lifecycle. It is safe to call from either the normal
+// context-cancel path or the Agones Ready-failure path so cleanup is
+// identical regardless of when shutdown is triggered.
+func shutdown(
+	ctx context.Context,
+	grpcServer *grpc.Server,
+	grpcServeErr <-chan error,
+	tickCancel context.CancelFunc,
+	tickDone <-chan struct{},
+	agonesLifecycle agones.Lifecycle,
+	logger *zerolog.Logger,
+) {
+	stopServers(grpcServer, grpcServeErr, logger)
+	tickCancel()
+	select {
+	case <-tickDone:
+	case <-ctx.Done():
+		logger.Warn().Msg("zone: tick loop did not exit before shutdown deadline")
+	}
+	if err := agonesLifecycle.Shutdown(context.Background()); err != nil {
+		logger.Warn().Err(err).Msg("zone: agones shutdown failed")
+	}
+	if err := agonesLifecycle.Close(); err != nil {
+		logger.Warn().Err(err).Msg("zone: agones close failed")
 	}
 }
 

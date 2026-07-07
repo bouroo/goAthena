@@ -59,8 +59,7 @@ func Register(c do.Injector) error {
 		logger,
 	)
 
-	spawnX := md.Width / 2
-	spawnY := md.Height / 2
+	spawnX, spawnY := findWalkableSpawn(md)
 
 	grpcServer := server.NewGRPC(logger)
 	zonev1.RegisterZoneServiceServer(
@@ -136,6 +135,39 @@ func syntheticMap(name string) *romap.MapData {
 		md.Walkable[i] = true
 	}
 	return md
+}
+
+// findWalkableSpawn returns the nearest walkable cell to the map
+// center. It scans outward in an expanding square from
+// (centerX, centerY). If no walkable cell exists (degenerate all-wall
+// map), it returns (0, 0).
+func findWalkableSpawn(md *romap.MapData) (int, int) {
+	cx, cy := md.Width/2, md.Height/2
+	if md.IsWalkable(cx, cy) {
+		return cx, cy
+	}
+	maxR := max(md.Width, md.Height)
+	for r := 1; r <= maxR; r++ {
+		for dy := -r; dy <= r; dy++ {
+			for dx := -r; dx <= r; dx++ {
+				if abs(dx) < r && abs(dy) < r {
+					continue // inner ring already checked
+				}
+				x, y := cx+dx, cy+dy
+				if md.IsWalkable(x, y) {
+					return x, y
+				}
+			}
+		}
+	}
+	return 0, 0
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // loadMap attempts to load the named map. Real implementation will
