@@ -27,7 +27,7 @@ func processBytes(
 	ctx context.Context,
 	decoder *netcodec.Decoder,
 	data []byte,
-	info domain.ConnectionInfo,
+	info *domain.ConnectionInfo,
 	resp domain.Responder,
 	handler domain.PacketHandler,
 ) error {

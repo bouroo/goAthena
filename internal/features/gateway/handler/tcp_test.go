@@ -30,7 +30,7 @@ type recordedPacket struct {
 	frame []byte
 }
 
-func (h *recordingHandler) HandlePacket(_ context.Context, _ domain.ConnectionInfo, _ domain.Responder, cmd uint16, frame []byte) error {
+func (h *recordingHandler) HandlePacket(_ context.Context, _ *domain.ConnectionInfo, _ domain.Responder, cmd uint16, frame []byte) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.err != nil {
@@ -92,7 +92,7 @@ func TestProcessBytes_CompleteCALogin_DispatchesOnce(t *testing.T) {
 	info := domain.ConnectionInfo{ID: 42, RemoteIP: "127.0.0.1:1234"}
 
 	frame := buildCALogin(t, "tester", "hunter2")
-	if err := processBytes(context.Background(), dec, frame, info, resp, h); err != nil {
+	if err := processBytes(context.Background(), dec, frame, &info, resp, h); err != nil {
 		t.Fatalf("processBytes err = %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestProcessBytes_PartialBytes_DoesNotDispatch(t *testing.T) {
 	full := buildCALogin(t, "u", "p")
 	partial := full[:30] // only cmd + version + 24-byte username
 
-	if err := processBytes(context.Background(), dec, partial, info, resp, h); err != nil {
+	if err := processBytes(context.Background(), dec, partial, &info, resp, h); err != nil {
 		t.Fatalf("processBytes(partial) err = %v", err)
 	}
 	if calls := h.calls(); len(calls) != 0 {
@@ -137,7 +137,7 @@ func TestProcessBytes_PartialBytes_DoesNotDispatch(t *testing.T) {
 	// Feed the remainder — the decoder must now yield the full packet
 	// without any loss or duplication.
 	rest := full[len(partial):]
-	if err := processBytes(context.Background(), dec, rest, info, resp, h); err != nil {
+	if err := processBytes(context.Background(), dec, rest, &info, resp, h); err != nil {
 		t.Fatalf("processBytes(rest) err = %v", err)
 	}
 	if calls := h.calls(); len(calls) != 1 {
@@ -154,7 +154,7 @@ func TestProcessBytes_UnknownCmd_ReturnsErrUnknownPacket(t *testing.T) {
 
 	bad := []byte{0x00, 0xFE, 0, 0, 0, 0} // 0xFE00 is not registered
 
-	err := processBytes(context.Background(), dec, bad, info, resp, h)
+	err := processBytes(context.Background(), dec, bad, &info, resp, h)
 	if err == nil {
 		t.Fatal("processBytes err = nil, want error")
 	}
@@ -175,7 +175,7 @@ func TestProcessBytes_HandlerError_Propagates(t *testing.T) {
 	info := domain.ConnectionInfo{ID: 7}
 
 	frame := buildCALogin(t, "u", "p")
-	err := processBytes(context.Background(), dec, frame, info, resp, h)
+	err := processBytes(context.Background(), dec, frame, &info, resp, h)
 	if !errors.Is(err, handlerErr) {
 		t.Fatalf("processBytes err = %v, want wraps %v", err, handlerErr)
 	}
@@ -192,7 +192,7 @@ func TestProcessBytes_MultiplePacketsInOneFeed(t *testing.T) {
 	b := buildCALogin(t, "bob", "pw")
 
 	combined := append(append([]byte{}, a...), b...)
-	if err := processBytes(context.Background(), dec, combined, info, resp, h); err != nil {
+	if err := processBytes(context.Background(), dec, combined, &info, resp, h); err != nil {
 		t.Fatalf("processBytes err = %v", err)
 	}
 	calls := h.calls()

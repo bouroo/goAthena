@@ -88,3 +88,56 @@ func (r MapRefuseEnterResponse) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// MapNotifyPlayerMoveResponse encodes a ZC_NOTIFY_PLAYERMOVE packet
+// (command 0x0087). The server broadcasts this to nearby clients every
+// time a player's path is computed, so each peer can interpolate the
+// sprite from src to dest. Layout source:
+//
+//	rathena/src/map/clif.cpp clif_movemoveok (around the moveOk call site)
+//		and rathena/src/map/packets.hpp ZC_NOTIFY_PLAYERMOVE.
+//
+// Fixed wire length: 12 bytes (int16 packetType + uint32 moveStartTime +
+// uint8 srcPos[3] + uint8 destPos[3]).
+//
+// The srcPos[3] and destPos[3] slots use rAthena's kRO 3-byte packed
+// position encoding (clif.cpp:173-178 WBUFPOS); the direction byte is
+// zero on both ends because the broadcast packet only describes the
+// path endpoints, not the per-cell facing.
+//
+// MoveStartTime is the server's monotone tick at the moment the path
+// was accepted — rAthena writes the same value into the local player's
+// session so subsequent CZ_REQUEST_MOVE packets can be anti-DoS-checked
+// against it.
+type MapNotifyPlayerMoveResponse struct {
+	// MoveStartTime is the map server's monotone tick at the moment
+	// the path was accepted (rathena's `startTime`).
+	MoveStartTime uint32
+	// SrcX, SrcY is the cell the move started from.
+	SrcX, SrcY int16
+	// DestX, DestY is the cell the path targets.
+	DestX, DestY int16
+}
+
+// Size returns the on-wire byte length that Encode will write (always 12).
+func (r MapNotifyPlayerMoveResponse) Size() int {
+	return sizeZCNotifyPlayerMove
+}
+
+// Encode writes the ZC_NOTIFY_PLAYERMOVE packet to w.
+func (r MapNotifyPlayerMoveResponse) Encode(w io.Writer) error {
+	buf := make([]byte, sizeZCNotifyPlayerMove)
+	// int16 packetType = 0x0087 (HeaderZCNOTIFYPLAYERMOVE).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYPLAYERMOVE)
+	// uint32 moveStartTime at offset 2.
+	binary.LittleEndian.PutUint32(buf[2:], r.MoveStartTime)
+	// uint8 srcPos[3] at offset 6 — kRO 3-byte packed source position.
+	encodePos(buf[6:9], r.SrcX, r.SrcY, 0)
+	// uint8 destPos[3] at offset 9 — kRO 3-byte packed destination position.
+	encodePos(buf[9:12], r.DestX, r.DestY, 0)
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_NOTIFY_PLAYERMOVE: %w", err)
+	}
+	return nil
+}

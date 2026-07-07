@@ -33,7 +33,7 @@ func newWSRecordingHandler() *wsRecordingHandler {
 	return &wsRecordingHandler{ch: make(chan recordedPacket, 16)}
 }
 
-func (h *wsRecordingHandler) HandlePacket(_ context.Context, _ domain.ConnectionInfo, _ domain.Responder, cmd uint16, frame []byte) error {
+func (h *wsRecordingHandler) HandlePacket(_ context.Context, _ *domain.ConnectionInfo, _ domain.Responder, cmd uint16, frame []byte) error {
 	cp := make([]byte, len(frame))
 	copy(cp, frame)
 	select {

@@ -13,6 +13,13 @@ service ZoneService {
   // WantToConnection). Validates the session and assigns the player to a
   // map instance.
   rpc EnterZone(EnterZoneRequest) returns (EnterZoneResponse);
+
+  // MoveEntity processes a client's move-to-cell request (CZ_REQUEST_MOVE
+  // 0x0085 / WalkToXY). Computes an A* path on the entity and returns
+  // the source position (cell the move started from) plus the
+  // destination (cell the path targets). The gateway uses src+dest to
+  // encode the broadcast packet ZC_NOTIFY_PLAYERMOVE 0x0087.
+  rpc MoveEntity(MoveEntityRequest) returns (MoveEntityResponse);
 }
 
 message EnterZoneRequest {
@@ -31,4 +38,19 @@ message EnterZoneResponse {
   uint32 map_x = 3;
   uint32 map_y = 4;
   string error = 5;         // human-readable error when success == false
+}
+
+message MoveEntityRequest {
+  uint32 account_id = 1;
+  uint32 dest_x = 2;        // destination cell X
+  uint32 dest_y = 3;        // destination cell Y
+}
+
+message MoveEntityResponse {
+  bool success = 1;
+  uint32 src_x = 2;         // cell the move started from
+  uint32 src_y = 3;
+  uint32 dest_x = 4;        // cell the path targets (echoed back)
+  uint32 dest_y = 5;
+  string error = 6;         // human-readable error when success == false
 }

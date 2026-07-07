@@ -132,3 +132,121 @@ func TestEnterZone_Success(t *testing.T) {
 	assert.Equal(t, uint32(wantY), resp.GetMapY())
 	assert.Empty(t, resp.GetError())
 }
+
+func TestMoveEntity_NilRequest(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockZoneService(ctrl)
+	h := handler.NewGRPCHandler(svc, "prontera", 150, 200, newTestLogger())
+
+	resp, err := h.MoveEntity(context.Background(), nil)
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestMoveEntity_InvalidAccountID(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockZoneService(ctrl)
+	h := handler.NewGRPCHandler(svc, "prontera", 150, 200, newTestLogger())
+
+	resp, err := h.MoveEntity(context.Background(), &zonev1.MoveEntityRequest{
+		AccountId: 0,
+		DestX:     160,
+		DestY:     210,
+	})
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+	assert.Contains(t, st.Message(), "account_id")
+}
+
+func TestMoveEntity_EntityNotFound(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockZoneService(ctrl)
+	h := handler.NewGRPCHandler(svc, "prontera", 150, 200, newTestLogger())
+
+	svc.EXPECT().
+		GetEntity(gomock.Any(), domain.EntityID(42)).
+		Return(nil, errors.New("entity not registered"))
+
+	resp, err := h.MoveEntity(context.Background(), &zonev1.MoveEntityRequest{
+		AccountId: 42,
+		DestX:     160,
+		DestY:     210,
+	})
+	require.NoError(t, err, "wire failures are not gRPC errors")
+	require.NotNil(t, resp)
+	assert.False(t, resp.GetSuccess())
+	assert.Contains(t, resp.GetError(), "entity not found")
+	assert.Contains(t, resp.GetError(), "entity not registered")
+}
+
+func TestMoveEntity_MoveFailed(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockZoneService(ctrl)
+	h := handler.NewGRPCHandler(svc, "prontera", 150, 200, newTestLogger())
+
+	svc.EXPECT().
+		GetEntity(gomock.Any(), domain.EntityID(42)).
+		Return(&domain.Entity{ID: domain.EntityID(42), X: 150, Y: 200}, nil)
+	svc.EXPECT().
+		MoveEntity(gomock.Any(), domain.EntityID(42), 160, 210).
+		Return(errors.New("no walkable path"))
+
+	resp, err := h.MoveEntity(context.Background(), &zonev1.MoveEntityRequest{
+		AccountId: 42,
+		DestX:     160,
+		DestY:     210,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.False(t, resp.GetSuccess())
+	// Source comes from GetEntity snapshot, destination is echoed back
+	// even on failure so the gateway can log the rejected path.
+	assert.Equal(t, uint32(150), resp.GetSrcX())
+	assert.Equal(t, uint32(200), resp.GetSrcY())
+	assert.Equal(t, uint32(160), resp.GetDestX())
+	assert.Equal(t, uint32(210), resp.GetDestY())
+	assert.Contains(t, resp.GetError(), "no walkable path")
+}
+
+func TestMoveEntity_Success(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockZoneService(ctrl)
+	h := handler.NewGRPCHandler(svc, "prontera", 150, 200, newTestLogger())
+
+	svc.EXPECT().
+		GetEntity(gomock.Any(), domain.EntityID(42)).
+		Return(&domain.Entity{ID: domain.EntityID(42), X: 150, Y: 200}, nil)
+	svc.EXPECT().
+		MoveEntity(gomock.Any(), domain.EntityID(42), 160, 210).
+		DoAndReturn(func(_ context.Context, id domain.EntityID, x, y int) error {
+			assert.Equal(t, domain.EntityID(42), id)
+			assert.Equal(t, 160, x)
+			assert.Equal(t, 210, y)
+			return nil
+		})
+
+	resp, err := h.MoveEntity(context.Background(), &zonev1.MoveEntityRequest{
+		AccountId: 42,
+		DestX:     160,
+		DestY:     210,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.True(t, resp.GetSuccess())
+	assert.Equal(t, uint32(150), resp.GetSrcX())
+	assert.Equal(t, uint32(200), resp.GetSrcY())
+	assert.Equal(t, uint32(160), resp.GetDestX())
+	assert.Equal(t, uint32(210), resp.GetDestY())
+	assert.Empty(t, resp.GetError())
+}

@@ -130,7 +130,7 @@ func (h *TCPHandler) OnTraffic(c gnet.Conn) gnet.Action {
 	}
 
 	resp := &tcpResponder{conn: c}
-	if err := processBytes(context.Background(), state.decoder, buf, state.info, resp, h.handler); err != nil {
+	if err := processBytes(context.Background(), state.decoder, buf, &state.info, resp, h.handler); err != nil {
 		h.logger.Warn().
 			Err(err).
 			Uint64("conn", state.info.ID).

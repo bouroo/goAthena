@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
+	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
@@ -49,6 +50,39 @@ func (f *fakeIdentityClient) GetCharacterList(ctx context.Context, req *identity
 		return nil, status.Error(codes.Unimplemented, "no chars fn installed")
 	}
 	return fn(ctx, req)
+}
+
+// fakeZoneClient is the dispatch-test stand-in for
+// zonev1.ZoneServiceClient. Tests install enterFn and moveFn to drive
+// the per-RPC responses. Mirrors the hand-rolled fake pattern from
+// internal/features/gateway/handler/map_ws_test.go so the dispatch
+// tests stay trivially diffable against the gRPC interface.
+type fakeZoneClient struct {
+	mu       sync.Mutex
+	enterFn  func(context.Context, *zonev1.EnterZoneRequest, ...grpc.CallOption) (*zonev1.EnterZoneResponse, error)
+	moveFn   func(context.Context, *zonev1.MoveEntityRequest, ...grpc.CallOption) (*zonev1.MoveEntityResponse, error)
+	moveReqs []*zonev1.MoveEntityRequest // captured MoveEntity calls (in arrival order)
+}
+
+func (f *fakeZoneClient) EnterZone(ctx context.Context, req *zonev1.EnterZoneRequest, opts ...grpc.CallOption) (*zonev1.EnterZoneResponse, error) {
+	f.mu.Lock()
+	fn := f.enterFn
+	f.mu.Unlock()
+	if fn == nil {
+		return nil, status.Error(codes.Unimplemented, "no enter fn installed")
+	}
+	return fn(ctx, req, opts...)
+}
+
+func (f *fakeZoneClient) MoveEntity(ctx context.Context, req *zonev1.MoveEntityRequest, opts ...grpc.CallOption) (*zonev1.MoveEntityResponse, error) {
+	f.mu.Lock()
+	f.moveReqs = append(f.moveReqs, req)
+	fn := f.moveFn
+	f.mu.Unlock()
+	if fn == nil {
+		return nil, status.Error(codes.Unimplemented, "no move fn installed")
+	}
+	return fn(ctx, req, opts...)
 }
 
 // bufResponder captures every packet HandlePacket sends. Matched in
@@ -103,7 +137,7 @@ func TestDispatchHandler_AcceptLogin_EncodesAccept(t *testing.T) {
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "hunter2")
 
-	if err := h.HandlePacket(context.Background(), conn, resp, packet.HeaderCALOGIN, frame); err != nil {
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCALOGIN, frame); err != nil {
 		t.Fatalf("HandlePacket err = %v, want nil", err)
 	}
 
@@ -154,7 +188,7 @@ func TestDispatchHandler_RefusedLogin_EncodesRefuse(t *testing.T) {
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "wrongpw")
 
-	if err := h.HandlePacket(context.Background(), domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, frame); err != nil {
+	if err := h.HandlePacket(context.Background(), &domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, frame); err != nil {
 		t.Fatalf("HandlePacket err = %v, want nil", err)
 	}
 
@@ -180,7 +214,7 @@ func TestDispatchHandler_IdentityDown_RefusesWithSentinel99(t *testing.T) {
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "pw")
 
-	if err := h.HandlePacket(context.Background(), domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, frame); err != nil {
+	if err := h.HandlePacket(context.Background(), &domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, frame); err != nil {
 		t.Fatalf("HandlePacket err = %v, want nil", err)
 	}
 
@@ -203,7 +237,7 @@ func TestDispatchHandler_NilResponse_RefusesWithSentinel99(t *testing.T) {
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "pw")
 
-	if err := h.HandlePacket(context.Background(), domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, frame); err != nil {
+	if err := h.HandlePacket(context.Background(), &domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, frame); err != nil {
 		t.Fatalf("HandlePacket err = %v, want nil", err)
 	}
 
@@ -234,7 +268,7 @@ func TestDispatchHandler_CancelledContext_NoRefuseSent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := h.HandlePacket(ctx, domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, frame); err != nil {
+	if err := h.HandlePacket(ctx, &domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, frame); err != nil {
 		t.Fatalf("HandlePacket err = %v, want nil", err)
 	}
 	if got := resp.buf.Len(); got != 0 {
@@ -256,7 +290,7 @@ func TestDispatchHandler_MalformedFrame_NoReplyNoError(t *testing.T) {
 	// 10 bytes — well short of the 55-byte CA_LOGIN; ParseCALogin must
 	// reject this without touching the identity RPC.
 	short := []byte{0x64, 0x00, 0, 0, 0, 0, 0, 0, 0, 0}
-	if err := h.HandlePacket(context.Background(), domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, short); err != nil {
+	if err := h.HandlePacket(context.Background(), &domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, short); err != nil {
 		t.Fatalf("HandlePacket err = %v, want nil (parse error must not tear conn down)", err)
 	}
 	if got := resp.buf.Len(); got != 0 {
@@ -285,7 +319,7 @@ func TestDispatchHandler_PassesClientIPStrippedToAuthenticate(t *testing.T) {
 	frame := buildCALogin(t, "alice", "pw")
 
 	conn := domain.ConnectionInfo{ID: 1, RemoteIP: "203.0.113.7:54321"}
-	if err := h.HandlePacket(context.Background(), conn, resp, packet.HeaderCALOGIN, frame); err != nil {
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCALOGIN, frame); err != nil {
 		t.Fatalf("HandlePacket err = %v", err)
 	}
 
@@ -440,7 +474,7 @@ func TestDispatchHandler_CHEnter_ClampsTotalSlotsAboveMax(t *testing.T) {
 	h := NewDispatchHandler(fake, nil, 20250604, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 	resp := &bufResponder{}
 
-	if err := h.HandlePacket(context.Background(), domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCHENTER, chEnterFrame(1)); err != nil {
+	if err := h.HandlePacket(context.Background(), &domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCHENTER, chEnterFrame(1)); err != nil {
 		t.Fatalf("HandlePacket err = %v, want nil", err)
 	}
 
@@ -468,6 +502,242 @@ func chEnterFrame(accountID uint32) []byte {
 	frame := make([]byte, 17)
 	binary.LittleEndian.PutUint16(frame[0:2], packet.HeaderCHENTER)
 	binary.LittleEndian.PutUint32(frame[2:6], accountID)
+	return frame
+}
+
+// buildCZRequestMove crafts the 5-byte CZ_REQUEST_MOVE frame the rAthena
+// client sends on each cell move (rathena/src/map/clif.cpp:11374).
+//
+// Layout: int16 packetType + uint8 dest[3] = 5. The dest[3] slot uses
+// rAthena's kRO 3-byte packed position (clif.cpp:173-178 WBUFPOS); we
+// hand-compute the bits inline because encodePos is unexported and the
+// format is small enough that the math is the test, not the helper.
+//
+// Layout (LSB first):
+//
+//	p[0] = x >> 2
+//	p[1] = ((x & 0x03) << 6) | (y >> 4)
+//	p[2] = ((y & 0x0f) << 4)
+func buildCZRequestMove(destX, destY int16) []byte {
+	frame := make([]byte, 5)
+	binary.LittleEndian.PutUint16(frame[0:2], packet.HeaderCZREQUESTMOVE)
+	ux := uint16(destX)                             //nolint:gosec // mirror rAthena's int16 → uint16 bit reinterpret
+	uy := uint16(destY)                             //nolint:gosec // ditto
+	frame[2] = byte(ux >> 2)                        //nolint:gosec // C truncates to uint8 by &0xff
+	frame[3] = byte(((ux & 0x03) << 6) | (uy >> 4)) //nolint:gosec // ditto
+	frame[4] = byte((uy & 0x0f) << 4)               //nolint:gosec // ditto
+	return frame
+}
+
+func TestDispatchHandler_CZRequestMove_NoAccountID_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	zone := &fakeZoneClient{
+		moveFn: func(_ context.Context, _ *zonev1.MoveEntityRequest, _ ...grpc.CallOption) (*zonev1.MoveEntityResponse, error) {
+			t.Fatal("MoveEntity must not be called when conn.AccountID is 0")
+			return nil, nil
+		},
+	}
+	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1} // AccountID deliberately unset
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZREQUESTMOVE,
+		buildCZRequestMove(165, 210)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes, want 0 (no AccountID → no RPC → no reply)", got)
+	}
+	if got := len(zone.moveReqs); got != 0 {
+		t.Fatalf("MoveEntity called %d times, want 0", got)
+	}
+}
+
+func TestDispatchHandler_CZRequestMove_Success_EncodesZCNotifyPlayerMove(t *testing.T) {
+	t.Parallel()
+
+	zone := &fakeZoneClient{
+		moveFn: func(_ context.Context, req *zonev1.MoveEntityRequest, _ ...grpc.CallOption) (*zonev1.MoveEntityResponse, error) {
+			if req.AccountId != 4242 {
+				t.Errorf("forwarded account_id = %d, want 4242", req.AccountId)
+			}
+			if req.DestX != 165 || req.DestY != 210 {
+				t.Errorf("forwarded dest = (%d, %d), want (165, 210)", req.DestX, req.DestY)
+			}
+			return &zonev1.MoveEntityResponse{
+				Success: true,
+				SrcX:    150,
+				SrcY:    200,
+				DestX:   165,
+				DestY:   210,
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZREQUESTMOVE,
+		buildCZRequestMove(165, 210)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 12 {
+		t.Fatalf("ZC_NOTIFY_PLAYERMOVE length = %d, want 12", len(out))
+	}
+	if out[0] != 0x87 || out[1] != 0x00 {
+		t.Fatalf("opcode = %02x %02x, want 87 00 (LE 0x0087)", out[0], out[1])
+	}
+	// moveStartTime at [2:6] is unix millis low 32 bits — assert it was
+	// written (non-zero).
+	if startTime := binary.LittleEndian.Uint32(out[2:6]); startTime == 0 {
+		t.Errorf("moveStartTime = 0, want non-zero (millis since epoch)")
+	}
+	// srcPos[3] at [6:9] — decode via ParseCZRequestMove on the bytes
+	// is not available (it's a S→C packet), so verify by re-running
+	// the same kRO unpack as the encoder tests do, but inlined here
+	// to avoid touching packet internals.
+	gotSrcX := int16(uint16(out[6])<<2 | uint16(out[7])>>6)
+	gotSrcY := int16(uint16(out[7]&0x3f)<<4 | uint16(out[8])>>4)
+	if gotSrcX != 150 || gotSrcY != 200 || (out[8]&0x0f) != 0 {
+		t.Errorf("srcPos = (%d, %d, dir=%d), want (150, 200, 0); bytes = %x",
+			gotSrcX, gotSrcY, out[8]&0x0f, out[6:9])
+	}
+	// destPos[3] at [9:12].
+	gotDestX := int16(uint16(out[9])<<2 | uint16(out[10])>>6)
+	gotDestY := int16(uint16(out[10]&0x3f)<<4 | uint16(out[11])>>4)
+	if gotDestX != 165 || gotDestY != 210 || (out[11]&0x0f) != 0 {
+		t.Errorf("destPos = (%d, %d, dir=%d), want (165, 210, 0); bytes = %x",
+			gotDestX, gotDestY, out[11]&0x0f, out[9:12])
+	}
+}
+
+func TestDispatchHandler_CZRequestMove_ZoneRejects_NoReply(t *testing.T) {
+	t.Parallel()
+
+	zone := &fakeZoneClient{
+		moveFn: func(_ context.Context, _ *zonev1.MoveEntityRequest, _ ...grpc.CallOption) (*zonev1.MoveEntityResponse, error) {
+			return &zonev1.MoveEntityResponse{
+				Success: false,
+				Error:   "no walkable path",
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZREQUESTMOVE,
+		buildCZRequestMove(165, 210)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on zone-rejected move, want 0", got)
+	}
+}
+
+func TestDispatchHandler_CZRequestMove_ZoneGRPCError_NoReply(t *testing.T) {
+	t.Parallel()
+
+	zone := &fakeZoneClient{
+		moveFn: func(_ context.Context, _ *zonev1.MoveEntityRequest, _ ...grpc.CallOption) (*zonev1.MoveEntityResponse, error) {
+			return nil, status.Error(codes.Unavailable, "zone down")
+		},
+	}
+	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZREQUESTMOVE,
+		buildCZRequestMove(165, 210)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on gRPC error, want 0", got)
+	}
+}
+
+func TestDispatchHandler_CZRequestMove_NilZone_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, nil, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZREQUESTMOVE,
+		buildCZRequestMove(165, 210)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes with nil zone client, want 0", got)
+	}
+}
+
+func TestDispatchHandler_CZEnter_Success_CachesAccountID(t *testing.T) {
+	t.Parallel()
+
+	zone := &fakeZoneClient{
+		enterFn: func(_ context.Context, req *zonev1.EnterZoneRequest, _ ...grpc.CallOption) (*zonev1.EnterZoneResponse, error) {
+			return &zonev1.EnterZoneResponse{
+				Success: true,
+				MapName: "prontera",
+				MapX:    150,
+				MapY:    200,
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZENTER,
+		buildCZEnter(4242, 9001, 0xdead0000, 0xbeef0000, 1)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if conn.AccountID != 4242 {
+		t.Fatalf("after successful CZ_ENTER, conn.AccountID = %d, want 4242", conn.AccountID)
+	}
+}
+
+func TestDispatchHandler_CZEnter_ZoneRejects_DoesNotCacheAccountID(t *testing.T) {
+	t.Parallel()
+
+	zone := &fakeZoneClient{
+		enterFn: func(_ context.Context, _ *zonev1.EnterZoneRequest, _ ...grpc.CallOption) (*zonev1.EnterZoneResponse, error) {
+			return &zonev1.EnterZoneResponse{Success: false, Error: "aoi grid full"}, nil
+		},
+	}
+	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZENTER,
+		buildCZEnter(4242, 9001, 0xdead0000, 0xbeef0000, 1)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if conn.AccountID != 0 {
+		t.Fatalf("after rejected CZ_ENTER, conn.AccountID = %d, want 0 (cache must not stick)", conn.AccountID)
+	}
+}
+
+// buildCZEnter crafts a 19-byte CZ_ENTER frame for the dispatch tests.
+func buildCZEnter(accountID, charID, authCode, clientTime uint32, sex uint8) []byte {
+	frame := make([]byte, 19)
+	binary.LittleEndian.PutUint16(frame[0:2], packet.HeaderCZENTER)
+	binary.LittleEndian.PutUint32(frame[2:6], accountID)
+	binary.LittleEndian.PutUint32(frame[6:10], charID)
+	binary.LittleEndian.PutUint32(frame[10:14], authCode)
+	binary.LittleEndian.PutUint32(frame[14:18], clientTime)
+	frame[18] = sex
 	return frame
 }
 

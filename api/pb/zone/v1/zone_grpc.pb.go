@@ -20,7 +20,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ZoneService_EnterZone_FullMethodName = "/zone.v1.ZoneService/EnterZone"
+	ZoneService_EnterZone_FullMethodName  = "/zone.v1.ZoneService/EnterZone"
+	ZoneService_MoveEntity_FullMethodName = "/zone.v1.ZoneService/MoveEntity"
 )
 
 // ZoneServiceClient is the client API for ZoneService service.
@@ -36,6 +37,12 @@ type ZoneServiceClient interface {
 	// WantToConnection). Validates the session and assigns the player to a
 	// map instance.
 	EnterZone(ctx context.Context, in *EnterZoneRequest, opts ...grpc.CallOption) (*EnterZoneResponse, error)
+	// MoveEntity processes a client's move-to-cell request (CZ_REQUEST_MOVE
+	// 0x0085 / WalkToXY). Computes an A* path on the entity and returns
+	// the source position (cell the move started from) plus the
+	// destination (cell the path targets). The gateway uses src+dest to
+	// encode the broadcast packet ZC_NOTIFY_PLAYERMOVE 0x0087.
+	MoveEntity(ctx context.Context, in *MoveEntityRequest, opts ...grpc.CallOption) (*MoveEntityResponse, error)
 }
 
 type zoneServiceClient struct {
@@ -56,6 +63,16 @@ func (c *zoneServiceClient) EnterZone(ctx context.Context, in *EnterZoneRequest,
 	return out, nil
 }
 
+func (c *zoneServiceClient) MoveEntity(ctx context.Context, in *MoveEntityRequest, opts ...grpc.CallOption) (*MoveEntityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MoveEntityResponse)
+	err := c.cc.Invoke(ctx, ZoneService_MoveEntity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ZoneServiceServer is the server API for ZoneService service.
 // All implementations must embed UnimplementedZoneServiceServer
 // for forward compatibility.
@@ -69,6 +86,12 @@ type ZoneServiceServer interface {
 	// WantToConnection). Validates the session and assigns the player to a
 	// map instance.
 	EnterZone(context.Context, *EnterZoneRequest) (*EnterZoneResponse, error)
+	// MoveEntity processes a client's move-to-cell request (CZ_REQUEST_MOVE
+	// 0x0085 / WalkToXY). Computes an A* path on the entity and returns
+	// the source position (cell the move started from) plus the
+	// destination (cell the path targets). The gateway uses src+dest to
+	// encode the broadcast packet ZC_NOTIFY_PLAYERMOVE 0x0087.
+	MoveEntity(context.Context, *MoveEntityRequest) (*MoveEntityResponse, error)
 	mustEmbedUnimplementedZoneServiceServer()
 }
 
@@ -81,6 +104,9 @@ type UnimplementedZoneServiceServer struct{}
 
 func (UnimplementedZoneServiceServer) EnterZone(context.Context, *EnterZoneRequest) (*EnterZoneResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method EnterZone not implemented")
+}
+func (UnimplementedZoneServiceServer) MoveEntity(context.Context, *MoveEntityRequest) (*MoveEntityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MoveEntity not implemented")
 }
 func (UnimplementedZoneServiceServer) mustEmbedUnimplementedZoneServiceServer() {}
 func (UnimplementedZoneServiceServer) testEmbeddedByValue()                     {}
@@ -121,6 +147,24 @@ func _ZoneService_EnterZone_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ZoneService_MoveEntity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MoveEntityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).MoveEntity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_MoveEntity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).MoveEntity(ctx, req.(*MoveEntityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ZoneService_ServiceDesc is the grpc.ServiceDesc for ZoneService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -131,6 +175,10 @@ var ZoneService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "EnterZone",
 			Handler:    _ZoneService_EnterZone_Handler,
+		},
+		{
+			MethodName: "MoveEntity",
+			Handler:    _ZoneService_MoveEntity_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -190,6 +190,150 @@ func (x *EnterZoneResponse) GetError() string {
 	return ""
 }
 
+type MoveEntityRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	DestX         uint32                 `protobuf:"varint,2,opt,name=dest_x,json=destX,proto3" json:"dest_x,omitempty"` // destination cell X
+	DestY         uint32                 `protobuf:"varint,3,opt,name=dest_y,json=destY,proto3" json:"dest_y,omitempty"` // destination cell Y
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MoveEntityRequest) Reset() {
+	*x = MoveEntityRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MoveEntityRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MoveEntityRequest) ProtoMessage() {}
+
+func (x *MoveEntityRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MoveEntityRequest.ProtoReflect.Descriptor instead.
+func (*MoveEntityRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *MoveEntityRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *MoveEntityRequest) GetDestX() uint32 {
+	if x != nil {
+		return x.DestX
+	}
+	return 0
+}
+
+func (x *MoveEntityRequest) GetDestY() uint32 {
+	if x != nil {
+		return x.DestY
+	}
+	return 0
+}
+
+type MoveEntityResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	SrcX          uint32                 `protobuf:"varint,2,opt,name=src_x,json=srcX,proto3" json:"src_x,omitempty"` // cell the move started from
+	SrcY          uint32                 `protobuf:"varint,3,opt,name=src_y,json=srcY,proto3" json:"src_y,omitempty"`
+	DestX         uint32                 `protobuf:"varint,4,opt,name=dest_x,json=destX,proto3" json:"dest_x,omitempty"` // cell the path targets (echoed back)
+	DestY         uint32                 `protobuf:"varint,5,opt,name=dest_y,json=destY,proto3" json:"dest_y,omitempty"`
+	Error         string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"` // human-readable error when success == false
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MoveEntityResponse) Reset() {
+	*x = MoveEntityResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MoveEntityResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MoveEntityResponse) ProtoMessage() {}
+
+func (x *MoveEntityResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MoveEntityResponse.ProtoReflect.Descriptor instead.
+func (*MoveEntityResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *MoveEntityResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *MoveEntityResponse) GetSrcX() uint32 {
+	if x != nil {
+		return x.SrcX
+	}
+	return 0
+}
+
+func (x *MoveEntityResponse) GetSrcY() uint32 {
+	if x != nil {
+		return x.SrcY
+	}
+	return 0
+}
+
+func (x *MoveEntityResponse) GetDestX() uint32 {
+	if x != nil {
+		return x.DestX
+	}
+	return 0
+}
+
+func (x *MoveEntityResponse) GetDestY() uint32 {
+	if x != nil {
+		return x.DestY
+	}
+	return 0
+}
+
+func (x *MoveEntityResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_zone_v1_zone_proto protoreflect.FileDescriptor
 
 const file_zone_v1_zone_proto_rawDesc = "" +
@@ -210,9 +354,23 @@ const file_zone_v1_zone_proto_rawDesc = "" +
 	"\bmap_name\x18\x02 \x01(\tR\amapName\x12\x13\n" +
 	"\x05map_x\x18\x03 \x01(\rR\x04mapX\x12\x13\n" +
 	"\x05map_y\x18\x04 \x01(\rR\x04mapY\x12\x14\n" +
-	"\x05error\x18\x05 \x01(\tR\x05error2Q\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\"`\n" +
+	"\x11MoveEntityRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12\x15\n" +
+	"\x06dest_x\x18\x02 \x01(\rR\x05destX\x12\x15\n" +
+	"\x06dest_y\x18\x03 \x01(\rR\x05destY\"\x9c\x01\n" +
+	"\x12MoveEntityResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x13\n" +
+	"\x05src_x\x18\x02 \x01(\rR\x04srcX\x12\x13\n" +
+	"\x05src_y\x18\x03 \x01(\rR\x04srcY\x12\x15\n" +
+	"\x06dest_x\x18\x04 \x01(\rR\x05destX\x12\x15\n" +
+	"\x06dest_y\x18\x05 \x01(\rR\x05destY\x12\x14\n" +
+	"\x05error\x18\x06 \x01(\tR\x05error2\x98\x01\n" +
 	"\vZoneService\x12B\n" +
-	"\tEnterZone\x12\x19.zone.v1.EnterZoneRequest\x1a\x1a.zone.v1.EnterZoneResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
+	"\tEnterZone\x12\x19.zone.v1.EnterZoneRequest\x1a\x1a.zone.v1.EnterZoneResponse\x12E\n" +
+	"\n" +
+	"MoveEntity\x12\x1a.zone.v1.MoveEntityRequest\x1a\x1b.zone.v1.MoveEntityResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
 
 var (
 	file_zone_v1_zone_proto_rawDescOnce sync.Once
@@ -226,16 +384,20 @@ func file_zone_v1_zone_proto_rawDescGZIP() []byte {
 	return file_zone_v1_zone_proto_rawDescData
 }
 
-var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_zone_v1_zone_proto_goTypes = []any{
-	(*EnterZoneRequest)(nil),  // 0: zone.v1.EnterZoneRequest
-	(*EnterZoneResponse)(nil), // 1: zone.v1.EnterZoneResponse
+	(*EnterZoneRequest)(nil),   // 0: zone.v1.EnterZoneRequest
+	(*EnterZoneResponse)(nil),  // 1: zone.v1.EnterZoneResponse
+	(*MoveEntityRequest)(nil),  // 2: zone.v1.MoveEntityRequest
+	(*MoveEntityResponse)(nil), // 3: zone.v1.MoveEntityResponse
 }
 var file_zone_v1_zone_proto_depIdxs = []int32{
 	0, // 0: zone.v1.ZoneService.EnterZone:input_type -> zone.v1.EnterZoneRequest
-	1, // 1: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
+	2, // 1: zone.v1.ZoneService.MoveEntity:input_type -> zone.v1.MoveEntityRequest
+	1, // 2: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
+	3, // 3: zone.v1.ZoneService.MoveEntity:output_type -> zone.v1.MoveEntityResponse
+	2, // [2:4] is the sub-list for method output_type
+	0, // [0:2] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -252,7 +414,7 @@ func file_zone_v1_zone_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_zone_v1_zone_proto_rawDesc), len(file_zone_v1_zone_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -20,6 +20,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
@@ -42,6 +44,14 @@ func (f *fakeZoneClient) EnterZone(ctx context.Context, req *zonev1.EnterZoneReq
 	return f.enterFn(ctx, req)
 }
 
+// MoveEntity is a stub — the WS-driven map-enter test does not
+// exercise move requests. Returning Unimplemented mirrors the
+// behaviour of UnimplementedZoneServiceServer for callers that
+// would route a CZ_REQUEST_MOVE through the same client.
+func (f *fakeZoneClient) MoveEntity(_ context.Context, _ *zonev1.MoveEntityRequest, _ ...grpc.CallOption) (*zonev1.MoveEntityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "MoveEntity not configured in fakeZoneClient")
+}
+
 // wsMapDispatchAdapter mirrors service.DispatchHandler for the WS path
 // so this test exercises the full real WSHandler → processBytes →
 // domain.PacketHandler → zone client → ZC_ACCEPT_ENTER → WS write
@@ -52,7 +62,7 @@ type wsMapDispatchAdapter struct {
 	zone zonev1.ZoneServiceClient
 }
 
-func (a *wsMapDispatchAdapter) HandlePacket(ctx context.Context, _ domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
+func (a *wsMapDispatchAdapter) HandlePacket(ctx context.Context, _ *domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
 	if cmd != packet.HeaderCZENTER {
 		return nil
 	}

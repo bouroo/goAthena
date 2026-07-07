@@ -42,7 +42,7 @@ type wsCharDispatchAdapter struct {
 	logger     zerolog.Logger
 }
 
-func (a *wsCharDispatchAdapter) HandlePacket(ctx context.Context, _ domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
+func (a *wsCharDispatchAdapter) HandlePacket(ctx context.Context, _ *domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
 	switch cmd {
 	case packet.HeaderCHENTER:
 		req, parseErr := packet.ParseCHEnter(frame)

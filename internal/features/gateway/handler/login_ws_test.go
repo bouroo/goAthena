@@ -63,7 +63,7 @@ type wsDispatchAdapter struct {
 	logger    zerolog.Logger
 }
 
-func (a *wsDispatchAdapter) HandlePacket(ctx context.Context, conn domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
+func (a *wsDispatchAdapter) HandlePacket(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
 	if cmd != packet.HeaderCALOGIN {
 		return nil
 	}
