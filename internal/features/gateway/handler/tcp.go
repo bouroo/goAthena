@@ -5,6 +5,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -128,7 +129,8 @@ func (h *TCPHandler) OnTraffic(c gnet.Conn) gnet.Action {
 		return gnet.Close
 	}
 
-	if err := processBytes(context.Background(), state.decoder, buf, state.info, h.handler); err != nil {
+	resp := &tcpResponder{conn: c}
+	if err := processBytes(context.Background(), state.decoder, buf, state.info, resp, h.handler); err != nil {
 		h.logger.Warn().
 			Err(err).
 			Uint64("conn", state.info.ID).
@@ -137,6 +139,22 @@ func (h *TCPHandler) OnTraffic(c gnet.Conn) gnet.Action {
 		return gnet.Close
 	}
 	return gnet.None
+}
+
+// tcpResponder adapts a gnet.Conn to the domain.Responder port by
+// delegating to the engine's AsyncWrite path. The callback is intentionally
+// a no-op because gnet.AsyncWrite does not surface the per-write result
+// back to us synchronously; transport-level write errors are observed at
+// gnet's I/O layer and forwarded via OnClose.
+type tcpResponder struct {
+	conn gnet.Conn
+}
+
+func (r *tcpResponder) SendPacket(p []byte) error {
+	if err := r.conn.AsyncWrite(p, nil); err != nil {
+		return fmt.Errorf("gnet AsyncWrite: %w", err)
+	}
+	return nil
 }
 
 // connState is the per-connection payload stored on gnet.Conn via

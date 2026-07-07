@@ -383,7 +383,8 @@ func validConfig() *config.Config {
 				Addr: ":6901",
 				Path: "/ws/",
 			},
-			Packetver: 20130807,
+			Packetver:    20250604,
+			IdentityAddr: "localhost:50051",
 		},
 		OTel: config.OTelConfig{
 			Exporter:    "none",

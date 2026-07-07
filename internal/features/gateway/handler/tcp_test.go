@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -29,7 +30,7 @@ type recordedPacket struct {
 	frame []byte
 }
 
-func (h *recordingHandler) HandlePacket(_ context.Context, _ domain.ConnectionInfo, cmd uint16, frame []byte) error {
+func (h *recordingHandler) HandlePacket(_ context.Context, _ domain.ConnectionInfo, _ domain.Responder, cmd uint16, frame []byte) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.err != nil {
@@ -49,6 +50,18 @@ func (h *recordingHandler) calls() []recordedPacket {
 	out := make([]recordedPacket, len(h.packets))
 	copy(out, h.packets)
 	return out
+}
+
+// noopResponder is a domain.Responder stub that discards replies. The
+// processBytes tests only verify decode + dispatch semantics and don't
+// inspect outgoing bytes.
+type noopResponder struct {
+	buf bytes.Buffer
+}
+
+func (n *noopResponder) SendPacket(p []byte) error {
+	_, err := n.buf.Write(p)
+	return err
 }
 
 // buildCALogin crafts a complete CA_LOGIN packet (0x0064, 55 bytes):
@@ -75,10 +88,11 @@ func TestProcessBytes_CompleteCALogin_DispatchesOnce(t *testing.T) {
 	db := packet.NewLoginServerDB()
 	dec := netcodec.NewLoginDecoder(db)
 	h := &recordingHandler{}
+	resp := &noopResponder{}
 	info := domain.ConnectionInfo{ID: 42, RemoteIP: "127.0.0.1:1234"}
 
 	frame := buildCALogin(t, "tester", "hunter2")
-	if err := processBytes(context.Background(), dec, frame, info, h); err != nil {
+	if err := processBytes(context.Background(), dec, frame, info, resp, h); err != nil {
 		t.Fatalf("processBytes err = %v", err)
 	}
 
@@ -104,12 +118,13 @@ func TestProcessBytes_PartialBytes_DoesNotDispatch(t *testing.T) {
 	db := packet.NewLoginServerDB()
 	dec := netcodec.NewLoginDecoder(db)
 	h := &recordingHandler{}
+	resp := &noopResponder{}
 	info := domain.ConnectionInfo{ID: 1}
 
 	full := buildCALogin(t, "u", "p")
 	partial := full[:30] // only cmd + version + 24-byte username
 
-	if err := processBytes(context.Background(), dec, partial, info, h); err != nil {
+	if err := processBytes(context.Background(), dec, partial, info, resp, h); err != nil {
 		t.Fatalf("processBytes(partial) err = %v", err)
 	}
 	if calls := h.calls(); len(calls) != 0 {
@@ -122,7 +137,7 @@ func TestProcessBytes_PartialBytes_DoesNotDispatch(t *testing.T) {
 	// Feed the remainder — the decoder must now yield the full packet
 	// without any loss or duplication.
 	rest := full[len(partial):]
-	if err := processBytes(context.Background(), dec, rest, info, h); err != nil {
+	if err := processBytes(context.Background(), dec, rest, info, resp, h); err != nil {
 		t.Fatalf("processBytes(rest) err = %v", err)
 	}
 	if calls := h.calls(); len(calls) != 1 {
@@ -134,11 +149,12 @@ func TestProcessBytes_UnknownCmd_ReturnsErrUnknownPacket(t *testing.T) {
 	db := packet.NewLoginServerDB()
 	dec := netcodec.NewLoginDecoder(db)
 	h := &recordingHandler{}
+	resp := &noopResponder{}
 	info := domain.ConnectionInfo{ID: 1}
 
 	bad := []byte{0x00, 0xFE, 0, 0, 0, 0} // 0xFE00 is not registered
 
-	err := processBytes(context.Background(), dec, bad, info, h)
+	err := processBytes(context.Background(), dec, bad, info, resp, h)
 	if err == nil {
 		t.Fatal("processBytes err = nil, want error")
 	}
@@ -155,10 +171,11 @@ func TestProcessBytes_HandlerError_Propagates(t *testing.T) {
 	dec := netcodec.NewLoginDecoder(db)
 	handlerErr := errors.New("downstream boom")
 	h := &recordingHandler{err: handlerErr}
+	resp := &noopResponder{}
 	info := domain.ConnectionInfo{ID: 7}
 
 	frame := buildCALogin(t, "u", "p")
-	err := processBytes(context.Background(), dec, frame, info, h)
+	err := processBytes(context.Background(), dec, frame, info, resp, h)
 	if !errors.Is(err, handlerErr) {
 		t.Fatalf("processBytes err = %v, want wraps %v", err, handlerErr)
 	}
@@ -168,13 +185,14 @@ func TestProcessBytes_MultiplePacketsInOneFeed(t *testing.T) {
 	db := packet.NewLoginServerDB()
 	dec := netcodec.NewLoginDecoder(db)
 	h := &recordingHandler{}
+	resp := &noopResponder{}
 	info := domain.ConnectionInfo{ID: 9}
 
 	a := buildCALogin(t, "alice", "pw")
 	b := buildCALogin(t, "bob", "pw")
 
 	combined := append(append([]byte{}, a...), b...)
-	if err := processBytes(context.Background(), dec, combined, info, h); err != nil {
+	if err := processBytes(context.Background(), dec, combined, info, resp, h); err != nil {
 		t.Fatalf("processBytes err = %v", err)
 	}
 	calls := h.calls()

@@ -110,11 +110,14 @@ type OTelConfig struct {
 	Sampling    float64 `mapstructure:"sampling" yaml:"sampling" env:"OTEL_TRACES_SAMPLER_ARG" validate:"min=0,max=1"`
 }
 
-// GatewayConfig configures the ingress gateway service (DEL-01).
+// GatewayConfig configures the ingress gateway service (DEL-01). IdentityAddr
+// is the gRPC target for the identity service (e.g. "identity:50051"); the
+// gateway forwards every decoded CA_LOGIN there.
 type GatewayConfig struct {
-	TCP       TCPConfig `mapstructure:"tcp" yaml:"tcp" validate:"required"`
-	WS        WSConfig  `mapstructure:"ws" yaml:"ws" validate:"required"`
-	Packetver int       `mapstructure:"packetver" yaml:"packetver" env:"GATEWAY_PACKETVER" validate:"min=20000000,max=20260000"`
+	TCP          TCPConfig `mapstructure:"tcp" yaml:"tcp" validate:"required"`
+	WS           WSConfig  `mapstructure:"ws" yaml:"ws" validate:"required"`
+	Packetver    int       `mapstructure:"packetver" yaml:"packetver" env:"GATEWAY_PACKETVER" validate:"min=20000000,max=20260000"`
+	IdentityAddr string    `mapstructure:"identity_addr" yaml:"identity_addr" env:"GATEWAY_IDENTITY_ADDR" validate:"required"`
 }
 
 // TCPConfig holds the gnet TCP listener settings for the kRO ingress port.
@@ -330,7 +333,8 @@ func setDefaults(v *viper.Viper) {
 		"gateway.ws.addr":            ":6901",
 		"gateway.ws.path":            "/ws/",
 		"gateway.ws.allowed_origins": []string{},
-		"gateway.packetver":          20130807,
+		"gateway.packetver":          20250604,
+		"gateway.identity_addr":      "localhost:50051",
 
 		"identity.use_md5_passwords": false,
 		"identity.max_chars":         15,
@@ -405,6 +409,7 @@ func leafBindings() []leafBinding {
 		{"gateway.ws.path", "GATEWAY_WS_PATH"},
 		{"gateway.ws.allowed_origins", "GATEWAY_WS_ALLOWED_ORIGINS"},
 		{"gateway.packetver", "GATEWAY_PACKETVER"},
+		{"gateway.identity_addr", "GATEWAY_IDENTITY_ADDR"},
 
 		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},
 		{"identity.max_chars", "IDENTITY_MAX_CHARS"},

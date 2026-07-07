@@ -16,6 +16,11 @@ import (
 // is wrapped and returned so the caller can decide to close the
 // connection.
 //
+// resp is forwarded into HandlePacket so the handler can reply on the
+// originating transport. The decoder itself never calls resp — keeping
+// the egress path inside the handler preserves the single-responsibility
+// split between framing and dispatch.
+//
 // Shared by TCPHandler (gnet, bytes drained from the inbound buffer on
 // OnTraffic) and WSHandler (coder/websocket, one binary message per Read).
 func processBytes(
@@ -23,6 +28,7 @@ func processBytes(
 	decoder *netcodec.Decoder,
 	data []byte,
 	info domain.ConnectionInfo,
+	resp domain.Responder,
 	handler domain.PacketHandler,
 ) error {
 	decoder.Feed(data)
@@ -35,7 +41,7 @@ func processBytes(
 			}
 			return fmt.Errorf("decode packet: %w", err)
 		}
-		if err := handler.HandlePacket(ctx, info, cmd, frame); err != nil {
+		if err := handler.HandlePacket(ctx, info, resp, cmd, frame); err != nil {
 			return fmt.Errorf("handle packet 0x%04x: %w", cmd, err)
 		}
 	}

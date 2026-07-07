@@ -184,7 +184,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := processBytes(readCtx, decoder, data, info, h.handler); err != nil {
+		if err := processBytes(readCtx, decoder, data, info, &wsResponder{conn: conn, ctx: readCtx}, h.handler); err != nil {
 			h.logger.Warn().
 				Err(err).
 				Uint64("conn", id).
@@ -193,4 +193,19 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// wsResponder adapts a coder/websocket connection to the domain.Responder
+// port. Writes are serialized on the active read context so a closing
+// handshake cancels an in-flight reply cleanly.
+type wsResponder struct {
+	conn *websocket.Conn
+	ctx  context.Context
+}
+
+func (r *wsResponder) SendPacket(p []byte) error {
+	if err := r.conn.Write(r.ctx, websocket.MessageBinary, p); err != nil {
+		return fmt.Errorf("ws write: %w", err)
+	}
+	return nil
 }
