@@ -421,16 +421,22 @@ func (h *DispatchHandler) handleCHSelectChar(_ context.Context, conn *domain.Con
 }
 
 // handleCZEnter forwards CZ_ENTER to zone.EnterZone and encodes the
-// reply. On success the client receives a ZC_ACCEPT_ENTER carrying the
-// map name + spawn position from the zone; on failure the gateway
-// sends ZC_REFUSE_ENTER with error code 0 (rAthena's generic "server
-// closed" refuse for map-server entry — there's no fine-grained
-// client-visible code book on the map side the way HC_REFUSE_ENTER
-// has on the char side).
+// reply. On success the client receives two packets in order:
+//
+//  1. ZC_ACCEPT_ENTER (cmd 0x02eb) carrying the map name + spawn
+//     position from the zone.
+//  2. ZC_SPAWN_UNIT (cmd 0x09fe) describing the player's own entity
+//     — the client uses this to render its own character on the map.
+//
+// On failure the gateway sends ZC_REFUSE_ENTER with error code 0
+// (rAthena's generic "server closed" refuse for map-server entry —
+// there's no fine-grained client-visible code book on the map side
+// the way HC_REFUSE_ENTER has on the char side).
 //
 // Reference: rathena/src/map/clif.cpp:10642 (clif_parse_WantToConnection)
 // and the corresponding map_send_zip0088_accept_enter / clif_authfail
-// emission sites.
+// emission sites; rathena/src/map/clif.cpp clif_spawn for the
+// self-spawn ZC_SPAWN_UNIT emission that follows.
 func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZEnter(frame)
 	if err != nil {
@@ -542,6 +548,59 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn *domain.Connec
 
 	if err := resp.SendPacket(buf.Bytes()); err != nil {
 		return fmt.Errorf("send ZC_ACCEPT_ENTER: %w", err)
+	}
+
+	// Send the self-spawn packet so the client renders its own
+	// character on the map. Character-specific fields (job, stats,
+	// name) are zero-filled for M6c — full character data lands when
+	// the identity service starts returning it in M7+. A send failure
+	// here does not tear the connection down (the player is already
+	// in the map and the client will surface the missing sprite as a
+	// visible glitch, not a fatal protocol error).
+	spawn := packet.SpawnUnitResponse{
+		ObjectType: 0, // TYPE_PC — the only value the gateway emits today.
+		AID:        conn.AccountID,
+		GID:        conn.AccountID,
+		Speed:      150,
+		PosX:       clampMapCoord(zResp.GetMapX()),
+		PosY:       clampMapCoord(zResp.GetMapY()),
+		Dir:        0,
+		XSize:      5,
+		YSize:      5,
+		CLevel:     1,
+		MaxHP:      1,
+		HP:         1,
+		Sex:        req.Sex,
+	}
+
+	var spawnBuf bytes.Buffer
+	if err := spawn.Encode(&spawnBuf); err != nil {
+		// SpawnUnitResponse.Encode cannot fail in practice (no
+		// variable-width fields), but we still bubble the error up
+		// rather than silently swallow it — wrapcheck requires every
+		// external error be wrapped. Map-phase send failures are not
+		// fatal at this stage (the handshake already succeeded), but
+		// an encode failure indicates a programmer error and must
+		// surface.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Msg("encode ZC_SPAWN_UNIT failed; map enter partially delivered")
+		return fmt.Errorf("encode ZC_SPAWN_UNIT: %w", err)
+	}
+
+	if err := resp.SendPacket(spawnBuf.Bytes()); err != nil {
+		// Log and continue — ZC_ACCEPT_ENTER was already sent, the
+		// connection is in a usable state, and a spawn send failure
+		// (peer closed mid-stream, transport buffer full) is not a
+		// reason to tear the conn down. The client will reconnect
+		// and re-handshake.
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Msg("send ZC_SPAWN_UNIT failed; map enter partially delivered")
 	}
 	return nil
 }

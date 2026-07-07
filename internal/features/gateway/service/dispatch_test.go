@@ -705,6 +705,85 @@ func TestDispatchHandler_CZEnter_Success_CachesAccountID(t *testing.T) {
 	if conn.AccountID != 4242 {
 		t.Fatalf("after successful CZ_ENTER, conn.AccountID = %d, want 4242", conn.AccountID)
 	}
+
+	// On success the gateway must emit TWO packets back-to-back:
+	// 13-byte ZC_ACCEPT_ENTER (cmd 0x02eb) + 107-byte ZC_SPAWN_UNIT
+	// (cmd 0x09fe) for the player's own entity. Both must be present
+	// in the responder buffer in that order.
+	out := resp.buf.Bytes()
+	const wantAcceptLen = 13
+	const wantSpawnLen = 107
+	if len(out) != wantAcceptLen+wantSpawnLen {
+		t.Fatalf("responder length = %d, want %d (ZC_ACCEPT_ENTER + ZC_SPAWN_UNIT)",
+			len(out), wantAcceptLen+wantSpawnLen)
+	}
+
+	// (1) ZC_ACCEPT_ENTER layout (no packet-length field — this is one of
+	// the few map-server packets with no length header): cmd (2) +
+	// startTime (4) + posDir[3] (3) + xSize (1) + ySize (1) + font (2)
+	// = 13 bytes.
+	accept := out[:wantAcceptLen]
+	if accept[0] != 0xeb || accept[1] != 0x02 {
+		t.Errorf("ZC_ACCEPT_ENTER opcode = %02x %02x, want eb 02 (LE 0x02eb)", accept[0], accept[1])
+	}
+	if startTime := binary.LittleEndian.Uint32(accept[2:6]); startTime == 0 {
+		t.Errorf("ZC_ACCEPT_ENTER startTime = 0, want non-zero (unix seconds)")
+	}
+	// posDir at [6:9] must unpack to the zone-reported (150, 200) with
+	// dir=0 (the handler hardcodes Dir=0 on the accept).
+	accX := int16(uint16(accept[6])<<2 | uint16(accept[7])>>6)
+	accY := int16(uint16(accept[7]&0x3f)<<4 | uint16(accept[8])>>4)
+	if accX != 150 || accY != 200 || (accept[8]&0x0f) != 0 {
+		t.Errorf("ZC_ACCEPT_ENTER posDir = (%d, %d, dir=%d), want (150, 200, 0)",
+			accX, accY, accept[8]&0x0f)
+	}
+	if accept[9] != 5 || accept[10] != 5 {
+		t.Errorf("ZC_ACCEPT_ENTER xSize/ySize = %d/%d, want 5/5", accept[9], accept[10])
+	}
+
+	// (2) ZC_SPAWN_UNIT: cmd 0x09fe LE at [0:2] + packetLength=107 at
+	// [2:4] + objectType=0 (PC) at [4] + AID=4242 at [5:9] + GID=4242
+	// at [9:13] + posDir at [63:66] = (150, 200, 0) + xSize=5 +
+	// ySize=5 + name = 24 NUL bytes at [83:107].
+	spawn := out[wantAcceptLen:]
+	if spawn[0] != 0xfe || spawn[1] != 0x09 {
+		t.Errorf("ZC_SPAWN_UNIT opcode = %02x %02x, want fe 09 (LE 0x09fe)", spawn[0], spawn[1])
+	}
+	if plen := binary.LittleEndian.Uint16(spawn[2:4]); plen != wantSpawnLen {
+		t.Errorf("ZC_SPAWN_UNIT packetLength = %d, want %d", plen, wantSpawnLen)
+	}
+	if spawn[4] != 0 {
+		t.Errorf("ZC_SPAWN_UNIT objectType = %d, want 0 (PC)", spawn[4])
+	}
+	if aid := binary.LittleEndian.Uint32(spawn[5:9]); aid != 4242 {
+		t.Errorf("ZC_SPAWN_UNIT AID = %d, want 4242 (conn.AccountID)", aid)
+	}
+	if gid := binary.LittleEndian.Uint32(spawn[9:13]); gid != 4242 {
+		t.Errorf("ZC_SPAWN_UNIT GID = %d, want 4242 (AID for self-spawn)", gid)
+	}
+	// Sex byte at [62] must echo the CZ_ENTER sex byte (1 = male from
+	// buildCZEnter's last arg).
+	if spawn[62] != 1 {
+		t.Errorf("ZC_SPAWN_UNIT sex = %d, want 1 (from CZ_ENTER request)", spawn[62])
+	}
+	// posDir at [63:66] must unpack to the zone-reported (150, 200) with
+	// dir=0 (the handler hardcodes Dir=0 on the spawn too).
+	spX := int16(uint16(spawn[63])<<2 | uint16(spawn[64])>>6)
+	spY := int16(uint16(spawn[64]&0x3f)<<4 | uint16(spawn[65])>>4)
+	if spX != 150 || spY != 200 || (spawn[65]&0x0f) != 0 {
+		t.Errorf("ZC_SPAWN_UNIT posDir = (%d, %d, dir=%d), want (150, 200, 0); bytes = %x",
+			spX, spY, spawn[65]&0x0f, spawn[63:66])
+	}
+	if spawn[66] != 5 || spawn[67] != 5 {
+		t.Errorf("ZC_SPAWN_UNIT xSize/ySize = %d/%d, want 5/5", spawn[66], spawn[67])
+	}
+	// Name field at [83:107] must be 24 NUL bytes (Name="" in M6c).
+	for i := 83; i < 107; i++ {
+		if spawn[i] != 0 {
+			t.Errorf("ZC_SPAWN_UNIT name byte at [%d] = 0x%02x, want 0x00 (M6c sends empty name)",
+				i, spawn[i])
+		}
+	}
 }
 
 func TestDispatchHandler_CZEnter_ZoneRejects_DoesNotCacheAccountID(t *testing.T) {
