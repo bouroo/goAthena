@@ -10,6 +10,8 @@
 //   - CH_SELECT_CHAR (0x0066)      → HC_NOTIFY_ZONESVR (zone redirect to DefaultMap)
 //   - CZ_ENTER (0x0072)             → zone.EnterZone → ZC_ACCEPT_ENTER
 //   - CZ_REQUEST_MOVE (0x0085)      → debug-logged (M4+ will forward to zone)
+//   - CZ_NOTIFY_ACTORINIT (0x007d)  → ZC_MAPPROPERTY_R2 (MAPPROPERTY_NOTHING)
+//   - CZ_REQUEST_TIME (0x007e)      → ZC_NOTIFY_TIME (unix millis low 32 bits)
 //   - everything else              → debug-logged, connection kept alive.
 
 package service
@@ -124,6 +126,10 @@ func (h *DispatchHandler) HandlePacket(ctx context.Context, conn *domain.Connect
 		return h.handleCZEnter(ctx, conn, resp, frame)
 	case packet.HeaderCZREQUESTMOVE:
 		return h.handleCZRequestMove(ctx, conn, resp, frame)
+	case packet.HeaderCZNOTIFYACTORINIT:
+		return h.handleCZNotifyActorInit(ctx, conn, resp)
+	case packet.HeaderCZREQUESTTIME:
+		return h.handleCZRequestTime(ctx, conn, resp, frame)
 	default:
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
@@ -855,6 +861,77 @@ func (h *DispatchHandler) handleCZRequestMove(ctx context.Context, conn *domain.
 
 	if err := resp.SendPacket(buf.Bytes()); err != nil {
 		return fmt.Errorf("send ZC_NOTIFY_PLAYERMOVE: %w", err)
+	}
+	return nil
+}
+
+// handleCZNotifyActorInit responds to CZ_NOTIFY_ACTORINIT (0x007d) —
+// the client's signal that it has finished loading the map. rAthena
+// responds with clif_map_property; we send ZC_MAPPROPERTY_R2 with
+// MAPPROPERTY_NOTHING (type=0, flags=0) since no maps have PVP/GVG
+// flags yet.
+func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder) error {
+	prop := packet.MapPropertyResponse{
+		PropertyType: 0, // MAPPROPERTY_NOTHING
+		Flags:        0,
+	}
+	var buf bytes.Buffer
+	if err := prop.Encode(&buf); err != nil {
+		// MapPropertyResponse.Encode cannot fail in practice (no
+		// variable-width fields), but we still bubble the error up
+		// rather than silently swallow it — wrapcheck requires every
+		// external error be wrapped. Drop the packet rather than
+		// refuse the whole handshake: the client already entered the
+		// map and the rest of the connection is unaffected.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Msg("encode ZC_MAPPROPERTY_R2 failed")
+		return nil
+	}
+	h.logger.Info().Uint64("conn", conn.ID).Msg("map property sent")
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_MAPPROPERTY_R2: %w", err)
+	}
+	return nil
+}
+
+// handleCZRequestTime responds to CZ_REQUEST_TIME (0x007e) — the
+// client's periodic server-tick ping. rAthena responds with
+// clif_notify_time(sd, gettick()); we return unix millis (low 32
+// bits) as a stateless equivalent.
+func (h *DispatchHandler) handleCZRequestTime(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZRequestTime(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_REQUEST_TIME; dropping packet")
+		return nil
+	}
+	notify := packet.NotifyTimeResponse{
+		Time: uint32(time.Now().UnixMilli()), //nolint:gosec // low 32 bits of unix millis per rAthena time convention
+	}
+	var buf bytes.Buffer
+	if err := notify.Encode(&buf); err != nil {
+		// NotifyTimeResponse.Encode cannot fail in practice (no
+		// variable-width fields), but we still bubble the error up
+		// rather than silently swallow it — wrapcheck requires every
+		// external error be wrapped. Drop the packet rather than
+		// refuse the handshake.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Msg("encode ZC_NOTIFY_TIME failed")
+		return nil
+	}
+	h.logger.Debug().
+		Uint64("conn", conn.ID).
+		Uint32("client_tick", req.ClientTick).
+		Msg("time sync")
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_NOTIFY_TIME: %w", err)
 	}
 	return nil
 }

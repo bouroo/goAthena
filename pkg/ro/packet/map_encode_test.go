@@ -600,6 +600,7 @@ func TestCZRequestMoveRequest_Encode_DirSlotZero(t *testing.T) {
 	if err := req.Encode(&buf); err != nil {
 		t.Fatalf("Encode err = %v", err)
 	}
+
 	parsed, err := ParseCZRequestMove(buf.Bytes())
 	if err != nil {
 		t.Fatalf("ParseCZRequestMove err = %v", err)
@@ -607,5 +608,202 @@ func TestCZRequestMoveRequest_Encode_DirSlotZero(t *testing.T) {
 	if parsed.DestX != req.DestX || parsed.DestY != req.DestY {
 		t.Errorf("pos round-trip = (%d,%d), want (%d,%d)",
 			parsed.DestX, parsed.DestY, req.DestX, req.DestY)
+	}
+}
+
+// MapPropertyResponse encode tests — ZC_MAPPROPERTY_R2 (0x099b, 8 bytes).
+
+func TestMapPropertyResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r MapPropertyResponse
+	if got, want := r.Size(), sizeZCMapPropertyR2; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestMapPropertyResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := MapPropertyResponse{
+		PropertyType: 0, // MAPPROPERTY_NOTHING
+		Flags:        0,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 8
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Opcode at [0:2] = 0x099b LE.
+	if got[0] != 0x9b || got[1] != 0x09 {
+		t.Errorf("header bytes = %02x %02x, want 9b 09 (LE 0x099b)", got[0], got[1])
+	}
+
+	// propertyType at [2:4] = uint16 LE.
+	if pt := binary.LittleEndian.Uint16(got[2:4]); pt != 0 {
+		t.Errorf("propertyType = %d, want 0 (MAPPROPERTY_NOTHING)", pt)
+	}
+
+	// flags at [4:8] = uint32 LE.
+	if flags := binary.LittleEndian.Uint32(got[4:8]); flags != 0 {
+		t.Errorf("flags = 0x%x, want 0", flags)
+	}
+}
+
+func TestMapPropertyResponse_Encode_NonZeroValues(t *testing.T) {
+	t.Parallel()
+
+	// Verify field offsets when propertyType + flags are non-zero —
+	// the zero path is fully exercised above, but we also want
+	// regression coverage for the non-zero wire-shape.
+	resp := MapPropertyResponse{
+		PropertyType: 2, // MAPPROPERTY_GVG (placeholder; not actually used today)
+		Flags:        0xDEADBEEF,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if pt := binary.LittleEndian.Uint16(got[2:4]); pt != 2 {
+		t.Errorf("propertyType = %d, want 2", pt)
+	}
+	if flags := binary.LittleEndian.Uint32(got[4:8]); flags != 0xDEADBEEF {
+		t.Errorf("flags = 0x%x, want 0xDEADBEEF", flags)
+	}
+}
+
+// NotifyTimeResponse encode tests — ZC_NOTIFY_TIME (0x007f, 6 bytes).
+
+func TestNotifyTimeResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r NotifyTimeResponse
+	if got, want := r.Size(), sizeZCNotifyTime; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestNotifyTimeResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := NotifyTimeResponse{Time: 0x12345678}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 6
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Opcode at [0:2] = 0x007f LE.
+	if got[0] != 0x7f || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want 7f 00 (LE 0x007f)", got[0], got[1])
+	}
+
+	// time at [2:6] = uint32 LE.
+	if t1 := binary.LittleEndian.Uint32(got[2:6]); t1 != 0x12345678 {
+		t.Errorf("time = 0x%x, want 0x12345678", t1)
+	}
+}
+
+func TestNotifyTimeResponse_Encode_ZeroValues(t *testing.T) {
+	t.Parallel()
+
+	// Zero-value encode is well-defined (no buffer, no offset
+	// ambiguity) — exercise the path explicitly.
+	resp := NotifyTimeResponse{}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 6 {
+		t.Fatalf("zero-value len = %d, want 6", len(got))
+	}
+	if got[0] != 0x7f || got[1] != 0x00 {
+		t.Errorf("header = %02x %02x, want 7f 00", got[0], got[1])
+	}
+	if t1 := binary.LittleEndian.Uint32(got[2:6]); t1 != 0 {
+		t.Errorf("time = %d, want 0", t1)
+	}
+}
+
+// CZRequestTimeRequest round-trip tests.
+
+func TestCZRequestTimeRequest_Encode_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	req := CZRequestTimeRequest{ClientTick: 0x12345678}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v, want nil", err)
+	}
+	if got := buf.Len(); got != sizeCZRequestTime {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCZRequestTime)
+	}
+
+	got, err := ParseCZRequestTime(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseCZRequestTime err = %v, want nil", err)
+	}
+	if got != req {
+		t.Errorf("round-trip mismatch:\n got = %+v\nwant = %+v", got, req)
+	}
+}
+
+func TestCZRequestTimeRequest_Encode_ZeroValues(t *testing.T) {
+	t.Parallel()
+
+	req := CZRequestTimeRequest{}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v", err)
+	}
+
+	got, err := ParseCZRequestTime(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseCZRequestTime err = %v", err)
+	}
+	if got != req {
+		t.Errorf("zero round-trip mismatch:\n got = %+v\nwant = %+v", got, req)
+	}
+}
+
+func TestCZRequestTimeRequest_Encode_LayoutSpotCheck(t *testing.T) {
+	t.Parallel()
+
+	// Spot-check the wire shape byte-exactly so a future refactor
+	// that swaps the field order / width is caught here.
+	req := CZRequestTimeRequest{ClientTick: 0xDEADBEEF}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v", err)
+	}
+	got := buf.Bytes()
+
+	if got[0] != 0x7e || got[1] != 0x00 {
+		t.Errorf("opcode = %02x %02x, want 7e 00 (LE 0x007e)", got[0], got[1])
+	}
+	if tick := binary.LittleEndian.Uint32(got[2:6]); tick != 0xDEADBEEF {
+		t.Errorf("clientTick = 0x%x, want 0xDEADBEEF", tick)
 	}
 }
