@@ -62,8 +62,11 @@ func TestRun_ShutdownOnContextCancel(t *testing.T) {
 		OTel:   config.OTelConfig{Exporter: "none", ServiceName: "test", Sampling: 1.0},
 		Log:    config.LogConfig{Level: "info", Format: "json"},
 		Gateway: config.GatewayConfig{
-			TCP: config.TCPConfig{Addr: "127.0.0.1:16910"},
-			WS:  config.WSConfig{Addr: "127.0.0.1:16911", Path: "/ws/"},
+			TCP:          config.TCPConfig{Addr: "127.0.0.1:16910"},
+			WS:           config.WSConfig{Addr: "127.0.0.1:16911", Path: "/ws/"},
+			Packetver:    20250604,
+			IdentityAddr: "127.0.0.1:50051",
+			MapAddr:      "127.0.0.1:5121",
 		},
 	}
 
