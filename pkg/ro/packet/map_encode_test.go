@@ -497,3 +497,115 @@ func TestSpawnUnitResponse_Encode_ZeroValues(t *testing.T) {
 		t.Errorf("PosDir = (%d, %d, dir=%d), want (0, 0, 0)", gotX, gotY, gotDir)
 	}
 }
+
+// CZEnterRequest round-trip tests — exercise the request-side encoder that
+// is the inverse of ParseCZEnter.
+
+func TestCZEnterRequest_Encode_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	req := CZEnterRequest{
+		AccountID:  0xAAAAAAAA,
+		CharID:     0xBBBBBBBB,
+		AuthCode:   0xCCCCCCCC,
+		ClientTime: 0xDDDDDDDD,
+		Sex:        0x01,
+	}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v, want nil", err)
+	}
+	if got := buf.Len(); got != sizeCZEnter {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCZEnter)
+	}
+
+	got, err := ParseCZEnter(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseCZEnter err = %v, want nil", err)
+	}
+	if got != req {
+		t.Errorf("round-trip mismatch:\n got = %+v\nwant = %+v", got, req)
+	}
+}
+
+func TestCZEnterRequest_Encode_ZeroValues(t *testing.T) {
+	t.Parallel()
+
+	req := CZEnterRequest{}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v", err)
+	}
+
+	got, err := ParseCZEnter(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseCZEnter err = %v", err)
+	}
+	if got != req {
+		t.Errorf("zero round-trip mismatch:\n got = %+v\nwant = %+v", got, req)
+	}
+}
+
+// CZRequestMoveRequest round-trip tests.
+
+func TestCZRequestMoveRequest_Encode_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	req := CZRequestMoveRequest{DestX: 150, DestY: 200}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v, want nil", err)
+	}
+	if got := buf.Len(); got != sizeCZRequestMove {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCZRequestMove)
+	}
+
+	got, err := ParseCZRequestMove(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseCZRequestMove err = %v, want nil", err)
+	}
+	if got != req {
+		t.Errorf("round-trip mismatch:\n got = %+v\nwant = %+v", got, req)
+	}
+}
+
+func TestCZRequestMoveRequest_Encode_ZeroOrigin(t *testing.T) {
+	t.Parallel()
+
+	req := CZRequestMoveRequest{DestX: 0, DestY: 0}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v", err)
+	}
+
+	got, err := ParseCZRequestMove(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseCZRequestMove err = %v", err)
+	}
+	if got != req {
+		t.Errorf("zero round-trip mismatch:\n got = %+v\nwant = %+v", got, req)
+	}
+}
+
+func TestCZRequestMoveRequest_Encode_DirSlotZero(t *testing.T) {
+	t.Parallel()
+
+	req := CZRequestMoveRequest{DestX: 50, DestY: 75}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v", err)
+	}
+	parsed, err := ParseCZRequestMove(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseCZRequestMove err = %v", err)
+	}
+	if parsed.DestX != req.DestX || parsed.DestY != req.DestY {
+		t.Errorf("pos round-trip = (%d,%d), want (%d,%d)",
+			parsed.DestX, parsed.DestY, req.DestX, req.DestY)
+	}
+}

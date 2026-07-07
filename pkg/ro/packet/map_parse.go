@@ -3,6 +3,7 @@ package packet
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 )
 
 // CZEnterRequest is the decoded form of a client → map-server CZ_ENTER packet
@@ -52,6 +53,32 @@ func ParseCZEnter(frame []byte) (CZEnterRequest, error) {
 	}, nil
 }
 
+// Encode writes the CZ_ENTER packet to w, mirroring the on-wire layout
+// documented on CZEnterRequest: [2:cmd=0x0072][4:accountID][4:charID]
+// [4:authCode][4:clientTime][1:sex] = 19 bytes. Source:
+// rathena/src/map/clif.cpp:10642 and the WantToConnection handler reading
+// RFIFOL/AID/CID/login_id1/client_tick/sex at the documented offsets.
+func (r CZEnterRequest) Encode(w io.Writer) error {
+	buf := make([]byte, sizeCZEnter)
+	// int16 packetType = 0x0072 (HeaderCZENTER).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZENTER)
+	// uint32 accountID at offset 2.
+	binary.LittleEndian.PutUint32(buf[2:], r.AccountID)
+	// uint32 charID at offset 6.
+	binary.LittleEndian.PutUint32(buf[6:], r.CharID)
+	// uint32 authCode at offset 10.
+	binary.LittleEndian.PutUint32(buf[10:], r.AuthCode)
+	// uint32 clientTime at offset 14.
+	binary.LittleEndian.PutUint32(buf[14:], r.ClientTime)
+	// uint8 sex at offset 18.
+	buf[18] = r.Sex
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_ENTER: %w", err)
+	}
+	return nil
+}
+
 // CZRequestMoveRequest is the decoded form of a client → map-server
 // CZ_REQUEST_MOVE packet (header 0x0085, 5 bytes on the wire). Source:
 // rathena/src/map/clif.cpp:11374 (WalkToXY handler calling RFIFOPOS at
@@ -89,4 +116,23 @@ func ParseCZRequestMove(frame []byte) (CZRequestMoveRequest, error) {
 		DestX: destX,
 		DestY: destY,
 	}, nil
+}
+
+// Encode writes the CZ_REQUEST_MOVE packet to w, mirroring the on-wire
+// layout documented on CZRequestMoveRequest: [2:cmd=0x0085][3:encodePos]
+// = 5 bytes. The dir slot of the packed position is always written as
+// zero — the move request carries no facing. Source:
+// rathena/src/map/clif.cpp:11374 (WalkToXY handler calling RFIFOPOS at
+// packet_db[..].pos[0]).
+func (r CZRequestMoveRequest) Encode(w io.Writer) error {
+	buf := make([]byte, sizeCZRequestMove)
+	// int16 packetType = 0x0085 (HeaderCZREQUESTMOVE).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQUESTMOVE)
+	// uint8 dest[3] at offset 2 — kRO 3-byte packed position.
+	encodePos(buf[2:5], r.DestX, r.DestY, 0)
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_REQUEST_MOVE: %w", err)
+	}
+	return nil
 }
