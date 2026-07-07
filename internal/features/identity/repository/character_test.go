@@ -10,6 +10,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/bouroo/goAthena/internal/features/identity/domain"
 	"github.com/bouroo/goAthena/internal/features/identity/repository"
@@ -121,6 +122,91 @@ func TestCharacterRepository_ListByAccount(t *testing.T) {
 		assert.Nil(t, got)
 		assert.Contains(t, err.Error(), "maxSlots")
 		assert.NoError(t, mock.ExpectationsWereMet(), "no SQL should have been issued")
+	})
+}
+
+func TestCharacterRepository_GetByID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("happy path returns mapped summary", func(t *testing.T) {
+		t.Parallel()
+		gormDB, mock := newMockGormDB(t)
+		repo := repository.NewCharacterRepository(gormDB)
+
+		rows := sqlmock.NewRows(charColumns).AddRow(
+			uint32(150001), uint32(2000000), int8(0), "alpha", uint16(7),
+			uint32(99), uint32(50), uint64(123456), uint64(7890), uint32(1000),
+			uint32(4000), uint32(3500), uint32(200), uint32(150), uint8(5), uint16(2),
+			uint16(0), uint16(1101), uint16(0), uint16(0), uint16(0),
+			uint16(0), uint16(0), "prontera", int64(0), int64(0), "M",
+		)
+		mock.ExpectQuery(`SELECT .* FROM "char" WHERE account_id = \$1 AND char_id = \$2`).
+			WithArgs(uint32(2000000), uint32(150001), 1).
+			WillReturnRows(rows)
+
+		got, err := repo.GetByID(context.Background(), 2000000, 150001)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, uint32(150001), got.CharID)
+		assert.Equal(t, uint32(2000000), got.AccountID)
+		assert.Equal(t, "alpha", got.Name)
+		assert.Equal(t, uint16(7), got.Class)
+		assert.Equal(t, uint32(4000), got.MaxHP)
+		assert.Equal(t, uint32(3500), got.HP)
+		assert.Equal(t, uint16(1101), got.Weapon)
+		assert.Equal(t, domain.SexMale, got.Sex)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("not found returns ErrCharacterNotFound without issuing extra queries", func(t *testing.T) {
+		t.Parallel()
+		gormDB, mock := newMockGormDB(t)
+		repo := repository.NewCharacterRepository(gormDB)
+
+		mock.ExpectQuery(`SELECT .* FROM "char" WHERE account_id = \$1 AND char_id = \$2`).
+			WithArgs(uint32(2000000), uint32(150001), 1).
+			WillReturnError(gorm.ErrRecordNotFound)
+
+		got, err := repo.GetByID(context.Background(), 2000000, 150001)
+		require.Error(t, err)
+		assert.Nil(t, got)
+		assert.ErrorIs(t, err, domain.ErrCharacterNotFound)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("other DB error is wrapped", func(t *testing.T) {
+		t.Parallel()
+		gormDB, mock := newMockGormDB(t)
+		repo := repository.NewCharacterRepository(gormDB)
+
+		boom := assert.AnError
+		mock.ExpectQuery(`SELECT .* FROM "char" WHERE account_id = \$1 AND char_id = \$2`).
+			WithArgs(uint32(2000000), uint32(150001), 1).
+			WillReturnError(boom)
+
+		got, err := repo.GetByID(context.Background(), 2000000, 150001)
+		require.Error(t, err)
+		assert.Nil(t, got)
+		assert.ErrorIs(t, err, boom)
+		assert.NotErrorIs(t, err, domain.ErrCharacterNotFound, "boom should not alias ErrCharacterNotFound")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("zero keys are rejected before any query", func(t *testing.T) {
+		t.Parallel()
+		gormDB, _ := newMockGormDB(t)
+		repo := repository.NewCharacterRepository(gormDB)
+
+		// No expectations: any SQL fired here would fail the test.
+		got, err := repo.GetByID(context.Background(), 0, 150001)
+		require.Error(t, err)
+		assert.Nil(t, got)
+		assert.ErrorIs(t, err, domain.ErrCharacterNotFound)
+
+		got, err = repo.GetByID(context.Background(), 2000000, 0)
+		require.Error(t, err)
+		assert.Nil(t, got)
+		assert.ErrorIs(t, err, domain.ErrCharacterNotFound)
 	})
 }
 

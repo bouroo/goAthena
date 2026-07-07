@@ -552,26 +552,15 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn *domain.Connec
 
 	// Send the self-spawn packet so the client renders its own
 	// character on the map. Character-specific fields (job, stats,
-	// name) are zero-filled for M6c — full character data lands when
-	// the identity service starts returning it in M7+. A send failure
-	// here does not tear the connection down (the player is already
-	// in the map and the client will surface the missing sprite as a
-	// visible glitch, not a fatal protocol error).
-	spawn := packet.SpawnUnitResponse{
-		ObjectType: 0, // TYPE_PC — the only value the gateway emits today.
-		AID:        conn.AccountID,
-		GID:        conn.AccountID,
-		Speed:      150,
-		PosX:       clampMapCoord(zResp.GetMapX()),
-		PosY:       clampMapCoord(zResp.GetMapY()),
-		Dir:        0,
-		XSize:      5,
-		YSize:      5,
-		CLevel:     1,
-		MaxHP:      1,
-		HP:         1,
-		Sex:        req.Sex,
-	}
+	// name) are populated from the identity service's GetCharacter
+	// RPC. On any failure (gRPC error, success=false, or a nil
+	// character) we fall back to a zero-filled spawn so the handshake
+	// still completes — the player is already in the map, and a
+	// missing spawn is preferable to a torn connection. A send
+	// failure here does not tear the connection down either (the
+	// client will surface the missing sprite as a visible glitch,
+	// not a fatal protocol error).
+	spawn := h.buildSelfSpawn(conn, req, zResp)
 
 	var spawnBuf bytes.Buffer
 	if err := spawn.Encode(&spawnBuf); err != nil {
@@ -603,6 +592,144 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn *domain.Connec
 			Msg("send ZC_SPAWN_UNIT failed; map enter partially delivered")
 	}
 	return nil
+}
+
+// buildSelfSpawn assembles the ZC_SPAWN_UNIT response for the player's
+// own entity. The character-specific fields (name, class, level, HP,
+// hair, equipment, sex) come from identity.GetCharacter; on any
+// failure the function logs a warning and returns a zero-filled
+// fallback so the map enter handshake always completes. The caller
+// (handleCZEnter) decides how to surface the send.
+func (h *DispatchHandler) buildSelfSpawn(
+	conn *domain.ConnectionInfo,
+	req packet.CZEnterRequest,
+	zResp *zonev1.EnterZoneResponse,
+) packet.SpawnUnitResponse {
+	char, err := h.fetchCharacterForSpawn(conn, req)
+	if err != nil {
+		// Logged by fetchCharacterForSpawn; the fallback below gives
+		// the client a usable, if unstyled, sprite.
+		_ = err
+	}
+
+	spawn := packet.SpawnUnitResponse{
+		ObjectType: 0, // TYPE_PC — the only value the gateway emits today.
+		AID:        conn.AccountID,
+		// GID is the entity ID (rathena's `id`). For the PC self-spawn
+		// this is the character's own char_id, not the account_id —
+		// the client uses GID to attribute local input back to the
+		// entity on the map and a mismatch would break per-entity
+		// chat and move broadcasts.
+		GID:   req.CharID,
+		Speed: 150,
+		PosX:  clampMapCoord(zResp.GetMapX()),
+		PosY:  clampMapCoord(zResp.GetMapY()),
+		Dir:   0,
+		XSize: 5,
+		YSize: 5,
+		Sex:   req.Sex,
+	}
+
+	if char == nil {
+		// Fallback values match the pre-M7a behaviour: a known-good
+		// wire shape with zero-filled character-specific fields.
+		// CLevel=1 / MaxHP=1 / HP=1 / Name="" render as a default
+		// sprite on every client we care about; the player is still
+		// in the map and can chat / move.
+		spawn.CLevel = 1
+		spawn.MaxHP = 1
+		spawn.HP = 1
+		return spawn
+	}
+
+	spawn.Job = int16(clampUint16(char.GetClassId())) //nolint:gosec // wire slot is 16-bit
+	spawn.Head = clampUint16(char.GetHair())
+	spawn.Weapon = char.GetWeapon()
+	spawn.Shield = char.GetShield()
+	// Accessory / Accessory2 / Accessory3 carry the head_bottom /
+	// head_top / head_mid view sprites in rAthena's clif_spawn
+	// packing order. clampUint16 saturates > 65535 values to 0
+	// (sentinel) so a misconfigured row visibly fails rather than
+	// silently wraps; the schema caps these columns at smallint so
+	// the clamp never fires in practice.
+	spawn.Accessory = clampUint16(char.GetHeadBottom())
+	spawn.Accessory2 = clampUint16(char.GetHeadTop())
+	spawn.Accessory3 = clampUint16(char.GetHeadMid())
+	spawn.HeadPalette = int16(clampUint16(char.GetHairColor()))    //nolint:gosec // wire slot is 16-bit
+	spawn.BodyPalette = int16(clampUint16(char.GetClothesColor())) //nolint:gosec // wire slot is 16-bit
+	spawn.Robe = clampUint16(char.GetRobe())
+	spawn.Sex = uint8(clampUint16(char.GetSex()))          //nolint:gosec // wire slot is 8-bit
+	spawn.CLevel = int16(clampUint16(char.GetBaseLevel())) //nolint:gosec // wire slot is 16-bit
+	// MaxHP / HP come in as uint32 from the proto and go out as
+	// int32 on the wire; rAthena caps max_hp at int32 (2^31 - 1)
+	// in pc.cpp::pc_setnewpc, so the conversion is safe in
+	// practice — annotate so gosec does not flag it.
+	spawn.MaxHP = int32(char.GetMaxHp()) //nolint:gosec // max_hp is int32 on the wire; values above 2^31-1 are impossible by rAthena's clamp
+	spawn.HP = int32(char.GetHp())       //nolint:gosec // ditto
+	spawn.Name = char.GetName()
+	return spawn
+}
+
+// fetchCharacterForSpawn invokes identity.GetCharacter and returns
+// the resulting CharacterDetail. Any failure — gRPC error, nil
+// response, success=false, or an internal error from the handler — is
+// logged and returns (nil, err) so buildSelfSpawn can fall back to
+// the zero-filled shape. The handshake is never blocked on identity
+// availability.
+func (h *DispatchHandler) fetchCharacterForSpawn(
+	conn *domain.ConnectionInfo,
+	req packet.CZEnterRequest,
+) (*identityv1.CharacterDetail, error) {
+	charResp, err := h.identity.GetCharacter(context.Background(), &identityv1.GetCharacterRequest{
+		AccountId: req.AccountID,
+		CharId:    req.CharID,
+	})
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled); clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint32("cid", req.CharID).
+				Msg("identity GetCharacter cancelled (client gone)")
+			return nil, fmt.Errorf("identity GetCharacter (client gone): %w", err)
+		}
+		st, _ := status.FromError(err)
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Uint32("cid", req.CharID).
+			Str("grpc_code", st.Code().String()).
+			Msg("identity GetCharacter RPC failed; falling back to zero-filled spawn")
+		return nil, fmt.Errorf("identity GetCharacter (cid=%d): %w", req.CharID, err)
+	}
+	if charResp == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Uint32("cid", req.CharID).
+			Msg("identity returned nil GetCharacter response; falling back to zero-filled spawn")
+		return nil, nil
+	}
+	if !charResp.GetSuccess() {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Uint32("cid", req.CharID).
+			Str("error", charResp.GetError()).
+			Msg("identity GetCharacter returned success=false; falling back to zero-filled spawn")
+		return nil, nil
+	}
+	char := charResp.GetCharacter()
+	if char == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Uint32("cid", req.CharID).
+			Msg("identity GetCharacter returned nil character; falling back to zero-filled spawn")
+		return nil, nil
+	}
+	return char, nil
 }
 
 // handleCZRequestMove forwards CZ_REQUEST_MOVE to zone.MoveEntity and

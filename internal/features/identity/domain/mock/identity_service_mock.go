@@ -41,6 +41,21 @@ func (m *MockIdentityService) EXPECT() *MockIdentityServiceMockRecorder {
 	return m.recorder
 }
 
+// GetCharacter mocks base method.
+func (m *MockIdentityService) GetCharacter(ctx context.Context, accountID, charID uint32) (*domain.CharacterSummary, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCharacter", ctx, accountID, charID)
+	ret0, _ := ret[0].(*domain.CharacterSummary)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetCharacter indicates an expected call of GetCharacter.
+func (mr *MockIdentityServiceMockRecorder) GetCharacter(ctx, accountID, charID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCharacter", reflect.TypeOf((*MockIdentityService)(nil).GetCharacter), ctx, accountID, charID)
+}
+
 // ListCharacters mocks base method.
 func (m *MockIdentityService) ListCharacters(ctx context.Context, accountID uint32) ([]domain.CharacterSummary, error) {
 	m.ctrl.T.Helper()

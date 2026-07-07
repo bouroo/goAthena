@@ -120,6 +120,84 @@ func (h *grpcHandler) GetCharacterList(
 	}, nil
 }
 
+// GetCharacter handles the per-character detail fetch used by the
+// gateway to populate the entity spawn packet. Unlike the other
+// IdentityService methods, a "not found" outcome is encoded inside the
+// response as success=false (with a short error string) rather than a
+// gRPC status: the gateway treats a missing character as a soft
+// failure and falls back to a zero-filled spawn packet so the map
+// enter handshake still completes.
+//
+// GORM / Valkey outages still surface as gRPC Internal so the gateway
+// can distinguish "data is missing" from "backend is down" by status
+// code.
+func (h *grpcHandler) GetCharacter(
+	ctx context.Context,
+	req *identityv1.GetCharacterRequest,
+) (*identityv1.GetCharacterResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 || req.GetCharId() == 0 {
+		// Reject zero keys with InvalidArgument so a buggy caller
+		// cannot trigger a doomed round-trip; the gateway's success
+		// fallback would otherwise silently swallow the malformed
+		// request.
+		return nil, status.Error(codes.InvalidArgument, "account_id and char_id must be non-zero")
+	}
+
+	char, err := h.svc.GetCharacter(ctx, req.GetAccountId(), req.GetCharId())
+	if err != nil {
+		if errors.Is(err, domain.ErrCharacterNotFound) {
+			return &identityv1.GetCharacterResponse{
+				Success: false,
+				Error:   "character not found",
+			}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "get character: %v", err)
+	}
+
+	return &identityv1.GetCharacterResponse{
+		Success: true,
+		Character: &identityv1.CharacterDetail{
+			CharId:       char.CharID,
+			Name:         char.Name,
+			ClassId:      uint32(char.Class),
+			BaseLevel:    char.BaseLevel,
+			JobLevel:     char.JobLevel,
+			Hp:           char.HP,
+			MaxHp:        char.MaxHP,
+			Sp:           char.SP,
+			MaxSp:        char.MaxSP,
+			Hair:         uint32(char.Hair),
+			HairColor:    uint32(char.HairColor),
+			ClothesColor: uint32(char.ClothesColor),
+			Weapon:       uint32(char.Weapon),
+			Shield:       uint32(char.Shield),
+			HeadTop:      uint32(char.HeadTop),
+			HeadMid:      uint32(char.HeadMid),
+			HeadBottom:   uint32(char.HeadBottom),
+			Robe:         uint32(char.Robe),
+			Sex:          sexToProtoByte(char.Sex),
+		},
+	}, nil
+}
+
+// sexToProtoByte maps the domain Sex string onto the uint32 the proto
+// expects. The proto field is uint32 for forward-compat with future
+// 4-state sex enums; today we use the kRO 0=F/1=M/2=S convention.
+func sexToProtoByte(s domain.Sex) uint32 {
+	switch s {
+	case domain.SexFemale:
+		return 0
+	case domain.SexMale:
+		return 1
+	case domain.SexServer:
+		return 2
+	}
+	return 0
+}
+
 // mapAuthMethod converts the proto AuthMethod enum into the domain
 // PasswordEncoding used by the service. SSOs, pc-bang and channel
 // variants all carry the same plaintext / MD5 credential as their base

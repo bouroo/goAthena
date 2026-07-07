@@ -646,6 +646,306 @@ func (x *GetCharacterListResponse) GetPremiumEnd() uint32 {
 	return 0
 }
 
+type GetCharacterRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCharacterRequest) Reset() {
+	*x = GetCharacterRequest{}
+	mi := &file_identity_v1_identity_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCharacterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCharacterRequest) ProtoMessage() {}
+
+func (x *GetCharacterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCharacterRequest.ProtoReflect.Descriptor instead.
+func (*GetCharacterRequest) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *GetCharacterRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *GetCharacterRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+type CharacterDetail struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CharId        uint32                 `protobuf:"varint,1,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	ClassId       uint32                 `protobuf:"varint,3,opt,name=class_id,json=classId,proto3" json:"class_id,omitempty"`
+	BaseLevel     uint32                 `protobuf:"varint,4,opt,name=base_level,json=baseLevel,proto3" json:"base_level,omitempty"`
+	JobLevel      uint32                 `protobuf:"varint,5,opt,name=job_level,json=jobLevel,proto3" json:"job_level,omitempty"`
+	Hp            uint32                 `protobuf:"varint,6,opt,name=hp,proto3" json:"hp,omitempty"`
+	MaxHp         uint32                 `protobuf:"varint,7,opt,name=max_hp,json=maxHp,proto3" json:"max_hp,omitempty"`
+	Sp            uint32                 `protobuf:"varint,8,opt,name=sp,proto3" json:"sp,omitempty"`
+	MaxSp         uint32                 `protobuf:"varint,9,opt,name=max_sp,json=maxSp,proto3" json:"max_sp,omitempty"`
+	Hair          uint32                 `protobuf:"varint,10,opt,name=hair,proto3" json:"hair,omitempty"`
+	HairColor     uint32                 `protobuf:"varint,11,opt,name=hair_color,json=hairColor,proto3" json:"hair_color,omitempty"`
+	ClothesColor  uint32                 `protobuf:"varint,12,opt,name=clothes_color,json=clothesColor,proto3" json:"clothes_color,omitempty"`
+	Weapon        uint32                 `protobuf:"varint,13,opt,name=weapon,proto3" json:"weapon,omitempty"`
+	Shield        uint32                 `protobuf:"varint,14,opt,name=shield,proto3" json:"shield,omitempty"`
+	HeadTop       uint32                 `protobuf:"varint,15,opt,name=head_top,json=headTop,proto3" json:"head_top,omitempty"`
+	HeadMid       uint32                 `protobuf:"varint,16,opt,name=head_mid,json=headMid,proto3" json:"head_mid,omitempty"`
+	HeadBottom    uint32                 `protobuf:"varint,17,opt,name=head_bottom,json=headBottom,proto3" json:"head_bottom,omitempty"`
+	Robe          uint32                 `protobuf:"varint,18,opt,name=robe,proto3" json:"robe,omitempty"`
+	Sex           uint32                 `protobuf:"varint,19,opt,name=sex,proto3" json:"sex,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CharacterDetail) Reset() {
+	*x = CharacterDetail{}
+	mi := &file_identity_v1_identity_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CharacterDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CharacterDetail) ProtoMessage() {}
+
+func (x *CharacterDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CharacterDetail.ProtoReflect.Descriptor instead.
+func (*CharacterDetail) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *CharacterDetail) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CharacterDetail) GetClassId() uint32 {
+	if x != nil {
+		return x.ClassId
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetBaseLevel() uint32 {
+	if x != nil {
+		return x.BaseLevel
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetJobLevel() uint32 {
+	if x != nil {
+		return x.JobLevel
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetHp() uint32 {
+	if x != nil {
+		return x.Hp
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetMaxHp() uint32 {
+	if x != nil {
+		return x.MaxHp
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetSp() uint32 {
+	if x != nil {
+		return x.Sp
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetMaxSp() uint32 {
+	if x != nil {
+		return x.MaxSp
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetHair() uint32 {
+	if x != nil {
+		return x.Hair
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetHairColor() uint32 {
+	if x != nil {
+		return x.HairColor
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetClothesColor() uint32 {
+	if x != nil {
+		return x.ClothesColor
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetWeapon() uint32 {
+	if x != nil {
+		return x.Weapon
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetShield() uint32 {
+	if x != nil {
+		return x.Shield
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetHeadTop() uint32 {
+	if x != nil {
+		return x.HeadTop
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetHeadMid() uint32 {
+	if x != nil {
+		return x.HeadMid
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetHeadBottom() uint32 {
+	if x != nil {
+		return x.HeadBottom
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetRobe() uint32 {
+	if x != nil {
+		return x.Robe
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetSex() uint32 {
+	if x != nil {
+		return x.Sex
+	}
+	return 0
+}
+
+type GetCharacterResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Character     *CharacterDetail       `protobuf:"bytes,2,opt,name=character,proto3" json:"character,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCharacterResponse) Reset() {
+	*x = GetCharacterResponse{}
+	mi := &file_identity_v1_identity_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCharacterResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCharacterResponse) ProtoMessage() {}
+
+func (x *GetCharacterResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCharacterResponse.ProtoReflect.Descriptor instead.
+func (*GetCharacterResponse) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetCharacterResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *GetCharacterResponse) GetCharacter() *CharacterDetail {
+	if x != nil {
+		return x.Character
+	}
+	return nil
+}
+
+func (x *GetCharacterResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_identity_v1_identity_proto protoreflect.FileDescriptor
 
 const file_identity_v1_identity_proto_rawDesc = "" +
@@ -705,7 +1005,39 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"totalSlots\x12#\n" +
 	"\rpremium_start\x18\x03 \x01(\rR\fpremiumStart\x12\x1f\n" +
 	"\vpremium_end\x18\x04 \x01(\rR\n" +
-	"premiumEnd*\xba\x01\n" +
+	"premiumEnd\"M\n" +
+	"\x13GetCharacterRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\"\xe8\x03\n" +
+	"\x0fCharacterDetail\x12\x17\n" +
+	"\achar_id\x18\x01 \x01(\rR\x06charId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x19\n" +
+	"\bclass_id\x18\x03 \x01(\rR\aclassId\x12\x1d\n" +
+	"\n" +
+	"base_level\x18\x04 \x01(\rR\tbaseLevel\x12\x1b\n" +
+	"\tjob_level\x18\x05 \x01(\rR\bjobLevel\x12\x0e\n" +
+	"\x02hp\x18\x06 \x01(\rR\x02hp\x12\x15\n" +
+	"\x06max_hp\x18\a \x01(\rR\x05maxHp\x12\x0e\n" +
+	"\x02sp\x18\b \x01(\rR\x02sp\x12\x15\n" +
+	"\x06max_sp\x18\t \x01(\rR\x05maxSp\x12\x12\n" +
+	"\x04hair\x18\n" +
+	" \x01(\rR\x04hair\x12\x1d\n" +
+	"\n" +
+	"hair_color\x18\v \x01(\rR\thairColor\x12#\n" +
+	"\rclothes_color\x18\f \x01(\rR\fclothesColor\x12\x16\n" +
+	"\x06weapon\x18\r \x01(\rR\x06weapon\x12\x16\n" +
+	"\x06shield\x18\x0e \x01(\rR\x06shield\x12\x19\n" +
+	"\bhead_top\x18\x0f \x01(\rR\aheadTop\x12\x19\n" +
+	"\bhead_mid\x18\x10 \x01(\rR\aheadMid\x12\x1f\n" +
+	"\vhead_bottom\x18\x11 \x01(\rR\n" +
+	"headBottom\x12\x12\n" +
+	"\x04robe\x18\x12 \x01(\rR\x04robe\x12\x10\n" +
+	"\x03sex\x18\x13 \x01(\rR\x03sex\"\x82\x01\n" +
+	"\x14GetCharacterResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12:\n" +
+	"\tcharacter\x18\x02 \x01(\v2\x1c.identity.v1.CharacterDetailR\tcharacter\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error*\xba\x01\n" +
 	"\n" +
 	"AuthMethod\x12\x1b\n" +
 	"\x17AUTH_METHOD_UNSPECIFIED\x10\x00\x12\x18\n" +
@@ -722,10 +1054,11 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\x14AUTH_RESULT_REJECTED\x10\x02\x12\x16\n" +
 	"\x12AUTH_RESULT_BANNED\x10\x03\x12!\n" +
 	"\x1dAUTH_RESULT_ALREADY_LOGGED_IN\x10\x04\x12\x1d\n" +
-	"\x19AUTH_RESULT_SERVER_CLOSED\x10\x052\xc7\x01\n" +
+	"\x19AUTH_RESULT_SERVER_CLOSED\x10\x052\x9c\x02\n" +
 	"\x0fIdentityService\x12S\n" +
 	"\fAuthenticate\x12 .identity.v1.AuthenticateRequest\x1a!.identity.v1.AuthenticateResponse\x12_\n" +
-	"\x10GetCharacterList\x12$.identity.v1.GetCharacterListRequest\x1a%.identity.v1.GetCharacterListResponseB:Z8github.com/bouroo/goAthena/api/pb/identity/v1;identityv1b\x06proto3"
+	"\x10GetCharacterList\x12$.identity.v1.GetCharacterListRequest\x1a%.identity.v1.GetCharacterListResponse\x12S\n" +
+	"\fGetCharacter\x12 .identity.v1.GetCharacterRequest\x1a!.identity.v1.GetCharacterResponseB:Z8github.com/bouroo/goAthena/api/pb/identity/v1;identityv1b\x06proto3"
 
 var (
 	file_identity_v1_identity_proto_rawDescOnce sync.Once
@@ -740,7 +1073,7 @@ func file_identity_v1_identity_proto_rawDescGZIP() []byte {
 }
 
 var file_identity_v1_identity_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_identity_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_identity_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_identity_v1_identity_proto_goTypes = []any{
 	(AuthMethod)(0),                  // 0: identity.v1.AuthMethod
 	(AuthResult)(0),                  // 1: identity.v1.AuthResult
@@ -750,21 +1083,27 @@ var file_identity_v1_identity_proto_goTypes = []any{
 	(*GetCharacterListRequest)(nil),  // 5: identity.v1.GetCharacterListRequest
 	(*CharacterInfo)(nil),            // 6: identity.v1.CharacterInfo
 	(*GetCharacterListResponse)(nil), // 7: identity.v1.GetCharacterListResponse
+	(*GetCharacterRequest)(nil),      // 8: identity.v1.GetCharacterRequest
+	(*CharacterDetail)(nil),          // 9: identity.v1.CharacterDetail
+	(*GetCharacterResponse)(nil),     // 10: identity.v1.GetCharacterResponse
 }
 var file_identity_v1_identity_proto_depIdxs = []int32{
-	0, // 0: identity.v1.AuthenticateRequest.method:type_name -> identity.v1.AuthMethod
-	1, // 1: identity.v1.AuthenticateResponse.result:type_name -> identity.v1.AuthResult
-	4, // 2: identity.v1.AuthenticateResponse.char_servers:type_name -> identity.v1.CharServerInfo
-	6, // 3: identity.v1.GetCharacterListResponse.characters:type_name -> identity.v1.CharacterInfo
-	2, // 4: identity.v1.IdentityService.Authenticate:input_type -> identity.v1.AuthenticateRequest
-	5, // 5: identity.v1.IdentityService.GetCharacterList:input_type -> identity.v1.GetCharacterListRequest
-	3, // 6: identity.v1.IdentityService.Authenticate:output_type -> identity.v1.AuthenticateResponse
-	7, // 7: identity.v1.IdentityService.GetCharacterList:output_type -> identity.v1.GetCharacterListResponse
-	6, // [6:8] is the sub-list for method output_type
-	4, // [4:6] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	0,  // 0: identity.v1.AuthenticateRequest.method:type_name -> identity.v1.AuthMethod
+	1,  // 1: identity.v1.AuthenticateResponse.result:type_name -> identity.v1.AuthResult
+	4,  // 2: identity.v1.AuthenticateResponse.char_servers:type_name -> identity.v1.CharServerInfo
+	6,  // 3: identity.v1.GetCharacterListResponse.characters:type_name -> identity.v1.CharacterInfo
+	9,  // 4: identity.v1.GetCharacterResponse.character:type_name -> identity.v1.CharacterDetail
+	2,  // 5: identity.v1.IdentityService.Authenticate:input_type -> identity.v1.AuthenticateRequest
+	5,  // 6: identity.v1.IdentityService.GetCharacterList:input_type -> identity.v1.GetCharacterListRequest
+	8,  // 7: identity.v1.IdentityService.GetCharacter:input_type -> identity.v1.GetCharacterRequest
+	3,  // 8: identity.v1.IdentityService.Authenticate:output_type -> identity.v1.AuthenticateResponse
+	7,  // 9: identity.v1.IdentityService.GetCharacterList:output_type -> identity.v1.GetCharacterListResponse
+	10, // 10: identity.v1.IdentityService.GetCharacter:output_type -> identity.v1.GetCharacterResponse
+	8,  // [8:11] is the sub-list for method output_type
+	5,  // [5:8] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_identity_v1_identity_proto_init() }
@@ -778,7 +1117,7 @@ func file_identity_v1_identity_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_identity_v1_identity_proto_rawDesc), len(file_identity_v1_identity_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   6,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

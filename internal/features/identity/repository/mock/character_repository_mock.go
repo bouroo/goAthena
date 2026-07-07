@@ -41,6 +41,21 @@ func (m *MockCharacterRepository) EXPECT() *MockCharacterRepositoryMockRecorder 
 	return m.recorder
 }
 
+// GetByID mocks base method.
+func (m *MockCharacterRepository) GetByID(ctx context.Context, accountID, charID uint32) (*domain.CharacterSummary, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetByID", ctx, accountID, charID)
+	ret0, _ := ret[0].(*domain.CharacterSummary)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetByID indicates an expected call of GetByID.
+func (mr *MockCharacterRepositoryMockRecorder) GetByID(ctx, accountID, charID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByID", reflect.TypeOf((*MockCharacterRepository)(nil).GetByID), ctx, accountID, charID)
+}
+
 // ListByAccount mocks base method.
 func (m *MockCharacterRepository) ListByAccount(ctx context.Context, accountID uint32, maxSlots int) ([]domain.CharacterSummary, error) {
 	m.ctrl.T.Helper()

@@ -17,6 +17,12 @@ service IdentityService {
   // GetCharacterList returns the character list for an authenticated account
   // (HC_ACCEPT_ENTER 0x6b). Called after the client connects to the char server.
   rpc GetCharacterList(GetCharacterListRequest) returns (GetCharacterListResponse);
+
+  // GetCharacter returns the full character detail (name, class, level,
+  // HP, hair, equipment, sex) for a single character on an authenticated
+  // account. The gateway calls this on CZ_ENTER to populate the entity
+  // spawn packet (ZC_SPAWN_UNIT 0x09fe) with real character data.
+  rpc GetCharacter(GetCharacterRequest) returns (GetCharacterResponse);
 }
 
 // AuthMethod identifies which CA_LOGIN variant the client sent.
@@ -91,4 +97,37 @@ message GetCharacterListResponse {
   uint32 total_slots = 2;
   uint32 premium_start = 3;
   uint32 premium_end = 4;
+}
+
+message GetCharacterRequest {
+  uint32 account_id = 1;
+  uint32 char_id = 2;
+}
+
+message CharacterDetail {
+  uint32 char_id = 1;
+  string name = 2;
+  uint32 class_id = 3;
+  uint32 base_level = 4;
+  uint32 job_level = 5;
+  uint32 hp = 6;
+  uint32 max_hp = 7;
+  uint32 sp = 8;
+  uint32 max_sp = 9;
+  uint32 hair = 10;
+  uint32 hair_color = 11;
+  uint32 clothes_color = 12;
+  uint32 weapon = 13;
+  uint32 shield = 14;
+  uint32 head_top = 15;
+  uint32 head_mid = 16;
+  uint32 head_bottom = 17;
+  uint32 robe = 18;
+  uint32 sex = 19;
+}
+
+message GetCharacterResponse {
+  bool success = 1;
+  CharacterDetail character = 2;
+  string error = 3;
 }

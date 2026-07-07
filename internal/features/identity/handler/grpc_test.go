@@ -324,3 +324,152 @@ func TestGetCharacterList_NilRequest_ReturnsInvalidArgument(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
+
+func TestGetCharacter_HappyPath(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	h := handler.NewGRPCHandler(svc)
+
+	svc.EXPECT().
+		GetCharacter(gomock.Any(), uint32(9), uint32(101)).
+		Return(&domain.CharacterSummary{
+			CharID:       101,
+			AccountID:    9,
+			Name:         "alpha",
+			Class:        7,
+			BaseLevel:    50,
+			JobLevel:     25,
+			HP:           1234,
+			MaxHP:        2000,
+			SP:           100,
+			MaxSP:        200,
+			Hair:         5,
+			HairColor:    2,
+			ClothesColor: 1,
+			Weapon:       1101,
+			Shield:       0,
+			HeadTop:      0,
+			HeadMid:      0,
+			HeadBottom:   0,
+			Robe:         0,
+			Sex:          domain.SexMale,
+		}, nil)
+
+	resp, err := h.GetCharacter(context.Background(), &identityv1.GetCharacterRequest{
+		AccountId: 9,
+		CharId:    101,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.True(t, resp.GetSuccess())
+	assert.Empty(t, resp.GetError())
+	require.NotNil(t, resp.GetCharacter())
+
+	d := resp.GetCharacter()
+	assert.Equal(t, uint32(101), d.GetCharId())
+	assert.Equal(t, "alpha", d.GetName())
+	assert.Equal(t, uint32(7), d.GetClassId())
+	assert.Equal(t, uint32(50), d.GetBaseLevel())
+	assert.Equal(t, uint32(25), d.GetJobLevel())
+	assert.Equal(t, uint32(1234), d.GetHp())
+	assert.Equal(t, uint32(2000), d.GetMaxHp())
+	assert.Equal(t, uint32(100), d.GetSp())
+	assert.Equal(t, uint32(200), d.GetMaxSp())
+	assert.Equal(t, uint32(5), d.GetHair())
+	assert.Equal(t, uint32(2), d.GetHairColor())
+	assert.Equal(t, uint32(1), d.GetClothesColor())
+	assert.Equal(t, uint32(1101), d.GetWeapon())
+	assert.Equal(t, uint32(0), d.GetShield())
+	assert.Equal(t, uint32(0), d.GetHeadTop())
+	assert.Equal(t, uint32(0), d.GetHeadMid())
+	assert.Equal(t, uint32(0), d.GetHeadBottom())
+	assert.Equal(t, uint32(0), d.GetRobe())
+	assert.Equal(t, uint32(1), d.GetSex(), "SexMale (M) must map to 1 (kRO male)")
+}
+
+func TestGetCharacter_NotFound_ReturnsSuccessFalse(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	h := handler.NewGRPCHandler(svc)
+
+	svc.EXPECT().
+		GetCharacter(gomock.Any(), uint32(9), uint32(101)).
+		Return(nil, domain.ErrCharacterNotFound)
+
+	resp, err := h.GetCharacter(context.Background(), &identityv1.GetCharacterRequest{
+		AccountId: 9,
+		CharId:    101,
+	})
+	require.NoError(t, err, "ErrCharacterNotFound must surface as success=false, not a gRPC status")
+	require.NotNil(t, resp)
+	assert.False(t, resp.GetSuccess())
+	assert.Nil(t, resp.GetCharacter())
+	assert.Equal(t, "character not found", resp.GetError())
+}
+
+func TestGetCharacter_InternalError_ReturnsInternalStatus(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	h := handler.NewGRPCHandler(svc)
+
+	svc.EXPECT().
+		GetCharacter(gomock.Any(), uint32(9), uint32(101)).
+		Return(nil, errors.New("db down"))
+
+	resp, err := h.GetCharacter(context.Background(), &identityv1.GetCharacterRequest{
+		AccountId: 9,
+		CharId:    101,
+	})
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.Internal, st.Code())
+	assert.Contains(t, st.Message(), "get character")
+}
+
+func TestGetCharacter_NilRequest_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	h := handler.NewGRPCHandler(svc)
+
+	resp, err := h.GetCharacter(context.Background(), nil)
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestGetCharacter_ZeroKeys_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	h := handler.NewGRPCHandler(svc)
+
+	// Service must not be called for zero keys.
+	cases := []struct {
+		name string
+		req  *identityv1.GetCharacterRequest
+	}{
+		{"zero account", &identityv1.GetCharacterRequest{AccountId: 0, CharId: 101}},
+		{"zero char", &identityv1.GetCharacterRequest{AccountId: 9, CharId: 0}},
+		{"both zero", &identityv1.GetCharacterRequest{AccountId: 0, CharId: 0}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp, err := h.GetCharacter(context.Background(), tc.req)
+			require.Error(t, err)
+			assert.Nil(t, resp)
+			st, ok := status.FromError(err)
+			require.True(t, ok)
+			assert.Equal(t, codes.InvalidArgument, st.Code())
+		})
+	}
+}

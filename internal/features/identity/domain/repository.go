@@ -44,6 +44,12 @@ type CharacterRepository interface {
 	// ascending. maxSlots caps the result to the effective slot count
 	// (MIN_CHARS or account.character_slots, whichever is greater).
 	ListByAccount(ctx context.Context, accountID uint32, maxSlots int) ([]CharacterSummary, error)
+	// GetByID fetches a single character by (accountID, charID). Returns
+	// ErrCharacterNotFound when no row matches. The (accountID, charID)
+	// compound key is the canonical rAthena ownership check
+	// (inter.cpp::char_clif_top) — a charID alone is not unique to an
+	// account, so callers that omit accountID risk cross-account reads.
+	GetByID(ctx context.Context, accountID, charID uint32) (*CharacterSummary, error)
 }
 
 // SessionRepository is the outbound port for session persistence, backed
