@@ -35,6 +35,7 @@ type Config struct {
 	Gateway  GatewayConfig  `mapstructure:"gateway" yaml:"gateway" validate:"required"`
 	Identity IdentityConfig `mapstructure:"identity" yaml:"identity" validate:"required"`
 	Zone     ZoneConfig     `mapstructure:"zone" yaml:"zone" validate:"required"`
+	Assets   AssetsConfig   `mapstructure:"assets" yaml:"assets"`
 	OTel     OTelConfig     `mapstructure:"otel" yaml:"otel" validate:"required"`
 	Log      LogConfig      `mapstructure:"log" yaml:"log" validate:"required"`
 }
@@ -189,6 +190,15 @@ type ZoneConfig struct {
 	DefaultMap    string        `mapstructure:"default_map" yaml:"default_map" env:"ZONE_DEFAULT_MAP"`
 	MoveSpeed     int           `mapstructure:"move_speed" yaml:"move_speed" env:"ZONE_MOVE_SPEED" validate:"min=50,max=1000"`
 	ShutdownGrace time.Duration `mapstructure:"shutdown_grace" yaml:"shutdown_grace" env:"ZONE_SHUTDOWN_GRACE" validate:"min=0"`
+}
+
+// AssetsConfig configures the GRF-backed HTTP asset server that serves
+// game files (sprites, textures, maps, Lua scripts) to roBrowser.
+// When Enabled is false, the asset server is not mounted.
+type AssetsConfig struct {
+	Enabled    bool   `mapstructure:"enabled" yaml:"enabled" env:"ASSETS_ENABLED"`
+	GRFDir     string `mapstructure:"grf_dir" yaml:"grf_dir" env:"ASSETS_GRF_DIR" validate:"required_with=Enabled"`
+	MaxCacheMB int64  `mapstructure:"max_cache_mb" yaml:"max_cache_mb" env:"ASSETS_MAX_CACHE_MB" validate:"min=0"`
 }
 
 // validate is the package-level validator instance.
@@ -363,6 +373,10 @@ func setDefaults(v *viper.Viper) {
 		"zone.move_speed":     150,
 		"zone.shutdown_grace": 30 * time.Second,
 
+		"assets.enabled":      false,
+		"assets.grf_dir":      "./data/grf",
+		"assets.max_cache_mb": 256,
+
 		"otel.exporter":     "none",
 		"otel.service_name": "goathena",
 		"otel.sampling":     1.0,
@@ -439,6 +453,10 @@ func leafBindings() []leafBinding {
 		{"zone.default_map", "ZONE_DEFAULT_MAP"},
 		{"zone.move_speed", "ZONE_MOVE_SPEED"},
 		{"zone.shutdown_grace", "ZONE_SHUTDOWN_GRACE"},
+
+		{"assets.enabled", "ASSETS_ENABLED"},
+		{"assets.grf_dir", "ASSETS_GRF_DIR"},
+		{"assets.max_cache_mb", "ASSETS_MAX_CACHE_MB"},
 
 		{"log.level", "LOG_LEVEL"},
 		{"log.format", "LOG_FORMAT"},

@@ -14,6 +14,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/app/common"
 	"github.com/bouroo/goAthena/internal/config"
+	assetsdi "github.com/bouroo/goAthena/internal/features/assets"
 	gatewaydi "github.com/bouroo/goAthena/internal/features/gateway/di"
 	"github.com/bouroo/goAthena/internal/features/gateway/handler"
 	"github.com/bouroo/goAthena/internal/shared/telemetry"
@@ -32,30 +33,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	defer func() {
 		_ = injector.Shutdown()
 	}()
-	do.ProvideValue(injector, cfg)
 
-	if err := telemetry.Register(ctx, injector); err != nil {
-		return fmt.Errorf("register telemetry: %w", err)
-	}
-
-	logger, err := do.Invoke[*zerolog.Logger](injector)
+	tcpHandler, wsHandler, logger, err := bootstrapGateway(ctx, cfg, injector)
 	if err != nil {
-		return fmt.Errorf("resolve logger: %w", err)
+		return err
 	}
 
-	if err := gatewaydi.Register(injector); err != nil {
-		return fmt.Errorf("register gateway feature: %w", err)
-	}
-
-	tcpHandler, err := do.Invoke[*handler.TCPHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve TCP handler: %w", err)
-	}
-
-	wsHandler, err := do.Invoke[*handler.WSHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve WS handler: %w", err)
-	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.App.ShutdownTimeout)
+	defer cancel()
 
 	logger.Info().
 		Str("version", common.Version).
@@ -85,10 +70,6 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		gnetErrCh <- nil
 	}()
 
-	shutdownTimeout := cfg.App.ShutdownTimeout
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancelShutdown()
-
 	select {
 	case <-ctx.Done():
 		logger.Info().Msg("gateway service shutting down")
@@ -113,4 +94,52 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}
 		return nil
 	}
+}
+
+// bootstrapGateway wires telemetry, registers all gateway-side features,
+// and resolves the TCP/WS handlers. Extracted from Run to keep the
+// gocyclo budget under 15. The caller owns the injector lifecycle.
+func bootstrapGateway(
+	ctx context.Context,
+	cfg *config.Config,
+	injector do.Injector,
+) (*handler.TCPHandler, *handler.WSHandler, *zerolog.Logger, error) {
+	do.ProvideValue(injector, cfg)
+
+	if err := telemetry.Register(ctx, injector); err != nil {
+		return nil, nil, nil, fmt.Errorf("register telemetry: %w", err)
+	}
+
+	logger, err := do.Invoke[*zerolog.Logger](injector)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("resolve logger: %w", err)
+	}
+
+	if err := gatewaydi.Register(injector); err != nil {
+		return nil, nil, nil, fmt.Errorf("register gateway feature: %w", err)
+	}
+
+	if err := assetsdi.Register(injector); err != nil {
+		return nil, nil, nil, fmt.Errorf("register assets feature: %w", err)
+	}
+
+	tcpHandler, err := do.Invoke[*handler.TCPHandler](injector)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("resolve TCP handler: %w", err)
+	}
+
+	wsHandler, err := do.Invoke[*handler.WSHandler](injector)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("resolve WS handler: %w", err)
+	}
+
+	// Wire the asset handler onto the WS server when present. The DI
+	// container only registers an *assets.AssetHandler when
+	// assets.enabled is true; a not-found error here just means the
+	// asset server is disabled — not a startup failure.
+	if assetHandler, assetErr := do.Invoke[*assetsdi.AssetHandler](injector); assetErr == nil {
+		wsHandler.WithAssetsHandler(assetHandler)
+	}
+
+	return tcpHandler, wsHandler, logger, nil
 }

@@ -388,6 +388,11 @@ func validConfig() *config.Config {
 			ZoneAddr:     "localhost:50052",
 			MapAddr:      "localhost:5121",
 		},
+		Assets: config.AssetsConfig{
+			Enabled:    false,
+			GRFDir:     "./data/grf",
+			MaxCacheMB: 256,
+		},
 		OTel: config.OTelConfig{
 			Exporter:    "none",
 			Endpoint:    "http://localhost:4318",

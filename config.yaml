@@ -78,6 +78,11 @@ zone:
   move_speed: 150
   shutdown_grace: 30s
 
+assets:
+  enabled: false
+  grf_dir: ./data/grf
+  max_cache_mb: 256
+
 log:
   level: info
   format: json
