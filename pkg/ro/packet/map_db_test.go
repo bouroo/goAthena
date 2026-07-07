@@ -47,8 +47,8 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewMapServerDB()
-	// 2 C→S + 3 S→C = 5.
-	const want = 5
+	// 2 C→S + 4 S→C = 6.
+	const want = 6
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -68,6 +68,7 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCACCEPTENTER, sizeZCAcceptEnter},
 		{HeaderZCREFUSEENTER, sizeZCRefuseEnter},
 		{HeaderZCNOTIFYPLAYERMOVE, sizeZCNotifyPlayerMove},
+		{HeaderZCSPAWNUNIT, sizeZCSpawnUnit},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

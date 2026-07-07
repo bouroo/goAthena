@@ -9,6 +9,8 @@ package packet
 //
 //	ZC_ACCEPT_ENTER  (S→C, sent on successful CZ_ENTER)
 //	ZC_REFUSE_ENTER  (S→C, sent on rejected CZ_ENTER)
+//	ZC_NOTIFY_PLAYERMOVE (S→C, sent on accepted CZ_REQUEST_MOVE)
+//	ZC_SPAWN_UNIT    (S→C, sent after ZC_ACCEPT_ENTER for own entity)
 //	CZ_ENTER         (C→S, client requests to enter the map server)
 //	CZ_REQUEST_MOVE  (C→S, client requests a single step in a cardinal dir)
 const (
@@ -20,6 +22,7 @@ const (
 	HeaderZCACCEPTENTER      uint16 = 0x02eb // rathena/src/map/packets.hpp:571 (ZC_ACCEPT_ENTER, PACKETVER >= 20160330 branch)
 	HeaderZCREFUSEENTER      uint16 = 0x0074 // rathena/src/map/packets.hpp:590 (ZC_REFUSE_ENTER)
 	HeaderZCNOTIFYPLAYERMOVE uint16 = 0x0087 // rathena/src/map/packets.hpp (ZC_NOTIFY_PLAYERMOVE)
+	HeaderZCSPAWNUNIT        uint16 = 0x09fe // rathena/src/map/packets.hpp ZC_SPAWN_UNIT (PACKETVER >= 20150513 branch)
 )
 
 // Fixed on-wire byte lengths derived from the packed struct layouts in
@@ -46,6 +49,21 @@ const (
 	// uint8 srcPos[3] + uint8 destPos[3] = 2+4+3+3 = 12
 	// (rathena/src/map/packets.hpp ZC_NOTIFY_PLAYERMOVE).
 	sizeZCNotifyPlayerMove = 12
+	// sizeZCSpawnUnit = uint16 packetType + uint16 packetLength +
+	// uint8 objectType + uint32 AID + uint32 GID + int16 speed + int16 bodyState
+	// + int16 healthState + int32 effectState + int16 job + uint16 head
+	// + uint32 weapon + uint32 shield + uint16 accessory + uint16 accessory2
+	// + uint16 accessory3 + int16 headPalette + int16 bodyPalette + int16 headDir
+	// + uint16 robe + uint32 GUID + int16 GEmblemVer + int16 honor
+	// + int32 virtue + uint8 isPKModeON + uint8 sex + uint8 posDir[3]
+	// + uint8 xSize + uint8 ySize + int16 clevel + int16 font
+	// + int32 maxHP + int32 HP + uint8 isBoss + int16 body + char name[24]
+	// = 2+2+1+4+4+2+2+2+4+2+2+4+4+2+2+2+2+2+2+2+4+2+2+4+1+1+3+1+1+2+2+4+4+1+2+24
+	// = 107 (rathena/src/map/packets.hpp ZC_SPAWN_UNIT, PACKETVER >= 20150513).
+	sizeZCSpawnUnit = 107
+	// sizeSpawnUnitName is the on-wire name field width in
+	// ZC_SPAWN_UNIT (rathena/src/map/packets.hpp ZC_SPAWN_UNIT::name).
+	sizeSpawnUnitName = 24
 )
 
 // NewMapServerDB returns a packet database pre-populated with all known
@@ -94,6 +112,12 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCNOTIFYPLAYERMOVE,
 		Name:      "ZC_NOTIFY_PLAYERMOVE",
 		Length:    sizeZCNotifyPlayerMove,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCSPAWNUNIT,
+		Name:      "ZC_SPAWN_UNIT",
+		Length:    sizeZCSpawnUnit,
 		Direction: DirectionServerToClient,
 	})
 
