@@ -91,17 +91,15 @@ func TestWSHandler_CZEnter_RealZoneGRPC_Bufconn(t *testing.T) {
 	}()
 	defer grpcServer.Stop()
 
-	// Real gRPC client dialing the bufconn listener.
-	dialCtx, dialCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer dialCancel()
-	conn, err := grpc.DialContext(
-		dialCtx,
-		"bufnet",
+	// Real gRPC client dialing the bufconn listener. grpc.NewClient is
+	// non-blocking; the passthrough resolver combined with a custom
+	// context dialer routes every call through bufconn.
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
 			return lis.Dial()
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
 	)
 	require.NoError(t, err, "bufconn dial")
 	defer func() { _ = conn.Close() }()
