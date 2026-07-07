@@ -251,7 +251,5 @@ func (r RefuseLoginResponse) validate() error {
 // rAthena's memcpy-with-trailing-zero-fill behavior for packed char[N] arrays.
 func writeFixedString(dst []byte, src string) {
 	copy(dst, src)
-	for i := len(src); i < len(dst); i++ {
-		dst[i] = 0
-	}
+	clear(dst[len(src):])
 }

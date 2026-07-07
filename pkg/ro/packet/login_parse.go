@@ -23,10 +23,13 @@ type CALoginRequest struct {
 
 // ParseCALogin parses a full 55-byte CA_LOGIN frame (including the 2-byte cmd
 // header) into a CALoginRequest. Returns a wrapped error if the frame is not
-// exactly 55 bytes.
+// exactly 55 bytes or its cmd header is not HeaderCALOGIN (0x0064).
 func ParseCALogin(frame []byte) (CALoginRequest, error) {
 	if len(frame) != sizeCALogin {
 		return CALoginRequest{}, fmt.Errorf("packet: parse CA_LOGIN: want %d bytes, got %d", sizeCALogin, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCALOGIN {
+		return CALoginRequest{}, fmt.Errorf("packet: parse CA_LOGIN: unexpected cmd 0x%04x", cmd)
 	}
 
 	return CALoginRequest{

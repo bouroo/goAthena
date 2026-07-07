@@ -77,6 +77,16 @@ func TestParseCALogin(t *testing.T) {
 			wantErr:    true,
 			wantErrSub: "0",
 		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, sizeCALogin)
+				writeLE16(f[0:], 0x0065)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
 	}
 
 	for _, tc := range tests {
