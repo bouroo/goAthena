@@ -173,3 +173,46 @@ func TestDB_Merge_DoesNotMutateSource(t *testing.T) {
 		t.Errorf("source entry mutated: got %+v ok=%v", def, ok)
 	}
 }
+
+func TestDB_Merge_ZeroValueReceiver(t *testing.T) {
+	t.Parallel()
+
+	// A zero-value &DB{} has a nil entries map; Merge must lazily
+	// initialize it instead of panicking on maps.Copy.
+	src := NewDB()
+	src.Register(Definition{ID: HeaderCHENTER, Name: "CH_ENTER", Length: sizeCHEnter})
+
+	dst := &DB{}
+	dst.Merge(src)
+
+	if got := dst.Size(); got != 1 {
+		t.Errorf("dst.Size() = %d, want 1", got)
+	}
+	def, ok := dst.Lookup(HeaderCHENTER)
+	if !ok {
+		t.Fatalf("Lookup CH_ENTER after Merge ok = false, want true")
+	}
+	if def.Name != "CH_ENTER" || def.Length != sizeCHEnter {
+		t.Errorf("merged def = %+v, want CH_ENTER/%d", def, sizeCHEnter)
+	}
+}
+
+func TestDB_Merge_NilOtherIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	// db.Merge(nil) must not panic and must leave the receiver unchanged
+	// (size stays the same, prior entries remain).
+	keep := Definition{ID: 0x0AAA, Name: "KEEP", Length: 3}
+	dst := NewDB()
+	dst.Register(keep)
+
+	dst.Merge(nil)
+
+	if got := dst.Size(); got != 1 {
+		t.Errorf("dst.Size() after Merge(nil) = %d, want 1", got)
+	}
+	def, ok := dst.Lookup(0x0AAA)
+	if !ok || def.Name != "KEEP" || def.Length != 3 {
+		t.Errorf("preserved entry lost after Merge(nil): %+v ok=%v", def, ok)
+	}
+}

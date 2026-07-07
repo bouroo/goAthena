@@ -115,6 +115,16 @@ func (db *DB) Size() int {
 //
 // This is how the gateway combines the login-server and char-server packet
 // sets into one DB without forcing each subsystem to know the other's IDs.
+//
+// Merge is nil-safe: a nil other is a no-op, and a zero-value receiver is
+// lazily initialized so external callers of the public package cannot panic
+// the database with `&DB{}` or `db.Merge(nil)`.
 func (db *DB) Merge(other *DB) {
+	if other == nil {
+		return
+	}
+	if db.entries == nil {
+		db.entries = make(map[uint16]Definition, len(other.entries))
+	}
 	maps.Copy(db.entries, other.entries)
 }
