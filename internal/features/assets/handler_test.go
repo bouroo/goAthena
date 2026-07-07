@@ -3,8 +3,12 @@
 package assets
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +17,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/image/bmp"
 )
 
 type stubReader struct {
@@ -339,4 +344,124 @@ func TestContentTypeFor(t *testing.T) {
 			require.Equal(t, want, contentTypeFor(name))
 		})
 	}
+}
+
+func makeTestBMP(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})
+	img.Set(1, 0, color.RGBA{G: 255, A: 255})
+	img.Set(0, 1, color.RGBA{B: 255, A: 255})
+	img.Set(1, 1, color.RGBA{R: 128, G: 128, B: 128, A: 255})
+	var buf bytes.Buffer
+	require.NoError(t, bmp.Encode(&buf, img))
+	return buf.Bytes()
+}
+
+func TestAssetHandler_BMPToPNG_Conversion(t *testing.T) {
+	t.Parallel()
+
+	logger := zerolog.New(io.Discard)
+	stub := &stubReader{files: map[string][]byte{
+		"data/texture/ok.bmp": makeTestBMP(t),
+	}}
+	h := NewAssetHandler(stub, logger)
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/data/texture/ok.bmp", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "image/png", rr.Header().Get("Content-Type"))
+
+	decoded, err := png.Decode(bytes.NewReader(rr.Body.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, image.Rect(0, 0, 2, 2), decoded.Bounds())
+
+	want := []color.RGBA{
+		{R: 255, A: 255},
+		{G: 255, A: 255},
+		{B: 255, A: 255},
+		{R: 128, G: 128, B: 128, A: 255},
+	}
+	for i, c := range want {
+		x := i % 2
+		y := i / 2
+		r, g, b, a := decoded.At(x, y).RGBA()
+		require.Equal(t, c.R, uint8(r>>8), "pixel %d R", i)
+		require.Equal(t, c.G, uint8(g>>8), "pixel %d G", i)
+		require.Equal(t, c.B, uint8(b>>8), "pixel %d B", i)
+		require.Equal(t, c.A, uint8(a>>8), "pixel %d A", i)
+	}
+}
+
+func TestAssetHandler_BMPToPNG_InvalidBMP_Fallback(t *testing.T) {
+	t.Parallel()
+
+	garbage := []byte{0x00, 0x01, 0x02, 0x03, 0xDE, 0xAD, 0xBE, 0xEF}
+	logger := zerolog.New(io.Discard)
+	stub := &stubReader{files: map[string][]byte{
+		"data/texture/bad.bmp": garbage,
+	}}
+	h := NewAssetHandler(stub, logger)
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/data/texture/bad.bmp", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "image/bmp", rr.Header().Get("Content-Type"))
+	require.Equal(t, garbage, rr.Body.Bytes())
+}
+
+func TestAssetHandler_NonBMP_NotConverted(t *testing.T) {
+	t.Parallel()
+
+	logger := zerolog.New(io.Discard)
+	originalPNG := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+	originalTXT := []byte("plain text body")
+	stub := &stubReader{files: map[string][]byte{
+		"data/x.png": originalPNG,
+		"data/x.txt": originalTXT,
+	}}
+	h := NewAssetHandler(stub, logger)
+
+	for _, tc := range []struct {
+		path     string
+		wantCT   string
+		wantBody []byte
+	}{
+		{"/assets/data/x.png", "image/png", originalPNG},
+		{"/assets/data/x.txt", "text/plain; charset=utf-8", originalTXT},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusOK, rr.Code, tc.path)
+		require.Equal(t, tc.wantCT, rr.Header().Get("Content-Type"), tc.path)
+		require.Equal(t, tc.wantBody, rr.Body.Bytes(), tc.path)
+	}
+}
+
+func TestConvertBMPToPNG_Success(t *testing.T) {
+	t.Parallel()
+
+	out, err := convertBMPToPNG(makeTestBMP(t))
+	require.NoError(t, err)
+	require.NotEmpty(t, out)
+	require.Equal(t, byte(0x89), out[0])
+	require.Equal(t, byte(0x50), out[1])
+
+	decoded, err := png.Decode(bytes.NewReader(out))
+	require.NoError(t, err)
+	require.Equal(t, image.Rect(0, 0, 2, 2), decoded.Bounds())
+}
+
+func TestConvertBMPToPNG_Invalid(t *testing.T) {
+	t.Parallel()
+
+	_, err := convertBMPToPNG([]byte("not a bmp"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decode bmp")
 }
