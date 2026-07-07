@@ -7,22 +7,26 @@
 //
 //  1. Validate config and build the DI injector.
 //  2. Wire infrastructure (Agones lifecycle, telemetry).
-//  3. Wire the zone feature (TickLoop + ZoneService).
-//  4. Start the tick loop in a background goroutine.
-//  5. Signal Agones Ready so the GameServer enters the GameServer
+//  3. Wire the zone feature (TickLoop + ZoneService + gRPC handler +
+//     *grpc.Server).
+//  4. Start the gRPC listener in a background goroutine.
+//  5. Start the tick loop in a background goroutine.
+//  6. Signal Agones Ready so the GameServer enters the GameServer
 //     state machine.
-//  6. Block until ctx is cancelled.
-//  7. On shutdown, wait for the tick loop to drain and signal Agones
-//     Shutdown.
+//  7. Block until ctx is cancelled.
+//  8. On shutdown, GracefulStop the gRPC server (so no new EnterZone
+//     calls arrive), drain the tick loop, and signal Agones Shutdown.
 package zone
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 
 	"github.com/rs/zerolog"
 	"github.com/samber/do/v2"
+	"google.golang.org/grpc"
 
 	"github.com/bouroo/goAthena/internal/app/common"
 	"github.com/bouroo/goAthena/internal/config"
@@ -44,13 +48,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}()
 	do.ProvideValue(injector, cfg)
 
-	if err := telemetry.Register(ctx, injector); err != nil {
-		return fmt.Errorf("register telemetry: %w", err)
-	}
-
-	logger, err := do.Invoke[*zerolog.Logger](injector)
+	logger, err := initInjector(ctx, injector)
 	if err != nil {
-		return fmt.Errorf("resolve logger: %w", err)
+		return err
 	}
 
 	logger.Info().
@@ -59,20 +59,23 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		Str("service", "zone").
 		Str("env", cfg.App.Environment).
 		Str("default_map", cfg.Zone.DefaultMap).
+		Str("grpc_addr", cfg.GRPCAddr()).
 		Dur("tick_rate", cfg.Zone.TickRate).
 		Msg("starting zone service")
 
 	agonesLifecycle := agones.New(ctx, logger)
 	do.ProvideValue(injector, agonesLifecycle)
 
-	if err := di.Register(injector); err != nil {
-		return fmt.Errorf("register zone feature: %w", err)
+	tickLoop, grpcServer, err := startComponents(injector)
+	if err != nil {
+		return err
 	}
 
-	tickLoop, err := di.ProvideTickLoop(injector)
-	if err != nil {
-		return fmt.Errorf("resolve tick loop: %w", err)
-	}
+	grpcServeErr := make(chan error, 1)
+	go func() {
+		logger.Info().Str("addr", cfg.GRPCAddr()).Msg("zone: grpc server starting")
+		grpcServeErr <- grpcServer.Serve(mustListen(cfg, logger))
+	}()
 
 	tickCtx, tickCancel := context.WithCancel(ctx)
 	tickDone := make(chan struct{})
@@ -90,8 +93,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	tickLoopSettle(tickLoop)
 
 	if err := agonesLifecycle.Ready(ctx); err != nil {
-		tickCancel()
-		<-tickDone
+		shutdown(ctx, grpcServer, grpcServeErr, tickCancel, tickDone, agonesLifecycle, logger)
 		// If the parent context is already cancelled we treat a Ready
 		// failure as a normal shutdown rather than a startup error.
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -106,24 +108,99 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	<-ctx.Done()
 	logger.Info().Msg("zone service shutting down")
 
-	// Stop the tick loop first so no new AOI broadcasts are issued while
-	// the Agones shutdown is in flight.
+	shutdown(ctx, grpcServer, grpcServeErr, tickCancel, tickDone, agonesLifecycle, logger)
+
+	return nil
+}
+
+// initInjector registers telemetry in the DI container and resolves the
+// structured logger. It returns a wrapped error per failure mode so Run
+// stays a flat linear sequence.
+func initInjector(ctx context.Context, injector do.Injector) (*zerolog.Logger, error) {
+	if err := telemetry.Register(ctx, injector); err != nil {
+		return nil, fmt.Errorf("register telemetry: %w", err)
+	}
+	logger, err := do.Invoke[*zerolog.Logger](injector)
+	if err != nil {
+		return nil, fmt.Errorf("resolve logger: %w", err)
+	}
+	return logger, nil
+}
+
+// startComponents wires the zone feature into the injector and resolves
+// the long-lived runtime dependencies (tick loop + gRPC server). It
+// returns the resolved values or a wrapped error.
+func startComponents(injector do.Injector) (*service.TickLoop, *grpc.Server, error) {
+	if err := di.Register(injector); err != nil {
+		return nil, nil, fmt.Errorf("register zone feature: %w", err)
+	}
+	tickLoop, err := di.ProvideTickLoop(injector)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve tick loop: %w", err)
+	}
+	grpcServer, err := di.ProvideGRPCServer(injector)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve grpc server: %w", err)
+	}
+	return tickLoop, grpcServer, nil
+}
+
+// mustListen binds the gRPC listener; the addr is taken from cfg.GRPCAddr.
+// The logger parameter is currently unused but kept for symmetry with the
+// rest of the startup sequence; future implementations may log bind
+// information here.
+func mustListen(cfg *config.Config, _ *zerolog.Logger) net.Listener {
+	lis, err := net.Listen("tcp", cfg.GRPCAddr())
+	if err != nil {
+		panic(fmt.Errorf("listen grpc %s: %w", cfg.GRPCAddr(), err))
+	}
+	return lis
+}
+
+// stopServers halts the gRPC server and drains its Serve goroutine's
+// outcome channel. GracefulStop returns before Serve does, so the
+// buffered channel is drained non-blockingly here; Serve publishes the
+// terminal error (typically grpc.ErrServerStopped) asynchronously.
+func stopServers(grpcServer *grpc.Server, grpcServeErr <-chan error, logger *zerolog.Logger) {
+	grpcServer.GracefulStop()
+	select {
+	case err := <-grpcServeErr:
+		if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			logger.Warn().Err(err).Msg("zone: grpc server stopped with error")
+		}
+	default:
+		// GracefulStop returns before Serve does; the goroutine will
+		// exit on its own and publish into grpcServeErr.
+	}
+}
+
+// shutdown performs the zone service shutdown sequence: stop accepting
+// new gRPC traffic, cancel the tick loop, then signal Agones Shutdown
+// and close the lifecycle. It is safe to call from either the normal
+// context-cancel path or the Agones Ready-failure path so cleanup is
+// identical regardless of when shutdown is triggered.
+func shutdown(
+	ctx context.Context,
+	grpcServer *grpc.Server,
+	grpcServeErr <-chan error,
+	tickCancel context.CancelFunc,
+	tickDone <-chan struct{},
+	agonesLifecycle agones.Lifecycle,
+	logger *zerolog.Logger,
+) {
+	stopServers(grpcServer, grpcServeErr, logger)
 	tickCancel()
 	select {
 	case <-tickDone:
 	case <-ctx.Done():
 		logger.Warn().Msg("zone: tick loop did not exit before shutdown deadline")
 	}
-
 	if err := agonesLifecycle.Shutdown(context.Background()); err != nil {
 		logger.Warn().Err(err).Msg("zone: agones shutdown failed")
 	}
-
 	if err := agonesLifecycle.Close(); err != nil {
 		logger.Warn().Err(err).Msg("zone: agones close failed")
 	}
-
-	return nil
 }
 
 // tickLoopSettle blocks briefly so the tick loop goroutine can enter
