@@ -193,6 +193,55 @@ func TestDispatchHandler_IdentityDown_RefusesWithSentinel99(t *testing.T) {
 	}
 }
 
+func TestDispatchHandler_NilResponse_RefusesWithSentinel99(t *testing.T) {
+	fake := &fakeIdentityClient{
+		authenticateFn: func(_ context.Context, _ *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error) {
+			return nil, nil
+		},
+	}
+	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t))
+	resp := &bufResponder{}
+	frame := buildCALogin(t, "tester", "pw")
+
+	if err := h.HandlePacket(context.Background(), domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, frame); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 26 {
+		t.Fatalf("refuse length = %d, want 26", len(out))
+	}
+	if out[0] != 0x3e || out[1] != 0x08 {
+		t.Fatalf("first two bytes = %x, want 0x3e 0x08 (AC_REFUSE_LOGIN)", out[:2])
+	}
+	if got := binary.LittleEndian.Uint32(out[2:6]); got != ErrIdentityUnavailableRefuse {
+		t.Fatalf("error code = %d, want %d (server-closed sentinel)", got, ErrIdentityUnavailableRefuse)
+	}
+}
+
+func TestDispatchHandler_CancelledContext_NoRefuseSent(t *testing.T) {
+	fake := &fakeIdentityClient{
+		authenticateFn: func(_ context.Context, _ *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error) {
+			return nil, status.Error(codes.Canceled, "client gone")
+		},
+	}
+	h := NewDispatchHandler(fake, 20250604, newDispatchTestLogger(t))
+	resp := &bufResponder{}
+	frame := buildCALogin(t, "tester", "pw")
+
+	// Pre-cancel the context to also cover the ctx.Err() != nil branch
+	// the handler checks alongside errors.Is(err, context.Canceled).
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := h.HandlePacket(ctx, domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCALOGIN, frame); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on cancelled ctx, want 0 (no refuse)", got)
+	}
+}
+
 func TestDispatchHandler_MalformedFrame_NoReplyNoError(t *testing.T) {
 	authCalls := 0
 	fake := &fakeIdentityClient{
@@ -275,6 +324,7 @@ func TestSplitHost(t *testing.T) {
 }
 
 func TestParseIPv4(t *testing.T) {
+	wantMapped := binary.BigEndian.Uint32([]byte{1, 2, 3, 4})
 	cases := []struct {
 		in   string
 		want uint32
@@ -283,13 +333,20 @@ func TestParseIPv4(t *testing.T) {
 		{"127.0.0.1", 0x7f000001},
 		{"", 0},
 		{"not-an-ip", 0},
-		{"::1", 0}, // IPv6 rejected for the IPv4 wire slot
+		{"::1", 0}, // plain IPv6 rejected for the IPv4 wire slot
 		{"1.2.3.4.5", 0},
+		// IPv4-mapped IPv6 (dual-stack) must normalize to the embedded IPv4.
+		{"::ffff:1.2.3.4", wantMapped},
 	}
 	for _, tc := range cases {
 		if got := parseIPv4(tc.in); got != tc.want {
 			t.Errorf("parseIPv4(%q) = 0x%x, want 0x%x", tc.in, got, tc.want)
 		}
+	}
+	// Equivalence assertion from the spec fix: the mapped and bare forms
+	// must collapse to the same wire value.
+	if got := parseIPv4("::ffff:1.2.3.4"); got != parseIPv4("1.2.3.4") {
+		t.Errorf("mapped IPv6 should equal bare IPv4: 0x%x vs 0x%x", got, parseIPv4("1.2.3.4"))
 	}
 }
 

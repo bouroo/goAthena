@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -85,6 +86,19 @@ func (h *DispatchHandler) HandlePacket(ctx context.Context, conn domain.Connecti
 
 	gResp, err := h.identity.Authenticate(ctx, authReq)
 	if err != nil {
+		// Distinguish a client that disconnected (ctx cancelled) from a
+		// real backend failure. The former is expected under load and
+		// must not generate a refuse — the conn is gone and SendPacket
+		// would either fail or panic on a closed writer.
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Str("user", req.Username).
+				Msg("identity call cancelled (client gone)")
+			_ = err
+			return nil
+		}
 		// Transport-level failure (identity down, deadline, network).
 		// Log with the gRPC status code so operators can correlate with
 		// identity service logs, then refuse the login with sentinel 99.
@@ -95,6 +109,17 @@ func (h *DispatchHandler) HandlePacket(ctx context.Context, conn domain.Connecti
 			Str("user", req.Username).
 			Str("grpc_code", st.Code().String()).
 			Msg("identity Authenticate RPC failed; refusing login")
+		return sendRefuse(resp, ErrIdentityUnavailableRefuse)
+	}
+
+	if gResp == nil {
+		// Buggy server returned (nil, nil). Treat as transport failure:
+		// refuse with the server-closed sentinel so the client gets a
+		// recognizable error rather than a hang.
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Str("user", req.Username).
+			Msg("identity returned nil response; refusing login")
 		return sendRefuse(resp, ErrIdentityUnavailableRefuse)
 	}
 
@@ -185,7 +210,11 @@ func parseIPv4(s string) uint32 {
 		return 0
 	}
 	addr, err := netip.ParseAddr(s)
-	if err != nil || !addr.Is4() {
+	if err != nil {
+		return 0
+	}
+	addr = addr.Unmap()
+	if !addr.Is4() {
 		return 0
 	}
 	b := addr.As4()
