@@ -24,15 +24,21 @@ import (
 //   - *grpc.ClientConn: a lazy connection to the identity service.
 //   - identityv1.IdentityServiceClient: the typed client built on the
 //     connection above.
-//   - *packet.DB: the login-server packet database.
-//   - domain.PacketHandler: M1b dispatch handler that forwards CA_LOGIN
-//     to identity and encodes AC_ACCEPT_LOGIN / AC_REFUSE_LOGIN.
+//   - *packet.DB: the merged login-server + char-server packet database.
+//   - domain.PacketHandler: M2b dispatch handler that handles CA_LOGIN,
+//     CH_ENTER, and CH_SELECT_CHAR.
 //   - *handler.TCPHandler: the gnet EventHandler for kRO TCP ingress.
 //   - *handler.WSHandler: the HTTP/WebSocket upgrade handler for the
 //     roBrowser ingress.
 func Register(c do.Injector) error {
 	do.Provide(c, func(_ do.Injector) (*packet.DB, error) {
-		return packet.NewLoginServerDB(), nil
+		// Merge char-server packet defs into the login-server DB so the
+		// codec can decode HC_ACCEPT_ENTER / HC_NOTIFY_ZONESVR / etc.
+		// on the wire without the dispatch layer caring which side
+		// they're on.
+		db := packet.NewLoginServerDB()
+		db.Merge(packet.NewCharServerDB())
+		return db, nil
 	})
 
 	do.Provide(c, func(i do.Injector) (*grpc.ClientConn, error) {
@@ -69,7 +75,18 @@ func Register(c do.Injector) error {
 		if err != nil {
 			return nil, err
 		}
-		return service.NewDispatchHandler(identityClient, cfg.Gateway.Packetver, *logger), nil
+		zoneHost, zonePort, err := service.SplitMapAddr(cfg.Gateway.MapAddr)
+		if err != nil {
+			return nil, fmt.Errorf("split gateway.map_addr %q: %w", cfg.Gateway.MapAddr, err)
+		}
+		return service.NewDispatchHandler(
+			identityClient,
+			cfg.Gateway.Packetver,
+			*logger,
+			cfg.Zone.DefaultMap,
+			zoneHost,
+			zonePort,
+		), nil
 	})
 
 	do.Provide(c, func(i do.Injector) (*handler.TCPHandler, error) {

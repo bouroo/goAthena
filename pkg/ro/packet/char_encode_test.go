@@ -4,6 +4,7 @@ package packet
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"testing"
 )
@@ -228,5 +229,162 @@ func TestNotifyZoneServerResponse_Size(t *testing.T) {
 
 	if got := (NotifyZoneServerResponse{}).Size(); got != sizeHCNotifyZone {
 		t.Errorf("Size() = %d, want %d", got, sizeHCNotifyZone)
+	}
+}
+
+// TestAcceptEnterResponse_Encode_ZeroChars asserts the 27-byte header-only
+// layout for an account with no characters.
+func TestAcceptEnterResponse_Encode_ZeroChars(t *testing.T) {
+	t.Parallel()
+
+	resp := AcceptEnterResponse{
+		Total:        9,
+		PremiumStart: 0,
+		PremiumEnd:   0,
+		Extension:    "",
+		Characters:   nil,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v, want nil", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != acceptEnterHeaderSize {
+		t.Fatalf("len = %d, want %d", len(got), acceptEnterHeaderSize)
+	}
+	// Header bytes: little-endian 0x006b → 0x6b 0x00.
+	if got[0] != 0x6b || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want 6b 00", got[0], got[1])
+	}
+	if pl := binary.LittleEndian.Uint16(got[2:4]); pl != acceptEnterHeaderSize {
+		t.Errorf("packetLength = %d, want %d", pl, acceptEnterHeaderSize)
+	}
+	if got[4] != 9 {
+		t.Errorf("total byte = %d, want 9", got[4])
+	}
+}
+
+// TestAcceptEnterResponse_Encode_OneChar asserts 27 + 175 = 202 bytes and
+// the embedded CHARACTER_INFO starts at offset 27.
+func TestAcceptEnterResponse_Encode_OneChar(t *testing.T) {
+	t.Parallel()
+
+	ch := CharacterInfo{
+		GID:      42,
+		Name:     "Hero",
+		MapName:  "prontera",
+		Level:    99,
+		Job:      7, // Knight-class placeholder
+		JobLevel: 50,
+		CharNum:  0,
+		Str:      9,
+		Agi:      9,
+		Vit:      9,
+		Int:      9,
+		Dex:      9,
+		Luk:      9,
+		Sex:      1,
+	}
+	resp := AcceptEnterResponse{
+		Total:      1,
+		Characters: []CharacterInfo{ch},
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v, want nil", err)
+	}
+	got := buf.Bytes()
+
+	wantLen := acceptEnterHeaderSize + CharacterInfoSize
+	if len(got) != wantLen {
+		t.Fatalf("len = %d, want %d (header %d + 1*%d char)", len(got), wantLen, acceptEnterHeaderSize, CharacterInfoSize)
+	}
+	if pl := binary.LittleEndian.Uint16(got[2:4]); int(pl) != wantLen {
+		t.Errorf("packetLength = %d, want %d", pl, wantLen)
+	}
+	if got[0] != 0x6b || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want 6b 00", got[0], got[1])
+	}
+	// The embedded CHARACTER_INFO starts at offset 27; its GID occupies
+	// [27:31] little-endian.
+	if g := binary.LittleEndian.Uint32(got[acceptEnterHeaderSize : acceptEnterHeaderSize+4]); g != 42 {
+		t.Errorf("embedded GID at [%d:%d] = %d, want 42",
+			acceptEnterHeaderSize, acceptEnterHeaderSize+4, g)
+	}
+}
+
+// TestAcceptEnterResponse_Encode_TwoChars asserts 27 + 2*175 = 377 bytes.
+func TestAcceptEnterResponse_Encode_TwoChars(t *testing.T) {
+	t.Parallel()
+
+	resp := AcceptEnterResponse{
+		Total: 2,
+		Characters: []CharacterInfo{
+			{GID: 1, Name: "A", MapName: "prontera", Sex: 1},
+			{GID: 2, Name: "B", MapName: "geffen", Sex: 0},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v, want nil", err)
+	}
+	got := buf.Bytes()
+
+	wantLen := acceptEnterHeaderSize + 2*CharacterInfoSize
+	if len(got) != wantLen {
+		t.Fatalf("len = %d, want %d (header %d + 2*%d char)", len(got), wantLen, acceptEnterHeaderSize, CharacterInfoSize)
+	}
+	if pl := binary.LittleEndian.Uint16(got[2:4]); int(pl) != wantLen {
+		t.Errorf("packetLength = %d, want %d", pl, wantLen)
+	}
+	// GID of the first embedded character.
+	if g := binary.LittleEndian.Uint32(got[acceptEnterHeaderSize : acceptEnterHeaderSize+4]); g != 1 {
+		t.Errorf("first embedded GID = %d, want 1", g)
+	}
+	// GID of the second embedded character at offset 27 + 175.
+	secondStart := acceptEnterHeaderSize + CharacterInfoSize
+	if g := binary.LittleEndian.Uint32(got[secondStart : secondStart+4]); g != 2 {
+		t.Errorf("second embedded GID at offset %d = %d, want 2", secondStart, g)
+	}
+}
+
+// TestAcceptEnterResponse_Encode_ExtensionOverflow asserts a too-long
+// extension string fails with the sentinel error and writes zero bytes.
+func TestAcceptEnterResponse_Encode_ExtensionOverflow(t *testing.T) {
+	t.Parallel()
+
+	resp := AcceptEnterResponse{
+		Extension: string(bytes.Repeat([]byte("E"), acceptEnterExtensionSlot+1)),
+	}
+
+	var buf bytes.Buffer
+	err := resp.Encode(&buf)
+	if err == nil {
+		t.Fatalf("Encode err = nil, want error")
+	}
+	if !errors.Is(err, ErrExtensionTooLong) {
+		t.Errorf("Encode err = %v, want errors.Is(.., ErrExtensionTooLong)", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("partial output written: %d bytes (want 0 on error)", buf.Len())
+	}
+}
+
+// TestAcceptEnterResponse_Size verifies Size with 0, 1, and N characters.
+func TestAcceptEnterResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	if got := (AcceptEnterResponse{}).Size(); got != acceptEnterHeaderSize {
+		t.Errorf("Size() with 0 chars = %d, want %d", got, acceptEnterHeaderSize)
+	}
+	if got := (AcceptEnterResponse{Characters: []CharacterInfo{{}}}).Size(); got != acceptEnterHeaderSize+CharacterInfoSize {
+		t.Errorf("Size() with 1 char = %d, want %d", got, acceptEnterHeaderSize+CharacterInfoSize)
+	}
+	if got := (AcceptEnterResponse{Characters: []CharacterInfo{{}, {}}}).Size(); got != acceptEnterHeaderSize+2*CharacterInfoSize {
+		t.Errorf("Size() with 2 chars = %d, want %d", got, acceptEnterHeaderSize+2*CharacterInfoSize)
 	}
 }
