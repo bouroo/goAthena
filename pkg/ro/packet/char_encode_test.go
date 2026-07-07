@@ -472,3 +472,116 @@ func TestAcceptEnterResponse_Encode_AtUint16Boundary(t *testing.T) {
 		t.Errorf("Size() = %d, want < 65536 for boundary test", got)
 	}
 }
+
+// CHEnterRequest round-trip tests — exercise the request-side encoder that
+// is the inverse of ParseCHEnter.
+
+func TestCHEnterRequest_Encode_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	req := CHEnterRequest{
+		AccountID: 0xAAAAAAAA,
+		LoginID1:  0xBBBBBBBB,
+		LoginID2:  0xCCCCCCCC,
+		Sex:       0x01,
+	}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v, want nil", err)
+	}
+	if got := buf.Len(); got != sizeCHEnter {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCHEnter)
+	}
+
+	got, err := ParseCHEnter(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseCHEnter err = %v, want nil", err)
+	}
+	if got != req {
+		t.Errorf("round-trip mismatch:\n got = %+v\nwant = %+v", got, req)
+	}
+}
+
+func TestCHEnterRequest_Encode_ZeroValues(t *testing.T) {
+	t.Parallel()
+
+	req := CHEnterRequest{}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v", err)
+	}
+
+	got, err := ParseCHEnter(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseCHEnter err = %v", err)
+	}
+	if got != req {
+		t.Errorf("zero round-trip mismatch:\n got = %+v\nwant = %+v", got, req)
+	}
+}
+
+func TestCHEnterRequest_Encode_ReservedSlotZero(t *testing.T) {
+	t.Parallel()
+
+	req := CHEnterRequest{
+		AccountID: 0x01020304,
+		LoginID1:  0x05060708,
+		LoginID2:  0x090A0B0C,
+		Sex:       0x01,
+	}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v", err)
+	}
+	got := buf.Bytes()
+	// Reserved uint16 at offset [14:16] must be zero.
+	if got[14] != 0x00 || got[15] != 0x00 {
+		t.Errorf("reserved slot bytes = %02x %02x, want 00 00", got[14], got[15])
+	}
+}
+
+// CHSelectCharRequest round-trip tests.
+
+func TestCHSelectCharRequest_Encode_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	req := CHSelectCharRequest{Slot: 0x05}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v, want nil", err)
+	}
+	if got := buf.Len(); got != sizeCHSelectChar {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCHSelectChar)
+	}
+
+	got, err := ParseCHSelectChar(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseCHSelectChar err = %v, want nil", err)
+	}
+	if got != req {
+		t.Errorf("round-trip mismatch:\n got = %+v\nwant = %+v", got, req)
+	}
+}
+
+func TestCHSelectCharRequest_Encode_ZeroSlot(t *testing.T) {
+	t.Parallel()
+
+	req := CHSelectCharRequest{Slot: 0}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode err = %v", err)
+	}
+
+	got, err := ParseCHSelectChar(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseCHSelectChar err = %v", err)
+	}
+	if got != req {
+		t.Errorf("zero round-trip mismatch:\n got = %+v\nwant = %+v", got, req)
+	}
+}
