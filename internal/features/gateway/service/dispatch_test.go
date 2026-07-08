@@ -1788,9 +1788,9 @@ func TestDispatchHandler_CZActionRequest_AttackMonster_EncodesNotifyAct(t *testi
 }
 
 // TestDispatchHandler_CZActionRequest_KillMonster_EncodesNotifyActAndVanish
-// covers the M18 kill path: attacking a monster whose HP drops to 0
-// must produce both ZC_NOTIFY_ACT (34 bytes) and ZC_NOTIFY_VANISH
-// (7 bytes), and remove the monster from the HP map.
+// covers the M18/M19 kill path: attacking a monster whose HP drops to 0
+// must produce ZC_NOTIFY_ACT (34 bytes), ZC_NOTIFY_VANISH (7 bytes), and
+// ZC_LONGPAR_CHANGE (8 bytes) for BaseExp and JobExp (total 57 bytes).
 func TestDispatchHandler_CZActionRequest_KillMonster_EncodesNotifyActAndVanish(t *testing.T) {
 	t.Parallel()
 
@@ -1802,6 +1802,8 @@ func TestDispatchHandler_CZActionRequest_KillMonster_EncodesNotifyActAndVanish(t
 		ID:        1,
 		AccountID: 200001,
 		MonsterHP: map[uint32]int32{110000005: 5}, // Poring with only 5 HP — one hit kills
+		BaseExp:   10,                             // Started with 10 BaseExp
+		JobExp:    5,                              // Started with 5 JobExp
 	}
 
 	req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
@@ -1816,9 +1818,9 @@ func TestDispatchHandler_CZActionRequest_KillMonster_EncodesNotifyActAndVanish(t
 	}
 
 	out := resp.buf.Bytes()
-	// ZC_NOTIFY_ACT (34) + ZC_NOTIFY_VANISH (7) = 41 bytes.
-	if len(out) != 41 {
-		t.Fatalf("response length = %d, want 41 (ZC_NOTIFY_ACT + ZC_NOTIFY_VANISH; buf=% x)", len(out), out)
+	// ZC_NOTIFY_ACT (34) + ZC_NOTIFY_VANISH (7) + ZC_LONGPAR_CHANGE (8) + ZC_LONGPAR_CHANGE (8) = 57 bytes.
+	if len(out) != 57 {
+		t.Fatalf("response length = %d, want 57 (ZC_NOTIFY_ACT + ZC_NOTIFY_VANISH + 2x ZC_LONGPAR_CHANGE; buf=% x)", len(out), out)
 	}
 	// First packet: ZC_NOTIFY_ACT.
 	if out[0] != 0xc8 || out[1] != 0x08 {
@@ -1832,19 +1834,30 @@ func TestDispatchHandler_CZActionRequest_KillMonster_EncodesNotifyActAndVanish(t
 	if gid := binary.LittleEndian.Uint32(out[36:40]); gid != 110000005 {
 		t.Errorf("vanish GID = %d, want 110000005", gid)
 	}
-	// Vanish type = CLR_DEAD (1).
-	if out[40] != packet.VanishDead {
-		t.Errorf("vanish type = 0x%02x, want 0x%02x (CLR_DEAD)", out[40], packet.VanishDead)
-	}
-	// Monster should be removed from HP map.
+	// Verify HP was deleted.
 	if _, ok := conn.MonsterHP[110000005]; ok {
-		t.Errorf("monster 110000005 still in HP map after death; should be removed")
+		t.Errorf("MonsterHP still has entry for 110000005, want deleted")
+	}
+
+	// Verify EXP accumulated. Poring gives 2 Base, 1 Job.
+	// We started with 10 Base, 5 Job.
+	if conn.BaseExp != 12 {
+		t.Errorf("BaseExp = %d, want 12", conn.BaseExp)
+	}
+	if conn.JobExp != 6 {
+		t.Errorf("JobExp = %d, want 6", conn.JobExp)
+	}
+
+	// Third packet: ZC_LONGPAR_CHANGE (BaseExp) at offset 41.
+	if out[41] != 0xb1 || out[42] != 0x00 {
+		t.Fatalf("third opcode = %02x %02x, want b1 00 (LE 0x00b1)", out[41], out[42])
+	}
+	// Fourth packet: ZC_LONGPAR_CHANGE (JobExp) at offset 49.
+	if out[49] != 0xb1 || out[50] != 0x00 {
+		t.Fatalf("fourth opcode = %02x %02x, want b1 00 (LE 0x00b1)", out[49], out[50])
 	}
 }
 
-// TestDispatchHandler_CZActionRequest_AttackUnknownTarget_NoReply
-// covers the case where the target GID is not in the monster HP map
-// (NPC, PC, or already-dead monster). The handler must drop silently.
 func TestDispatchHandler_CZActionRequest_AttackUnknownTarget_NoReply(t *testing.T) {
 	t.Parallel()
 
@@ -3180,9 +3193,9 @@ func TestDispatchHandler_CZNotifyActorInit_MonsterSpawn(t *testing.T) {
 		objType uint8
 	}{
 		{gid: 110000005, name: "Poring", hp: 50, maxHP: 50, job: 1002, speed: 400, clevel: 1, objType: 0x05},
-		{gid: 110000006, name: "Lunatic", hp: 150, maxHP: 150, job: 1063, speed: 400, clevel: 3, objType: 0x05},
-		{gid: 110000007, name: "Drops", hp: 55, maxHP: 55, job: 1113, speed: 400, clevel: 1, objType: 0x05},
-		{gid: 110000008, name: "Spore", hp: 120, maxHP: 120, job: 1157, speed: 400, clevel: 2, objType: 0x05},
+		{gid: 110000006, name: "Lunatic", hp: 60, maxHP: 60, job: 1063, speed: 400, clevel: 3, objType: 0x05},
+		{gid: 110000007, name: "Drops", hp: 55, maxHP: 55, job: 1113, speed: 400, clevel: 3, objType: 0x05},
+		{gid: 110000008, name: "Spore", hp: 510, maxHP: 510, job: 1014, speed: 400, clevel: 16, objType: 0x05},
 	}
 	if len(idles) != 8 {
 		t.Fatalf("ZC_SET_UNIT_IDLE packet count = %d, want 8 (4 NPC + 4 monster)", len(idles))

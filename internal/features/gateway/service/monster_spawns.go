@@ -14,6 +14,8 @@ type monsterSpawn struct {
 	HP       int32
 	MaxHP    int32
 	Speed    int16
+	BaseExp  int32
+	JobExp   int32
 }
 
 // monsterSpawns is the hardcoded monster spawn list for the default
@@ -22,13 +24,13 @@ type monsterSpawn struct {
 //
 // Monster data is from rAthena db/pre-re/mob_db.yml:
 //
-//	1002 = Poring (level 1, HP 50)
-//	1063 = Lunatic (level 3, HP 150)
-//	1113 = Drops (level 1, HP 55)
-//	1157 = Spore (level 2, HP 120)
+//	1002 = Poring (level 1, HP 50, Base 2, Job 1)
+//	1063 = Lunatic (level 3, HP 60, Base 6, Job 2)
+//	1113 = Drops (level 3, HP 55, Base 4, Job 3)
+//	1014 = Spore (level 16, HP 510, Base 66, Job 108)
 var monsterSpawns = []monsterSpawn{
-	{GID: 110000005, Name: "Poring", SpriteID: 1002, X: 155, Y: 165, Dir: 0, Level: 1, HP: 50, MaxHP: 50, Speed: 400},
-	{GID: 110000006, Name: "Lunatic", SpriteID: 1063, X: 165, Y: 165, Dir: 0, Level: 3, HP: 150, MaxHP: 150, Speed: 400},
-	{GID: 110000007, Name: "Drops", SpriteID: 1113, X: 155, Y: 175, Dir: 0, Level: 1, HP: 55, MaxHP: 55, Speed: 400},
-	{GID: 110000008, Name: "Spore", SpriteID: 1157, X: 165, Y: 175, Dir: 0, Level: 2, HP: 120, MaxHP: 120, Speed: 400},
+	{GID: 110000005, Name: "Poring", SpriteID: 1002, X: 155, Y: 165, Dir: 0, Level: 1, HP: 50, MaxHP: 50, Speed: 400, BaseExp: 2, JobExp: 1},
+	{GID: 110000006, Name: "Lunatic", SpriteID: 1063, X: 165, Y: 165, Dir: 0, Level: 3, HP: 60, MaxHP: 60, Speed: 400, BaseExp: 6, JobExp: 2},
+	{GID: 110000007, Name: "Drops", SpriteID: 1113, X: 155, Y: 175, Dir: 0, Level: 3, HP: 55, MaxHP: 55, Speed: 400, BaseExp: 4, JobExp: 3},
+	{GID: 110000008, Name: "Spore", SpriteID: 1014, X: 165, Y: 175, Dir: 0, Level: 16, HP: 510, MaxHP: 510, Speed: 400, BaseExp: 66, JobExp: 108},
 }

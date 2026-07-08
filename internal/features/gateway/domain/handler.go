@@ -27,6 +27,10 @@ type ConnectionInfo struct {
 	// the handler sends ZC_NOTIFY_VANISH and removes the entry so
 	// subsequent attacks on a dead monster are silently dropped.
 	MonsterHP map[uint32]int32
+	// BaseExp tracks the accumulated base experience (M19).
+	BaseExp int32
+	// JobExp tracks the accumulated job experience (M19).
+	JobExp int32
 }
 
 // Responder sends serialized packets back to the client. Each transport

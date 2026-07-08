@@ -980,8 +980,8 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		_ = err
 	}
 
-	// Default values for every parameter — zeny and exp are not in the
-	// proto today (M9) so they are always zero. Weight and max_weight
+	// Default values for every parameter — zeny is not in the
+	// proto today (M9) so it is always zero. Weight and max_weight
 	// require inventory tracking (deferred). Manner/karma are sent as
 	// zero (no system yet).
 	var (
@@ -1042,8 +1042,8 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		packet.ParChangeResponse{VarID: packet.SPSP, Count: int32(sp)},       //nolint:gosec // sp fits in int32
 		// Zeny + base/job exp (32-bit; ZC_LONGLONGPAR_CHANGE upgrade deferred).
 		packet.LongParChangeResponse{VarID: packet.SPZeny, Amount: 0},
-		packet.LongParChangeResponse{VarID: packet.SPBaseExp, Amount: 0},
-		packet.LongParChangeResponse{VarID: packet.SPJobExp, Amount: 0},
+		packet.LongParChangeResponse{VarID: packet.SPBaseExp, Amount: conn.BaseExp},
+		packet.LongParChangeResponse{VarID: packet.SPJobExp, Amount: conn.JobExp},
 		// ZC_STATUS — base stats with their upgrade costs + derived combat values (zero).
 		packet.StatusResponse{
 			StatusPoint: uint16(statusPoint), //nolint:gosec // status_point fits in uint16 for pre-renewal
@@ -1422,6 +1422,10 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 			return nil
 		}
 		delete(conn.MonsterHP, targetGID)
+
+		// M19: apply EXP
+		h.applyMonsterKillExp(conn, &burst, targetGID)
+
 		h.logger.Info().
 			Uint64("conn", conn.ID).
 			Uint32("target_gid", targetGID).
@@ -1441,6 +1445,35 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 		return fmt.Errorf("send attack burst: %w", err)
 	}
 	return nil
+}
+
+// applyMonsterKillExp looks up the dead monster's EXP values, accumulates
+// them in the connection state, and appends ZC_LONGPAR_CHANGE updates
+// to the response burst.
+func (h *DispatchHandler) applyMonsterKillExp(conn *domain.ConnectionInfo, burst *bytes.Buffer, targetGID uint32) {
+	for _, m := range monsterSpawns {
+		if m.GID == targetGID {
+			conn.BaseExp += m.BaseExp
+			conn.JobExp += m.JobExp
+
+			baseExpUpdate := packet.LongParChangeResponse{
+				VarID:  packet.SPBaseExp,
+				Amount: conn.BaseExp,
+			}
+			if err := baseExpUpdate.Encode(burst); err != nil {
+				h.logger.Error().Err(err).Msg("encode SPBaseExp failed")
+			}
+
+			jobExpUpdate := packet.LongParChangeResponse{
+				VarID:  packet.SPJobExp,
+				Amount: conn.JobExp,
+			}
+			if err := jobExpUpdate.Encode(burst); err != nil {
+				h.logger.Error().Err(err).Msg("encode SPJobExp failed")
+			}
+			break
+		}
+	}
 }
 
 // handleCZChangeDir responds to CZ_CHANGE_DIRECTION (0x009b) — the
