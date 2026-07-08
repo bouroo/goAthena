@@ -1147,3 +1147,223 @@ func TestEmptyListEncoders_ShareMinimumFrameSize(t *testing.T) {
 		}
 	}
 }
+
+// TestNotifyChatResponse_Encode pins the M11 chat-echo wire layout:
+// [2:cmd=0x008d][2:packetLength][4:GID][n:message+null]. The encoder must
+// compute packetLength from the trailing body rather than trusting a
+// precomputed field, must append a NUL terminator even when the message
+// already ends with one, and must use little-endian for every multi-byte
+// slot.
+func TestNotifyChatResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := NotifyChatResponse{
+		GID:     0x11223344,
+		Message: "hello",
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	// 4 (header) + 4 (GID) + 5 ("hello") + 1 (NUL) = 14.
+	const wantLen = 14
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Opcode bytes at [0:2] = 0x008d (LE → 0x8d 0x00).
+	if got[0] != 0x8d || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want 8d 00 (LE 0x008d ZC_NOTIFY_CHAT)",
+			got[0], got[1])
+	}
+	// packetLength at [2:4] = 14 (LE).
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	// GID at [4:8] = 0x11223344.
+	if gid := binary.LittleEndian.Uint32(got[4:8]); gid != 0x11223344 {
+		t.Errorf("GID = 0x%x, want 0x11223344", gid)
+	}
+	// Message bytes at [8:13] = "hello".
+	if !bytes.Equal(got[8:13], []byte("hello")) {
+		t.Errorf("message bytes = %q, want %q", got[8:13], "hello")
+	}
+	// NUL terminator at [13].
+	if got[13] != 0 {
+		t.Errorf("NUL terminator at [13] = 0x%02x, want 0x00", got[13])
+	}
+}
+
+// TestNotifyChatResponse_Encode_AppendsNulEvenWhenInputHasNone covers the
+// ASCII-empty payload case: the encoder must still write a NUL
+// terminator after a zero-length message so the client's C string
+// parser doesn't read past the buffer.
+func TestNotifyChatResponse_Encode_AppendsNulEvenWhenInputHasNone(t *testing.T) {
+	t.Parallel()
+
+	resp := NotifyChatResponse{GID: 1, Message: ""}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	// 4 (header) + 4 (GID) + 0 (msg) + 1 (NUL) = 9.
+	const wantLen = 9
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+	if got[8] != 0 {
+		t.Errorf("NUL terminator at [8] = 0x%02x, want 0x00", got[8])
+	}
+}
+
+// TestNotifyChatResponse_Encode_OversizedMessageRejected pins the
+// uint16 packet-length guard: a message whose total wire size would
+// exceed 65535 bytes must return an error rather than silently
+// truncating the packetLength slot via uint16 overflow.
+func TestNotifyChatResponse_Encode_OversizedMessageRejected(t *testing.T) {
+	t.Parallel()
+
+	// 4 (header) + 4 (GID) + len(msg) + 1 (NUL) > 0xffff ⇒ len(msg) > 65526.
+	resp := NotifyChatResponse{
+		GID:     1,
+		Message: strings.Repeat("a", 0xffff),
+	}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err == nil {
+		t.Fatalf("Encode() error = nil, want non-nil (oversized message)")
+	}
+}
+
+// TestCZGlobalMessageRequest_Encode covers the M11 client-encoder
+// round-trip: the encoder must emit the correct cmd header, derive the
+// packetLength from the message bytes, and append a trailing NUL
+// terminator.
+func TestCZGlobalMessageRequest_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := CZGlobalMessageRequest{Message: "hi"}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	// 4 (header) + 2 ("hi") + 1 (NUL) = 7.
+	const wantLen = 7
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d (buf=% x)", len(got), wantLen, got)
+	}
+	if got[0] != 0x8c || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want 8c 00 (LE 0x008c)", got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	if !bytes.Equal(got[4:6], []byte("hi")) {
+		t.Errorf("message bytes = %q, want %q", got[4:6], "hi")
+	}
+	if got[6] != 0 {
+		t.Errorf("NUL terminator at [6] = 0x%02x, want 0x00", got[6])
+	}
+}
+
+// TestCZGlobalMessageRequest_Encode_OversizedMessageRejected pins the
+// uint16 packet-length guard: a message whose total wire size would
+// exceed 65535 bytes must return an error rather than silently
+// truncating the packetLength slot via uint16 overflow.
+func TestCZGlobalMessageRequest_Encode_OversizedMessageRejected(t *testing.T) {
+	t.Parallel()
+
+	// 4 (header) + len(msg) + 1 (NUL) > 0xffff ⇒ len(msg) > 65530.
+	resp := CZGlobalMessageRequest{Message: strings.Repeat("a", 0xffff)}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err == nil {
+		t.Fatalf("Encode() error = nil, want non-nil (oversized message)")
+	}
+}
+
+// TestActionResponse_Size pins the fixed 11-byte wire length that
+// ZC_ACTION_RESPONSE advertises. The dispatch handler relies on this
+// invariant to coalesce action echoes into the chat send path without
+// re-framing per packet.
+func TestActionResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r ActionResponse
+	if got, want := r.Size(), sizeZCActionResponse; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+// TestActionResponse_Encode exercises the M11 sit/stand wire layout
+// byte-exact: [2:cmd=0x008b][4:GID][1:action][4:targetGID] = 11 bytes.
+func TestActionResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := ActionResponse{
+		GID:       0xDEADBEEF,
+		Action:    0x01, // sit
+		TargetGID: 0x00000000,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 11
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Opcode bytes at [0:2] = 0x008b (LE → 0x8b 0x00).
+	if got[0] != 0x8b || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want 8b 00 (LE 0x008b ZC_ACTION_RESPONSE)",
+			got[0], got[1])
+	}
+	// GID at [2:6] = 0xDEADBEEF.
+	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
+		t.Errorf("GID = 0x%x, want 0xDEADBEEF", gid)
+	}
+	// action at [6] = 0x01.
+	if got[6] != 0x01 {
+		t.Errorf("action = 0x%02x, want 0x01", got[6])
+	}
+	// targetGID at [7:11] = 0.
+	if tgt := binary.LittleEndian.Uint32(got[7:11]); tgt != 0 {
+		t.Errorf("targetGID = 0x%x, want 0", tgt)
+	}
+}
+
+// TestActionResponse_Encode_AttackSelector verifies the byte-exact
+// encoding for action code 2 (attack per rAthena's mapping; the M11
+// dispatch drops it but the wire encoder must still serialize it
+// correctly for future callers).
+func TestActionResponse_Encode_AttackSelector(t *testing.T) {
+	t.Parallel()
+
+	resp := ActionResponse{
+		GID:       0x01020304,
+		Action:    0x02,
+		TargetGID: 0xAABBCCDD,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if got[6] != 0x02 {
+		t.Errorf("action = 0x%02x, want 0x02", got[6])
+	}
+	if tgt := binary.LittleEndian.Uint32(got[7:11]); tgt != 0xAABBCCDD {
+		t.Errorf("targetGID = 0x%x, want 0xAABBCCDD", tgt)
+	}
+}

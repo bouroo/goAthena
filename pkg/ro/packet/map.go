@@ -23,14 +23,32 @@ const (
 	HeaderCZREQUESTMOVE     uint16 = 0x0085 // rathena/src/map/clif.cpp:11374 (CZ_REQUEST_MOVE)
 	HeaderCZNOTIFYACTORINIT uint16 = 0x007d // rathena/src/map/clif.cpp:10744 (CZ_NOTIFY_ACTORINIT / LoadEndAck)
 	HeaderCZREQUESTTIME     uint16 = 0x007e // rathena/src/map/clif.cpp:11198 (CZ_REQUEST_TIME / TickSend)
+	// CZ_ACTION_REQUEST (0x0089) — sit/stand/attack request. rathena/src/map/
+	// clif_packetdb.hpp:38 (`parseable_packet(0x0089,7,clif_parse_ActionRequest,2,6)`).
+	// Fixed 7 bytes: [2:cmd][4:targetGID][1:action].
+	HeaderCZACTIONREQUEST uint16 = 0x0089
+	// CZ_GLOBAL_MESSAGE (0x008c) — public chat. rathena/src/map/
+	// clif_packetdb.hpp:40 (`parseable_packet(0x008c,-1,clif_parse_GlobalMessage,2,4)`).
+	// Variable length: [2:cmd][2:packetLength][n:text+null].
+	HeaderCZGLOBALMESSAGE uint16 = 0x008c
 
 	// S→C — map server → client.
-	HeaderZCACCEPTENTER             uint16 = 0x02eb // rathena/src/map/packets.hpp:571 (ZC_ACCEPT_ENTER, PACKETVER >= 20160330 branch)
-	HeaderZCREFUSEENTER             uint16 = 0x0074 // rathena/src/map/packets.hpp:590 (ZC_REFUSE_ENTER)
-	HeaderZCNOTIFYPLAYERMOVE        uint16 = 0x0087 // rathena/src/map/packets.hpp (ZC_NOTIFY_PLAYERMOVE)
-	HeaderZCSPAWNUNIT               uint16 = 0x09fe // rathena/src/map/packets.hpp ZC_SPAWN_UNIT (PACKETVER >= 20150513 branch)
-	HeaderZCMAPPROPERTYR2           uint16 = 0x099b // rathena/src/map/clif.cpp:6869 (ZC_MAPPROPERTY_R2, PACKETVER >= 20121010)
-	HeaderZCNOTIFYTIME              uint16 = 0x007f // rathena/src/map/clif.cpp:11186 (ZC_NOTIFY_TIME)
+	HeaderZCACCEPTENTER      uint16 = 0x02eb // rathena/src/map/packets.hpp:571 (ZC_ACCEPT_ENTER, PACKETVER >= 20160330 branch)
+	HeaderZCREFUSEENTER      uint16 = 0x0074 // rathena/src/map/packets.hpp:590 (ZC_REFUSE_ENTER)
+	HeaderZCNOTIFYPLAYERMOVE uint16 = 0x0087 // rathena/src/map/packets.hpp (ZC_NOTIFY_PLAYERMOVE)
+	HeaderZCSPAWNUNIT        uint16 = 0x09fe // rathena/src/map/packets.hpp ZC_SPAWN_UNIT (PACKETVER >= 20150513 branch)
+	HeaderZCMAPPROPERTYR2    uint16 = 0x099b // rathena/src/map/clif.cpp:6869 (ZC_MAPPROPERTY_R2, PACKETVER >= 20121010)
+	HeaderZCNOTIFYTIME       uint16 = 0x007f // rathena/src/map/clif.cpp:11186 (ZC_NOTIFY_TIME)
+	// ZC_ACTION_RESPONSE (0x008b) — sit/stand/attack broadcast echo. rAthena
+	// does not currently emit 0x008b (clif_packetdb.hpp:39 registers it as a
+	// 2-byte stub) — modern clients use ZC_NOTIFY_ACT (0x008a) for area
+	// broadcast. For the single-player echo path we use the compact 0x008b
+	// shape: [2:cmd][4:GID][1:action][4:targetGID] = 11 bytes.
+	HeaderZCACTIONRESPONSE uint16 = 0x008b
+	// ZC_NOTIFY_CHAT (0x008d) — chat echo. rathena/src/map/packets_struct.hpp:2337
+	// (`PACKET_ZC_NOTIFY_CHAT { int16 PacketType; int16 PacketLength; uint32 GID; char Message[] }`).
+	// Variable length: [2:cmd][2:packetLength][4:GID][n:text+null].
+	HeaderZCNOTIFYCHAT              uint16 = 0x008d
 	HeaderZCSTATUS                  uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
 	HeaderZCPARCHANGE               uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
 	HeaderZCLONGPARCHANGE           uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
@@ -143,6 +161,17 @@ const (
 	// All 27 slots are zero-filled for a fresh character. hotkey_data is
 	// declared at rathena/src/map/packets_struct.hpp:1576-1580.
 	sizeZCShortcutKeyList = 191
+	// sizeCZActionRequest = int16 packetType + uint32 targetGID +
+	// uint8 action = 2+4+1 = 7 (rathena/src/map/clif_packetdb.hpp:38 —
+	// `parseable_packet(0x0089,7,clif_parse_ActionRequest,2,6)`). The pos
+	// array [2, 6] documents targetGID at offset 2 and action at offset 6.
+	sizeCZActionRequest = 7
+	// sizeZCActionResponse = int16 packetType + uint32 GID + uint8 action +
+	// uint32 targetGID = 2+4+1+4 = 11. The wire shape is the compact
+	// pre-Renewal echo for 0x008b — rAthena's modern clif uses
+	// ZC_NOTIFY_ACT (0x008a) for the same broadcast but the gateway emits
+	// 0x008b for the single-player echo path.
+	sizeZCActionResponse = 11
 )
 
 // NewMapServerDB returns a packet database pre-populated with all known
@@ -183,6 +212,22 @@ func NewMapServerDB() *DB {
 		ID:        HeaderCZREQUESTTIME,
 		Name:      "CZ_REQUEST_TIME",
 		Length:    sizeCZRequestTime,
+		Direction: DirectionClientToServer,
+	})
+	// M11: action + chat. CZ_ACTION_REQUEST is fixed 7 bytes; CZ_GLOBAL_MESSAGE
+	// is variable — the text starts at offset 4 and the wire packetLength
+	// slot at [2:4] carries the trailing byte count. See rathena/src/map/
+	// clif_packetdb.hpp:38-40 for the canonical entries.
+	db.Register(Definition{
+		ID:        HeaderCZACTIONREQUEST,
+		Name:      "CZ_ACTION_REQUEST",
+		Length:    sizeCZActionRequest,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZGLOBALMESSAGE,
+		Name:      "CZ_GLOBAL_MESSAGE",
+		Length:    VariableLength,
 		Direction: DirectionClientToServer,
 	})
 
@@ -273,6 +318,20 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCSHORTCUTKEYLIST,
 		Name:      "ZC_SHORTCUT_KEY_LIST",
 		Length:    sizeZCShortcutKeyList,
+		Direction: DirectionServerToClient,
+	})
+	// M11: ZC_NOTIFY_CHAT is variable length (chat text + trailing NUL);
+	// ZC_ACTION_RESPONSE is fixed 11 bytes (cmd + GID + action + targetGID).
+	db.Register(Definition{
+		ID:        HeaderZCNOTIFYCHAT,
+		Name:      "ZC_NOTIFY_CHAT",
+		Length:    VariableLength,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCACTIONRESPONSE,
+		Name:      "ZC_ACTION_RESPONSE",
+		Length:    sizeZCActionResponse,
 		Direction: DirectionServerToClient,
 	})
 

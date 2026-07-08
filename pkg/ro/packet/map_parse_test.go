@@ -284,3 +284,244 @@ func TestParseCZRequestTime(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCZGlobalMessage(t *testing.T) {
+	t.Parallel()
+
+	// 4-byte header + "hi\0" = 7 bytes total. packetLength is filled
+	// in correctly (7) so callers that also decode the length slot get
+	// the expected value.
+	goodFrame := func() []byte {
+		f := []byte{0x8c, 0x00, 0x07, 0x00, 'h', 'i', 0x00}
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZGlobalMessageRequest
+	}{
+		{
+			name:    "valid known frame with NUL terminator",
+			frame:   goodFrame,
+			wantErr: false,
+			want:    CZGlobalMessageRequest{Message: "hi"},
+		},
+		{
+			name:  "valid frame with trailing extra bytes",
+			frame: append(append([]byte{}, goodFrame...), 0xAA, 0xBB),
+			// Trailing bytes past the packetLength boundary are
+			// tolerated so the gateway can hand in a buffered frame
+			// without first stripping the tail.
+			wantErr: false,
+			want:    CZGlobalMessageRequest{Message: "hi"},
+		},
+		{
+			name:       "empty body returns error",
+			frame:      []byte{0x8c, 0x00, 0x04, 0x00},
+			wantErr:    true,
+			wantErrSub: "empty message",
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, 3),
+			wantErr:    true,
+			wantErrSub: "3",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, 6)
+				writeLE16(f[0:], HeaderCZACTIONREQUEST) // 0x0089 instead of 0x008c
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+		{
+			name: "body without NUL terminator decodes to full body",
+			frame: []byte{
+				0x8c, 0x00, 0x07, 0x00,
+				'h', 'e', 'l',
+			},
+			wantErr: false,
+			want:    CZGlobalMessageRequest{Message: "hel"},
+		},
+		{
+			name: "packetLength smaller than header reports too-short length",
+			frame: []byte{
+				0x8c, 0x00, 0x03, 0x00,
+				'h', 'i', 0x00,
+			},
+			wantErr:    true,
+			wantErrSub: "packet length 3 too short",
+		},
+		{
+			name: "packetLength larger than frame reports frame/len mismatch",
+			frame: []byte{
+				0x8c, 0x00, 0x10, 0x00,
+				'h', 'i', 0x00,
+			},
+			wantErr:    true,
+			wantErrSub: "frame length 7 shorter than packet length 16",
+		},
+		{
+			name: "trailing bytes past packetLength are not read into message",
+			// Header says 7 bytes; the trailing 0xAA 0xBB belong to a
+			// subsequent buffered packet and must not leak into the
+			// parsed message body.
+			frame: []byte{
+				0x8c, 0x00, 0x07, 0x00,
+				'h', 'i', 0x00,
+				0xAA, 0xBB,
+			},
+			wantErr: false,
+			want:    CZGlobalMessageRequest{Message: "hi"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZGlobalMessage(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZGlobalMessage() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZGlobalMessage() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseCZGlobalMessage() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseCZActionRequest(t *testing.T) {
+	t.Parallel()
+
+	// Known 7-byte frame: cmd 0x0089, targetGID = 0xAABBCCDD,
+	// action = 0x01 (sit per goAthena M11 mapping).
+	goodFrame := func() []byte {
+		f := make([]byte, sizeCZActionRequest)
+		writeLE16(f[0:], HeaderCZACTIONREQUEST)
+		writeLE32(f[2:], 0xAABBCCDD)
+		f[6] = 0x01
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZActionRequestRequest
+	}{
+		{
+			name:    "valid known frame decodes targetGID and action",
+			frame:   goodFrame,
+			wantErr: false,
+			want: CZActionRequestRequest{
+				TargetGID: 0xAABBCCDD,
+				Action:    0x01,
+			},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZActionRequest-1),
+			wantErr:    true,
+			wantErrSub: "6",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, sizeCZActionRequest)
+				writeLE16(f[0:], HeaderCZGLOBALMESSAGE) // 0x008c instead of 0x0089
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+		{
+			name: "action selector 0 (stand) decodes verbatim",
+			frame: func() []byte {
+				f := make([]byte, sizeCZActionRequest)
+				writeLE16(f[0:], HeaderCZACTIONREQUEST)
+				writeLE32(f[2:], 0x00000001)
+				f[6] = 0x00
+				return f
+			}(),
+			wantErr: false,
+			want: CZActionRequestRequest{
+				TargetGID: 0x00000001,
+				Action:    0x00,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZActionRequest(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZActionRequest() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZActionRequest() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseCZActionRequest() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseCZActionRequest_AcceptsTrailingBytes confirms the parser
+// tolerates bytes past the 7-byte fixed header — the gateway hands in
+// buffered frames whose tail is still being drained.
+func TestParseCZActionRequest_AcceptsTrailingBytes(t *testing.T) {
+	t.Parallel()
+
+	base := make([]byte, sizeCZActionRequest)
+	writeLE16(base[0:], HeaderCZACTIONREQUEST)
+	writeLE32(base[2:], 0x01020304)
+	base[6] = 0x01
+	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
+
+	got, err := ParseCZActionRequest(frame)
+	if err != nil {
+		t.Fatalf("ParseCZActionRequest() unexpected error: %v", err)
+	}
+	want := CZActionRequestRequest{TargetGID: 0x01020304, Action: 0x01}
+	if got != want {
+		t.Errorf("ParseCZActionRequest() = %+v, want %+v", got, want)
+	}
+}

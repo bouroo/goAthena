@@ -12,6 +12,8 @@
 //   - CZ_REQUEST_MOVE (0x0085)      → debug-logged (M4+ will forward to zone)
 //   - CZ_NOTIFY_ACTORINIT (0x007d)  → ZC_MAPPROPERTY_R2 (MAPPROPERTY_NOTHING)
 //   - CZ_REQUEST_TIME (0x007e)      → ZC_NOTIFY_TIME (unix millis low 32 bits)
+//   - CZ_ACTION_REQUEST (0x0089)    → ZC_ACTION_RESPONSE (sit/stand echo; attacks ignored)
+//   - CZ_GLOBAL_MESSAGE (0x008c)    → ZC_NOTIFY_CHAT (single-player echo; no AOI)
 //   - everything else              → debug-logged, connection kept alive.
 
 package service
@@ -131,6 +133,10 @@ func (h *DispatchHandler) HandlePacket(ctx context.Context, conn *domain.Connect
 		return h.handleCZNotifyActorInit(ctx, conn, resp)
 	case packet.HeaderCZREQUESTTIME:
 		return h.handleCZRequestTime(ctx, conn, resp, frame)
+	case packet.HeaderCZGLOBALMESSAGE:
+		return h.handleCZGlobalMessage(ctx, conn, resp, frame)
+	case packet.HeaderCZACTIONREQUEST:
+		return h.handleCZActionRequest(ctx, conn, resp, frame)
 	default:
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
@@ -1089,6 +1095,156 @@ func (h *DispatchHandler) handleCZRequestTime(_ context.Context, conn *domain.Co
 		Msg("time sync")
 	if err := resp.SendPacket(buf.Bytes()); err != nil {
 		return fmt.Errorf("send ZC_NOTIFY_TIME: %w", err)
+	}
+	return nil
+}
+
+// handleCZGlobalMessage responds to CZ_GLOBAL_MESSAGE (0x008c) — the
+// client's public chat send. rAthena's clif_parse_GlobalMessage
+// (rathena/src/map/clif.cpp:11509) prepends "<name> : " to the message
+// and broadcasts ZC_NOTIFY_CHAT to nearby clients; the gateway has no
+// AOI and no entity registry yet, so we echo the raw text back to the
+// sender with the connection's authenticated AID substituted as the
+// GID slot. The AID-as-GID stand-in is intentional and documented in
+// decision-log.md — there is no zone-resident GID before the zone
+// service returns one, and dropping chat for an in-progress map enter
+// is a worse user experience than a stable but technically-wrong GID.
+//
+// Malformed frames are logged and dropped (rAthena treats a truncated
+// chat packet the same way — the client retries after re-reading its
+// addressbook).
+func (h *DispatchHandler) handleCZGlobalMessage(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZGlobalMessage(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_GLOBAL_MESSAGE; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		// CZ_GLOBAL_MESSAGE without a preceding CZ_ENTER: the client
+		// has not authenticated against the zone yet, so we have no
+		// entity to attribute the chat to. Drop silently rather than
+		// panic on a zero AID in the GID slot — see handleCZRequestMove
+		// for the analogous guard.
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("CZ_GLOBAL_MESSAGE without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	notify := packet.NotifyChatResponse{
+		GID:     conn.AccountID,
+		Message: req.Message,
+	}
+
+	var buf bytes.Buffer
+	if err := notify.Encode(&buf); err != nil {
+		// NotifyChatResponse.Encode cannot fail in practice (the
+		// message is length-checked at parse time and the NUL
+		// terminator is unconditionally appended), but wrapcheck
+		// requires every external error be wrapped — log and drop.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Msg("encode ZC_NOTIFY_CHAT failed; dropping packet")
+		return nil
+	}
+
+	h.logger.Debug().
+		Uint64("conn", conn.ID).
+		Uint32("aid", conn.AccountID).
+		Str("message", req.Message).
+		Msg("chat echo")
+
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_NOTIFY_CHAT: %w", err)
+	}
+	return nil
+}
+
+// handleCZActionRequest responds to CZ_ACTION_REQUEST (0x0089) — the
+// client's sit/stand/attack selector. The on-wire action byte mapping
+// used by goAthena's M11 echo path is:
+//
+//	0 → stand up  (echoed as ZC_ACTION_RESPONSE)
+//	1 → sit down  (echoed as ZC_ACTION_RESPONSE)
+//	2 → attack    (ignored — no combat system yet)
+//	3 → attack    (ignored — no combat system yet)
+//	7+ → ignored (continuous attack / touch skill — out of M11 scope)
+//
+// The echo packets are sent only to the originating connection; there
+// is no AOI broadcast (zone-side work). When the zone service takes
+// over per-entity state (M14+) the dispatcher will forward these to
+// the zone Action RPC and broadcast the response on the AOI ring.
+func (h *DispatchHandler) handleCZActionRequest(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZActionRequest(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_ACTION_REQUEST; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		// CZ_ACTION_REQUEST without a preceding CZ_ENTER: the client
+		// has not authenticated against the zone yet, so we have no
+		// entity to attribute the sit/stand to. Drop silently rather
+		// than panic on a zero AID in the GID slot — see
+		// handleCZRequestMove for the analogous guard.
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint8("action", req.Action).
+			Msg("CZ_ACTION_REQUEST without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	// Drop attacks silently — the M11 dispatch has no combat system,
+	// and rAthena treats a no-target attack as a harmless transient.
+	// Unknown action selectors fall through to the same drop branch.
+	if req.Action != 0 && req.Action != 1 {
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint8("action", req.Action).
+			Msg("CZ_ACTION_REQUEST ignored (combat / out-of-scope)")
+		return nil
+	}
+
+	action := packet.ActionResponse{
+		GID:       conn.AccountID, // AID-as-GID stand-in — see handleCZGlobalMessage.
+		Action:    req.Action,
+		TargetGID: 0,
+	}
+
+	var buf bytes.Buffer
+	if err := action.Encode(&buf); err != nil {
+		// ActionResponse.Encode cannot fail in practice (no
+		// variable-width fields), but wrapcheck requires every
+		// external error be wrapped — log and drop.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint8("action", req.Action).
+			Msg("encode ZC_ACTION_RESPONSE failed; dropping packet")
+		return nil
+	}
+
+	h.logger.Debug().
+		Uint64("conn", conn.ID).
+		Uint32("aid", conn.AccountID).
+		Uint8("action", req.Action).
+		Msg("action echo")
+
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_ACTION_RESPONSE: %w", err)
 	}
 	return nil
 }
