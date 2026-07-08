@@ -1749,9 +1749,9 @@ func (h *DispatchHandler) handleCZAckSelectDealType(_ context.Context, conn *dom
 	switch req.Type {
 	case 0x00:
 		// Buy — send the NPC's stock list.
-		items := make([]packet.ShopBuyItem, 0, len(npc.ShopItems))
-		for _, it := range npc.ShopItems {
-			items = append(items, packet.ShopBuyItem(it))
+		items := make([]packet.ShopBuyItem, len(npc.ShopItems))
+		for i, it := range npc.ShopItems {
+			items[i] = packet.ShopBuyItem(it)
 		}
 		list := packet.PurchaseItemListResponse{Items: items}
 		var buf bytes.Buffer

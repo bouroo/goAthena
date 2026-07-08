@@ -771,13 +771,13 @@ func ParseCZPCPurchaseItemList(frame []byte) (CZPCPurchaseItemListRequest, error
 	if n == 0 {
 		return CZPCPurchaseItemListRequest{}, nil
 	}
-	entries := make([]CZPCPurchaseItemListEntry, 0, n)
+	entries := make([]CZPCPurchaseItemListEntry, n)
 	for i := range n {
 		off := minFrame + i*sizeShopBuyEntry
-		entries = append(entries, CZPCPurchaseItemListEntry{
+		entries[i] = CZPCPurchaseItemListEntry{
 			ItemID: binary.LittleEndian.Uint32(frame[off : off+4]),
 			Amount: binary.LittleEndian.Uint16(frame[off+4 : off+6]),
-		})
+		}
 	}
 	return CZPCPurchaseItemListRequest{Entries: entries}, nil
 }
