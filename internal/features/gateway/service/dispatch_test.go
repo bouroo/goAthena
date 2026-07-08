@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
@@ -3298,5 +3299,158 @@ func TestDispatchHandler_CZNotifyActorInit_MonsterCount(t *testing.T) {
 	}
 	if idleCount != 8 {
 		t.Fatalf("ZC_SET_UNIT_IDLE packet count = %d, want 8 (4 NPC + 4 monster)", idleCount)
+	}
+}
+
+type safeResponder struct {
+	mu      sync.Mutex
+	packets [][]byte
+}
+
+func (s *safeResponder) SendPacket(p []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.packets = append(s.packets, p)
+	return nil
+}
+
+func (s *safeResponder) GetPackets() [][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([][]byte, len(s.packets))
+	copy(out, s.packets)
+	return out
+}
+
+func TestDispatchHandler_Attack_MonsterRespawns(t *testing.T) {
+	// Set a short respawn delay for testing
+	oldDelay := monsterRespawnDelay
+	monsterRespawnDelay = 20 * time.Millisecond
+	t.Cleanup(func() {
+		monsterRespawnDelay = oldDelay
+	})
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &safeResponder{}
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: 200001,
+		MonsterHP: map[uint32]int32{110000005: 5}, // Poring with only 5 HP — kills it
+	}
+
+	req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	// Verify the monster is dead and vanish packet is sent immediately
+	conn.Lock()
+	_, ok := conn.MonsterHP[110000005]
+	conn.Unlock()
+	if ok {
+		t.Fatal("monster should be dead (removed from MonsterHP)")
+	}
+
+	// Wait for respawn (up to 1s)
+	var respawnPkt []byte
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		conn.Lock()
+		hp, ok := conn.MonsterHP[110000005]
+		conn.Unlock()
+		if ok && hp == 50 {
+			// Found respawned monster with full HP!
+			// Check packets
+			pkts := resp.GetPackets()
+			for _, p := range pkts {
+				if len(p) >= 2 && binary.LittleEndian.Uint16(p[0:2]) == 0x09ff {
+					// Check if it is the correct AID
+					if len(p) >= 9 && binary.LittleEndian.Uint32(p[5:9]) == 110000005 {
+						respawnPkt = p
+						break
+					}
+				}
+			}
+			if respawnPkt != nil {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if respawnPkt == nil {
+		t.Fatal("timed out waiting for monster respawn or respawn packet")
+	}
+
+	// Verify respawn packet fields:
+	// objectType at offset 4 must be 0x05 (NPC_MOB_TYPE)
+	if respawnPkt[4] != 0x05 {
+		t.Errorf("respawn packet objectType = %d, want 0x05", respawnPkt[4])
+	}
+	// GID at [5:9] is 110000005
+	if gid := binary.LittleEndian.Uint32(respawnPkt[5:9]); gid != 110000005 {
+		t.Errorf("respawn packet GID = %d, want 110000005", gid)
+	}
+	// Job (sprite ID) at [23:25] must be 1002 (Poring)
+	if sprite := int16(binary.LittleEndian.Uint16(respawnPkt[23:25])); sprite != 1002 {
+		t.Errorf("respawn packet sprite ID = %d, want 1002", sprite)
+	}
+	// MaxHP at [72:76] must be 50
+	if maxHP := int32(binary.LittleEndian.Uint32(respawnPkt[72:76])); maxHP != 50 {
+		t.Errorf("respawn packet maxHP = %d, want 50", maxHP)
+	}
+	// HP at [76:80] must be 50
+	if hp := int32(binary.LittleEndian.Uint32(respawnPkt[76:80])); hp != 50 {
+		t.Errorf("respawn packet HP = %d, want 50", hp)
+	}
+}
+
+func TestDispatchHandler_Attack_Concurrency(t *testing.T) {
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &safeResponder{}
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: 200001,
+		MonsterHP: map[uint32]int32{110000005: 10000}, // Poring with large HP to prevent death in this test
+	}
+
+	req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	const workers = 10
+	const iterations = 50
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				_ = h.HandlePacket(context.Background(), &conn, resp,
+					packet.HeaderCZACTIONREQUEST, reqBuf.Bytes())
+			}
+		}()
+	}
+	wg.Wait()
+
+	conn.Lock()
+	hp := conn.MonsterHP[110000005]
+	conn.Unlock()
+
+	expectedHP := int32(10000 - workers*iterations*10)
+	if hp != expectedHP {
+		t.Errorf("monster HP = %d, want %d", hp, expectedHP)
 	}
 }

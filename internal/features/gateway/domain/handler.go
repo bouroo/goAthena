@@ -2,7 +2,10 @@
 // feature (WS-A): packet codec, TCP/WS ingress, gRPC routing.
 package domain
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // ConnectionInfo describes a single accepted TCP connection. It is built
 // once at OnOpen time and threaded through the PacketHandler so handlers
@@ -16,6 +19,7 @@ import "context"
 // identity.GetCharacter. The handler chain takes the info by pointer so
 // mutations persist across packets on the same connection.
 type ConnectionInfo struct {
+	mu        sync.Mutex // guards MonsterHP, BaseExp, JobExp against concurrent access (e.g. from respawn timers)
 	ID        uint64
 	RemoteIP  string
 	OpenedAt  int64  // unix nanos
@@ -31,6 +35,16 @@ type ConnectionInfo struct {
 	BaseExp int32
 	// JobExp tracks the accumulated job experience (M19).
 	JobExp int32
+}
+
+// Lock locks the connection mutex.
+func (c *ConnectionInfo) Lock() {
+	c.mu.Lock()
+}
+
+// Unlock unlocks the connection mutex.
+func (c *ConnectionInfo) Unlock() {
+	c.mu.Unlock()
 }
 
 // Responder sends serialized packets back to the client. Each transport

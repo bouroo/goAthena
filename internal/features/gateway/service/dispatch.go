@@ -49,6 +49,10 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
+// monsterRespawnDelay defines the time to wait before respawning a killed monster.
+// Overridable in tests to make them deterministic and fast.
+var monsterRespawnDelay = 5 * time.Second
+
 // ErrIdentityUnavailableRefuse is the AC_REFUSE_LOGIN error code the
 // gateway sends when the identity gRPC call returns a transport-level
 // failure (identity down, deadline exceeded, network partition). 99
@@ -980,6 +984,11 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		_ = err
 	}
 
+	conn.Lock()
+	baseExp := conn.BaseExp
+	jobExp := conn.JobExp
+	conn.Unlock()
+
 	// Default values for every parameter — zeny is not in the
 	// proto today (M9) so it is always zero. Weight and max_weight
 	// require inventory tracking (deferred). Manner/karma are sent as
@@ -1042,8 +1051,8 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		packet.ParChangeResponse{VarID: packet.SPSP, Count: int32(sp)},       //nolint:gosec // sp fits in int32
 		// Zeny + base/job exp (32-bit; ZC_LONGLONGPAR_CHANGE upgrade deferred).
 		packet.LongParChangeResponse{VarID: packet.SPZeny, Amount: 0},
-		packet.LongParChangeResponse{VarID: packet.SPBaseExp, Amount: conn.BaseExp},
-		packet.LongParChangeResponse{VarID: packet.SPJobExp, Amount: conn.JobExp},
+		packet.LongParChangeResponse{VarID: packet.SPBaseExp, Amount: baseExp},
+		packet.LongParChangeResponse{VarID: packet.SPJobExp, Amount: jobExp},
 		// ZC_STATUS — base stats with their upgrade costs + derived combat values (zero).
 		packet.StatusResponse{
 			StatusPoint: uint16(statusPoint), //nolint:gosec // status_point fits in uint16 for pre-renewal
@@ -1153,12 +1162,14 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 	// gets its own copy so multiple clients can independently damage
 	// monsters without interfering (single-player echo path; true multi-
 	// player HP sync is zone-side work).
+	conn.Lock()
 	if conn.MonsterHP == nil {
 		conn.MonsterHP = make(map[uint32]int32, len(monsterSpawns))
 	}
 	for _, mob := range monsterSpawns {
 		conn.MonsterHP[mob.GID] = mob.HP
 	}
+	conn.Unlock()
 
 	h.logger.Info().
 		Uint64("conn", conn.ID).
@@ -1373,8 +1384,10 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 	// Fixed damage — no stat-based formula yet (deferred to zone service).
 	const fixedDamage int32 = 10
 
+	conn.Lock()
 	hp, ok := conn.MonsterHP[targetGID]
 	if !ok {
+		conn.Unlock()
 		// Target is not a known monster (could be NPC, PC, or already
 		// dead). Drop silently — no error, no reply.
 		h.logger.Debug().
@@ -1383,6 +1396,15 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 			Msg("attack on unknown/dead target; dropping")
 		return nil
 	}
+
+	hp -= fixedDamage
+	dead := hp <= 0
+	if dead {
+		delete(conn.MonsterHP, targetGID)
+	} else {
+		conn.MonsterHP[targetGID] = hp
+	}
+	conn.Unlock()
 
 	tick := uint32(time.Now().UnixMilli()) //nolint:gosec // low 32 bits per rAthena time convention
 
@@ -1407,8 +1429,7 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 		return nil
 	}
 
-	hp -= fixedDamage
-	if hp <= 0 {
+	if dead {
 		// Monster died — send ZC_NOTIFY_VANISH and remove from HP map.
 		vanish := packet.NotifyVanishResponse{
 			GID:  targetGID,
@@ -1421,10 +1442,12 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 				Msg("encode ZC_NOTIFY_VANISH failed")
 			return nil
 		}
-		delete(conn.MonsterHP, targetGID)
 
 		// M19: apply EXP
 		h.applyMonsterKillExp(conn, &burst, targetGID)
+
+		// M20: schedule respawn
+		h.scheduleMonsterRespawn(conn, resp, targetGID)
 
 		h.logger.Info().
 			Uint64("conn", conn.ID).
@@ -1432,7 +1455,6 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 			Int32("damage", fixedDamage).
 			Msg("monster killed")
 	} else {
-		conn.MonsterHP[targetGID] = hp
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
 			Uint32("target_gid", targetGID).
@@ -1451,6 +1473,8 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 // them in the connection state, and appends ZC_LONGPAR_CHANGE updates
 // to the response burst.
 func (h *DispatchHandler) applyMonsterKillExp(conn *domain.ConnectionInfo, burst *bytes.Buffer, targetGID uint32) {
+	conn.Lock()
+	defer conn.Unlock()
 	for _, m := range monsterSpawns {
 		if m.GID == targetGID {
 			conn.BaseExp += m.BaseExp
@@ -1474,6 +1498,62 @@ func (h *DispatchHandler) applyMonsterKillExp(conn *domain.ConnectionInfo, burst
 			break
 		}
 	}
+}
+
+// scheduleMonsterRespawn schedules the respawn of a killed monster.
+func (h *DispatchHandler) scheduleMonsterRespawn(conn *domain.ConnectionInfo, resp domain.Responder, targetGID uint32) {
+	time.AfterFunc(monsterRespawnDelay, func() {
+		var mob *monsterSpawn
+		for i := range monsterSpawns {
+			if monsterSpawns[i].GID == targetGID {
+				mob = &monsterSpawns[i]
+				break
+			}
+		}
+		if mob == nil {
+			return
+		}
+
+		conn.Lock()
+		if conn.MonsterHP == nil {
+			conn.MonsterHP = make(map[uint32]int32)
+		}
+		conn.MonsterHP[targetGID] = mob.MaxHP
+		conn.Unlock()
+
+		idle := packet.SetUnitIdleResponse{
+			ObjectType: 0x05, // NPC_MOB_TYPE
+			AID:        mob.GID,
+			GID:        0,
+			Speed:      mob.Speed,
+			Job:        mob.SpriteID,
+			MaxHP:      mob.MaxHP,
+			HP:         mob.HP,
+			PosX:       mob.X,
+			PosY:       mob.Y,
+			Dir:        mob.Dir,
+			Name:       mob.Name,
+			CLevel:     mob.Level,
+		}
+
+		var buf bytes.Buffer
+		if err := idle.Encode(&buf); err != nil {
+			h.logger.Error().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Str("mob_name", mob.Name).
+				Msg("encode monster ZC_SET_UNIT_IDLE failed on respawn")
+			return
+		}
+
+		if err := resp.SendPacket(buf.Bytes()); err != nil {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint32("target_gid", targetGID).
+				Msg("send monster ZC_SET_UNIT_IDLE failed on respawn (client disconnected)")
+		}
+	})
 }
 
 // handleCZChangeDir responds to CZ_CHANGE_DIRECTION (0x009b) — the
