@@ -49,10 +49,6 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
-// monsterRespawnDelay defines the time to wait before respawning a killed monster.
-// Overridable in tests to make them deterministic and fast.
-var monsterRespawnDelay = 5 * time.Second
-
 // ErrIdentityUnavailableRefuse is the AC_REFUSE_LOGIN error code the
 // gateway sends when the identity gRPC call returns a transport-level
 // failure (identity down, deadline exceeded, network partition). 99
@@ -91,6 +87,8 @@ type DispatchHandler struct {
 	// zonePort is the TCP port written into HC_NOTIFY_ZONESVR. Sourced
 	// from gateway.map_addr.
 	zonePort uint16
+	// respawnDelay is the time to wait before respawning a killed monster.
+	respawnDelay time.Duration
 }
 
 // NewDispatchHandler constructs a dispatch-backed PacketHandler.
@@ -116,13 +114,14 @@ func NewDispatchHandler(
 	zonePort uint16,
 ) *DispatchHandler {
 	return &DispatchHandler{
-		identity:   identity,
-		zone:       zone,
-		packetver:  uint32(packetver), //nolint:gosec // validated upstream by config.min/max=20260000
-		logger:     logger.With().Str("component", "gateway.dispatch").Logger(),
-		defaultMap: defaultMap,
-		zoneIP:     zoneIP,
-		zonePort:   zonePort,
+		identity:     identity,
+		zone:         zone,
+		packetver:    uint32(packetver), //nolint:gosec // validated upstream by config.min/max=20260000
+		logger:       logger.With().Str("component", "gateway.dispatch").Logger(),
+		defaultMap:   defaultMap,
+		zoneIP:       zoneIP,
+		zonePort:     zonePort,
+		respawnDelay: 5 * time.Second,
 	}
 }
 
@@ -984,10 +983,7 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		_ = err
 	}
 
-	conn.Lock()
-	baseExp := conn.BaseExp
-	jobExp := conn.JobExp
-	conn.Unlock()
+	baseExp, jobExp := conn.ExpValues()
 
 	// Default values for every parameter — zeny is not in the
 	// proto today (M9) so it is always zero. Weight and max_weight
@@ -1162,14 +1158,11 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 	// gets its own copy so multiple clients can independently damage
 	// monsters without interfering (single-player echo path; true multi-
 	// player HP sync is zone-side work).
-	conn.Lock()
-	if conn.MonsterHP == nil {
-		conn.MonsterHP = make(map[uint32]int32, len(monsterSpawns))
+	spawns := make([]domain.MonsterSpawn, len(monsterSpawns))
+	for i, mob := range monsterSpawns {
+		spawns[i] = domain.MonsterSpawn{GID: mob.GID, MaxHP: mob.HP}
 	}
-	for _, mob := range monsterSpawns {
-		conn.MonsterHP[mob.GID] = mob.HP
-	}
-	conn.Unlock()
+	conn.InitMonsterHP(spawns)
 
 	h.logger.Info().
 		Uint64("conn", conn.ID).
@@ -1384,10 +1377,8 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 	// Fixed damage — no stat-based formula yet (deferred to zone service).
 	const fixedDamage int32 = 10
 
-	conn.Lock()
-	hp, ok := conn.MonsterHP[targetGID]
+	hp, ok := conn.ApplyDamage(targetGID, fixedDamage)
 	if !ok {
-		conn.Unlock()
 		// Target is not a known monster (could be NPC, PC, or already
 		// dead). Drop silently — no error, no reply.
 		h.logger.Debug().
@@ -1397,14 +1388,10 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 		return nil
 	}
 
-	hp -= fixedDamage
 	dead := hp <= 0
 	if dead {
-		delete(conn.MonsterHP, targetGID)
-	} else {
-		conn.MonsterHP[targetGID] = hp
+		conn.RemoveMonster(targetGID)
 	}
-	conn.Unlock()
 
 	tick := uint32(time.Now().UnixMilli()) //nolint:gosec // low 32 bits per rAthena time convention
 
@@ -1473,16 +1460,14 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 // them in the connection state, and appends ZC_LONGPAR_CHANGE updates
 // to the response burst.
 func (h *DispatchHandler) applyMonsterKillExp(conn *domain.ConnectionInfo, burst *bytes.Buffer, targetGID uint32) {
-	conn.Lock()
-	defer conn.Unlock()
 	for _, m := range monsterSpawns {
 		if m.GID == targetGID {
-			conn.BaseExp += m.BaseExp
-			conn.JobExp += m.JobExp
+			conn.AddExp(m.BaseExp, m.JobExp)
+			baseExp, jobExp := conn.ExpValues()
 
 			baseExpUpdate := packet.LongParChangeResponse{
 				VarID:  packet.SPBaseExp,
-				Amount: conn.BaseExp,
+				Amount: baseExp,
 			}
 			if err := baseExpUpdate.Encode(burst); err != nil {
 				h.logger.Error().Err(err).Msg("encode SPBaseExp failed")
@@ -1490,7 +1475,7 @@ func (h *DispatchHandler) applyMonsterKillExp(conn *domain.ConnectionInfo, burst
 
 			jobExpUpdate := packet.LongParChangeResponse{
 				VarID:  packet.SPJobExp,
-				Amount: conn.JobExp,
+				Amount: jobExp,
 			}
 			if err := jobExpUpdate.Encode(burst); err != nil {
 				h.logger.Error().Err(err).Msg("encode SPJobExp failed")
@@ -1502,7 +1487,8 @@ func (h *DispatchHandler) applyMonsterKillExp(conn *domain.ConnectionInfo, burst
 
 // scheduleMonsterRespawn schedules the respawn of a killed monster.
 func (h *DispatchHandler) scheduleMonsterRespawn(conn *domain.ConnectionInfo, resp domain.Responder, targetGID uint32) {
-	time.AfterFunc(monsterRespawnDelay, func() {
+	// Pending timers hold conn/resp references until they fire; for this single-player echo path this is acceptable — full timer lifecycle is zone-service scope.
+	time.AfterFunc(h.respawnDelay, func() {
 		var mob *monsterSpawn
 		for i := range monsterSpawns {
 			if monsterSpawns[i].GID == targetGID {
@@ -1514,12 +1500,7 @@ func (h *DispatchHandler) scheduleMonsterRespawn(conn *domain.ConnectionInfo, re
 			return
 		}
 
-		conn.Lock()
-		if conn.MonsterHP == nil {
-			conn.MonsterHP = make(map[uint32]int32)
-		}
-		conn.MonsterHP[targetGID] = mob.MaxHP
-		conn.Unlock()
+		conn.RespawnMonster(targetGID, mob.MaxHP)
 
 		idle := packet.SetUnitIdleResponse{
 			ObjectType: 0x05, // NPC_MOB_TYPE

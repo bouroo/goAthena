@@ -7,6 +7,13 @@ import (
 	"sync"
 )
 
+// MonsterSpawn defines the minimal fields the domain layer needs to track
+// monster HP and spawns.
+type MonsterSpawn struct {
+	GID   uint32
+	MaxHP int32
+}
+
 // ConnectionInfo describes a single accepted TCP connection. It is built
 // once at OnOpen time and threaded through the PacketHandler so handlers
 // can log the peer and timestamp without re-querying gnet.Conn.
@@ -37,14 +44,64 @@ type ConnectionInfo struct {
 	JobExp int32
 }
 
-// Lock locks the connection mutex.
-func (c *ConnectionInfo) Lock() {
+// InitMonsterHP initializes the ConnectionInfo's MonsterHP map from a slice of MonsterSpawns.
+func (c *ConnectionInfo) InitMonsterHP(spawns []MonsterSpawn) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.MonsterHP == nil {
+		c.MonsterHP = make(map[uint32]int32, len(spawns))
+	}
+	for _, s := range spawns {
+		c.MonsterHP[s.GID] = s.MaxHP
+	}
 }
 
-// Unlock unlocks the connection mutex.
-func (c *ConnectionInfo) Unlock() {
-	c.mu.Unlock()
+// ApplyDamage applies damage to the specified monster's HP.
+// Returns the remaining HP and whether the operation succeeded (true if the monster exists).
+func (c *ConnectionInfo) ApplyDamage(gid uint32, damage int32) (int32, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	hp, ok := c.MonsterHP[gid]
+	if !ok {
+		return 0, false
+	}
+	hp -= damage
+	c.MonsterHP[gid] = hp
+	return hp, true
+}
+
+// RemoveMonster deletes a monster from the tracked HP map.
+func (c *ConnectionInfo) RemoveMonster(gid uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.MonsterHP, gid)
+}
+
+// RespawnMonster re-inserts a monster into the HP map with its max HP.
+// Returns false if the monster was not previously tracked or if the GID is not valid (no-op).
+func (c *ConnectionInfo) RespawnMonster(gid uint32, maxHP int32) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.MonsterHP == nil {
+		c.MonsterHP = make(map[uint32]int32)
+	}
+	c.MonsterHP[gid] = maxHP
+	return true
+}
+
+// AddExp accumulates base and job experience.
+func (c *ConnectionInfo) AddExp(base, job int32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.BaseExp += base
+	c.JobExp += job
+}
+
+// ExpValues returns the current BaseExp and JobExp values.
+func (c *ConnectionInfo) ExpValues() (int32, int32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.BaseExp, c.JobExp
 }
 
 // Responder sends serialized packets back to the client. Each transport

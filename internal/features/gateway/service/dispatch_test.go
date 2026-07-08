@@ -3323,22 +3323,16 @@ func (s *safeResponder) GetPackets() [][]byte {
 }
 
 func TestDispatchHandler_Attack_MonsterRespawns(t *testing.T) {
-	// Set a short respawn delay for testing
-	oldDelay := monsterRespawnDelay
-	monsterRespawnDelay = 20 * time.Millisecond
-	t.Cleanup(func() {
-		monsterRespawnDelay = oldDelay
-	})
-
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
 		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+	h.respawnDelay = 20 * time.Millisecond
 
 	resp := &safeResponder{}
 	conn := domain.ConnectionInfo{
 		ID:        1,
 		AccountID: 200001,
-		MonsterHP: map[uint32]int32{110000005: 5}, // Poring with only 5 HP — kills it
 	}
+	conn.InitMonsterHP([]domain.MonsterSpawn{{GID: 110000005, MaxHP: 5}}) // Poring with only 5 HP — kills it
 
 	req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
 	var reqBuf bytes.Buffer
@@ -3352,10 +3346,8 @@ func TestDispatchHandler_Attack_MonsterRespawns(t *testing.T) {
 	}
 
 	// Verify the monster is dead and vanish packet is sent immediately
-	conn.Lock()
-	_, ok := conn.MonsterHP[110000005]
-	conn.Unlock()
-	if ok {
+	// For checking HP without raw access, we can try to apply 0 damage and if it returns ok=false it means the monster was removed.
+	if _, ok := conn.ApplyDamage(110000005, 0); ok {
 		t.Fatal("monster should be dead (removed from MonsterHP)")
 	}
 
@@ -3363,10 +3355,8 @@ func TestDispatchHandler_Attack_MonsterRespawns(t *testing.T) {
 	var respawnPkt []byte
 	deadline := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
-		conn.Lock()
-		hp, ok := conn.MonsterHP[110000005]
-		conn.Unlock()
-		if ok && hp == 50 {
+		// If monster is respawned, ApplyDamage with 0 damage will succeed and return 50 (maxHP)
+		if hp, ok := conn.ApplyDamage(110000005, 0); ok && hp == 50 {
 			// Found respawned monster with full HP!
 			// Check packets
 			pkts := resp.GetPackets()
@@ -3421,8 +3411,8 @@ func TestDispatchHandler_Attack_Concurrency(t *testing.T) {
 	conn := domain.ConnectionInfo{
 		ID:        1,
 		AccountID: 200001,
-		MonsterHP: map[uint32]int32{110000005: 10000}, // Poring with large HP to prevent death in this test
 	}
+	conn.InitMonsterHP([]domain.MonsterSpawn{{GID: 110000005, MaxHP: 10000}}) // Poring with large HP to prevent death in this test
 
 	req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
 	var reqBuf bytes.Buffer
@@ -3445,9 +3435,10 @@ func TestDispatchHandler_Attack_Concurrency(t *testing.T) {
 	}
 	wg.Wait()
 
-	conn.Lock()
-	hp := conn.MonsterHP[110000005]
-	conn.Unlock()
+	hp, ok := conn.ApplyDamage(110000005, 0)
+	if !ok {
+		t.Fatal("expected monster to exist")
+	}
 
 	expectedHP := int32(10000 - workers*iterations*10)
 	if hp != expectedHP {
