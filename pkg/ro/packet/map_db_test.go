@@ -67,9 +67,10 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewMapServerDB()
-	// 13 C→S + 22 S→C = 35 (M15 adds CZ_CONTACTNPC, CZ_REQNEXTSCRIPT,
-	// CZ_CLOSE_DIALOG, ZC_SAY_DIALOG2, ZC_WAIT_DIALOG2, ZC_CLOSE_DIALOG).
-	const want = 35
+	// 15 C→S + 25 S→C = 40 (M16 adds CZ_ACK_SELECT_DEALTYPE,
+	// CZ_PC_PURCHASE_ITEMLIST, ZC_SELECT_DEALTYPE, ZC_PC_PURCHASE_ITEMLIST,
+	// ZC_PC_PURCHASE_RESULT).
+	const want = 40
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

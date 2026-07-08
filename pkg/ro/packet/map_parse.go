@@ -651,3 +651,158 @@ func (r CZCloseDialogRequest) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// CZAckSelectDealTypeRequest is the decoded form of a client → map-server
+// CZ_ACK_SELECT_DEALTYPE packet (header 0x00c5, 7 bytes on the wire).
+// Source: rathena/src/map/clif_packetdb.hpp
+// (CZ_ACK_SELECT_DEALTYPE) + rathena/src/map/clif.cpp
+// clif_parse_NpcSelectDealType.
+//
+// The on-wire shape is `<NpcID>.L <type>.B` — the client sends the NPC
+// entity ID it just clicked and a deal-type selector:
+//
+//	0x00 = Buy
+//	0x01 = Sell
+//	0x02 = Cancel (close the deal window without buying/selling)
+//
+// rAthena's clif_parse_NpcSelectDealType branches on the type byte
+// and dispatches to the buy list (ZC_PC_PURCHASE_ITEMLIST) / sell
+// list (ZC_PC_SELL_ITEMLIST) / nothing (Cancel).
+type CZAckSelectDealTypeRequest struct {
+	// NpcID is the NPC entity ID the client selected a deal type for.
+	NpcID uint32
+	// Type is the deal-type selector byte (0=Buy, 1=Sell, 2=Cancel).
+	Type uint8
+}
+
+// ParseCZAckSelectDealType decodes a CZ_ACK_SELECT_DEALTYPE frame. The
+// frame must carry cmd 0x00c5 and contain 7 bytes.
+//
+// Returns a wrapped error naming the byte count if the frame is short,
+// or naming the unexpected cmd id if the header is not 0x00c5.
+func ParseCZAckSelectDealType(frame []byte) (CZAckSelectDealTypeRequest, error) {
+	if len(frame) < sizeCZAckSelectDealtype {
+		return CZAckSelectDealTypeRequest{}, fmt.Errorf("packet: parse CZ_ACK_SELECT_DEALTYPE: want at least %d bytes, got %d", sizeCZAckSelectDealtype, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZACKSELECTDEALTYPE {
+		return CZAckSelectDealTypeRequest{}, fmt.Errorf("packet: parse CZ_ACK_SELECT_DEALTYPE: unexpected cmd 0x%04x", cmd)
+	}
+	return CZAckSelectDealTypeRequest{
+		NpcID: binary.LittleEndian.Uint32(frame[2:6]),
+		Type:  frame[6],
+	}, nil
+}
+
+// Encode writes the CZ_ACK_SELECT_DEALTYPE packet to w. Mirrors the
+// on-wire layout: [2:cmd=0x00c5][4:NpcID uint32][1:type uint8] = 7 bytes.
+func (r CZAckSelectDealTypeRequest) Encode(w io.Writer) error {
+	var buf [sizeCZAckSelectDealtype]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZACKSELECTDEALTYPE)
+	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
+	buf[6] = r.Type
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_ACK_SELECT_DEALTYPE: %w", err)
+	}
+	return nil
+}
+
+// CZPCPurchaseItemListEntry is one (itemId, amount) tuple in a
+// CZ_PC_PURCHASE_ITEMLIST request. The on-wire size is 6 bytes:
+// uint32 itemId + uint16 amount.
+type CZPCPurchaseItemListEntry struct {
+	// ItemID is the item database ID the player wants to buy.
+	ItemID uint32
+	// Amount is the quantity the player wants to buy.
+	Amount uint16
+}
+
+// CZPCPurchaseItemListRequest is the decoded form of a client → map-server
+// CZ_PC_PURCHASE_ITEMLIST packet (header 0x00c8, variable length).
+// Source: rathena/src/map/clif_packetdb.hpp (CZ_PC_PURCHASE_ITEMLIST) +
+// rathena/src/map/clif.cpp clif_parse_PurchaseItem.
+//
+// The on-wire shape is:
+//
+//	int16  packetType   (0x00c8)
+//	int16  packetLength (header + 6 * len(entries))
+//	[per entry, 6 bytes:]
+//	  uint32 itemId
+//	  uint16 amount
+//
+// rAthena's clif_parse_PurchaseItem validates the zeny balance and
+// inventory slot availability server-side before returning
+// ZC_PC_PURCHASE_RESULT (0=success, 1=zeny/weight/slots failed). The
+// gateway defers zeny deduction and inventory mutation until the
+// inventory system lands; we still parse the request so the dispatcher
+// can log the player's intent and acknowledge with a success result.
+type CZPCPurchaseItemListRequest struct {
+	// Entries is the list of (itemId, amount) tuples the player wants
+	// to buy. rAthena caps the list at MAX_PURCHASE_ITEM (rAthena's
+	// `clif_purchaseitems` array bound); the parser does not enforce
+	// that cap here — the dispatcher is the right layer to reject
+	// oversized requests.
+	Entries []CZPCPurchaseItemListEntry
+}
+
+// ParseCZPCPurchaseItemList decodes a CZ_PC_PURCHASE_ITEMLIST frame.
+// The frame must carry cmd 0x00c8 and contain at least the 4-byte
+// header. The body is a sequence of 6-byte entries; the parser
+// validates that (len(frame) - 4) % 6 == 0 so a misaligned wire frame
+// (truncated or extra bytes) is rejected with a clear error rather
+// than silently dropped or mis-parsed.
+//
+// Returns a wrapped error naming the byte count if the frame is
+// shorter than 4 bytes, naming the unexpected cmd id if the header
+// is not 0x00c8, or naming the misalignment if the trailing body is
+// not a whole multiple of the 6-byte per-entry size.
+func ParseCZPCPurchaseItemList(frame []byte) (CZPCPurchaseItemListRequest, error) {
+	const minFrame = 4
+	if len(frame) < minFrame {
+		return CZPCPurchaseItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_PURCHASE_ITEMLIST: want at least %d bytes, got %d", minFrame, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZPCPURCHASEITEMLIST {
+		return CZPCPurchaseItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_PURCHASE_ITEMLIST: unexpected cmd 0x%04x", cmd)
+	}
+	bodyLen := len(frame) - minFrame
+	if bodyLen%sizeShopBuyEntry != 0 {
+		return CZPCPurchaseItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_PURCHASE_ITEMLIST: body length %d not aligned to %d-byte entries", bodyLen, sizeShopBuyEntry)
+	}
+	n := bodyLen / sizeShopBuyEntry
+	if n == 0 {
+		return CZPCPurchaseItemListRequest{}, nil
+	}
+	entries := make([]CZPCPurchaseItemListEntry, n)
+	for i := range n {
+		off := minFrame + i*sizeShopBuyEntry
+		entries[i] = CZPCPurchaseItemListEntry{
+			ItemID: binary.LittleEndian.Uint32(frame[off : off+4]),
+			Amount: binary.LittleEndian.Uint16(frame[off+4 : off+6]),
+		}
+	}
+	return CZPCPurchaseItemListRequest{Entries: entries}, nil
+}
+
+// Encode writes the CZ_PC_PURCHASE_ITEMLIST packet to w, appending no
+// trailing bytes. Mirrors the on-wire layout:
+// [2:cmd=0x00c8][2:packetLength][n * (4:itemId + 2:amount)].
+// The encoder computes packetLength from the entry count so the caller
+// cannot accidentally emit a frame whose length slot disagrees with
+// the trailing bytes.
+func (r CZPCPurchaseItemListRequest) Encode(w io.Writer) error {
+	total := 4 + len(r.Entries)*sizeShopBuyEntry
+	if total > 0xffff {
+		return fmt.Errorf("packet: write CZ_PC_PURCHASE_ITEMLIST: too many entries (%d)", len(r.Entries))
+	}
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZPCPURCHASEITEMLIST)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	for i, e := range r.Entries {
+		off := 4 + i*sizeShopBuyEntry
+		binary.LittleEndian.PutUint32(buf[off:off+4], e.ItemID)
+		binary.LittleEndian.PutUint16(buf[off+4:off+6], e.Amount)
+	}
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_PC_PURCHASE_ITEMLIST: %w", err)
+	}
+	return nil
+}

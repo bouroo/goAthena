@@ -65,6 +65,20 @@ const (
 	// zcCloseDialogSize is the fixed length of ZC_CLOSE_DIALOG (M15):
 	// [2:cmd=0x00b6][4:NpcID] = 6 bytes.
 	zcCloseDialogSize = 6
+	// M16: NPC shop interaction.
+	//
+	// zcSelectDealtypeSize is the fixed length of ZC_SELECT_DEALTYPE:
+	// [2:cmd=0x00c4][4:NpcID] = 6 bytes.
+	zcSelectDealtypeSize = 6
+	// shopBuyItemWireSize is the per-item size in
+	// ZC_PC_PURCHASE_ITEMLIST (rathena/src/map/packets_struct.hpp
+	// ITEM_INFO, PACKETVER >= 20210203): uint32 itemId + uint32 price
+	// + uint32 discountPrice + uint8 itemType + uint16 viewSprite +
+	// uint32 location = 4+4+4+1+2+4 = 19 bytes.
+	shopBuyItemWireSize = 19
+	// zcPCPurchaseResultSize is the fixed length of
+	// ZC_PC_PURCHASE_RESULT: [2:cmd=0x00ca][1:result] = 3 bytes.
+	zcPCPurchaseResultSize = 3
 )
 
 // acceptEnterHeaderSize is the fixed prefix length of HC_ACCEPT_ENTER
@@ -905,6 +919,178 @@ func stageCZCloseDialog(t *testing.T, conn net.Conn, dec *netcodec.Decoder, dead
 	t.Logf("CZ_CLOSE_DIALOG ok: no response (logged only)")
 }
 
+// M16: NPC shop interaction stages.
+//
+// stageCZContactNPCShop sends CZ_CONTACTNPC for the Weapon Shop NPC
+// (GID 110000002) and asserts the server responds with ZC_SELECT_DEALTYPE
+// (0x00c4) rather than the M15 dialog sequence. Wire layout:
+//
+//	[0:2]   cmd 0x00c4
+//	[2:6]   NpcID (uint32 LE)
+func stageCZContactNPCShop(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, npcGID uint32) {
+	t.Helper()
+	if err := (packet.CZContactNPCRequest{AID: npcGID, Type: 0x01}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_CONTACTNPC: %v", err)
+	}
+
+	cmd, frame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_SELECT_DEALTYPE: %v", err)
+	}
+	if cmd != packet.HeaderZCSELECTDEALTYPE {
+		t.Fatalf("CZ_CONTACTNPC shop response cmd = 0x%04x, want 0x%04x (ZC_SELECT_DEALTYPE); frame=% x",
+			cmd, packet.HeaderZCSELECTDEALTYPE, frame)
+	}
+	if len(frame) != zcSelectDealtypeSize {
+		t.Fatalf("ZC_SELECT_DEALTYPE length = %d, want %d (frame=% x)",
+			len(frame), zcSelectDealtypeSize, frame)
+	}
+	if nid := binary.LittleEndian.Uint32(frame[2:6]); nid != npcGID {
+		t.Errorf("ZC_SELECT_DEALTYPE NpcID = %d, want %d", nid, npcGID)
+	}
+	t.Logf("CZ_CONTACTNPC shop ok: npc_gid=%d", npcGID)
+}
+
+// stageCZAckSelectDealTypeBuy sends CZ_ACK_SELECT_DEALTYPE with type=0
+// (Buy) and asserts ZC_PC_PURCHASE_ITEMLIST carries the Weapon Shop
+// stock list (4 items: 501, 502, 1201, 1101). Wire layout per item
+// (19 bytes):
+//
+//	[0:4]   itemId (uint32 LE)
+//	[4:8]   price (uint32 LE)
+//	[8:12]  discountPrice (uint32 LE)
+//	[12]    itemType (uint8)
+//	[13:15] viewSprite (uint16 LE)
+//	[15:19] location (uint32 LE)
+func stageCZAckSelectDealTypeBuy(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, npcGID uint32) {
+	t.Helper()
+	if err := (packet.CZAckSelectDealTypeRequest{NpcID: npcGID, Type: 0x00}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_ACK_SELECT_DEALTYPE: %v", err)
+	}
+
+	cmd, frame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_PC_PURCHASE_ITEMLIST: %v", err)
+	}
+	if cmd != packet.HeaderZCPCPURCHASEITEMLIST {
+		t.Fatalf("CZ_ACK_SELECT_DEALTYPE response cmd = 0x%04x, want 0x%04x (ZC_PC_PURCHASE_ITEMLIST); frame=% x",
+			cmd, packet.HeaderZCPCPURCHASEITEMLIST, frame)
+	}
+	const wantItemCount = 4
+	wantLen := 4 + wantItemCount*shopBuyItemWireSize
+	if len(frame) != wantLen {
+		t.Fatalf("ZC_PC_PURCHASE_ITEMLIST length = %d, want %d (frame=% x)",
+			len(frame), wantLen, frame)
+	}
+	if plen := binary.LittleEndian.Uint16(frame[2:4]); int(plen) != wantLen {
+		t.Errorf("ZC_PC_PURCHASE_ITEMLIST packetLength = %d, want %d", plen, wantLen)
+	}
+
+	type wantItem struct {
+		itemID uint32
+		price  uint32
+		itemTy uint8
+		sprite uint16
+		loc    uint32
+	}
+	wants := []wantItem{
+		{501, 50, 0, 0, 0},
+		{502, 200, 0, 0, 0},
+		{1201, 500, 3, 1, 2},
+		{1101, 1500, 3, 2, 2},
+	}
+	for i, w := range wants {
+		off := 4 + i*shopBuyItemWireSize
+		if id := binary.LittleEndian.Uint32(frame[off : off+4]); id != w.itemID {
+			t.Errorf("item[%d] itemId = %d, want %d", i, id, w.itemID)
+		}
+		if price := binary.LittleEndian.Uint32(frame[off+4 : off+8]); price != w.price {
+			t.Errorf("item[%d] price = %d, want %d", i, price, w.price)
+		}
+		if ty := frame[off+12]; ty != w.itemTy {
+			t.Errorf("item[%d] itemType = %d, want %d", i, ty, w.itemTy)
+		}
+		if sprite := binary.LittleEndian.Uint16(frame[off+13 : off+15]); sprite != w.sprite {
+			t.Errorf("item[%d] viewSprite = %d, want %d", i, sprite, w.sprite)
+		}
+		if loc := binary.LittleEndian.Uint32(frame[off+15 : off+19]); loc != w.loc {
+			t.Errorf("item[%d] location = %d, want %d", i, loc, w.loc)
+		}
+	}
+	t.Logf("CZ_ACK_SELECT_DEALTYPE buy ok: items=%d", wantItemCount)
+}
+
+// stageCZPCPurchaseItemList sends CZ_PC_PURCHASE_ITEMLIST for one item
+// (Red Potion, amount=1) and asserts ZC_PC_PURCHASE_RESULT arrives
+// with result=0 (success). Wire layout:
+//
+//	[0:2]   cmd 0x00ca
+//	[2]     result (uint8)
+func stageCZPCPurchaseItemList(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration) {
+	t.Helper()
+	req := packet.CZPCPurchaseItemListRequest{
+		Entries: []packet.CZPCPurchaseItemListEntry{
+			{ItemID: 501, Amount: 1},
+		},
+	}
+	if err := req.Encode(conn); err != nil {
+		t.Fatalf("encode CZ_PC_PURCHASE_ITEMLIST: %v", err)
+	}
+
+	cmd, frame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_PC_PURCHASE_RESULT: %v", err)
+	}
+	if cmd != packet.HeaderZCPCPURCHASERESULT {
+		t.Fatalf("CZ_PC_PURCHASE_ITEMLIST response cmd = 0x%04x, want 0x%04x (ZC_PC_PURCHASE_RESULT); frame=% x",
+			cmd, packet.HeaderZCPCPURCHASERESULT, frame)
+	}
+	if len(frame) != zcPCPurchaseResultSize {
+		t.Fatalf("ZC_PC_PURCHASE_RESULT length = %d, want %d (frame=% x)",
+			len(frame), zcPCPurchaseResultSize, frame)
+	}
+	if res := frame[2]; res != 0 {
+		t.Errorf("ZC_PC_PURCHASE_RESULT result = %d, want 0 (success)", res)
+	}
+	t.Logf("CZ_PC_PURCHASE_ITEMLIST ok: result=success")
+}
+
+// stageCZAckSelectDealTypeCancel sends CZ_ACK_SELECT_DEALTYPE with
+// type=2 (Cancel) and asserts no response is written.
+func stageCZAckSelectDealTypeCancel(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, npcGID uint32) {
+	t.Helper()
+	if err := (packet.CZAckSelectDealTypeRequest{NpcID: npcGID, Type: 0x02}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_ACK_SELECT_DEALTYPE (Cancel): %v", err)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	chunk := make([]byte, 4096)
+	for {
+		cmd, _, derr := dec.Next()
+		if derr == nil {
+			t.Fatalf("unexpected response packet 0x%04x after CZ_ACK_SELECT_DEALTYPE (Cancel)", cmd)
+		}
+		if derr != netcodec.ErrIncomplete {
+			break
+		}
+		n, rerr := conn.Read(chunk)
+		if n > 0 {
+			dec.Feed(chunk[:n])
+			continue
+		}
+		if rerr == nil {
+			break
+		}
+		if netErr, ok := rerr.(net.Error); ok && netErr.Timeout() {
+			break
+		}
+		t.Fatalf("read after CZ_ACK_SELECT_DEALTYPE (Cancel): %v", rerr)
+	}
+	t.Logf("CZ_ACK_SELECT_DEALTYPE cancel ok: no response")
+}
+
 // TestE2E_GatewayFullFlow_TCP speaks the raw kRO binary packet protocol
 // over a single TCP connection to the running gateway and exercises the
 // full login → char → map → move round-trip across every real
@@ -976,6 +1162,14 @@ func TestE2E_GatewayFullFlow_TCP(t *testing.T) {
 	stageCZContactNPC(t, conn, dec, ioDeadline, 110000001, "Kafra Employee")
 	stageCZReqNextScript(t, conn, dec, ioDeadline, 110000001)
 	stageCZCloseDialog(t, conn, dec, ioDeadline, 110000001)
+	// M16: NPC shop interaction. Click on Weapon Shop (GID 110000002),
+	// verify ZC_SELECT_DEALTYPE, request the buy list, verify the 4-item
+	// stock, submit a purchase for 1 Red Potion, verify the success
+	// result, then close the deal window.
+	stageCZContactNPCShop(t, conn, dec, ioDeadline, 110000002)
+	stageCZAckSelectDealTypeBuy(t, conn, dec, ioDeadline, 110000002)
+	stageCZPCPurchaseItemList(t, conn, dec, ioDeadline)
+	stageCZAckSelectDealTypeCancel(t, conn, dec, ioDeadline, 110000002)
 }
 
 // cstrBytes returns the NUL-terminated prefix of b as a string, or the

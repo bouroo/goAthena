@@ -7,6 +7,289 @@ import (
 	"testing"
 )
 
+// M16: NPC shop interaction — CZ_ACK_SELECT_DEALTYPE, CZ_PC_PURCHASE_ITEMLIST.
+
+func TestParseCZAckSelectDealType(t *testing.T) {
+	t.Parallel()
+
+	goodFrame := func() []byte {
+		f := make([]byte, sizeCZAckSelectDealtype)
+		writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE)
+		writeLE32(f[2:], 0x068E36C2) // 110000002 = rAthena START_NPC_NUM + 2
+		f[6] = 0x00                  // type=Buy
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZAckSelectDealTypeRequest
+	}{
+		{
+			name:    "valid type=Buy",
+			frame:   goodFrame,
+			wantErr: false,
+			want:    CZAckSelectDealTypeRequest{NpcID: 0x068E36C2, Type: 0x00},
+		},
+		{
+			name: "valid type=Sell",
+			frame: func() []byte {
+				f := make([]byte, sizeCZAckSelectDealtype)
+				writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE)
+				writeLE32(f[2:], 0x068E36C2)
+				f[6] = 0x01
+				return f
+			}(),
+			wantErr: false,
+			want:    CZAckSelectDealTypeRequest{NpcID: 0x068E36C2, Type: 0x01},
+		},
+		{
+			name: "valid type=Cancel",
+			frame: func() []byte {
+				f := make([]byte, sizeCZAckSelectDealtype)
+				writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE)
+				writeLE32(f[2:], 0x068E36C2)
+				f[6] = 0x02
+				return f
+			}(),
+			wantErr: false,
+			want:    CZAckSelectDealTypeRequest{NpcID: 0x068E36C2, Type: 0x02},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZAckSelectDealtype-1),
+			wantErr:    true,
+			wantErrSub: "6",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, sizeCZAckSelectDealtype)
+				writeLE16(f[0:], HeaderCZCONTACTNPC)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZAckSelectDealType(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZAckSelectDealType() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZAckSelectDealType() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseCZAckSelectDealType() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseCZAckSelectDealType_AcceptsTrailingBytes(t *testing.T) {
+	t.Parallel()
+
+	base := make([]byte, sizeCZAckSelectDealtype)
+	writeLE16(base[0:], HeaderCZACKSELECTDEALTYPE)
+	writeLE32(base[2:], 0x068E36C2)
+	base[6] = 0x00
+	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
+
+	got, err := ParseCZAckSelectDealType(frame)
+	if err != nil {
+		t.Fatalf("ParseCZAckSelectDealType() unexpected error: %v", err)
+	}
+	want := CZAckSelectDealTypeRequest{NpcID: 0x068E36C2, Type: 0x00}
+	if got != want {
+		t.Errorf("ParseCZAckSelectDealType() = %+v, want %+v", got, want)
+	}
+}
+
+func TestParseCZPCPurchaseItemList(t *testing.T) {
+	t.Parallel()
+
+	// One entry: cmd 0x00c8, packetLength=4+6=10, itemId=501,
+	// amount=10.
+	oneItem := func() []byte {
+		f := make([]byte, 4+sizeShopBuyEntry)
+		writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST)
+		writeLE16(f[2:], 4+sizeShopBuyEntry)
+		writeLE32(f[4:], 501)
+		writeLE16(f[8:], 10)
+		return f
+	}()
+
+	// Two entries: cmd 0x00c8, packetLength=4+12=16, items 501 x10
+	// then 502 x20.
+	twoItems := func() []byte {
+		f := make([]byte, 4+2*sizeShopBuyEntry)
+		writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST)
+		writeLE16(f[2:], 4+2*sizeShopBuyEntry)
+		writeLE32(f[4:], 501)
+		writeLE16(f[8:], 10)
+		writeLE32(f[10:], 502)
+		writeLE16(f[14:], 20)
+		return f
+	}()
+
+	// Empty list: 4-byte header, packetLength=4, no entries.
+	empty := func() []byte {
+		f := make([]byte, 4)
+		writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST)
+		writeLE16(f[2:], 4)
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZPCPurchaseItemListRequest
+	}{
+		{
+			name:    "valid single item",
+			frame:   oneItem,
+			wantErr: false,
+			want: CZPCPurchaseItemListRequest{
+				Entries: []CZPCPurchaseItemListEntry{{ItemID: 501, Amount: 10}},
+			},
+		},
+		{
+			name:    "valid multiple items",
+			frame:   twoItems,
+			wantErr: false,
+			want: CZPCPurchaseItemListRequest{
+				Entries: []CZPCPurchaseItemListEntry{
+					{ItemID: 501, Amount: 10},
+					{ItemID: 502, Amount: 20},
+				},
+			},
+		},
+		{
+			name:    "valid empty list",
+			frame:   empty,
+			wantErr: false,
+			want:    CZPCPurchaseItemListRequest{Entries: nil},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, 3),
+			wantErr:    true,
+			wantErrSub: "3",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, 4+sizeShopBuyEntry)
+				writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+		{
+			name: "unaligned body reports misalignment",
+			frame: func() []byte {
+				// 4-byte header + 1 stray byte (5 bytes total) — not a
+				// whole multiple of 6.
+				f := make([]byte, 5)
+				writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "aligned",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZPCPurchaseItemList(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZPCPurchaseItemList() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZPCPurchaseItemList() unexpected error: %v", err)
+			}
+			if len(got.Entries) != len(tc.want.Entries) {
+				t.Fatalf("ParseCZPCPurchaseItemList() len(Entries) = %d, want %d",
+					len(got.Entries), len(tc.want.Entries))
+			}
+			for i, e := range got.Entries {
+				if e != tc.want.Entries[i] {
+					t.Errorf("entry[%d] = %+v, want %+v", i, e, tc.want.Entries[i])
+				}
+			}
+		})
+	}
+}
+
+func TestParseCZPCPurchaseItemList_AcceptsTrailingBytes(t *testing.T) {
+	t.Parallel()
+
+	// 4-byte header + 6-byte entry + 3 trailing bytes (still aligned
+	// for the parser since (13 - 4) % 6 != 0 — test that the parser
+	// flags misalignment rather than dropping the tail silently).
+	base := make([]byte, 4+sizeShopBuyEntry)
+	writeLE16(base[0:], HeaderCZPCPURCHASEITEMLIST)
+	writeLE16(base[2:], 4+sizeShopBuyEntry)
+	writeLE32(base[4:], 501)
+	writeLE16(base[8:], 10)
+
+	// Exactly aligned: append 6 more bytes (another full entry).
+	frame := append(append([]byte{}, base...), 0, 0, 0, 0, 0, 0)
+	// Overwrite the second entry with explicit values for clarity.
+	writeLE32(frame[10:], 502)
+	writeLE16(frame[14:], 20)
+
+	got, err := ParseCZPCPurchaseItemList(frame)
+	if err != nil {
+		t.Fatalf("ParseCZPCPurchaseItemList() unexpected error: %v", err)
+	}
+	if len(got.Entries) != 2 {
+		t.Fatalf("len(Entries) = %d, want 2", len(got.Entries))
+	}
+	if got.Entries[0] != (CZPCPurchaseItemListEntry{ItemID: 501, Amount: 10}) {
+		t.Errorf("entry[0] = %+v, want {501 10}", got.Entries[0])
+	}
+	if got.Entries[1] != (CZPCPurchaseItemListEntry{ItemID: 502, Amount: 20}) {
+		t.Errorf("entry[1] = %+v, want {502 20}", got.Entries[1])
+	}
+}
+
 func TestParseCZEnter(t *testing.T) {
 	t.Parallel()
 
