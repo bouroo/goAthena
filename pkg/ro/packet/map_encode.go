@@ -321,60 +321,10 @@ func encodeSpawnUnitLike(w io.Writer, opcode uint16, r SpawnUnitResponse) error 
 	return nil
 }
 
-// SetUnitIdleResponse encodes a ZC_SET_UNIT_IDLE packet (command
-// 0x09ff, 107 bytes fixed). The server sends this to spawn an NPC
-// entity on the client's map view. The struct layout is identical to
-// ZC_SPAWN_UNIT (0x09fe) for PACKETVER 20250604 — rAthena's
-// clif_set_unit_idle writes the same packet_idle_unit struct with the
-// same field order and size, only the opcode differs.
-//
-// NPC-specific conventions (rAthena npc_data defaults):
-//   - ObjectType = 0x06 (NPC_EVT_TYPE for standard NPC sprites)
-//   - GID = 0 (NPCs have no char_id)
-//   - Speed = 0 (NPCs don't walk by default)
-//   - MaxHP / HP = -1 (sentinel: "don't show HP bar")
-//   - HeadDir = 0
-//   - XSize / YSize = 0
-//
-// Source: rathena/src/map/clif.cpp clif_set_unit_idle.
-type SetUnitIdleResponse struct {
-	ObjectType  uint8
-	AID         uint32
-	GID         uint32
-	Speed       int16
-	BodyState   int16
-	HealthState int16
-	EffectState int32
-	Job         int16
-	Head        uint16
-	Weapon      uint32
-	Shield      uint32
-	Accessory   uint16
-	Accessory2  uint16
-	Accessory3  uint16
-	HeadPalette int16
-	BodyPalette int16
-	HeadDir     int16
-	Robe        uint16
-	GUID        uint32
-	GEmblemVer  int16
-	Honor       int16
-	Virtue      int32
-	IsPKModeON  uint8
-	Sex         uint8
-	PosX        int16
-	PosY        int16
-	Dir         uint8
-	XSize       uint8
-	YSize       uint8
-	CLevel      int16
-	Font        int16
-	MaxHP       int32
-	HP          int32
-	IsBoss      uint8
-	Body        int16
-	Name        string
-}
+// SetUnitIdleResponse is ZC_SET_UNIT_IDLE (0x9ff) — same layout as
+// SpawnUnitResponse but with a different opcode. NPCs use this packet
+// instead of ZC_SPAWN_UNIT (see rAthena clif_set_unit_idle).
+type SetUnitIdleResponse SpawnUnitResponse
 
 // Size returns the on-wire byte length that Encode will write (always 107).
 func (r SetUnitIdleResponse) Size() int {
