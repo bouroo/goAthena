@@ -142,23 +142,25 @@ type parChangeRecord struct {
 
 // parseStatusBurst walks a status-burst response buffer sequentially
 // and returns the ZC_PAR_CHANGE records it contains, the ZC_STATUS
-// payload, the ZC_LONGPAR_CHANGE count, and the M10 empty list
-// packet records. This replaces the byte-by-byte header scan that
-// could misfire when a payload value happened to match a packet
-// header byte pair.
+// payload, the ZC_LONGPAR_CHANGE count, the M10 empty list
+// packet records, and the M14 NPC spawn (ZC_SET_UNIT_IDLE) records.
+// This replaces the byte-by-byte header scan that could misfire when
+// a payload value happened to match a packet header byte pair.
 //
 // Layout consumed: leading ZC_MAPPROPERTY_R2 (8 bytes) is skipped; then
 // 0..N ZC_PAR_CHANGE / ZC_LONGPAR_CHANGE (8 bytes each), then exactly
 // one ZC_STATUS (44 bytes), then the four M10 empty list packets
 // (ZC_INVENTORY_ITEMLIST_NORMAL 0x00a3 / ZC_INVENTORY_ITEMLIST_EQUIP
 // 0x00a4 / ZC_SKILLINFO_LIST 0x010f are 4 bytes each, and
-// ZC_SHORTCUT_KEY_LIST 0x02b9 is 191 bytes). The buffer must be fully
-// consumed.
+// ZC_SHORTCUT_KEY_LIST 0x02b9 is 191 bytes), then 0..N M14 NPC spawn
+// packets (ZC_SET_UNIT_IDLE 0x09ff, 107 bytes each). The buffer must
+// be fully consumed.
 func parseStatusBurst(t *testing.T, buf []byte) (
 	parChanges []parChangeRecord,
 	longParChanges int,
 	statusPayload []byte,
 	emptyListPackets []uint16,
+	npcSpawnGIDs []uint32,
 ) {
 	t.Helper()
 	offset := 0
@@ -227,6 +229,15 @@ func parseStatusBurst(t *testing.T, buf []byte) (
 			}
 			emptyListPackets = append(emptyListPackets, cmd)
 			offset += hotkeySize
+		case 0x09ff: // ZC_SET_UNIT_IDLE (M14, fixed 107 bytes)
+			const idleSize = 107
+			if offset+idleSize > len(buf) {
+				t.Fatalf("truncated ZC_SET_UNIT_IDLE at offset %d (have %d bytes)", offset, len(buf)-offset)
+			}
+			// AID at offset 5 (uint32 LE) is the NPC GID.
+			gid := binary.LittleEndian.Uint32(buf[offset+5 : offset+9])
+			npcSpawnGIDs = append(npcSpawnGIDs, gid)
+			offset += idleSize
 		default:
 			t.Fatalf("unexpected packet header 0x%04x at offset %d (buf=% x)", cmd, offset, buf)
 		}
@@ -234,7 +245,7 @@ func parseStatusBurst(t *testing.T, buf []byte) (
 	if offset != len(buf) {
 		t.Fatalf("trailing %d unparsed bytes at offset %d (buf=% x)", len(buf)-offset, offset, buf)
 	}
-	return parChanges, longParChanges, statusPayload, emptyListPackets
+	return parChanges, longParChanges, statusPayload, emptyListPackets, npcSpawnGIDs
 }
 
 // findParChange scans a (sequential) ZC_PAR_CHANGE list for the first
@@ -1243,7 +1254,7 @@ func TestDispatchHandler_CZNotifyActorInit_StatusBurst(t *testing.T) {
 	// (2) Walk the rest of the buffer sequentially — no byte-by-byte
 	// scan, so a payload byte that happens to match a packet header
 	// cannot cause a false positive.
-	parChanges, longParChanges, statusPayload, emptyListPackets := parseStatusBurst(t, out[8:])
+	parChanges, longParChanges, statusPayload, emptyListPackets, npcGIDs := parseStatusBurst(t, out[8:])
 
 	// (3) Status burst must include exactly one ZC_STATUS (44 bytes).
 	if len(statusPayload) != 44 {
@@ -1289,6 +1300,20 @@ func TestDispatchHandler_CZNotifyActorInit_StatusBurst(t *testing.T) {
 			t.Errorf("empty-list packet[%d] = 0x%04x, want 0x%04x", i, emptyListPackets[i], want)
 		}
 	}
+
+	// (8) M14: NPC spawn packets (ZC_SET_UNIT_IDLE, 0x09ff) must
+	// follow the empty list packets. Four NPCs are defined with GIDs
+	// starting at 110000001.
+	wantNPCGIDs := []uint32{110000001, 110000002, 110000003, 110000004}
+	if len(npcGIDs) != len(wantNPCGIDs) {
+		t.Fatalf("NPC spawn packets seen = %d, want %d (GIDs: %v)",
+			len(npcGIDs), len(wantNPCGIDs), npcGIDs)
+	}
+	for i, want := range wantNPCGIDs {
+		if npcGIDs[i] != want {
+			t.Errorf("NPC spawn[%d] GID = %d, want %d", i, npcGIDs[i], want)
+		}
+	}
 }
 
 func TestDispatchHandler_CZNotifyActorInit_NoCharacter_FallsBackToZeros(t *testing.T) {
@@ -1321,7 +1346,7 @@ func TestDispatchHandler_CZNotifyActorInit_NoCharacter_FallsBackToZeros(t *testi
 
 	// Walk the burst sequentially so a payload byte that happens to
 	// look like a packet header can't cause a false positive.
-	parChanges, _, statusPayload, _ := parseStatusBurst(t, out[8:])
+	parChanges, _, statusPayload, _, _ := parseStatusBurst(t, out[8:])
 
 	// ZC_STATUS must be present and 44 bytes.
 	if len(statusPayload) != 44 {
@@ -1371,7 +1396,7 @@ func TestDispatchHandler_CZNotifyActorInit_NoConnID_StillBurstsZeros(t *testing.
 	// present and the burst is well-formed. M10 also asserts the
 	// four empty-list packets follow in the documented rAthena
 	// LoadEndAck order.
-	_, _, statusPayload, emptyListPackets := parseStatusBurst(t, out[8:])
+	_, _, statusPayload, emptyListPackets, _ := parseStatusBurst(t, out[8:])
 	if len(statusPayload) != 44 {
 		t.Errorf("ZC_STATUS payload = %d bytes, want 44", len(statusPayload))
 	}

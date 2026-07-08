@@ -15,9 +15,10 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		length    int
 		direction Direction
 	}
-	// 6 C→S + 15 S→C = 21 entries total. M11 added CZ_ACTION_REQUEST,
+	// 6 C→S + 16 S→C = 22 entries total. M11 added CZ_ACTION_REQUEST,
 	// CZ_GLOBAL_MESSAGE, ZC_NOTIFY_CHAT, and ZC_ACTION_RESPONSE for the
-	// chat + sit/stand handlers.
+	// chat + sit/stand handlers. M14 added ZC_SET_UNIT_IDLE for NPC
+	// entity spawning.
 	checks := []expect{
 		{HeaderCZENTER, "CZ_ENTER", sizeCZEnter, DirectionClientToServer},
 		{HeaderCZREQUESTMOVE, "CZ_REQUEST_MOVE", sizeCZRequestMove, DirectionClientToServer},
@@ -41,6 +42,7 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCSHORTCUTKEYLIST, "ZC_SHORTCUT_KEY_LIST", sizeZCShortcutKeyList, DirectionServerToClient},
 		{HeaderZCNOTIFYCHAT, "ZC_NOTIFY_CHAT", VariableLength, DirectionServerToClient},
 		{HeaderZCACTIONRESPONSE, "ZC_ACTION_RESPONSE", sizeZCActionResponse, DirectionServerToClient},
+		{HeaderZCSETUNITIDLE, "ZC_SET_UNIT_IDLE", sizeZCSetUnitIdle, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -65,9 +67,9 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewMapServerDB()
-	// 10 C→S + 18 S→C = 28 (M13 adds CZ_GETCHARNAMEREQUEST, CZ_RESTART,
-	// ZC_ACK_REQNAME).
-	const want = 28
+	// 10 C→S + 19 S→C = 29 (M13 adds CZ_GETCHARNAMEREQUEST, CZ_RESTART,
+	// ZC_ACK_REQNAME. M14 adds ZC_SET_UNIT_IDLE).
+	const want = 29
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -110,6 +112,7 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCCHANGEDIR, sizeZCChangeDir},
 		{HeaderZCEMOTION, sizeZCEmotion},
 		{HeaderZCACKREQNAME, sizeZCAckReqName},
+		{HeaderZCSETUNITIDLE, sizeZCSetUnitIdle},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

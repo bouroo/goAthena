@@ -1832,3 +1832,156 @@ func cstrBytes(b []byte) string {
 	}
 	return string(b)
 }
+
+// M14: ZC_SET_UNIT_IDLE (0x09ff, 107 bytes) — NPC entity spawn.
+
+func TestSetUnitIdleResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r SetUnitIdleResponse
+	if got, want := r.Size(), sizeZCSetUnitIdle; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestSetUnitIdleResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := SetUnitIdleResponse{
+		ObjectType: 0x06, // NPC_EVT_TYPE
+		AID:        110000001,
+		GID:        0,
+		Speed:      0,
+		Job:        114, // Kafra Employee sprite
+		MaxHP:      -1,
+		HP:         -1,
+		PosX:       150,
+		PosY:       180,
+		Dir:        0,
+		Name:       "Kafra Employee",
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 107
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Opcode at [0:2] = 0x09ff LE.
+	if got[0] != 0xff || got[1] != 0x09 {
+		t.Errorf("opcode bytes = %02x %02x, want ff 09 (LE 0x09ff)", got[0], got[1])
+	}
+
+	// PacketLength at [2:4] = 107 LE.
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != 107 {
+		t.Errorf("packetLength = %d, want 107", plen)
+	}
+
+	// ObjectType at [4] = 0x06 (NPC_EVT_TYPE).
+	if got[4] != 0x06 {
+		t.Errorf("objectType = %d, want 0x06 (NPC_EVT_TYPE)", got[4])
+	}
+
+	// AID at [5:9] = 110000001.
+	if aid := binary.LittleEndian.Uint32(got[5:9]); aid != 110000001 {
+		t.Errorf("AID = %d, want 110000001", aid)
+	}
+
+	// GID at [9:13] = 0 (NPCs have no char_id).
+	if gid := binary.LittleEndian.Uint32(got[9:13]); gid != 0 {
+		t.Errorf("GID = %d, want 0", gid)
+	}
+
+	// Speed at [13:15] = 0 (NPCs don't walk).
+	if speed := binary.LittleEndian.Uint16(got[13:15]); speed != 0 {
+		t.Errorf("speed = %d, want 0", speed)
+	}
+
+	// Job at [23:25] = 114 (Kafra Employee sprite).
+	if job := binary.LittleEndian.Uint16(got[23:25]); job != 114 {
+		t.Errorf("job = %d, want 114", job)
+	}
+
+	// MaxHP at [72:76] = -1 (sentinel: don't show HP bar).
+	if maxHP := int32(binary.LittleEndian.Uint32(got[72:76])); maxHP != -1 {
+		t.Errorf("maxHP = %d, want -1", maxHP)
+	}
+
+	// HP at [76:80] = -1.
+	if hp := int32(binary.LittleEndian.Uint32(got[76:80])); hp != -1 {
+		t.Errorf("HP = %d, want -1", hp)
+	}
+
+	// PosDir at [63:66] must round-trip to (150, 180, 0).
+	gotX, gotY, gotDir := decodePos(got[63:66])
+	if gotX != 150 || gotY != 180 || gotDir != 0 {
+		t.Errorf("PosDir unpacked = (%d, %d, dir=%d), want (150, 180, 0); bytes = %x",
+			gotX, gotY, gotDir, got[63:66])
+	}
+
+	// Name at [83:107] = "Kafra Employee" + null padding.
+	nameSlot := got[83:107]
+	gotName := cstrBytes(nameSlot)
+	if gotName != "Kafra Employee" {
+		t.Errorf("name = %q, want %q", gotName, "Kafra Employee")
+	}
+	for i := len("Kafra Employee"); i < 24; i++ {
+		if nameSlot[i] != 0 {
+			t.Errorf("name byte at [%d] = 0x%02x, want 0x00 (null pad)", i, nameSlot[i])
+		}
+	}
+}
+
+func TestSetUnitIdleResponse_Encode_ZeroValues(t *testing.T) {
+	t.Parallel()
+
+	resp := SetUnitIdleResponse{}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 107 {
+		t.Fatalf("zero-value len = %d, want 107", len(got))
+	}
+	if got[0] != 0xff || got[1] != 0x09 {
+		t.Errorf("opcode = %02x %02x, want ff 09", got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != 107 {
+		t.Errorf("packetLength = %d, want 107", plen)
+	}
+	// Name field must be 24 zero bytes.
+	for i := 83; i < 107; i++ {
+		if got[i] != 0 {
+			t.Errorf("name byte at [%d] = 0x%02x, want 0x00", i, got[i])
+		}
+	}
+}
+
+func TestSetUnitIdleResponse_Encode_NameTruncation(t *testing.T) {
+	t.Parallel()
+
+	longName := strings.Repeat("N", 40)
+	resp := SetUnitIdleResponse{Name: longName}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 107 {
+		t.Fatalf("len(got) = %d, want 107", len(got))
+	}
+	wantName := []byte(strings.Repeat("N", 24))
+	if !bytes.Equal(got[83:107], wantName) {
+		t.Errorf("truncated name = %q, want 24 'N's", got[83:107])
+	}
+}

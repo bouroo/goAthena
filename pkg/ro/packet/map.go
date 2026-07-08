@@ -49,6 +49,7 @@ const (
 	HeaderZCREFUSEENTER      uint16 = 0x0074 // rathena/src/map/packets.hpp:590 (ZC_REFUSE_ENTER)
 	HeaderZCNOTIFYPLAYERMOVE uint16 = 0x0087 // rathena/src/map/packets.hpp (ZC_NOTIFY_PLAYERMOVE)
 	HeaderZCSPAWNUNIT        uint16 = 0x09fe // rathena/src/map/packets.hpp ZC_SPAWN_UNIT (PACKETVER >= 20150513 branch)
+	HeaderZCSETUNITIDLE      uint16 = 0x09ff // rathena/src/map/packets.hpp ZC_SET_UNIT_IDLE (same layout as ZC_SPAWN_UNIT, different opcode)
 	HeaderZCMAPPROPERTYR2    uint16 = 0x099b // rathena/src/map/clif.cpp:6869 (ZC_MAPPROPERTY_R2, PACKETVER >= 20121010)
 	HeaderZCNOTIFYTIME       uint16 = 0x007f // rathena/src/map/clif.cpp:11186 (ZC_NOTIFY_TIME)
 	// ZC_ACTION_RESPONSE (0x008b) — sit/stand/attack broadcast echo. rAthena
@@ -154,6 +155,11 @@ const (
 	// = 2+2+1+4+4+2+2+2+4+2+2+4+4+2+2+2+2+2+2+2+4+2+2+4+1+1+3+1+1+2+2+4+4+1+2+24
 	// = 107 (rathena/src/map/packets.hpp ZC_SPAWN_UNIT, PACKETVER >= 20150513).
 	sizeZCSpawnUnit = 107
+	// sizeZCSetUnitIdle is identical to sizeZCSpawnUnit — ZC_SET_UNIT_IDLE
+	// (0x09ff) shares the same struct layout as ZC_SPAWN_UNIT (0x09fe) for
+	// PACKETVER 20250604. rAthena's clif_set_unit_idle writes the same
+	// packet_idle_unit struct with the same field order and size.
+	sizeZCSetUnitIdle = 107
 	// sizeSpawnUnitName is the on-wire name field width in
 	// ZC_SPAWN_UNIT (rathena/src/map/packets.hpp ZC_SPAWN_UNIT::name).
 	sizeSpawnUnitName = 24
@@ -444,6 +450,15 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCACKREQNAME,
 		Name:      "ZC_ACK_REQNAME",
 		Length:    sizeZCAckReqName,
+		Direction: DirectionServerToClient,
+	})
+	// M14: ZC_SET_UNIT_IDLE (fixed 107 bytes) — NPC entity spawn.
+	// Same struct layout as ZC_SPAWN_UNIT (0x09fe) but uses opcode
+	// 0x09ff per rAthena's clif_set_unit_idle path.
+	db.Register(Definition{
+		ID:        HeaderZCSETUNITIDLE,
+		Name:      "ZC_SET_UNIT_IDLE",
+		Length:    sizeZCSetUnitIdle,
 		Direction: DirectionServerToClient,
 	})
 

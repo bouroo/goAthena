@@ -1055,6 +1055,35 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 	_, _ = burst.Write(packet.EncodeEmptySkillList())
 	_, _ = burst.Write(packet.EncodeEmptyHotkeyList())
 
+	// M14: append NPC spawn packets (ZC_SET_UNIT_IDLE, 0x09ff) after
+	// the empty list packets. rAthena's clif_parse_LoadEndAck spawns
+	// NPCs via clif_spawnnpc after the status burst; we send them
+	// inline in the same coalesced write. NPC GIDs start at
+	// 110000000 (rAthena START_NPC_NUM).
+	for _, npc := range npcSpawns {
+		idle := packet.SetUnitIdleResponse{
+			ObjectType: 0x06, // NPC_EVT_TYPE for standard NPC sprites
+			AID:        npc.GID,
+			GID:        0,
+			Speed:      0,
+			Job:        npc.SpriteID,
+			MaxHP:      -1,
+			HP:         -1,
+			PosX:       npc.X,
+			PosY:       npc.Y,
+			Dir:        npc.Dir,
+			Name:       npc.Name,
+		}
+		if err := idle.Encode(&burst); err != nil {
+			h.logger.Error().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Str("npc_name", npc.Name).
+				Msg("encode ZC_SET_UNIT_IDLE failed")
+			return nil
+		}
+	}
+
 	h.logger.Info().
 		Uint64("conn", conn.ID).
 		Uint32("aid", conn.AccountID).
@@ -1063,6 +1092,7 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		Uint32("max_hp", maxHP).
 		Uint32("base_level", baseLevel).
 		Uint32("job_level", jobLevel).
+		Int("npc_count", len(npcSpawns)).
 		Msg("status burst sent")
 
 	if err := resp.SendPacket(burst.Bytes()); err != nil {
