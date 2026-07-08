@@ -730,11 +730,14 @@ func (r NotifyChatResponse) Encode(w io.Writer) error {
 	msgBytes := []byte(r.Message)
 	// 4 (header) + 4 (GID) + len(msg) + 1 (NUL terminator).
 	total := 4 + 4 + len(msgBytes) + 1
+	if total > 0xffff {
+		return fmt.Errorf("packet: write ZC_NOTIFY_CHAT: message too long (%d bytes)", len(msgBytes))
+	}
 	buf := make([]byte, total)
 	// int16 packetType = 0x008d (HeaderZCNOTIFYCHAT).
 	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYCHAT)
 	// int16 packetLength at offset 2 — full frame length including header.
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // total fits in uint16 for any message under CHAT_SIZE_MAX (≈ 255)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
 	// uint32 GID at offset 4.
 	binary.LittleEndian.PutUint32(buf[4:], r.GID)
 	// char Message[] at offset 8 + trailing NUL.

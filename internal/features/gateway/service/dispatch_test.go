@@ -1727,3 +1727,60 @@ func TestDispatchHandler_CZActionRequest_MalformedFrame_DropsSilently(t *testing
 		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
 	}
 }
+
+// TestDispatchHandler_CZGlobalMessage_PreAuthGuard_DropsSilently
+// ensures the pre-auth guard rejects chat from a connection that has
+// not yet completed CZ_ENTER (conn.AccountID == 0). The handler must
+// drop the packet silently — no ZC_NOTIFY_CHAT reply, no connection
+// tear-down — mirroring the pattern in handleCZRequestMove.
+func TestDispatchHandler_CZGlobalMessage_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	// AccountID is zero — the pre-auth guard must trip.
+	conn := domain.ConnectionInfo{ID: 1}
+
+	req := packet.CZGlobalMessageRequest{Message: "hello"}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_GLOBAL_MESSAGE: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZGLOBALMESSAGE, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth chat, want 0 (drop)", got)
+	}
+}
+
+// TestDispatchHandler_CZActionRequest_PreAuthGuard_DropsSilently
+// ensures the pre-auth guard rejects sit/stand from a connection that
+// has not yet completed CZ_ENTER. Mirrors the chat pre-auth test.
+func TestDispatchHandler_CZActionRequest_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+
+	req := packet.CZActionRequestRequest{TargetGID: 1, Action: 1}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth action, want 0 (drop)", got)
+	}
+}

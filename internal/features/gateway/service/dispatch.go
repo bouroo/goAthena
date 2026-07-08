@@ -1124,6 +1124,19 @@ func (h *DispatchHandler) handleCZGlobalMessage(_ context.Context, conn *domain.
 		return nil
 	}
 
+	if conn.AccountID == 0 {
+		// CZ_GLOBAL_MESSAGE without a preceding CZ_ENTER: the client
+		// has not authenticated against the zone yet, so we have no
+		// entity to attribute the chat to. Drop silently rather than
+		// panic on a zero AID in the GID slot — see handleCZRequestMove
+		// for the analogous guard.
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("CZ_GLOBAL_MESSAGE without prior CZ_ENTER; dropping")
+		return nil
+	}
+
 	notify := packet.NotifyChatResponse{
 		GID:     conn.AccountID,
 		Message: req.Message,
@@ -1177,6 +1190,19 @@ func (h *DispatchHandler) handleCZActionRequest(_ context.Context, conn *domain.
 			Uint64("conn", conn.ID).
 			Int("frame_len", len(frame)).
 			Msg("malformed CZ_ACTION_REQUEST; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		// CZ_ACTION_REQUEST without a preceding CZ_ENTER: the client
+		// has not authenticated against the zone yet, so we have no
+		// entity to attribute the sit/stand to. Drop silently rather
+		// than panic on a zero AID in the GID slot — see
+		// handleCZRequestMove for the analogous guard.
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint8("action", req.Action).
+			Msg("CZ_ACTION_REQUEST without prior CZ_ENTER; dropping")
 		return nil
 	}
 

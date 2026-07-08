@@ -355,6 +355,37 @@ func TestParseCZGlobalMessage(t *testing.T) {
 			wantErr: false,
 			want:    CZGlobalMessageRequest{Message: "hel"},
 		},
+		{
+			name: "packetLength smaller than header reports too-short length",
+			frame: []byte{
+				0x8c, 0x00, 0x03, 0x00,
+				'h', 'i', 0x00,
+			},
+			wantErr:    true,
+			wantErrSub: "packet length 3 too short",
+		},
+		{
+			name: "packetLength larger than frame reports frame/len mismatch",
+			frame: []byte{
+				0x8c, 0x00, 0x10, 0x00,
+				'h', 'i', 0x00,
+			},
+			wantErr:    true,
+			wantErrSub: "frame length 7 shorter than packet length 16",
+		},
+		{
+			name: "trailing bytes past packetLength are not read into message",
+			// Header says 7 bytes; the trailing 0xAA 0xBB belong to a
+			// subsequent buffered packet and must not leak into the
+			// parsed message body.
+			frame: []byte{
+				0x8c, 0x00, 0x07, 0x00,
+				'h', 'i', 0x00,
+				0xAA, 0xBB,
+			},
+			wantErr: false,
+			want:    CZGlobalMessageRequest{Message: "hi"},
+		},
 	}
 
 	for _, tc := range tests {

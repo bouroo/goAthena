@@ -198,14 +198,17 @@ type CZGlobalMessageRequest struct {
 
 // ParseCZGlobalMessage decodes a CZ_GLOBAL_MESSAGE frame. The frame must
 // carry cmd 0x008c and contain at least the 4-byte header; the message
-// is the NUL-terminated text starting at offset 4. Trailing bytes past
-// the embedded packetLength are tolerated so the gateway can hand in a
-// buffered frame without first stripping the tail.
+// is the NUL-terminated text starting at offset 4. The body slice is
+// bounded by the embedded packetLength slot at frame[2:4] rather than
+// the frame's total length, so a buffered frame carrying trailing
+// packets cannot leak bytes from the next packet into the parsed
+// message.
 //
 // Returns a wrapped error if the frame is shorter than 4 bytes, the cmd
-// id is not 0x008c, or the message body is empty (a chat packet with no
-// payload is malformed — the client always NUL-terminates, including for
-// the trivial single-character case).
+// id is not 0x008c, the embedded packetLength is below the header size
+// or larger than the frame, or the message body is empty (a chat packet
+// with no payload is malformed — the client always NUL-terminates,
+// including for the trivial single-character case).
 func ParseCZGlobalMessage(frame []byte) (CZGlobalMessageRequest, error) {
 	const minFrame = 4
 	if len(frame) < minFrame {
@@ -215,7 +218,15 @@ func ParseCZGlobalMessage(frame []byte) (CZGlobalMessageRequest, error) {
 		return CZGlobalMessageRequest{}, fmt.Errorf("packet: parse CZ_GLOBAL_MESSAGE: unexpected cmd 0x%04x", cmd)
 	}
 
-	body := frame[4:]
+	plen := binary.LittleEndian.Uint16(frame[2:4])
+	if int(plen) < minFrame {
+		return CZGlobalMessageRequest{}, fmt.Errorf("packet: parse CZ_GLOBAL_MESSAGE: packet length %d too short", plen)
+	}
+	if len(frame) < int(plen) {
+		return CZGlobalMessageRequest{}, fmt.Errorf("packet: parse CZ_GLOBAL_MESSAGE: frame length %d shorter than packet length %d", len(frame), plen)
+	}
+
+	body := frame[4:plen]
 	if len(body) == 0 {
 		return CZGlobalMessageRequest{}, fmt.Errorf("packet: parse CZ_GLOBAL_MESSAGE: empty message body")
 	}
@@ -297,9 +308,12 @@ func (r CZGlobalMessageRequest) Encode(w io.Writer) error {
 	msg := []byte(r.Message)
 	// 4 (header) + len(msg) + 1 (NUL terminator).
 	total := 4 + len(msg) + 1
+	if total > 0xffff {
+		return fmt.Errorf("packet: write CZ_GLOBAL_MESSAGE: message too long (%d bytes)", len(msg))
+	}
 	buf := make([]byte, total)
 	binary.LittleEndian.PutUint16(buf[0:], HeaderCZGLOBALMESSAGE)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // total fits in uint16 for any message under CHAT_SIZE_MAX (≈ 255)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
 	copy(buf[4:], msg)
 	// buf[4+len(msg)] is already 0x00 from make() — the trailing NUL.
 

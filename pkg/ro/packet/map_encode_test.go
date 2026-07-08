@@ -1221,6 +1221,72 @@ func TestNotifyChatResponse_Encode_AppendsNulEvenWhenInputHasNone(t *testing.T) 
 	}
 }
 
+// TestNotifyChatResponse_Encode_OversizedMessageRejected pins the
+// uint16 packet-length guard: a message whose total wire size would
+// exceed 65535 bytes must return an error rather than silently
+// truncating the packetLength slot via uint16 overflow.
+func TestNotifyChatResponse_Encode_OversizedMessageRejected(t *testing.T) {
+	t.Parallel()
+
+	// 4 (header) + 4 (GID) + len(msg) + 1 (NUL) > 0xffff ⇒ len(msg) > 65526.
+	resp := NotifyChatResponse{
+		GID:     1,
+		Message: strings.Repeat("a", 0xffff),
+	}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err == nil {
+		t.Fatalf("Encode() error = nil, want non-nil (oversized message)")
+	}
+}
+
+// TestCZGlobalMessageRequest_Encode covers the M11 client-encoder
+// round-trip: the encoder must emit the correct cmd header, derive the
+// packetLength from the message bytes, and append a trailing NUL
+// terminator.
+func TestCZGlobalMessageRequest_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := CZGlobalMessageRequest{Message: "hi"}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	// 4 (header) + 2 ("hi") + 1 (NUL) = 7.
+	const wantLen = 7
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d (buf=% x)", len(got), wantLen, got)
+	}
+	if got[0] != 0x8c || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want 8c 00 (LE 0x008c)", got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	if !bytes.Equal(got[4:6], []byte("hi")) {
+		t.Errorf("message bytes = %q, want %q", got[4:6], "hi")
+	}
+	if got[6] != 0 {
+		t.Errorf("NUL terminator at [6] = 0x%02x, want 0x00", got[6])
+	}
+}
+
+// TestCZGlobalMessageRequest_Encode_OversizedMessageRejected pins the
+// uint16 packet-length guard: a message whose total wire size would
+// exceed 65535 bytes must return an error rather than silently
+// truncating the packetLength slot via uint16 overflow.
+func TestCZGlobalMessageRequest_Encode_OversizedMessageRejected(t *testing.T) {
+	t.Parallel()
+
+	// 4 (header) + len(msg) + 1 (NUL) > 0xffff ⇒ len(msg) > 65530.
+	resp := CZGlobalMessageRequest{Message: strings.Repeat("a", 0xffff)}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err == nil {
+		t.Fatalf("Encode() error = nil, want non-nil (oversized message)")
+	}
+}
+
 // TestActionResponse_Size pins the fixed 11-byte wire length that
 // ZC_ACTION_RESPONSE advertises. The dispatch handler relies on this
 // invariant to coalesce action echoes into the chat send path without
