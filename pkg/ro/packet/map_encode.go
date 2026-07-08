@@ -942,11 +942,7 @@ func (r AckReqNameResponse) Encode(w io.Writer) error {
 	binary.LittleEndian.PutUint32(buf[2:], r.GID)
 	// char name[24] at offset 6 — copy up to 24 bytes, null-pad the
 	// rest. The array is zero-initialized so trailing bytes are 0x00.
-	nameBytes := []byte(r.Name)
-	if len(nameBytes) > sizeZCAckReqNameName {
-		nameBytes = nameBytes[:sizeZCAckReqNameName]
-	}
-	copy(buf[6:6+len(nameBytes)], nameBytes)
+	copy(buf[6:6+sizeZCAckReqNameName], r.Name)
 
 	if _, err := w.Write(buf[:]); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_REQNAME: %w", err)

@@ -1426,9 +1426,12 @@ func (h *DispatchHandler) handleCZGetCharNameRequest(_ context.Context, conn *do
 	if req.GID == conn.CharID {
 		char, err := h.fetchCharacterByConn(conn)
 		if err != nil {
-			_ = err
-		}
-		if char != nil {
+			h.logger.Warn().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint32("char_id", conn.CharID).
+				Msg("failed to fetch character for name request")
+		} else if char != nil {
 			name = char.GetName()
 		}
 	}
