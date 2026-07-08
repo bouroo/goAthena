@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
+	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -59,7 +60,7 @@ func TestNewWSHandler_StoresConfig(t *testing.T) {
 	rec := newWSRecordingHandler()
 	logger := newTestLogger(t)
 
-	h := NewWSHandler(db, rec, ":0", "/ws/", logger, nil)
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), ":0", "/ws/", logger, nil)
 
 	if h.db != db {
 		t.Fatalf("db pointer not stored")
@@ -78,7 +79,7 @@ func TestWSHandler_RejectNonUpgrade_Returns404(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -101,7 +102,7 @@ func TestWSHandler_RejectsPlainUpgradeRequest(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -125,7 +126,7 @@ func TestWSHandler_AcceptsBinaryCALoginAndDispatches(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -167,7 +168,7 @@ func TestWSHandler_MultiplePacketsInOneBinaryMessage(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -207,7 +208,7 @@ func TestWSHandler_PartialPacketAcrossMessages_BufferedUntilComplete(t *testing.
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -260,7 +261,7 @@ func TestWSHandler_NonBinaryMessage_ClosesConnection(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -295,7 +296,7 @@ func TestWSHandler_StopWithoutStart_IsNoop(t *testing.T) {
 	db := packet.NewLoginServerDB()
 	rec := newWSRecordingHandler()
 	logger := newTestLogger(t)
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), "unused", "/ws/", logger, nil)
 
 	if err := h.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop without Start err = %v, want nil", err)
@@ -310,7 +311,7 @@ func TestWSHandler_StartStopRealPort(t *testing.T) {
 	db := packet.NewLoginServerDB()
 	rec := newWSRecordingHandler()
 	logger := zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.Disabled)
-	h := NewWSHandler(db, rec, addr, "/ws/", logger, nil)
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), addr, "/ws/", logger, nil)
 
 	if err := h.Start(context.Background()); err != nil {
 		t.Skipf("port %s not bindable in this environment: %v", addr, err)
@@ -335,7 +336,7 @@ func TestWSHandler_RejectsDisallowedOrigin(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger, []string{"https://allowed.example.com"})
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), "unused", "/ws/", logger, []string{"https://allowed.example.com"})
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -370,7 +371,7 @@ func TestWSHandler_AcceptsAllowedOrigin(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger, []string{"https://allowed.example.com"})
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), "unused", "/ws/", logger, []string{"https://allowed.example.com"})
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 
@@ -410,7 +411,7 @@ func TestWSHandler_EmptyOriginsAcceptsAll(t *testing.T) {
 	logger := newTestLogger(t)
 
 	mux := http.NewServeMux()
-	h := NewWSHandler(db, rec, "unused", "/ws/", logger, nil)
+	h := NewWSHandler(db, rec, service.NewSessionRegistry(), "unused", "/ws/", logger, nil)
 	mux.HandleFunc(h.path, h.ServeHTTP)
 	mux.HandleFunc("/", h.rejectNonUpgrade)
 

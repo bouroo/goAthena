@@ -73,6 +73,14 @@ type DispatchHandler struct {
 	zone      zonev1.ZoneServiceClient
 	packetver uint32
 	logger    zerolog.Logger
+	// registry is the gateway-wide map-scoped session index. It is
+	// populated by handleCZEnter on a successful map enter and read
+	// by the future NATS broadcast subscriber (a later workstream
+	// fans events out via ForEachOnMap). The interface is satisfied
+	// by service.NewSessionRegistry and shared with TCPHandler /
+	// WSHandler so the OnClose / disconnect paths can unregister
+	// the same account.
+	registry SessionRegistry
 
 	// defaultMap is the initial map name advertised in HC_NOTIFY_ZONESVR
 	// after CH_SELECT_CHAR. Sourced from zone.default_map.
@@ -112,6 +120,7 @@ func NewDispatchHandler(
 	defaultMap string,
 	zoneIP uint32,
 	zonePort uint16,
+	registry SessionRegistry,
 ) *DispatchHandler {
 	return &DispatchHandler{
 		identity:     identity,
@@ -121,6 +130,7 @@ func NewDispatchHandler(
 		defaultMap:   defaultMap,
 		zoneIP:       zoneIP,
 		zonePort:     zonePort,
+		registry:     registry,
 		respawnDelay: 5 * time.Second,
 	}
 }
@@ -577,6 +587,23 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn *domain.Connec
 	// connection close by gnet dropping connState.
 	conn.AccountID = req.AccountID
 	conn.CharID = req.CharID
+	conn.MapName = zResp.GetMapName()
+
+	// Install the session in the registry now that the map is known.
+	// View is populated later (below) at the exact point the
+	// identity.GetCharacter RPC result is available, avoiding a
+	// second RPC at this site. The Responder is the per-connection
+	// transport Responder; for TCP it wraps a stable gnet.Conn
+	// (AsyncWrite is goroutine-safe) and for WS it wraps the active
+	// read-context (lives until the WS serve loop returns), so
+	// storing it as a fat pointer is correct.
+	if conn.AccountID != 0 {
+		h.registry.Register(conn.AccountID, domain.Session{
+			Responder: resp,
+			CharID:    conn.CharID,
+			MapName:   conn.MapName,
+		})
+	}
 
 	accept := packet.MapAcceptEnterResponse{
 		StartTime: uint32(time.Now().Unix()), //nolint:gosec // low 32 bits of unix time per rAthena startTime convention
@@ -625,7 +652,40 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn *domain.Connec
 	// failure here does not tear the connection down either (the
 	// client will surface the missing sprite as a visible glitch,
 	// not a fatal protocol error).
-	spawn := h.buildSelfSpawn(conn, req, zResp)
+	//
+	// The same RPC result is also written back into the session
+	// registry as the View snapshot — a single GetCharacter call
+	// services both the self-spawn encode and the registry, so the
+	// future fan-out produces the same wire shape as the per-conn
+	// self-spawn.
+	return h.sendSelfSpawnAndUpdateRegistry(conn, resp, req, zResp)
+}
+
+// sendSelfSpawnAndUpdateRegistry fetches the character for the
+// self-spawn (reusing the same RPC result for the session registry's
+// View snapshot) and sends the ZC_SPAWN_UNIT frame. Extracted from
+// handleCZEnter to keep the parent's gocyclo budget under 15 after
+// the registry wiring was added in Step 2c.
+func (h *DispatchHandler) sendSelfSpawnAndUpdateRegistry(
+	conn *domain.ConnectionInfo,
+	resp domain.Responder,
+	req packet.CZEnterRequest,
+	zResp *zonev1.EnterZoneResponse,
+) error {
+	char, err := h.fetchCharacterForSpawn(conn, req)
+	if err != nil {
+		// Logged by fetchCharacterForSpawn; the fallback below gives
+		// the client a usable, if unstyled, sprite.
+		_ = err
+	}
+	if char != nil && conn.AccountID != 0 {
+		// SetView silently no-ops if the session was Unregistered
+		// between Register and this point (e.g. the client dropped
+		// mid-handshake); the future ForEachOnMap will not see a
+		// stale entry either way.
+		h.registry.SetView(conn.AccountID, viewDataFromCharacter(conn.AccountID, char))
+	}
+	spawn := h.buildSelfSpawnFromCharacter(conn, req, char, zResp)
 
 	var spawnBuf bytes.Buffer
 	if err := spawn.Encode(&spawnBuf); err != nil {
@@ -659,24 +719,22 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn *domain.Connec
 	return nil
 }
 
-// buildSelfSpawn assembles the ZC_SPAWN_UNIT response for the player's
-// own entity. The character-specific fields (name, class, level, HP,
-// hair, equipment, sex) come from identity.GetCharacter; on any
-// failure the function logs a warning and returns a zero-filled
-// fallback so the map enter handshake always completes. The caller
-// (handleCZEnter) decides how to surface the send.
-func (h *DispatchHandler) buildSelfSpawn(
+// buildSelfSpawnFromCharacter assembles the ZC_SPAWN_UNIT response for
+// the player's own entity from a pre-fetched character snapshot. On
+// a nil character the function returns a zero-filled fallback so the
+// map enter handshake always completes — the caller (handleCZEnter)
+// decides how to surface the send.
+//
+// The character is fetched once in handleCZEnter and passed in here
+// so the same GetCharacter RPC result can be mirrored into the
+// session registry's View snapshot (via viewDataFromCharacter) without
+// a second round-trip.
+func (h *DispatchHandler) buildSelfSpawnFromCharacter(
 	conn *domain.ConnectionInfo,
 	req packet.CZEnterRequest,
+	char *identityv1.CharacterDetail,
 	zResp *zonev1.EnterZoneResponse,
 ) packet.SpawnUnitResponse {
-	char, err := h.fetchCharacterForSpawn(conn, req)
-	if err != nil {
-		// Logged by fetchCharacterForSpawn; the fallback below gives
-		// the client a usable, if unstyled, sprite.
-		_ = err
-	}
-
 	spawn := packet.SpawnUnitResponse{
 		ObjectType: 0, // TYPE_PC — the only value the gateway emits today.
 		AID:        conn.AccountID,
@@ -685,14 +743,18 @@ func (h *DispatchHandler) buildSelfSpawn(
 		// the client uses GID to attribute local input back to the
 		// entity on the map and a mismatch would break per-entity
 		// chat and move broadcasts.
-		GID:   req.CharID,
+		GID:   conn.CharID,
 		Speed: 150,
 		PosX:  clampMapCoord(zResp.GetMapX()),
 		PosY:  clampMapCoord(zResp.GetMapY()),
 		Dir:   0,
 		XSize: 5,
 		YSize: 5,
-		Sex:   req.Sex,
+		// Initial Sex comes from the parsed CZ_ENTER request byte;
+		// the non-nil-char path below overrides it with the identity
+		// row (M7a). Kept as the fallback so the identity-failure
+		// path still renders a sex-aware default sprite.
+		Sex: req.Sex,
 	}
 
 	if char == nil {

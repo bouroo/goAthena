@@ -46,6 +46,20 @@ type SessionRegistry interface {
 	// vanished" condition.
 	SetMap(accountID uint32, mapName string) bool
 
+	// SetView replaces the ViewData snapshot on the session for
+	// accountID. It returns false if no session is registered for
+	// that account — the caller is expected to treat a false return
+	// as a "session vanished" condition (e.g. the client disconnected
+	// between Register and the self-spawn character fetch).
+	//
+	// SetView exists so the dispatch handler can populate the
+	// character-derived view fields at the exact point the
+	// identity.GetCharacter RPC result becomes available, avoiding a
+	// second RPC at Register time. The SetView is silent on race:
+	// if the session is Unregistered between the caller's Register
+	// and SetView, the value is dropped.
+	SetView(accountID uint32, v domain.ViewData) bool
+
 	// Get returns a snapshot copy of the session for accountID. The
 	// second return is false when no session is registered. The copy
 	// means callers can read Responder / View without racing against
@@ -131,6 +145,22 @@ func (r *sessionRegistry) SetMap(accountID uint32, mapName string) bool {
 		return false
 	}
 	s.MapName = mapName
+	r.rooms[accountID] = s
+	return true
+}
+
+// SetView replaces the View snapshot on the session for accountID.
+// Returns false when no session is registered for accountID — callers
+// treat a false return as "the session vanished mid-call". See
+// SessionRegistry.SetView for the full contract.
+func (r *sessionRegistry) SetView(accountID uint32, v domain.ViewData) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.rooms[accountID]
+	if !ok {
+		return false
+	}
+	s.View = v
 	r.rooms[accountID] = s
 	return true
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
+	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	netcodec "github.com/bouroo/goAthena/internal/infrastructure/net"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
@@ -29,6 +30,7 @@ import (
 type WSHandler struct {
 	db             *packet.DB
 	handler        domain.PacketHandler
+	registry       service.SessionRegistry
 	logger         zerolog.Logger
 	addr           string
 	path           string
@@ -45,10 +47,21 @@ type WSHandler struct {
 // the CSWSH origin allowlist applied to the upgrade; when empty, origin
 // verification is disabled and a warning is logged per connection (dev
 // default). Production deployments must pass a non-empty allowlist.
-func NewWSHandler(db *packet.DB, handler domain.PacketHandler, addr, path string, logger zerolog.Logger, allowedOrigins []string) *WSHandler {
+// registry is consulted on disconnect to remove any session the
+// dispatch handler installed for the connection; pass the same
+// instance the dispatch handler was constructed with.
+func NewWSHandler(
+	db *packet.DB,
+	handler domain.PacketHandler,
+	registry service.SessionRegistry,
+	addr, path string,
+	logger zerolog.Logger,
+	allowedOrigins []string,
+) *WSHandler {
 	return &WSHandler{
 		db:             db,
 		handler:        handler,
+		registry:       registry,
 		addr:           addr,
 		path:           path,
 		allowedOrigins: allowedOrigins,
@@ -165,6 +178,14 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	defer func() {
 		_ = conn.Close(websocket.StatusNormalClosure, "")
+		// Remove any session the dispatch handler installed for this
+		// connection. Unregister is a no-op when the session was never
+		// registered (no successful CZ_ENTER) or already removed by a
+		// prior cleanup path. Must run before the close log so the
+		// registry count reflects the disconnect.
+		if h.registry != nil && info.AccountID != 0 {
+			h.registry.Unregister(info.AccountID)
+		}
 		h.logger.Debug().
 			Uint64("conn", id).
 			Str("remote", r.RemoteAddr).

@@ -144,6 +144,46 @@ func TestSessionRegistry_SetMap(t *testing.T) {
 	})
 }
 
+func TestSessionRegistry_SetView(t *testing.T) {
+	t.Parallel()
+	t.Run("registered", func(t *testing.T) {
+		t.Parallel()
+		r := NewSessionRegistry()
+		r.Register(42, newSampleSession(42, 7, "prontera"))
+
+		view := domain.ViewData{
+			ObjectType: 0,
+			AID:        42,
+			GID:        7,
+			Speed:      150,
+			Job:        7,
+			Head:       5,
+			Weapon:     1101,
+			Sex:        1,
+			CLevel:     50,
+			MaxHP:      2000,
+			HP:         1234,
+			Name:       "alpha",
+		}
+		ok := r.SetView(42, view)
+		assert.True(t, ok, "SetView on a registered key should return true")
+
+		got, ok := r.Get(42)
+		require.True(t, ok)
+		assert.Equal(t, view, got.View, "SetView must replace the View snapshot")
+		// CharID and MapName must be preserved by SetView — the
+		// dispatch handler relies on these to attribute broadcasts.
+		assert.Equal(t, uint32(7), got.CharID)
+		assert.Equal(t, "prontera", got.MapName)
+	})
+	t.Run("absent", func(t *testing.T) {
+		t.Parallel()
+		r := NewSessionRegistry()
+		ok := r.SetView(424242, domain.ViewData{Name: "ghost"})
+		assert.False(t, ok, "SetView on an absent key should return false")
+	})
+}
+
 func TestSessionRegistry_ForEachOnMap(t *testing.T) {
 	t.Parallel()
 	r := NewSessionRegistry()
