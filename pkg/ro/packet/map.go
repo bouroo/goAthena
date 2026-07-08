@@ -127,6 +127,12 @@ const (
 	HeaderZCINVENTORYITEMLISTEQUIP  uint16 = 0x00a4 // rathena/src/map/clif_packetdb.hpp (ZC_INVENTORY_ITEMLIST_EQUIP)
 	HeaderZCSKILLINFOLIST           uint16 = 0x010f // rathena/src/map/packets_struct.hpp:4279 (ZC_SKILLINFO_LIST)
 	HeaderZCSHORTCUTKEYLIST         uint16 = 0x02b9 // rathena/src/map/packets_struct.hpp:1619 (ZC_SHORTCUT_KEY_LIST, PACKETVER < 20090603)
+	// ZC_NOTIFY_ACT (0x08c8) — damage / action notification. rathena/src/map/
+	// packets.hpp:1426 (PACKETVER >= 20131223). Fixed 34 bytes.
+	HeaderZCNOTIFYACT uint16 = 0x08c8
+	// ZC_NOTIFY_VANISH (0x0080) — entity vanish notification. rathena/src/map/
+	// packets.hpp:609. Fixed 7 bytes.
+	HeaderZCNOTIFYVANISH uint16 = 0x0080
 )
 
 // SP_* status parameter IDs from rathena/src/map/map.hpp:498-505.
@@ -312,6 +318,35 @@ const (
 	// sizeZCPCPurchaseResult = int16 packetType + uint8 result = 2+1 = 3
 	// (rathena/src/map/packets.hpp: ZC_PC_PURCHASE_RESULT).
 	sizeZCPCPurchaseResult = 3
+	// sizeZCNotifyAct = int16 packetType + int32 srcID + int32 targetID +
+	// int32 serverTick + int32 srcSpeed + int32 dmgSpeed + int32 damage +
+	// int8 isSPDamage + uint16 div + uint8 type + int32 damage2
+	// = 2+4+4+4+4+4+4+1+2+1+4 = 34 (rathena/src/map/packets.hpp:1413-1425,
+	// PACKETVER >= 20131223 branch).
+	sizeZCNotifyAct = 34
+	// sizeZCNotifyVanish = int16 packetType + uint32 gid + uint8 type = 2+4+1 = 7
+	// (rathena/src/map/packets.hpp:604-608).
+	sizeZCNotifyVanish = 7
+)
+
+// Damage / action type constants from rathena/src/map/clif.hpp:691-707.
+// Used as the `type` field in ZC_NOTIFY_ACT and the `action` byte in
+// CZ_ACTION_REQUEST (0x0089).
+const (
+	DMGNormal  uint8 = 0 // DMG_NORMAL — single attack
+	DMGPickup  uint8 = 1 // DMG_PICKUP_ITEM — pick up item
+	DMGSitDown uint8 = 2 // DMG_SIT_DOWN — sit down
+	DMGStandUp uint8 = 3 // DMG_STAND_UP — stand up
+	DMGRepeat  uint8 = 7 // DMG_REPEAT — continuous attack
+)
+
+// Vanish type constants from rathena/src/map/clif.hpp:358-361.
+// Used as the `type` field in ZC_NOTIFY_VANISH (0x0080).
+const (
+	VanishOutsight uint8 = 0 // CLR_OUTSIGHT
+	VanishDead     uint8 = 1 // CLR_DEAD
+	VanishRespawn  uint8 = 2 // CLR_RESPAWN
+	VanishTeleport uint8 = 3 // CLR_TELEPORT
 )
 
 // NewMapServerDB returns a packet database pre-populated with all known
@@ -605,6 +640,20 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCPCPURCHASERESULT,
 		Name:      "ZC_PC_PURCHASE_RESULT",
 		Length:    sizeZCPCPurchaseResult,
+		Direction: DirectionServerToClient,
+	})
+	// M18: ZC_NOTIFY_ACT (fixed 34 bytes) — damage / sit / stand notification.
+	// ZC_NOTIFY_VANISH (fixed 7 bytes) — entity death / despawn notification.
+	db.Register(Definition{
+		ID:        HeaderZCNOTIFYACT,
+		Name:      "ZC_NOTIFY_ACT",
+		Length:    sizeZCNotifyAct,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCNOTIFYVANISH,
+		Name:      "ZC_NOTIFY_VANISH",
+		Length:    sizeZCNotifyVanish,
 		Direction: DirectionServerToClient,
 	})
 

@@ -1149,6 +1149,17 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		}
 	}
 
+	// M18: initialize per-connection monster HP tracking. Each connection
+	// gets its own copy so multiple clients can independently damage
+	// monsters without interfering (single-player echo path; true multi-
+	// player HP sync is zone-side work).
+	if conn.MonsterHP == nil {
+		conn.MonsterHP = make(map[uint32]int32, len(monsterSpawns))
+	}
+	for _, mob := range monsterSpawns {
+		conn.MonsterHP[mob.GID] = mob.HP
+	}
+
 	h.logger.Info().
 		Uint64("conn", conn.ID).
 		Uint32("aid", conn.AccountID).
@@ -1278,18 +1289,18 @@ func (h *DispatchHandler) handleCZGlobalMessage(_ context.Context, conn *domain.
 
 // handleCZActionRequest responds to CZ_ACTION_REQUEST (0x0089) — the
 // client's sit/stand/attack selector. The on-wire action byte mapping
-// used by goAthena's M11 echo path is:
+// follows rAthena's e_damage_type enum (rathena/src/map/clif.hpp:691-707):
 //
-//	0 → stand up  (echoed as ZC_ACTION_RESPONSE)
-//	1 → sit down  (echoed as ZC_ACTION_RESPONSE)
-//	2 → attack    (ignored — no combat system yet)
-//	3 → attack    (ignored — no combat system yet)
-//	7+ → ignored (continuous attack / touch skill — out of M11 scope)
+//	0 → attack (DMG_NORMAL)   — combat: damage monster, send ZC_NOTIFY_ACT
+//	1 → pickup item            — dropped (no item system yet)
+//	2 → sit down (DMG_SIT_DOWN) — echo as ZC_NOTIFY_ACT with type=2
+//	3 → stand up (DMG_STAND_UP) — echo as ZC_NOTIFY_ACT with type=3
+//	7 → continuous attack      — same as action 0
 //
-// The echo packets are sent only to the originating connection; there
-// is no AOI broadcast (zone-side work). When the zone service takes
-// over per-entity state (M14+) the dispatcher will forward these to
-// the zone Action RPC and broadcast the response on the AOI ring.
+// rAthena's clif_sitting / clif_standing (clif.cpp:5327-5358) broadcast
+// ZC_NOTIFY_ACT (0x08c8) with type=DMG_SIT_DOWN / DMG_STAND_UP — NOT the
+// compact 0x008b stub. M18 corrects the M11 mapping (which wrongly used
+// 0/1 for sit/stand) and adds the attack path.
 func (h *DispatchHandler) handleCZActionRequest(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZActionRequest(frame)
 	if err != nil {
@@ -1302,11 +1313,6 @@ func (h *DispatchHandler) handleCZActionRequest(_ context.Context, conn *domain.
 	}
 
 	if conn.AccountID == 0 {
-		// CZ_ACTION_REQUEST without a preceding CZ_ENTER: the client
-		// has not authenticated against the zone yet, so we have no
-		// entity to attribute the sit/stand to. Drop silently rather
-		// than panic on a zero AID in the GID slot — see
-		// handleCZRequestMove for the analogous guard.
 		h.logger.Warn().
 			Uint64("conn", conn.ID).
 			Uint8("action", req.Action).
@@ -1314,45 +1320,125 @@ func (h *DispatchHandler) handleCZActionRequest(_ context.Context, conn *domain.
 		return nil
 	}
 
-	// Drop attacks silently — the M11 dispatch has no combat system,
-	// and rAthena treats a no-target attack as a harmless transient.
-	// Unknown action selectors fall through to the same drop branch.
-	if req.Action != 0 && req.Action != 1 {
+	switch req.Action {
+	case packet.DMGNormal, packet.DMGRepeat:
+		return h.handleAttack(conn, resp, req.TargetGID)
+	case packet.DMGSitDown, packet.DMGStandUp:
+		return h.handleSitStand(conn, resp, req.Action)
+	default:
+		// action 1 (pickup item), 4-6, 8-14 — out of scope.
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
 			Uint32("aid", conn.AccountID).
 			Uint8("action", req.Action).
-			Msg("CZ_ACTION_REQUEST ignored (combat / out-of-scope)")
+			Msg("CZ_ACTION_REQUEST ignored (out of scope)")
 		return nil
 	}
+}
 
-	action := packet.ActionResponse{
-		GID:       conn.AccountID, // AID-as-GID stand-in — see handleCZGlobalMessage.
-		Action:    req.Action,
-		TargetGID: 0,
+// handleSitStand sends a ZC_NOTIFY_ACT packet for sit/stand actions.
+// rAthena's clif_sitting / clif_standing use ZC_NOTIFY_ACT (0x08c8)
+// with type=DMG_SIT_DOWN (2) or DMG_STAND_UP (3) and all other fields
+// zeroed (no damage, no target).
+func (h *DispatchHandler) handleSitStand(conn *domain.ConnectionInfo, resp domain.Responder, action uint8) error {
+	act := packet.NotifyActResponse{
+		SrcID: conn.AccountID,
+		Type:  action,
 	}
-
 	var buf bytes.Buffer
-	if err := action.Encode(&buf); err != nil {
-		// ActionResponse.Encode cannot fail in practice (no
-		// variable-width fields), but wrapcheck requires every
-		// external error be wrapped — log and drop.
+	if err := act.Encode(&buf); err != nil {
 		h.logger.Error().
 			Err(err).
 			Uint64("conn", conn.ID).
-			Uint8("action", req.Action).
-			Msg("encode ZC_ACTION_RESPONSE failed; dropping packet")
+			Uint8("action", action).
+			Msg("encode ZC_NOTIFY_ACT (sit/stand) failed")
 		return nil
 	}
-
 	h.logger.Debug().
 		Uint64("conn", conn.ID).
 		Uint32("aid", conn.AccountID).
-		Uint8("action", req.Action).
-		Msg("action echo")
-
+		Uint8("action", action).
+		Msg("sit/stand echo")
 	if err := resp.SendPacket(buf.Bytes()); err != nil {
-		return fmt.Errorf("send ZC_ACTION_RESPONSE: %w", err)
+		return fmt.Errorf("send ZC_NOTIFY_ACT (sit/stand): %w", err)
+	}
+	return nil
+}
+
+// handleAttack processes a melee attack on a monster. It applies a
+// fixed damage value (10), sends ZC_NOTIFY_ACT with the damage, and
+// if the monster's HP drops to 0 or below, sends ZC_NOTIFY_VANISH
+// and removes the monster from the per-connection HP map.
+func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.Responder, targetGID uint32) error {
+	// Fixed damage — no stat-based formula yet (deferred to zone service).
+	const fixedDamage int32 = 10
+
+	hp, ok := conn.MonsterHP[targetGID]
+	if !ok {
+		// Target is not a known monster (could be NPC, PC, or already
+		// dead). Drop silently — no error, no reply.
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint32("target_gid", targetGID).
+			Msg("attack on unknown/dead target; dropping")
+		return nil
+	}
+
+	tick := uint32(time.Now().UnixMilli()) //nolint:gosec // low 32 bits per rAthena time convention
+
+	var burst bytes.Buffer
+
+	// ZC_NOTIFY_ACT — damage notification.
+	act := packet.NotifyActResponse{
+		SrcID:      conn.AccountID,
+		TargetID:   targetGID,
+		ServerTick: tick,
+		SrcSpeed:   0, // amotion — deferred
+		DmgSpeed:   0, // dmotion — deferred
+		Damage:     fixedDamage,
+		Div:        1,
+		Type:       packet.DMGNormal,
+	}
+	if err := act.Encode(&burst); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Msg("encode ZC_NOTIFY_ACT (attack) failed")
+		return nil
+	}
+
+	hp -= fixedDamage
+	if hp <= 0 {
+		// Monster died — send ZC_NOTIFY_VANISH and remove from HP map.
+		vanish := packet.NotifyVanishResponse{
+			GID:  targetGID,
+			Type: packet.VanishDead,
+		}
+		if err := vanish.Encode(&burst); err != nil {
+			h.logger.Error().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Msg("encode ZC_NOTIFY_VANISH failed")
+			return nil
+		}
+		delete(conn.MonsterHP, targetGID)
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("target_gid", targetGID).
+			Int32("damage", fixedDamage).
+			Msg("monster killed")
+	} else {
+		conn.MonsterHP[targetGID] = hp
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint32("target_gid", targetGID).
+			Int32("damage", fixedDamage).
+			Int32("remaining_hp", hp).
+			Msg("monster damaged")
+	}
+
+	if err := resp.SendPacket(burst.Bytes()); err != nil {
+		return fmt.Errorf("send attack burst: %w", err)
 	}
 	return nil
 }

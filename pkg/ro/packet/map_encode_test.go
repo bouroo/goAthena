@@ -2366,3 +2366,87 @@ func TestPurchaseResultResponse_Encode(t *testing.T) {
 		})
 	}
 }
+
+func TestNotifyActResponse_Size(t *testing.T) {
+	t.Parallel()
+	var r NotifyActResponse
+	if got, want := r.Size(), sizeZCNotifyAct; got != want {
+		t.Errorf("NotifyActResponse.Size() = %d, want %d", got, want)
+	}
+}
+
+func TestNotifyActResponse_Encode(t *testing.T) {
+	t.Parallel()
+	resp := NotifyActResponse{
+		SrcID:      0x01020304,
+		TargetID:   0x05060708,
+		ServerTick: 0x090A0B0C,
+		Damage:     42,
+		Div:        1,
+		Type:       DMGNormal,
+	}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	out := buf.Bytes()
+	if len(out) != sizeZCNotifyAct {
+		t.Fatalf("length = %d, want %d", len(out), sizeZCNotifyAct)
+	}
+	// Opcode at [0:2] = 0x08c8 LE → 0xc8 0x08.
+	if out[0] != 0xc8 || out[1] != 0x08 {
+		t.Errorf("opcode = %02x %02x, want c8 08", out[0], out[1])
+	}
+	// srcID at [2:6].
+	if v := binary.LittleEndian.Uint32(out[2:6]); v != 0x01020304 {
+		t.Errorf("srcID = 0x%08x, want 0x01020304", v)
+	}
+	// targetID at [6:10].
+	if v := binary.LittleEndian.Uint32(out[6:10]); v != 0x05060708 {
+		t.Errorf("targetID = 0x%08x, want 0x05060708", v)
+	}
+	// damage at [22:26].
+	if v := int32(binary.LittleEndian.Uint32(out[22:26])); v != 42 {
+		t.Errorf("damage = %d, want 42", v)
+	}
+	// type at [29].
+	if out[29] != DMGNormal {
+		t.Errorf("type = %d, want %d (DMG_NORMAL)", out[29], DMGNormal)
+	}
+}
+
+func TestNotifyVanishResponse_Size(t *testing.T) {
+	t.Parallel()
+	var r NotifyVanishResponse
+	if got, want := r.Size(), sizeZCNotifyVanish; got != want {
+		t.Errorf("NotifyVanishResponse.Size() = %d, want %d", got, want)
+	}
+}
+
+func TestNotifyVanishResponse_Encode(t *testing.T) {
+	t.Parallel()
+	resp := NotifyVanishResponse{
+		GID:  0x11223344,
+		Type: VanishDead,
+	}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	out := buf.Bytes()
+	if len(out) != sizeZCNotifyVanish {
+		t.Fatalf("length = %d, want %d", len(out), sizeZCNotifyVanish)
+	}
+	// Opcode at [0:2] = 0x0080 LE → 0x80 0x00.
+	if out[0] != 0x80 || out[1] != 0x00 {
+		t.Errorf("opcode = %02x %02x, want 80 00", out[0], out[1])
+	}
+	// gid at [2:6].
+	if v := binary.LittleEndian.Uint32(out[2:6]); v != 0x11223344 {
+		t.Errorf("gid = 0x%08x, want 0x11223344", v)
+	}
+	// type at [6].
+	if out[6] != VanishDead {
+		t.Errorf("type = %d, want %d (CLR_DEAD)", out[6], VanishDead)
+	}
+}

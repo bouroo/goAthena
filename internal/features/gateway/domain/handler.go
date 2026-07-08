@@ -21,6 +21,12 @@ type ConnectionInfo struct {
 	OpenedAt  int64  // unix nanos
 	AccountID uint32 // set by handleCZEnter on successful map enter
 	CharID    uint32 // set by handleCZEnter on successful map enter
+	// MonsterHP tracks per-connection monster HP for the M18 basic
+	// attack path. Initialized during handleCZNotifyActorInit from
+	// the static monsterSpawns table. When a monster's HP reaches 0
+	// the handler sends ZC_NOTIFY_VANISH and removes the entry so
+	// subsequent attacks on a dead monster are silently dropped.
+	MonsterHP map[uint32]int32
 }
 
 // Responder sends serialized packets back to the client. Each transport
