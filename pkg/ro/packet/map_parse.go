@@ -374,11 +374,11 @@ func ParseCZChangeDir(frame []byte) (CZChangeDirRequest, error) {
 // PACKETVER but allowed by the wire format) see their value preserved
 // on the round-trip.
 func (r CZChangeDirRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCZChangeDir)
+	var buf [sizeCZChangeDir]byte
 	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCHANGEDIR)
 	binary.LittleEndian.PutUint16(buf[2:], r.HeadDir)
 	buf[4] = r.Dir
-	if _, err := w.Write(buf); err != nil {
+	if _, err := w.Write(buf[:]); err != nil {
 		return fmt.Errorf("packet: write CZ_CHANGE_DIRECTION: %w", err)
 	}
 	return nil
@@ -423,10 +423,10 @@ func ParseCZReqEmotion(frame []byte) (CZReqEmotionRequest, error) {
 // Encode writes the CZ_REQ_EMOTION packet to w. Mirrors the on-wire
 // layout: [2:cmd=0x00bf][1:emotion_type] = 3 bytes.
 func (r CZReqEmotionRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCZReqEmotion)
+	var buf [sizeCZReqEmotion]byte
 	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQEMOTION)
 	buf[2] = r.EmotionType
-	if _, err := w.Write(buf); err != nil {
+	if _, err := w.Write(buf[:]); err != nil {
 		return fmt.Errorf("packet: write CZ_REQ_EMOTION: %w", err)
 	}
 	return nil

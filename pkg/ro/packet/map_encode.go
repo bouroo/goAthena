@@ -843,7 +843,7 @@ func (r ChangeDirResponse) Size() int {
 
 // Encode writes the ZC_CHANGE_DIRECTION packet to w.
 func (r ChangeDirResponse) Encode(w io.Writer) error {
-	buf := make([]byte, sizeZCChangeDir)
+	var buf [sizeZCChangeDir]byte
 	// int16 packetType = 0x009c (HeaderZCCHANGEDIR).
 	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCHANGEDIR)
 	// uint32 srcId at offset 2.
@@ -853,7 +853,7 @@ func (r ChangeDirResponse) Encode(w io.Writer) error {
 	// uint8 dir at offset 8.
 	buf[8] = r.Dir
 
-	if _, err := w.Write(buf); err != nil {
+	if _, err := w.Write(buf[:]); err != nil {
 		return fmt.Errorf("packet: write ZC_CHANGE_DIRECTION: %w", err)
 	}
 	return nil
@@ -892,7 +892,7 @@ func (r EmotionResponse) Size() int {
 
 // Encode writes the ZC_EMOTION packet to w.
 func (r EmotionResponse) Encode(w io.Writer) error {
-	buf := make([]byte, sizeZCEmotion)
+	var buf [sizeZCEmotion]byte
 	// int16 packetType = 0x00c0 (HeaderZCEMOTION).
 	binary.LittleEndian.PutUint16(buf[0:], HeaderZCEMOTION)
 	// int32 GID at offset 2 — written as the wire's int32 slot.
@@ -900,7 +900,7 @@ func (r EmotionResponse) Encode(w io.Writer) error {
 	// uint8 type at offset 6.
 	buf[6] = r.Type
 
-	if _, err := w.Write(buf); err != nil {
+	if _, err := w.Write(buf[:]); err != nil {
 		return fmt.Errorf("packet: write ZC_EMOTION: %w", err)
 	}
 	return nil
