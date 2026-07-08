@@ -525,3 +525,215 @@ func TestParseCZActionRequest_AcceptsTrailingBytes(t *testing.T) {
 		t.Errorf("ParseCZActionRequest() = %+v, want %+v", got, want)
 	}
 }
+
+func TestParseCZChangeDir(t *testing.T) {
+	t.Parallel()
+
+	// Known 5-byte frame: cmd 0x009b, headDir 0x0001 (CW),
+	// dir 0x04 (south — rathena/src/map/clif.cpp:11571-11578).
+	goodFrame := func() []byte {
+		f := make([]byte, sizeCZChangeDir)
+		writeLE16(f[0:], HeaderCZCHANGEDIR)
+		writeLE16(f[2:], 0x0001)
+		f[4] = 0x04
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZChangeDirRequest
+	}{
+		{
+			name:    "valid known frame decodes headDir and dir",
+			frame:   goodFrame,
+			wantErr: false,
+			want: CZChangeDirRequest{
+				HeadDir: 0x0001,
+				Dir:     0x04,
+			},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZChangeDir-1),
+			wantErr:    true,
+			wantErrSub: "4",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, sizeCZChangeDir)
+				writeLE16(f[0:], HeaderCZACTIONREQUEST) // 0x0089 instead of 0x009b
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+		{
+			name: "all-zero headDir and dir decodes verbatim",
+			frame: func() []byte {
+				f := make([]byte, sizeCZChangeDir)
+				writeLE16(f[0:], HeaderCZCHANGEDIR)
+				return f
+			}(),
+			wantErr: false,
+			want:    CZChangeDirRequest{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZChangeDir(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZChangeDir() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZChangeDir() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseCZChangeDir() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseCZChangeDir_AcceptsTrailingBytes confirms the parser
+// tolerates bytes past the 5-byte fixed header — the gateway hands in
+// buffered frames whose tail is still being drained.
+func TestParseCZChangeDir_AcceptsTrailingBytes(t *testing.T) {
+	t.Parallel()
+
+	base := make([]byte, sizeCZChangeDir)
+	writeLE16(base[0:], HeaderCZCHANGEDIR)
+	writeLE16(base[2:], 0x0002)
+	base[4] = 0x07
+	frame := append(append([]byte{}, base...), 0xAA, 0xBB)
+
+	got, err := ParseCZChangeDir(frame)
+	if err != nil {
+		t.Fatalf("ParseCZChangeDir() unexpected error: %v", err)
+	}
+	want := CZChangeDirRequest{HeadDir: 0x0002, Dir: 0x07}
+	if got != want {
+		t.Errorf("ParseCZChangeDir() = %+v, want %+v", got, want)
+	}
+}
+
+func TestParseCZReqEmotion(t *testing.T) {
+	t.Parallel()
+
+	// Known 3-byte frame: cmd 0x00bf, emotion_type 0x02 (ET_CRY).
+	goodFrame := func() []byte {
+		f := make([]byte, sizeCZReqEmotion)
+		writeLE16(f[0:], HeaderCZREQEMOTION)
+		f[2] = 0x02
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZReqEmotionRequest
+	}{
+		{
+			name:    "valid known frame decodes emotion type",
+			frame:   goodFrame,
+			wantErr: false,
+			want:    CZReqEmotionRequest{EmotionType: 0x02},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZReqEmotion-1),
+			wantErr:    true,
+			wantErrSub: "2",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, sizeCZReqEmotion)
+				writeLE16(f[0:], HeaderCZCHANGEDIR) // 0x009b instead of 0x00bf
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+		{
+			name: "all-zero emotion type decodes verbatim",
+			frame: func() []byte {
+				f := make([]byte, sizeCZReqEmotion)
+				writeLE16(f[0:], HeaderCZREQEMOTION)
+				return f
+			}(),
+			wantErr: false,
+			want:    CZReqEmotionRequest{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZReqEmotion(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZReqEmotion() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZReqEmotion() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseCZReqEmotion() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseCZReqEmotion_AcceptsTrailingBytes confirms the parser
+// tolerates bytes past the 3-byte fixed header — the gateway hands in
+// buffered frames whose tail is still being drained.
+func TestParseCZReqEmotion_AcceptsTrailingBytes(t *testing.T) {
+	t.Parallel()
+
+	base := make([]byte, sizeCZReqEmotion)
+	writeLE16(base[0:], HeaderCZREQEMOTION)
+	base[2] = 0x07
+	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
+
+	got, err := ParseCZReqEmotion(frame)
+	if err != nil {
+		t.Fatalf("ParseCZReqEmotion() unexpected error: %v", err)
+	}
+	want := CZReqEmotionRequest{EmotionType: 0x07}
+	if got != want {
+		t.Errorf("ParseCZReqEmotion() = %+v, want %+v", got, want)
+	}
+}

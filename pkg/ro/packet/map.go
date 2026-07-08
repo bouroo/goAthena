@@ -31,6 +31,18 @@ const (
 	// clif_packetdb.hpp:40 (`parseable_packet(0x008c,-1,clif_parse_GlobalMessage,2,4)`).
 	// Variable length: [2:cmd][2:packetLength][n:text+null].
 	HeaderCZGLOBALMESSAGE uint16 = 0x008c
+	// CZ_CHANGE_DIRECTION (0x009b) — direction change request. rathena/src/map/
+	// clif_packetdb.hpp:48 (`parseable_packet(0x009b,5,clif_parse_ChangeDir,2,4)`).
+	// Fixed 5 bytes: [2:cmd][2:headDir uint16][1:dir uint8]. The pos array
+	// [2, 4] documents headDir at offset 2 and dir at offset 4 — the
+	// handler reads headDir via RFIFOB on this PACKETVER (clif.cpp:11613).
+	HeaderCZCHANGEDIR uint16 = 0x009b
+	// CZ_REQ_EMOTION (0x00bf) — emotion request. rathena/src/map/
+	// clif_packetdb.hpp:66 (`parseable_packet(HEADER_CZ_REQ_EMOTION,
+	// sizeof(PACKET_CZ_REQ_EMOTION), clif_parse_Emotion, 0)`).
+	// Fixed 3 bytes: [2:cmd][1:emotion_type]. The struct definition lives
+	// at rathena/src/map/packets.hpp:1406-1409.
+	HeaderCZREQEMOTION uint16 = 0x00bf
 
 	// S→C — map server → client.
 	HeaderZCACCEPTENTER      uint16 = 0x02eb // rathena/src/map/packets.hpp:571 (ZC_ACCEPT_ENTER, PACKETVER >= 20160330 branch)
@@ -48,7 +60,16 @@ const (
 	// ZC_NOTIFY_CHAT (0x008d) — chat echo. rathena/src/map/packets_struct.hpp:2337
 	// (`PACKET_ZC_NOTIFY_CHAT { int16 PacketType; int16 PacketLength; uint32 GID; char Message[] }`).
 	// Variable length: [2:cmd][2:packetLength][4:GID][n:text+null].
-	HeaderZCNOTIFYCHAT              uint16 = 0x008d
+	HeaderZCNOTIFYCHAT uint16 = 0x008d
+	// ZC_CHANGE_DIRECTION (0x009c) — direction echo. rathena/src/map/
+	// packets.hpp:688-694 (`PACKET_ZC_CHANGE_DIRECTION { int16 packetType;
+	// uint32 srcId; uint16 headDir; uint8 dir }`). Fixed 9 bytes:
+	// [2:cmd][4:srcId][2:headDir uint16][1:dir uint8].
+	HeaderZCCHANGEDIR uint16 = 0x009c
+	// ZC_EMOTION (0x00c0) — emotion echo. rathena/src/map/packets.hpp:1973-1978
+	// (`PACKET_ZC_EMOTION { int16 packetType; int32 GID; uint8 type }`).
+	// Fixed 7 bytes: [2:cmd][4:GID int32][1:type uint8].
+	HeaderZCEMOTION                 uint16 = 0x00c0
 	HeaderZCSTATUS                  uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
 	HeaderZCPARCHANGE               uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
 	HeaderZCLONGPARCHANGE           uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
@@ -172,6 +193,23 @@ const (
 	// ZC_NOTIFY_ACT (0x008a) for the same broadcast but the gateway emits
 	// 0x008b for the single-player echo path.
 	sizeZCActionResponse = 11
+	// sizeCZChangeDir = int16 packetType + uint16 headDir + uint8 dir =
+	// 2+2+1 = 5 (rathena/src/map/clif_packetdb.hpp:48 —
+	// `parseable_packet(0x009b,5,clif_parse_ChangeDir,2,4)`). The pos
+	// array [2, 4] documents headDir at offset 2 and dir at offset 4.
+	// rAthena's clif_parse_ChangeDir reads headDir via RFIFOB (single
+	// byte) at clif.cpp:11613 — the upper byte of the uint16 is
+	// effectively reserved on this PACKETVER and ignored by the handler.
+	sizeCZChangeDir = 5
+	// sizeZCChangeDir = int16 packetType + uint32 srcId + uint16 headDir +
+	// uint8 dir = 2+4+2+1 = 9 (rathena/src/map/packets.hpp:688-694).
+	sizeZCChangeDir = 9
+	// sizeCZReqEmotion = int16 packetType + uint8 emotion_type = 2+1 = 3
+	// (rathena/src/map/packets.hpp:1406-1410).
+	sizeCZReqEmotion = 3
+	// sizeZCEmotion = int16 packetType + int32 GID + uint8 type = 2+4+1 = 7
+	// (rathena/src/map/packets.hpp:1973-1978).
+	sizeZCEmotion = 7
 )
 
 // NewMapServerDB returns a packet database pre-populated with all known
@@ -228,6 +266,21 @@ func NewMapServerDB() *DB {
 		ID:        HeaderCZGLOBALMESSAGE,
 		Name:      "CZ_GLOBAL_MESSAGE",
 		Length:    VariableLength,
+		Direction: DirectionClientToServer,
+	})
+	// M12: CZ_CHANGE_DIRECTION (fixed 5 bytes) + CZ_REQ_EMOTION (fixed 3
+	// bytes) — basic player expression echo path. See the header
+	// constants above for rAthena source pointers.
+	db.Register(Definition{
+		ID:        HeaderCZCHANGEDIR,
+		Name:      "CZ_CHANGE_DIRECTION",
+		Length:    sizeCZChangeDir,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQEMOTION,
+		Name:      "CZ_REQ_EMOTION",
+		Length:    sizeCZReqEmotion,
 		Direction: DirectionClientToServer,
 	})
 
@@ -332,6 +385,20 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCACTIONRESPONSE,
 		Name:      "ZC_ACTION_RESPONSE",
 		Length:    sizeZCActionResponse,
+		Direction: DirectionServerToClient,
+	})
+	// M12: ZC_CHANGE_DIRECTION (fixed 9 bytes) + ZC_EMOTION (fixed 7 bytes)
+	// — direction / emotion single-player echo.
+	db.Register(Definition{
+		ID:        HeaderZCCHANGEDIR,
+		Name:      "ZC_CHANGE_DIRECTION",
+		Length:    sizeZCChangeDir,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCEMOTION,
+		Name:      "ZC_EMOTION",
+		Length:    sizeZCEmotion,
 		Direction: DirectionServerToClient,
 	})
 

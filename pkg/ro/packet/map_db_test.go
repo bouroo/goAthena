@@ -65,8 +65,9 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewMapServerDB()
-	// 6 C→S + 15 S→C = 21.
-	const want = 21
+	// 8 C→S + 17 S→C = 25 (M12 adds CZ_CHANGE_DIRECTION, CZ_REQ_EMOTION,
+	// ZC_CHANGE_DIRECTION, ZC_EMOTION).
+	const want = 25
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -87,6 +88,8 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderCZREQUESTTIME, sizeCZRequestTime},
 		{HeaderCZACTIONREQUEST, sizeCZActionRequest},
 		{HeaderCZGLOBALMESSAGE, VariableLength},
+		{HeaderCZCHANGEDIR, sizeCZChangeDir},
+		{HeaderCZREQEMOTION, sizeCZReqEmotion},
 		{HeaderZCACCEPTENTER, sizeZCAcceptEnter},
 		{HeaderZCREFUSEENTER, sizeZCRefuseEnter},
 		{HeaderZCNOTIFYPLAYERMOVE, sizeZCNotifyPlayerMove},
@@ -102,6 +105,8 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCSHORTCUTKEYLIST, sizeZCShortcutKeyList},
 		{HeaderZCNOTIFYCHAT, VariableLength},
 		{HeaderZCACTIONRESPONSE, sizeZCActionResponse},
+		{HeaderZCCHANGEDIR, sizeZCChangeDir},
+		{HeaderZCEMOTION, sizeZCEmotion},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)
