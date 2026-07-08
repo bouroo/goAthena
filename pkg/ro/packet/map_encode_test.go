@@ -1639,3 +1639,196 @@ func TestCZReqEmotionRequest_Encode_ZeroValues(t *testing.T) {
 		}
 	}
 }
+
+func TestAckReqNameResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r AckReqNameResponse
+	if got, want := r.Size(), sizeZCAckReqName; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestAckReqNameResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := AckReqNameResponse{
+		GID:  0xDEADBEEF,
+		Name: "TestChar",
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 30
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	if got[0] != 0x95 || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want 95 00 (LE 0x0095)", got[0], got[1])
+	}
+
+	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
+		t.Errorf("GID = 0x%x, want 0xDEADBEEF", gid)
+	}
+
+	// Name at offset 6, 24 bytes — "TestChar" + null padding.
+	nameSlot := got[6:30]
+	gotName := cstrBytes(nameSlot)
+	if gotName != "TestChar" {
+		t.Errorf("name = %q, want %q", gotName, "TestChar")
+	}
+	// Verify null padding after the name.
+	for i := len("TestChar"); i < 24; i++ {
+		if nameSlot[i] != 0 {
+			t.Errorf("nameSlot[%d] = 0x%02x, want 0x00 (null pad)", i, nameSlot[i])
+		}
+	}
+}
+
+func TestAckReqNameResponse_Encode_EmptyName(t *testing.T) {
+	t.Parallel()
+
+	resp := AckReqNameResponse{
+		GID:  42,
+		Name: "",
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 30 {
+		t.Fatalf("len(got) = %d, want 30", len(got))
+	}
+
+	// All 24 name bytes must be zero.
+	for i := 6; i < 30; i++ {
+		if got[i] != 0 {
+			t.Errorf("byte[%d] = 0x%02x, want 0x00 (empty name)", i, got[i])
+		}
+	}
+}
+
+func TestAckReqNameResponse_Encode_LongNameTruncated(t *testing.T) {
+	t.Parallel()
+
+	longName := "ThisNameIsWayTooLongFor24Bytes"
+	resp := AckReqNameResponse{
+		GID:  1,
+		Name: longName,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 30 {
+		t.Fatalf("len(got) = %d, want 30", len(got))
+	}
+
+	// Name must be truncated to 24 bytes.
+	nameSlot := got[6:30]
+	gotName := cstrBytes(nameSlot)
+	if len(gotName) > 24 {
+		t.Errorf("name length = %d, want ≤ 24", len(gotName))
+	}
+	if gotName != longName[:24] {
+		t.Errorf("name = %q, want %q", gotName, longName[:24])
+	}
+}
+
+func TestCZGetCharNameRequestRequest_Encode(t *testing.T) {
+	t.Parallel()
+
+	req := CZGetCharNameRequestRequest{GID: 0xCAFEBABE}
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 6 {
+		t.Fatalf("len(got) = %d, want 6", len(got))
+	}
+	if got[0] != 0x94 || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want 94 00", got[0], got[1])
+	}
+	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xCAFEBABE {
+		t.Errorf("GID = 0x%x, want 0xCAFEBABE", gid)
+	}
+
+	// Round-trip.
+	parsed, err := ParseCZGetCharNameRequest(got)
+	if err != nil {
+		t.Fatalf("ParseCZGetCharNameRequest() round-trip error: %v", err)
+	}
+	if parsed != req {
+		t.Errorf("round-trip = %+v, want %+v", parsed, req)
+	}
+}
+
+func TestCZRestartRequest_Encode(t *testing.T) {
+	t.Parallel()
+
+	req := CZRestartRequest{Type: 0x01}
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3", len(got))
+	}
+	if got[0] != 0xb2 || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want b2 00", got[0], got[1])
+	}
+	if got[2] != 0x01 {
+		t.Errorf("type = 0x%02x, want 0x01", got[2])
+	}
+
+	// Round-trip.
+	parsed, err := ParseCZRestart(got)
+	if err != nil {
+		t.Fatalf("ParseCZRestart() round-trip error: %v", err)
+	}
+	if parsed != req {
+		t.Errorf("round-trip = %+v, want %+v", parsed, req)
+	}
+}
+
+func TestCZRestartRequest_Encode_TypeZero(t *testing.T) {
+	t.Parallel()
+
+	req := CZRestartRequest{Type: 0x00}
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3", len(got))
+	}
+	if got[2] != 0x00 {
+		t.Errorf("type = 0x%02x, want 0x00", got[2])
+	}
+}
+
+// cstrBytes returns the NUL-terminated prefix of b as a string, or the
+// full slice if no NUL byte is present.
+func cstrBytes(b []byte) string {
+	if i := bytes.IndexByte(b, 0); i >= 0 {
+		return string(b[:i])
+	}
+	return string(b)
+}

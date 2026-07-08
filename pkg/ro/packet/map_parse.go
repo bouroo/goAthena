@@ -431,3 +431,93 @@ func (r CZReqEmotionRequest) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// CZGetCharNameRequestRequest is the decoded form of a client → map-server
+// CZ_GETCHARNAMEREQUEST packet (header 0x0094, 6 bytes on the wire).
+// Source: rathena/src/map/clif_packetdb.hpp:45
+// (`parseable_packet(0x0094,6,clif_parse_GetCharNameRequest,2)`) +
+// rathena/src/map/clif.cpp:11469-11503 (clif_parse_GetCharNameRequest).
+//
+// The on-wire shape is `<GID>.L` — the client sends the GID of the
+// entity whose name it wants to look up. rAthena's handler resolves
+// the GID via map_id2bl and calls clif_name(sd, bl, SELF) to send
+// the full ZC_ACK_REQNAMEALL response.
+type CZGetCharNameRequestRequest struct {
+	// GID is the entity ID the client wants the name for.
+	GID uint32
+}
+
+// ParseCZGetCharNameRequest decodes a CZ_GETCHARNAMEREQUEST frame.
+// The frame must carry cmd 0x0094 and contain 6 bytes.
+//
+// Returns a wrapped error naming the byte count if the frame is short,
+// or naming the unexpected cmd id if the header is not 0x0094.
+func ParseCZGetCharNameRequest(frame []byte) (CZGetCharNameRequestRequest, error) {
+	if len(frame) < sizeCZGetCharNameRequest {
+		return CZGetCharNameRequestRequest{}, fmt.Errorf("packet: parse CZ_GETCHARNAMEREQUEST: want at least %d bytes, got %d", sizeCZGetCharNameRequest, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZGETCHARNAMEREQUEST {
+		return CZGetCharNameRequestRequest{}, fmt.Errorf("packet: parse CZ_GETCHARNAMEREQUEST: unexpected cmd 0x%04x", cmd)
+	}
+	return CZGetCharNameRequestRequest{
+		GID: binary.LittleEndian.Uint32(frame[2:6]),
+	}, nil
+}
+
+// Encode writes the CZ_GETCHARNAMEREQUEST packet to w. Mirrors the
+// on-wire layout: [2:cmd=0x0094][4:GID int32] = 6 bytes.
+func (r CZGetCharNameRequestRequest) Encode(w io.Writer) error {
+	var buf [sizeCZGetCharNameRequest]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZGETCHARNAMEREQUEST)
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_GETCHARNAMEREQUEST: %w", err)
+	}
+	return nil
+}
+
+// CZRestartRequest is the decoded form of a client → map-server
+// CZ_RESTART packet (header 0x00b2, 3 bytes on the wire). Source:
+// rathena/src/map/clif_packetdb.hpp:61
+// (`parseable_packet(0x00b2,3,clif_parse_Restart,2)`) +
+// rathena/src/map/clif.cpp:11837-11854 (clif_parse_Restart).
+//
+// The on-wire shape is `<type>.B` — the client sends a single byte:
+// 0x00 = respawn (pc_respawn), 0x01 = return to character select
+// (chrif_charselectreq). rAthena's handler branches on this byte
+// and either calls pc_respawn or sends the char-select request.
+type CZRestartRequest struct {
+	// Type is the restart selector byte:
+	//   0x00 = respawn at save point
+	//   0x01 = return to character select screen
+	Type uint8
+}
+
+// ParseCZRestart decodes a CZ_RESTART frame. The frame must carry
+// cmd 0x00b2 and contain 3 bytes.
+//
+// Returns a wrapped error naming the byte count if the frame is short,
+// or naming the unexpected cmd id if the header is not 0x00b2.
+func ParseCZRestart(frame []byte) (CZRestartRequest, error) {
+	if len(frame) < sizeCZRestart {
+		return CZRestartRequest{}, fmt.Errorf("packet: parse CZ_RESTART: want at least %d bytes, got %d", sizeCZRestart, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZRESTART {
+		return CZRestartRequest{}, fmt.Errorf("packet: parse CZ_RESTART: unexpected cmd 0x%04x", cmd)
+	}
+	return CZRestartRequest{
+		Type: frame[2],
+	}, nil
+}
+
+// Encode writes the CZ_RESTART packet to w. Mirrors the on-wire
+// layout: [2:cmd=0x00b2][1:type uint8] = 3 bytes.
+func (r CZRestartRequest) Encode(w io.Writer) error {
+	var buf [sizeCZRestart]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZRESTART)
+	buf[2] = r.Type
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_RESTART: %w", err)
+	}
+	return nil
+}
