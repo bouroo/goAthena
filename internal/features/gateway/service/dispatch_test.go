@@ -1615,11 +1615,11 @@ func TestDispatchHandler_CZGlobalMessage_MalformedFrame_DropsSilently(t *testing
 	}
 }
 
-// TestDispatchHandler_CZActionRequest_Sit_EncodesZCActionResponse
-// covers the M11 sit path (action=1). The handler must reply with a
-// fixed 11-byte ZC_ACTION_RESPONSE carrying the AID as the GID, the
-// action byte echoed verbatim, and targetGID=0.
-func TestDispatchHandler_CZActionRequest_Sit_EncodesZCActionResponse(t *testing.T) {
+// TestDispatchHandler_CZActionRequest_Sit_EncodesZCNotifyAct
+// covers the M18 sit path (action=2, DMG_SIT_DOWN). The handler must
+// reply with a 34-byte ZC_NOTIFY_ACT carrying the AID as srcID,
+// type=2 (sit), and all other fields zeroed.
+func TestDispatchHandler_CZActionRequest_Sit_EncodesZCNotifyAct(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
@@ -1629,7 +1629,7 @@ func TestDispatchHandler_CZActionRequest_Sit_EncodesZCActionResponse(t *testing.
 	const wantAID uint32 = 9999
 	conn := domain.ConnectionInfo{ID: 1, AccountID: wantAID}
 
-	req := packet.CZActionRequestRequest{TargetGID: wantAID, Action: 1}
+	req := packet.CZActionRequestRequest{TargetGID: wantAID, Action: packet.DMGSitDown}
 	var reqBuf bytes.Buffer
 	if err := req.Encode(&reqBuf); err != nil {
 		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
@@ -1641,34 +1641,27 @@ func TestDispatchHandler_CZActionRequest_Sit_EncodesZCActionResponse(t *testing.
 	}
 
 	out := resp.buf.Bytes()
-	const wantLen = 11
+	const wantLen = 34
 	if len(out) != wantLen {
-		t.Fatalf("ZC_ACTION_RESPONSE length = %d, want %d (buf=% x)", len(out), wantLen, out)
+		t.Fatalf("ZC_NOTIFY_ACT length = %d, want %d (buf=% x)", len(out), wantLen, out)
 	}
-	// Opcode at [0:2] = 0x008b LE.
-	if out[0] != 0x8b || out[1] != 0x00 {
-		t.Fatalf("opcode = %02x %02x, want 8b 00 (LE 0x008b)", out[0], out[1])
+	// Opcode at [0:2] = 0x08c8 LE.
+	if out[0] != 0xc8 || out[1] != 0x08 {
+		t.Fatalf("opcode = %02x %02x, want c8 08 (LE 0x08c8)", out[0], out[1])
 	}
-	// GID at [2:6] = wantAID.
+	// srcID at [2:6] = wantAID.
 	if gid := binary.LittleEndian.Uint32(out[2:6]); gid != wantAID {
-		t.Errorf("GID = %d, want %d", gid, wantAID)
+		t.Errorf("srcID = %d, want %d", gid, wantAID)
 	}
-	// action at [6] = 1 (sit).
-	if out[6] != 0x01 {
-		t.Errorf("action = 0x%02x, want 0x01 (sit)", out[6])
-	}
-	// targetGID at [7:11] = 0 (self-targeted, no separate target).
-	if tgt := binary.LittleEndian.Uint32(out[7:11]); tgt != 0 {
-		t.Errorf("targetGID = %d, want 0", tgt)
+	// type at [29] = 2 (sit).
+	if out[29] != packet.DMGSitDown {
+		t.Errorf("type = 0x%02x, want 0x%02x (sit)", out[29], packet.DMGSitDown)
 	}
 }
 
-// TestDispatchHandler_CZActionRequest_Stand_EncodesZCActionResponse
-// covers the M11 stand path (action=0). Mirrors the sit test; we
-// keep it as a separate test so a future refactor that accidentally
-// drops the 0-branch (the action=0 and action=1 cases look very
-// similar) is caught by a failing test name.
-func TestDispatchHandler_CZActionRequest_Stand_EncodesZCActionResponse(t *testing.T) {
+// TestDispatchHandler_CZActionRequest_Stand_EncodesZCNotifyAct
+// covers the M18 stand path (action=3, DMG_STAND_UP).
+func TestDispatchHandler_CZActionRequest_Stand_EncodesZCNotifyAct(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
@@ -1677,7 +1670,7 @@ func TestDispatchHandler_CZActionRequest_Stand_EncodesZCActionResponse(t *testin
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 1}
 
-	req := packet.CZActionRequestRequest{TargetGID: 1, Action: 0}
+	req := packet.CZActionRequestRequest{TargetGID: 1, Action: packet.DMGStandUp}
 	var reqBuf bytes.Buffer
 	if err := req.Encode(&reqBuf); err != nil {
 		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
@@ -1689,24 +1682,25 @@ func TestDispatchHandler_CZActionRequest_Stand_EncodesZCActionResponse(t *testin
 	}
 
 	out := resp.buf.Bytes()
-	if len(out) != 11 {
-		t.Fatalf("ZC_ACTION_RESPONSE length = %d, want 11 (buf=% x)", len(out), out)
+	if len(out) != 34 {
+		t.Fatalf("ZC_NOTIFY_ACT length = %d, want 34 (buf=% x)", len(out), out)
 	}
-	if out[6] != 0x00 {
-		t.Errorf("action = 0x%02x, want 0x00 (stand)", out[6])
+	if out[29] != packet.DMGStandUp {
+		t.Errorf("type = 0x%02x, want 0x%02x (stand)", out[29], packet.DMGStandUp)
 	}
 }
 
-// TestDispatchHandler_CZActionRequest_Attack_NoReply covers the
-// M11 attack branches (action=2 and action=3). The dispatch must drop
-// them silently — no combat system yet — without writing a reply.
-func TestDispatchHandler_CZActionRequest_Attack_NoReply(t *testing.T) {
+// TestDispatchHandler_CZActionRequest_OutOfScopeAction_NoReply covers
+// action codes that are silently dropped: 1 (pickup item), 4-6, 8-14.
+// Attack actions (0, 7) are handled by the attack path; sit (2) and
+// stand (3) by the sit/stand path.
+func TestDispatchHandler_CZActionRequest_OutOfScopeAction_NoReply(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
 		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 
-	for _, action := range []uint8{2, 3, 7, 12} {
+	for _, action := range []uint8{1, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14} {
 		action := action
 		t.Run(fmt.Sprintf("action_%d", action), func(t *testing.T) {
 			t.Parallel()
@@ -1725,10 +1719,158 @@ func TestDispatchHandler_CZActionRequest_Attack_NoReply(t *testing.T) {
 				t.Fatalf("HandlePacket err = %v, want nil", err)
 			}
 			if got := resp.buf.Len(); got != 0 {
-				t.Fatalf("responder wrote %d bytes for attack action=%d, want 0 (drop)",
+				t.Fatalf("responder wrote %d bytes for action=%d, want 0 (drop)",
 					got, action)
 			}
 		})
+	}
+}
+
+// TestDispatchHandler_CZActionRequest_AttackMonster_EncodesNotifyAct
+// covers the M18 attack path: action=0 (DMG_NORMAL) targeting a known
+// monster GID. The handler must reply with a 34-byte ZC_NOTIFY_ACT
+// carrying the damage value, and decrement the monster's HP.
+func TestDispatchHandler_CZActionRequest_AttackMonster_EncodesNotifyAct(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	const wantAID uint32 = 200001
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: wantAID,
+		MonsterHP: map[uint32]int32{110000005: 50}, // Poring with 50 HP
+	}
+
+	req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	// Only ZC_NOTIFY_ACT (34 bytes) — monster has 50 HP, damage is 10,
+	// so it survives (40 HP remaining). No ZC_NOTIFY_VANISH.
+	if len(out) != 34 {
+		t.Fatalf("response length = %d, want 34 (ZC_NOTIFY_ACT only; buf=% x)", len(out), out)
+	}
+	// Opcode = 0x08c8.
+	if out[0] != 0xc8 || out[1] != 0x08 {
+		t.Fatalf("opcode = %02x %02x, want c8 08 (LE 0x08c8)", out[0], out[1])
+	}
+	// srcID = AID.
+	if src := binary.LittleEndian.Uint32(out[2:6]); src != wantAID {
+		t.Errorf("srcID = %d, want %d", src, wantAID)
+	}
+	// targetID = monster GID.
+	if tgt := binary.LittleEndian.Uint32(out[6:10]); tgt != 110000005 {
+		t.Errorf("targetID = %d, want 110000005", tgt)
+	}
+	// damage = 10.
+	if dmg := int32(binary.LittleEndian.Uint32(out[22:26])); dmg != 10 {
+		t.Errorf("damage = %d, want 10", dmg)
+	}
+	// type = DMG_NORMAL (0).
+	if out[29] != packet.DMGNormal {
+		t.Errorf("type = 0x%02x, want 0x%02x (DMG_NORMAL)", out[29], packet.DMGNormal)
+	}
+	// HP should be decremented.
+	if hp := conn.MonsterHP[110000005]; hp != 40 {
+		t.Errorf("monster HP after attack = %d, want 40", hp)
+	}
+}
+
+// TestDispatchHandler_CZActionRequest_KillMonster_EncodesNotifyActAndVanish
+// covers the M18 kill path: attacking a monster whose HP drops to 0
+// must produce both ZC_NOTIFY_ACT (34 bytes) and ZC_NOTIFY_VANISH
+// (7 bytes), and remove the monster from the HP map.
+func TestDispatchHandler_CZActionRequest_KillMonster_EncodesNotifyActAndVanish(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: 200001,
+		MonsterHP: map[uint32]int32{110000005: 5}, // Poring with only 5 HP — one hit kills
+	}
+
+	req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	// ZC_NOTIFY_ACT (34) + ZC_NOTIFY_VANISH (7) = 41 bytes.
+	if len(out) != 41 {
+		t.Fatalf("response length = %d, want 41 (ZC_NOTIFY_ACT + ZC_NOTIFY_VANISH; buf=% x)", len(out), out)
+	}
+	// First packet: ZC_NOTIFY_ACT.
+	if out[0] != 0xc8 || out[1] != 0x08 {
+		t.Fatalf("first opcode = %02x %02x, want c8 08 (LE 0x08c8)", out[0], out[1])
+	}
+	// Second packet: ZC_NOTIFY_VANISH at offset 34.
+	if out[34] != 0x80 || out[35] != 0x00 {
+		t.Fatalf("second opcode = %02x %02x, want 80 00 (LE 0x0080)", out[34], out[35])
+	}
+	// Vanish GID = monster GID.
+	if gid := binary.LittleEndian.Uint32(out[36:40]); gid != 110000005 {
+		t.Errorf("vanish GID = %d, want 110000005", gid)
+	}
+	// Vanish type = CLR_DEAD (1).
+	if out[40] != packet.VanishDead {
+		t.Errorf("vanish type = 0x%02x, want 0x%02x (CLR_DEAD)", out[40], packet.VanishDead)
+	}
+	// Monster should be removed from HP map.
+	if _, ok := conn.MonsterHP[110000005]; ok {
+		t.Errorf("monster 110000005 still in HP map after death; should be removed")
+	}
+}
+
+// TestDispatchHandler_CZActionRequest_AttackUnknownTarget_NoReply
+// covers the case where the target GID is not in the monster HP map
+// (NPC, PC, or already-dead monster). The handler must drop silently.
+func TestDispatchHandler_CZActionRequest_AttackUnknownTarget_NoReply(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: 42,
+		MonsterHP: map[uint32]int32{110000005: 50},
+	}
+
+	// Attack an NPC GID (not in MonsterHP).
+	req := packet.CZActionRequestRequest{TargetGID: 110000001, Action: packet.DMGNormal}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for unknown target, want 0 (drop)", got)
 	}
 }
 
@@ -1797,7 +1939,7 @@ func TestDispatchHandler_CZActionRequest_PreAuthGuard_DropsSilently(t *testing.T
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
 
-	req := packet.CZActionRequestRequest{TargetGID: 1, Action: 1}
+	req := packet.CZActionRequestRequest{TargetGID: 1, Action: packet.DMGSitDown}
 	var reqBuf bytes.Buffer
 	if err := req.Encode(&reqBuf); err != nil {
 		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)

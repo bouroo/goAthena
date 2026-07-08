@@ -243,27 +243,22 @@ func ParseCZGlobalMessage(frame []byte) (CZGlobalMessageRequest, error) {
 // CZ_ACTION_REQUEST packet (header 0x0089, 7 bytes fixed). Source:
 // rathena/src/map/clif_packetdb.hpp:38 +
 // rathena/src/map/clif.cpp:11806-11829. The on-wire shape is
-// `<targetGID>.L <action>.B`, where action is the rAthena sit/stand/
-// attack selector. goAthena's M11 dispatch only honors action codes
-// 0 (stand) and 1 (sit); codes 2/3 (attack) and 7/12 (continuous
-// attack / touch skill) are ignored at the dispatcher layer until a
-// combat system lands.
+// `<targetGID>.L <action>.B`, where action is the rAthena e_damage_type
+// selector (rathena/src/map/clif.hpp:691-707):
+//
+//	0 = attack (DMG_NORMAL)
+//	1 = pick up item (DMG_PICKUP_ITEM)
+//	2 = sit down (DMG_SIT_DOWN)
+//	3 = stand up (DMG_STAND_UP)
+//	7 = continuous attack (DMG_REPEAT)
 type CZActionRequestRequest struct {
 	// TargetGID is the entity the action targets — for self-targeted
 	// actions (sit / stand) this is the player's own GID; for attack
 	// actions it is the victim's GID. The gateway echoes the caller's
 	// own GID on sit/stand and ignores attacks.
 	TargetGID uint32
-	// Action is the rAthena action selector byte:
-	//   0 = stand up (DMG_NORMAL — but rAthena reuses 0 for both
-	//       "attack once" and "stand up" depending on session state; we
-	//       map 0 → stand at the dispatcher for the echo path);
-	//   1 = pick up item (rAthena) / sit down (goAthena M11 mapping);
-	//   2 = sit down (rAthena) / ignored (goAthena M11);
-	//   3 = stand up (rAthena) / ignored (goAthena M11);
-	//   7 = continuous attack.
-	// The action byte is preserved on the wire so the dispatcher can
-	// branch on its own policy without re-deriving the selector.
+	// Action is the rAthena action selector byte (see the doc comment
+	// for the e_damage_type mapping).
 	Action uint8
 }
 

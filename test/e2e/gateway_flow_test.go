@@ -46,6 +46,13 @@ const (
 	// zcActionResponseSize is the fixed length of ZC_ACTION_RESPONSE
 	// (M11): [2:cmd][4:GID][1:action][4:targetGID] = 11 bytes.
 	zcActionResponseSize = 11
+	// zcNotifyActSize is the fixed length of ZC_NOTIFY_ACT (M18):
+	// [2:cmd=0x08c8][4:srcID][4:targetID][4:serverTick][4:srcSpeed]
+	// [4:dmgSpeed][4:damage][1:isSPDamage][2:div][1:type][4:damage2] = 34 bytes.
+	zcNotifyActSize = 34
+	// zcNotifyVanishSize is the fixed length of ZC_NOTIFY_VANISH (M18):
+	// [2:cmd=0x0080][4:gid][1:type] = 7 bytes.
+	zcNotifyVanishSize = 7
 	// zcChangeDirSize is the fixed length of ZC_CHANGE_DIRECTION
 	// (M12): [2:cmd][4:srcId][2:headDir uint16][1:dir uint8] = 9 bytes.
 	zcChangeDirSize = 9
@@ -601,37 +608,88 @@ func stageCZGlobalMessage(t *testing.T, conn net.Conn, dec *netcodec.Decoder, de
 	t.Logf("CZ_GLOBAL_MESSAGE ok: message=%q", message)
 }
 
-// stageCZActionRequestSit sends CZ_ACTION_REQUEST with action=1 (sit)
-// and asserts ZC_ACTION_RESPONSE echoes the same action byte back with
-// the AID stamped in the GID slot and targetGID=0.
+// stageCZActionRequestSit sends CZ_ACTION_REQUEST with action=2 (sit)
+// and asserts ZC_NOTIFY_ACT (0x08c8) echoes with srcID=AID and type=2.
 func stageCZActionRequestSit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, aid uint32) {
 	t.Helper()
-	if err := (packet.CZActionRequestRequest{TargetGID: aid, Action: 1}).Encode(conn); err != nil {
+	if err := (packet.CZActionRequestRequest{TargetGID: aid, Action: packet.DMGSitDown}).Encode(conn); err != nil {
 		t.Fatalf("encode CZ_ACTION_REQUEST (sit): %v", err)
 	}
 
 	cmd, actFrame, err := feedAndNext(t, conn, dec, deadline)
 	if err != nil {
-		t.Fatalf("read ZC_ACTION_RESPONSE: %v", err)
+		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
 	}
-	if cmd != packet.HeaderZCACTIONRESPONSE {
-		t.Fatalf("CZ_ACTION_REQUEST response cmd = 0x%04x, want 0x%04x (ZC_ACTION_RESPONSE); frame=% x",
-			cmd, packet.HeaderZCACTIONRESPONSE, actFrame)
+	if cmd != packet.HeaderZCNOTIFYACT {
+		t.Fatalf("CZ_ACTION_REQUEST response cmd = 0x%04x, want 0x%04x (ZC_NOTIFY_ACT); frame=% x",
+			cmd, packet.HeaderZCNOTIFYACT, actFrame)
 	}
-	if len(actFrame) != zcActionResponseSize {
-		t.Fatalf("ZC_ACTION_RESPONSE length = %d, want %d",
-			len(actFrame), zcActionResponseSize)
+	if len(actFrame) != zcNotifyActSize {
+		t.Fatalf("ZC_NOTIFY_ACT length = %d, want %d",
+			len(actFrame), zcNotifyActSize)
 	}
-	if gid := binary.LittleEndian.Uint32(actFrame[2:6]); gid != aid {
-		t.Errorf("ZC_ACTION_RESPONSE GID = %d, want %d (AID-as-GID echo)", gid, aid)
+	if src := binary.LittleEndian.Uint32(actFrame[2:6]); src != aid {
+		t.Errorf("ZC_NOTIFY_ACT srcID = %d, want %d (AID-as-srcID echo)", src, aid)
 	}
-	if actFrame[6] != 0x01 {
-		t.Errorf("ZC_ACTION_RESPONSE action = %d, want 1 (sit)", actFrame[6])
+	if actFrame[29] != packet.DMGSitDown {
+		t.Errorf("ZC_NOTIFY_ACT type = %d, want %d (sit)", actFrame[29], packet.DMGSitDown)
 	}
-	if tgt := binary.LittleEndian.Uint32(actFrame[7:11]); tgt != 0 {
-		t.Errorf("ZC_ACTION_RESPONSE targetGID = %d, want 0", tgt)
+	t.Logf("CZ_ACTION_REQUEST ok: action=sit srcID=%d", aid)
+}
+
+// stageCZActionRequestAttack sends CZ_ACTION_REQUEST with action=0
+// (attack) targeting the first monster (Poring, GID 110000005, 50 HP).
+// With fixed damage=10, it takes 5 hits to kill. This stage sends
+// enough attacks to kill the monster and verifies the final hit
+// produces both ZC_NOTIFY_ACT and ZC_NOTIFY_VANISH.
+func stageCZActionRequestAttack(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, aid uint32) {
+	t.Helper()
+	const targetGID uint32 = 110000005 // Poring
+	const fixedDamage int32 = 10
+	const poringHP int32 = 50
+	hitsToKill := int(poringHP / fixedDamage) // 5 hits
+
+	for i := 0; i < hitsToKill; i++ {
+		if err := (packet.CZActionRequestRequest{TargetGID: targetGID, Action: packet.DMGNormal}).Encode(conn); err != nil {
+			t.Fatalf("encode CZ_ACTION_REQUEST (attack) hit %d: %v", i, err)
+		}
+
+		cmd, frame, err := feedAndNext(t, conn, dec, deadline)
+		if err != nil {
+			t.Fatalf("read attack response hit %d: %v", i, err)
+		}
+		if cmd != packet.HeaderZCNOTIFYACT {
+			t.Fatalf("attack hit %d cmd = 0x%04x, want 0x%04x (ZC_NOTIFY_ACT)", i, cmd, packet.HeaderZCNOTIFYACT)
+		}
+		if len(frame) != zcNotifyActSize {
+			t.Fatalf("attack hit %d ZC_NOTIFY_ACT length = %d, want %d", i, len(frame), zcNotifyActSize)
+		}
+		// Verify damage field.
+		if dmg := int32(binary.LittleEndian.Uint32(frame[22:26])); dmg != fixedDamage {
+			t.Errorf("attack hit %d damage = %d, want %d", i, dmg, fixedDamage)
+		}
+
+		// On the killing blow, expect an additional ZC_NOTIFY_VANISH.
+		if i == hitsToKill-1 {
+			cmd2, vanishFrame, err := feedAndNext(t, conn, dec, deadline)
+			if err != nil {
+				t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
+			}
+			if cmd2 != packet.HeaderZCNOTIFYVANISH {
+				t.Fatalf("kill blow cmd = 0x%04x, want 0x%04x (ZC_NOTIFY_VANISH)", cmd2, packet.HeaderZCNOTIFYVANISH)
+			}
+			if len(vanishFrame) != zcNotifyVanishSize {
+				t.Fatalf("ZC_NOTIFY_VANISH length = %d, want %d", len(vanishFrame), zcNotifyVanishSize)
+			}
+			if gid := binary.LittleEndian.Uint32(vanishFrame[2:6]); gid != targetGID {
+				t.Errorf("ZC_NOTIFY_VANISH gid = %d, want %d", gid, targetGID)
+			}
+			if vanishFrame[6] != packet.VanishDead {
+				t.Errorf("ZC_NOTIFY_VANISH type = %d, want %d (CLR_DEAD)", vanishFrame[6], packet.VanishDead)
+			}
+		}
 	}
-	t.Logf("CZ_ACTION_REQUEST ok: action=sit gid=%d", aid)
+	t.Logf("CZ_ACTION_REQUEST ok: killed Poring (gid=%d) in %d hits", targetGID, hitsToKill)
 }
 
 // stageCZChangeDir sends CZ_CHANGE_DIRECTION with headDir=CCW + dir=SE
@@ -1170,6 +1228,8 @@ func TestE2E_GatewayFullFlow_TCP(t *testing.T) {
 	// AOI broadcast yet (zone-side work in M14+).
 	stageCZGlobalMessage(t, conn, dec, ioDeadline, aid)
 	stageCZActionRequestSit(t, conn, dec, ioDeadline, aid)
+	// M18: basic attack — kill a Poring (5 hits at 10 damage each).
+	stageCZActionRequestAttack(t, conn, dec, ioDeadline, aid)
 	// M12: direction change + emotion echo. Same single-player
 	// pattern — the gateway echoes the request back with the AID in
 	// the srcId/GID slot.

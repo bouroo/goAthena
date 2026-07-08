@@ -1170,3 +1170,86 @@ func (r PurchaseResultResponse) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// NotifyActResponse encodes ZC_NOTIFY_ACT (command 0x08c8, 34 bytes fixed,
+// PACKETVER >= 20131223). The server sends this to broadcast damage,
+// sit, and stand actions. rAthena's clif_sitting / clif_standing /
+// clif_damage all emit this packet.
+//
+// Wire layout (rathena/src/map/packets.hpp:1413-1425):
+//
+//	int16  packetType (0x08c8)
+//	int32  srcID        (attacker GID)
+//	int32  targetID     (target GID)
+//	int32  serverTick   (server tick)
+//	int32  srcSpeed     (source amotion)
+//	int32  dmgSpeed     (damage amotion)
+//	int32  damage       (damage value)
+//	int8   isSPDamage   (0=HP, 1=SP)
+//	uint16 div          (hit count)
+//	uint8  type         (damage/action type — DMG_* constants)
+//	int32  damage2      (dual-wield second damage)
+type NotifyActResponse struct {
+	SrcID      uint32
+	TargetID   uint32
+	ServerTick uint32
+	SrcSpeed   int32
+	DmgSpeed   int32
+	Damage     int32
+	IsSPDamage int8
+	Div        uint16
+	Type       uint8
+	Damage2    int32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 34).
+func (r NotifyActResponse) Size() int { return sizeZCNotifyAct }
+
+// Encode writes the ZC_NOTIFY_ACT packet to w.
+func (r NotifyActResponse) Encode(w io.Writer) error {
+	var buf [sizeZCNotifyAct]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYACT)
+	binary.LittleEndian.PutUint32(buf[2:], r.SrcID)
+	binary.LittleEndian.PutUint32(buf[6:], r.TargetID)
+	binary.LittleEndian.PutUint32(buf[10:], r.ServerTick)
+	binary.LittleEndian.PutUint32(buf[14:], uint32(r.SrcSpeed)) //nolint:gosec // wire slot is unsigned
+	binary.LittleEndian.PutUint32(buf[18:], uint32(r.DmgSpeed)) //nolint:gosec // ditto
+	binary.LittleEndian.PutUint32(buf[22:], uint32(r.Damage))   //nolint:gosec // ditto
+	buf[26] = uint8(r.IsSPDamage)                               //nolint:gosec // rAthena int8 slot is 0/1 in practice; the on-wire byte is unsigned
+	binary.LittleEndian.PutUint16(buf[27:], r.Div)
+	buf[29] = r.Type
+	binary.LittleEndian.PutUint32(buf[30:], uint32(r.Damage2)) //nolint:gosec // ditto
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_NOTIFY_ACT: %w", err)
+	}
+	return nil
+}
+
+// NotifyVanishResponse encodes ZC_NOTIFY_VANISH (command 0x0080, 7 bytes
+// fixed). The server sends this when an entity leaves the client's view —
+// died, teleported, or moved out of sight range.
+//
+// Wire layout (rathena/src/map/packets.hpp:604-608):
+//
+//	int16  packetType (0x0080)
+//	uint32 gid        (entity that vanished)
+//	uint8  type       (vanish reason — Vanish* constants)
+type NotifyVanishResponse struct {
+	GID  uint32
+	Type uint8
+}
+
+// Size returns the on-wire byte length that Encode will write (always 7).
+func (r NotifyVanishResponse) Size() int { return sizeZCNotifyVanish }
+
+// Encode writes the ZC_NOTIFY_VANISH packet to w.
+func (r NotifyVanishResponse) Encode(w io.Writer) error {
+	var buf [sizeZCNotifyVanish]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYVANISH)
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	buf[6] = r.Type
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_NOTIFY_VANISH: %w", err)
+	}
+	return nil
+}
