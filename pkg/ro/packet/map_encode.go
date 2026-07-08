@@ -264,82 +264,51 @@ func (r SpawnUnitResponse) Size() int {
 
 // Encode writes the ZC_SPAWN_UNIT packet to w.
 func (r SpawnUnitResponse) Encode(w io.Writer) error {
+	return encodeSpawnUnitLike(w, HeaderZCSPAWNUNIT, r)
+}
+
+// encodeSpawnUnitLike writes a ZC_SPAWN_UNIT / ZC_SET_UNIT_IDLE packet
+// to w using the supplied opcode. Both packets share the same struct
+// layout (packet_spawn_unit / packet_idle_unit) for PACKETVER 20250604;
+// only the opcode differs. rAthena's clif_spawn_unit and
+// clif_set_unit_idle write the same fields in the same order.
+func encodeSpawnUnitLike(w io.Writer, opcode uint16, r SpawnUnitResponse) error {
 	buf := make([]byte, sizeZCSpawnUnit)
-	// uint16 packetType = 0x09fe (HeaderZCSPAWNUNIT).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSPAWNUNIT)
-	// uint16 packetLength = 107 (sizeZCSpawnUnit).
+	binary.LittleEndian.PutUint16(buf[0:], opcode)
 	binary.LittleEndian.PutUint16(buf[2:], sizeZCSpawnUnit)
-	// uint8 objectType at offset 4.
 	buf[4] = r.ObjectType
-	// uint32 AID at offset 5.
 	binary.LittleEndian.PutUint32(buf[5:], r.AID)
-	// uint32 GID at offset 9.
 	binary.LittleEndian.PutUint32(buf[9:], r.GID)
-	// int16 speed at offset 13.
-	binary.LittleEndian.PutUint16(buf[13:], uint16(r.Speed)) //nolint:gosec // wire slot is unsigned
-	// int16 bodyState at offset 15.
-	binary.LittleEndian.PutUint16(buf[15:], uint16(r.BodyState)) //nolint:gosec // ditto
-	// int16 healthState at offset 17.
+	binary.LittleEndian.PutUint16(buf[13:], uint16(r.Speed))       //nolint:gosec // wire slot is unsigned
+	binary.LittleEndian.PutUint16(buf[15:], uint16(r.BodyState))   //nolint:gosec // ditto
 	binary.LittleEndian.PutUint16(buf[17:], uint16(r.HealthState)) //nolint:gosec // ditto
-	// int32 effectState at offset 19.
 	binary.LittleEndian.PutUint32(buf[19:], uint32(r.EffectState)) //nolint:gosec // ditto
-	// int16 job at offset 23.
-	binary.LittleEndian.PutUint16(buf[23:], uint16(r.Job)) //nolint:gosec // ditto
-	// uint16 head at offset 25.
+	binary.LittleEndian.PutUint16(buf[23:], uint16(r.Job))         //nolint:gosec // ditto
 	binary.LittleEndian.PutUint16(buf[25:], r.Head)
-	// uint32 weapon at offset 27.
 	binary.LittleEndian.PutUint32(buf[27:], r.Weapon)
-	// uint32 shield at offset 31.
 	binary.LittleEndian.PutUint32(buf[31:], r.Shield)
-	// uint16 accessory at offset 35.
 	binary.LittleEndian.PutUint16(buf[35:], r.Accessory)
-	// uint16 accessory2 at offset 37.
 	binary.LittleEndian.PutUint16(buf[37:], r.Accessory2)
-	// uint16 accessory3 at offset 39.
 	binary.LittleEndian.PutUint16(buf[39:], r.Accessory3)
-	// int16 headPalette at offset 41.
 	binary.LittleEndian.PutUint16(buf[41:], uint16(r.HeadPalette)) //nolint:gosec // wire slot is unsigned
-	// int16 bodyPalette at offset 43.
 	binary.LittleEndian.PutUint16(buf[43:], uint16(r.BodyPalette)) //nolint:gosec // ditto
-	// int16 headDir at offset 45.
-	binary.LittleEndian.PutUint16(buf[45:], uint16(r.HeadDir)) //nolint:gosec // ditto
-	// uint16 robe at offset 47.
+	binary.LittleEndian.PutUint16(buf[45:], uint16(r.HeadDir))     //nolint:gosec // ditto
 	binary.LittleEndian.PutUint16(buf[47:], r.Robe)
-	// uint32 GUID at offset 49.
 	binary.LittleEndian.PutUint32(buf[49:], r.GUID)
-	// int16 GEmblemVer at offset 53.
 	binary.LittleEndian.PutUint16(buf[53:], uint16(r.GEmblemVer)) //nolint:gosec // wire slot is unsigned
-	// int16 honor at offset 55.
-	binary.LittleEndian.PutUint16(buf[55:], uint16(r.Honor)) //nolint:gosec // ditto
-	// int32 virtue at offset 57.
-	binary.LittleEndian.PutUint32(buf[57:], uint32(r.Virtue)) //nolint:gosec // ditto
-	// uint8 isPKModeON at offset 61.
+	binary.LittleEndian.PutUint16(buf[55:], uint16(r.Honor))      //nolint:gosec // ditto
+	binary.LittleEndian.PutUint32(buf[57:], uint32(r.Virtue))     //nolint:gosec // ditto
 	buf[61] = r.IsPKModeON
-	// uint8 sex at offset 62.
 	buf[62] = r.Sex
-	// uint8 posDir[3] at offset 63 — kRO 3-byte packed position.
 	encodePos(buf[63:66], r.PosX, r.PosY, r.Dir)
-	// uint8 xSize at offset 66.
 	buf[66] = r.XSize
-	// uint8 ySize at offset 67.
 	buf[67] = r.YSize
-	// int16 clevel at offset 68.
 	binary.LittleEndian.PutUint16(buf[68:], uint16(r.CLevel)) //nolint:gosec // wire slot is unsigned
-	// int16 font at offset 70.
-	binary.LittleEndian.PutUint16(buf[70:], uint16(r.Font)) //nolint:gosec // ditto
-	// int32 maxHP at offset 72.
-	binary.LittleEndian.PutUint32(buf[72:], uint32(r.MaxHP)) //nolint:gosec // ditto
-	// int32 HP at offset 76.
-	binary.LittleEndian.PutUint32(buf[76:], uint32(r.HP)) //nolint:gosec // ditto
-	// uint8 isBoss at offset 80.
+	binary.LittleEndian.PutUint16(buf[70:], uint16(r.Font))   //nolint:gosec // ditto
+	binary.LittleEndian.PutUint32(buf[72:], uint32(r.MaxHP))  //nolint:gosec // ditto
+	binary.LittleEndian.PutUint32(buf[76:], uint32(r.HP))     //nolint:gosec // ditto
 	buf[80] = r.IsBoss
-	// int16 body at offset 81.
 	binary.LittleEndian.PutUint16(buf[81:], uint16(r.Body)) //nolint:gosec // wire slot is unsigned
-	// char name[24] at offset 83 — copy up to 24 bytes, null-pad the
-	// rest. make() already zero-initializes the tail, so we only need
-	// to handle truncation (name longer than 24 bytes) and short
-	// names. Bytes 83..83+len(name) come from the string; the trailing
-	// bytes remain 0x00.
 	nameBytes := []byte(r.Name)
 	if len(nameBytes) > sizeSpawnUnitName {
 		nameBytes = nameBytes[:sizeSpawnUnitName]
@@ -347,9 +316,24 @@ func (r SpawnUnitResponse) Encode(w io.Writer) error {
 	copy(buf[83:83+len(nameBytes)], nameBytes)
 
 	if _, err := w.Write(buf); err != nil {
-		return fmt.Errorf("packet: write ZC_SPAWN_UNIT: %w", err)
+		return fmt.Errorf("packet: write 0x%04x: %w", opcode, err)
 	}
 	return nil
+}
+
+// SetUnitIdleResponse is ZC_SET_UNIT_IDLE (0x9ff) — same layout as
+// SpawnUnitResponse but with a different opcode. NPCs use this packet
+// instead of ZC_SPAWN_UNIT (see rAthena clif_set_unit_idle).
+type SetUnitIdleResponse SpawnUnitResponse
+
+// Size returns the on-wire byte length that Encode will write (always 107).
+func (r SetUnitIdleResponse) Size() int {
+	return sizeZCSetUnitIdle
+}
+
+// Encode writes the ZC_SET_UNIT_IDLE packet to w.
+func (r SetUnitIdleResponse) Encode(w io.Writer) error {
+	return encodeSpawnUnitLike(w, HeaderZCSETUNITIDLE, SpawnUnitResponse(r))
 }
 
 // MapPropertyResponse is the ZC_MAPPROPERTY_R2 packet (0x099b, 8 bytes).

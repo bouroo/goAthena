@@ -55,6 +55,10 @@ const (
 	// zcAckReqNameSize is the fixed length of ZC_ACK_REQNAME (M13):
 	// [2:cmd][4:GID int32][24:name char[24]] = 30 bytes.
 	zcAckReqNameSize = 30
+	// zcSetUnitIdleSize is the fixed length of ZC_SET_UNIT_IDLE (M14):
+	// same struct layout as ZC_SPAWN_UNIT (0x09fe) but opcode 0x09ff.
+	// [2:cmd][2:packetLength][103:payload] = 107 bytes.
+	zcSetUnitIdleSize = 107
 )
 
 // acceptEnterHeaderSize is the fixed prefix length of HC_ACCEPT_ENTER
@@ -379,24 +383,22 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 		t.Errorf("ZC_MAPPROPERTY_R2 flags = 0x%x, want 0", flags)
 	}
 
-	// M9+M10: the response stream after MAPPROPERTY_R2 contains the
+	// M9+M10+M14: the response stream after MAPPROPERTY_R2 contains the
 	// status burst (ZC_PAR_CHANGE / ZC_LONGPAR_CHANGE / ZC_STATUS) and
 	// the four M10 empty list packets (ZC_INVENTORY_ITEMLIST_NORMAL /
 	// ZC_INVENTORY_ITEMLIST_EQUIP / ZC_SKILLINFO_LIST /
-	// ZC_SHORTCUT_KEY_LIST). Drain framed packets from the decoder
-	// until either we have observed all the required headers in the
-	// rAthena LoadEndAck order or the decoder reports ErrIncomplete /
-	// a timeout. The expected burst is: 12 ZC_PAR_CHANGE/
-	// ZC_LONGPAR_CHANGE (8 bytes each) + 1 ZC_STATUS (44 bytes) + 6
-	// per-stat ZC_PAR_CHANGE (8 bytes each) + 3 variable-length list
-	// packets (4 bytes each) + 1 fixed-length ZC_SHORTCUT_KEY_LIST
-	// (191 bytes) = 287 bytes.
+	// ZC_SHORTCUT_KEY_LIST) followed by M14 NPC spawn packets
+	// (ZC_SET_UNIT_IDLE 0x09ff, 107 bytes each). Drain framed packets
+	// from the decoder until either we have observed all the required
+	// headers in the rAthena LoadEndAck order or the decoder reports
+	// ErrIncomplete / a timeout.
 	if err := conn.SetReadDeadline(time.Now().Add(deadline)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
 	}
 	chunk := make([]byte, 4096)
 	sawStatus := false
 	var emptyListCmds []uint16
+	var npcSpawnGIDs []uint32
 	packets := 0
 	wantEmpty := []uint16{
 		packet.HeaderZCINVENTORYITEMLISTNORMAL,
@@ -404,7 +406,8 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 		packet.HeaderZCSKILLINFOLIST,
 		packet.HeaderZCSHORTCUTKEYLIST,
 	}
-	for packets < 64 { // generous upper bound on status-burst + list packet count
+	wantNPCGIDs := []uint32{110000001, 110000002, 110000003, 110000004}
+	for packets < 128 { // generous upper bound on status-burst + list + NPC packet count
 		fcmd, frame, derr := dec.Next()
 		if derr == nil {
 			packets++
@@ -431,8 +434,16 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 					t.Errorf("ZC_SHORTCUT_KEY_LIST frame length = %d, want %d", len(frame), zcShortcutKeyListSize)
 				}
 				emptyListCmds = append(emptyListCmds, fcmd)
+			case packet.HeaderZCSETUNITIDLE:
+				// M14: NPC spawn packet (107 bytes fixed).
+				if len(frame) != zcSetUnitIdleSize {
+					t.Errorf("ZC_SET_UNIT_IDLE frame length = %d, want %d", len(frame), zcSetUnitIdleSize)
+				}
+				// AID at offset 5 (uint32 LE) is the NPC GID.
+				gid := binary.LittleEndian.Uint32(frame[5:9])
+				npcSpawnGIDs = append(npcSpawnGIDs, gid)
 			}
-			if sawStatus && len(emptyListCmds) == len(wantEmpty) {
+			if sawStatus && len(emptyListCmds) == len(wantEmpty) && len(npcSpawnGIDs) == len(wantNPCGIDs) {
 				break
 			}
 			continue
@@ -466,7 +477,16 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 				i, emptyListCmds[i], want)
 		}
 	}
-	t.Logf("CZ_NOTIFY_ACTORINIT ok: propertyType=0 flags=0 burst_packets=%d empty_list_packets=%d", packets, len(emptyListCmds))
+	if len(npcSpawnGIDs) != len(wantNPCGIDs) {
+		t.Fatalf("NPC spawn packets seen = %d, want %d (GIDs: %v)",
+			len(npcSpawnGIDs), len(wantNPCGIDs), npcSpawnGIDs)
+	}
+	for i, want := range wantNPCGIDs {
+		if npcSpawnGIDs[i] != want {
+			t.Errorf("NPC spawn[%d] GID = %d, want %d", i, npcSpawnGIDs[i], want)
+		}
+	}
+	t.Logf("CZ_NOTIFY_ACTORINIT ok: propertyType=0 flags=0 burst_packets=%d empty_list_packets=%d npc_spawns=%d", packets, len(emptyListCmds), len(npcSpawnGIDs))
 }
 
 // stageCZRequestTime sends CZ_REQUEST_TIME and asserts ZC_NOTIFY_TIME
