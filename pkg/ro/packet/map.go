@@ -69,7 +69,19 @@ const (
 	// ZC_EMOTION (0x00c0) — emotion echo. rathena/src/map/packets.hpp:1973-1978
 	// (`PACKET_ZC_EMOTION { int16 packetType; int32 GID; uint8 type }`).
 	// Fixed 7 bytes: [2:cmd][4:GID int32][1:type uint8].
-	HeaderZCEMOTION                 uint16 = 0x00c0
+	HeaderZCEMOTION uint16 = 0x00c0
+	// CZ_GETCHARNAMEREQUEST (0x0094) — client requests a character name by GID.
+	// rathena/src/map/clif_packetdb.hpp:45 (`parseable_packet(0x0094,6,clif_parse_GetCharNameRequest,2)`).
+	// Fixed 6 bytes: [2:cmd][4:GID int32].
+	HeaderCZGETCHARNAMEREQUEST uint16 = 0x0094
+	// ZC_ACK_REQNAME (0x0095) — server responds with a character name.
+	// rathena/src/map/clif.cpp:9923 (`0095 <id>.L <char name>.24B`).
+	// Fixed 30 bytes: [2:cmd][4:GID int32][24:name char[24]].
+	HeaderZCACKREQNAME uint16 = 0x0095
+	// CZ_RESTART (0x00b2) — client requests respawn or return to char select.
+	// rathena/src/map/clif_packetdb.hpp:61 (`parseable_packet(0x00b2,3,clif_parse_Restart,2)`).
+	// Fixed 3 bytes: [2:cmd][1:type uint8] (0=respawn, 1=return to char select).
+	HeaderCZRESTART                 uint16 = 0x00b2
 	HeaderZCSTATUS                  uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
 	HeaderZCPARCHANGE               uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
 	HeaderZCLONGPARCHANGE           uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
@@ -210,6 +222,18 @@ const (
 	// sizeZCEmotion = int16 packetType + int32 GID + uint8 type = 2+4+1 = 7
 	// (rathena/src/map/packets.hpp:1973-1978).
 	sizeZCEmotion = 7
+	// sizeCZGetCharNameRequest = int16 packetType + int32 GID = 2+4 = 6
+	// (rathena/src/map/clif_packetdb.hpp:45).
+	sizeCZGetCharNameRequest = 6
+	// sizeZCAckReqName = int16 packetType + int32 GID + char name[24] = 2+4+24 = 30
+	// (rathena/src/map/packets_struct.hpp:3556-3560).
+	sizeZCAckReqName = 30
+	// sizeZCAckReqNameName is the on-wire name field width in ZC_ACK_REQNAME
+	// (rathena/src/common/mmo.hpp:154 — NAME_LENGTH = 23+1 = 24).
+	sizeZCAckReqNameName = 24
+	// sizeCZRestart = int16 packetType + uint8 type = 2+1 = 3
+	// (rathena/src/map/clif_packetdb.hpp:61).
+	sizeCZRestart = 3
 )
 
 // NewMapServerDB returns a packet database pre-populated with all known
@@ -281,6 +305,20 @@ func NewMapServerDB() *DB {
 		ID:        HeaderCZREQEMOTION,
 		Name:      "CZ_REQ_EMOTION",
 		Length:    sizeCZReqEmotion,
+		Direction: DirectionClientToServer,
+	})
+	// M13: CZ_GETCHARNAMEREQUEST (fixed 6 bytes) + CZ_RESTART (fixed 3
+	// bytes) — name lookup and respawn/char-select request.
+	db.Register(Definition{
+		ID:        HeaderCZGETCHARNAMEREQUEST,
+		Name:      "CZ_GETCHARNAMEREQUEST",
+		Length:    sizeCZGetCharNameRequest,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZRESTART,
+		Name:      "CZ_RESTART",
+		Length:    sizeCZRestart,
 		Direction: DirectionClientToServer,
 	})
 
@@ -399,6 +437,13 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCEMOTION,
 		Name:      "ZC_EMOTION",
 		Length:    sizeZCEmotion,
+		Direction: DirectionServerToClient,
+	})
+	// M13: ZC_ACK_REQNAME (fixed 30 bytes) — name lookup response.
+	db.Register(Definition{
+		ID:        HeaderZCACKREQNAME,
+		Name:      "ZC_ACK_REQNAME",
+		Length:    sizeZCAckReqName,
 		Direction: DirectionServerToClient,
 	})
 

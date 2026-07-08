@@ -737,3 +737,192 @@ func TestParseCZReqEmotion_AcceptsTrailingBytes(t *testing.T) {
 		t.Errorf("ParseCZReqEmotion() = %+v, want %+v", got, want)
 	}
 }
+
+func TestParseCZGetCharNameRequest(t *testing.T) {
+	t.Parallel()
+
+	goodFrame := func() []byte {
+		f := make([]byte, sizeCZGetCharNameRequest)
+		writeLE16(f[0:], HeaderCZGETCHARNAMEREQUEST)
+		writeLE32(f[2:], 0xDEADBEEF)
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZGetCharNameRequestRequest
+	}{
+		{
+			name:    "valid known frame",
+			frame:   goodFrame,
+			wantErr: false,
+			want:    CZGetCharNameRequestRequest{GID: 0xDEADBEEF},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZGetCharNameRequest-1),
+			wantErr:    true,
+			wantErrSub: "5",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, sizeCZGetCharNameRequest)
+				writeLE16(f[0:], HeaderCZREQUESTMOVE)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZGetCharNameRequest(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZGetCharNameRequest() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZGetCharNameRequest() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseCZGetCharNameRequest() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseCZGetCharNameRequest_AcceptsTrailingBytes(t *testing.T) {
+	t.Parallel()
+
+	base := make([]byte, sizeCZGetCharNameRequest)
+	writeLE16(base[0:], HeaderCZGETCHARNAMEREQUEST)
+	writeLE32(base[2:], 0xCAFEBABE)
+	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
+
+	got, err := ParseCZGetCharNameRequest(frame)
+	if err != nil {
+		t.Fatalf("ParseCZGetCharNameRequest() unexpected error: %v", err)
+	}
+	want := CZGetCharNameRequestRequest{GID: 0xCAFEBABE}
+	if got != want {
+		t.Errorf("ParseCZGetCharNameRequest() = %+v, want %+v", got, want)
+	}
+}
+
+func TestParseCZRestart(t *testing.T) {
+	t.Parallel()
+
+	goodFrame := func() []byte {
+		f := make([]byte, sizeCZRestart)
+		writeLE16(f[0:], HeaderCZRESTART)
+		f[2] = 0x01
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZRestartRequest
+	}{
+		{
+			name:    "valid known frame type=1",
+			frame:   goodFrame,
+			wantErr: false,
+			want:    CZRestartRequest{Type: 0x01},
+		},
+		{
+			name: "valid frame type=0",
+			frame: func() []byte {
+				f := make([]byte, sizeCZRestart)
+				writeLE16(f[0:], HeaderCZRESTART)
+				f[2] = 0x00
+				return f
+			}(),
+			wantErr: false,
+			want:    CZRestartRequest{Type: 0x00},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZRestart-1),
+			wantErr:    true,
+			wantErrSub: "2",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, sizeCZRestart)
+				writeLE16(f[0:], HeaderCZREQUESTMOVE)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZRestart(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZRestart() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZRestart() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseCZRestart() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseCZRestart_AcceptsTrailingBytes(t *testing.T) {
+	t.Parallel()
+
+	base := make([]byte, sizeCZRestart)
+	writeLE16(base[0:], HeaderCZRESTART)
+	base[2] = 0x01
+	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
+
+	got, err := ParseCZRestart(frame)
+	if err != nil {
+		t.Fatalf("ParseCZRestart() unexpected error: %v", err)
+	}
+	want := CZRestartRequest{Type: 0x01}
+	if got != want {
+		t.Errorf("ParseCZRestart() = %+v, want %+v", got, want)
+	}
+}

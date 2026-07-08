@@ -1982,3 +1982,260 @@ func TestDispatchHandler_CZReqEmotion_PreAuthGuard_DropsSilently(t *testing.T) {
 		t.Fatalf("responder wrote %d bytes for pre-auth emotion, want 0 (drop)", got)
 	}
 }
+
+// TestDispatchHandler_CZGetCharNameRequest_EncodesZCAckReqName covers the
+// M13 name-request happy path: the dispatcher must respond with
+// ZC_ACK_REQNAME carrying the character name when the requested GID
+// matches the player's own CharID.
+func TestDispatchHandler_CZGetCharNameRequest_EncodesZCAckReqName(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeIdentityClient{
+		getCharacterFn: func(_ context.Context, _ *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+			return &identityv1.GetCharacterResponse{
+				Success: true,
+				Character: &identityv1.CharacterDetail{
+					Name: "TestChar",
+				},
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(fake, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	const wantAID uint32 = 100
+	const wantCID uint32 = 200
+	conn := domain.ConnectionInfo{ID: 1, AccountID: wantAID, CharID: wantCID}
+
+	req := packet.CZGetCharNameRequestRequest{GID: wantCID}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_GETCHARNAMEREQUEST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZGETCHARNAMEREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	const wantLen = 30
+	if len(out) != wantLen {
+		t.Fatalf("ZC_ACK_REQNAME length = %d, want %d (buf=% x)", len(out), wantLen, out)
+	}
+	// Opcode at [0:2] = 0x0095 LE.
+	if out[0] != 0x95 || out[1] != 0x00 {
+		t.Fatalf("opcode = %02x %02x, want 95 00 (LE 0x0095)", out[0], out[1])
+	}
+	// GID at [2:6] = wantCID.
+	if gid := binary.LittleEndian.Uint32(out[2:6]); gid != wantCID {
+		t.Errorf("GID = %d, want %d", gid, wantCID)
+	}
+	// Name at [6:30] = "TestChar" + null padding.
+	nameSlot := out[6:30]
+	gotName := cstrBytes(nameSlot)
+	if gotName != "TestChar" {
+		t.Errorf("name = %q, want %q", gotName, "TestChar")
+	}
+}
+
+// TestDispatchHandler_CZGetCharNameRequest_UnknownGID_EmptyName ensures
+// the dispatcher responds with an empty name when the requested GID
+// does not match the player's own CharID.
+func TestDispatchHandler_CZGetCharNameRequest_UnknownGID_EmptyName(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100, CharID: 200}
+
+	// Request a GID that does not match the player's CharID.
+	req := packet.CZGetCharNameRequestRequest{GID: 999}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_GETCHARNAMEREQUEST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZGETCHARNAMEREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 30 {
+		t.Fatalf("ZC_ACK_REQNAME length = %d, want 30", len(out))
+	}
+	// GID must be the requested GID, not the player's CharID.
+	if gid := binary.LittleEndian.Uint32(out[2:6]); gid != 999 {
+		t.Errorf("GID = %d, want 999", gid)
+	}
+	// Name must be empty (all null bytes).
+	for i := 6; i < 30; i++ {
+		if out[i] != 0 {
+			t.Errorf("name byte[%d] = 0x%02x, want 0x00 (empty name)", i, out[i])
+		}
+	}
+}
+
+// TestDispatchHandler_CZGetCharNameRequest_MalformedFrame_DropsSilently
+// ensures a truncated name-request frame is dropped without writing any
+// reply and without tearing the connection down.
+func TestDispatchHandler_CZGetCharNameRequest_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 2-byte frame is shorter than the 6-byte CZ_GETCHARNAMEREQUEST.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZGETCHARNAMEREQUEST, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZGetCharNameRequest_PreAuthGuard_DropsSilently
+// ensures the pre-auth guard rejects name requests from a connection
+// that has not yet completed CZ_ENTER.
+func TestDispatchHandler_CZGetCharNameRequest_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+
+	req := packet.CZGetCharNameRequestRequest{GID: 42}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_GETCHARNAMEREQUEST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZGETCHARNAMEREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth name request, want 0 (drop)", got)
+	}
+}
+
+// TestDispatchHandler_CZRestart_TypeCharSelect_LoggedOnly ensures the
+// dispatcher logs the restart request but does not write any reply
+// (state transition to char select is deferred).
+func TestDispatchHandler_CZRestart_TypeCharSelect_LoggedOnly(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	req := packet.CZRestartRequest{Type: 0x01}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_RESTART: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZRESTART, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	// No reply expected — restart is logged only.
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for CZ_RESTART, want 0 (log only)", got)
+	}
+}
+
+// TestDispatchHandler_CZRestart_TypeRespawn_LoggedOnly ensures the
+// dispatcher logs the respawn request but does not write any reply.
+func TestDispatchHandler_CZRestart_TypeRespawn_LoggedOnly(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	req := packet.CZRestartRequest{Type: 0x00}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_RESTART: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZRESTART, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for CZ_RESTART respawn, want 0 (log only)", got)
+	}
+}
+
+// TestDispatchHandler_CZRestart_MalformedFrame_DropsSilently ensures a
+// truncated restart frame is dropped without writing any reply.
+func TestDispatchHandler_CZRestart_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 2-byte frame is shorter than the 3-byte CZ_RESTART.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZRESTART, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZRestart_PreAuthGuard_DropsSilently ensures the
+// pre-auth guard rejects restart requests from a connection that has
+// not yet completed CZ_ENTER.
+func TestDispatchHandler_CZRestart_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+
+	req := packet.CZRestartRequest{Type: 0x01}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_RESTART: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZRESTART, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth restart, want 0 (drop)", got)
+	}
+}
+
+// cstrBytes returns the NUL-terminated prefix of b as a string, or the
+// full slice if no NUL byte is present.
+func cstrBytes(b []byte) string {
+	if i := bytes.IndexByte(b, 0); i >= 0 {
+		return string(b[:i])
+	}
+	return string(b)
+}

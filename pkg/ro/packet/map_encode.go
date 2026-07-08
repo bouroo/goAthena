@@ -905,3 +905,47 @@ func (r EmotionResponse) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// AckReqNameResponse encodes a ZC_ACK_REQNAME packet (command 0x0095,
+// 30 bytes fixed). The server sends this in response to
+// CZ_GETCHARNAMEREQUEST to tell the client the character name for a
+// given GID.
+//
+// Wire shape (rathena/src/map/packets_struct.hpp:3556-3560 +
+// rathena/src/map/clif.cpp:9923):
+//
+//	[2:cmd=0x0095][4:GID int32][24:name char[24]] = 30 bytes
+//
+// Name is written as a fixed-width 24-byte field; callers must supply
+// a UTF-8 name and any bytes past len(Name) are null-padded, matching
+// rAthena's safestrncpy pattern. Names longer than 24 bytes are
+// truncated.
+type AckReqNameResponse struct {
+	// GID is the entity ID whose name is being returned.
+	GID uint32
+	// Name is the character name (UTF-8 for Thai Classic). The encoder
+	// null-pads to 24 bytes; names longer than 24 bytes are truncated.
+	Name string
+}
+
+// Size returns the on-wire byte length that Encode will write (always 30).
+func (r AckReqNameResponse) Size() int {
+	return sizeZCAckReqName
+}
+
+// Encode writes the ZC_ACK_REQNAME packet to w.
+func (r AckReqNameResponse) Encode(w io.Writer) error {
+	var buf [sizeZCAckReqName]byte
+	// int16 packetType = 0x0095 (HeaderZCACKREQNAME).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREQNAME)
+	// int32 GID at offset 2.
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	// char name[24] at offset 6 — copy up to 24 bytes, null-pad the
+	// rest. The array is zero-initialized so trailing bytes are 0x00.
+	copy(buf[6:6+sizeZCAckReqNameName], r.Name)
+
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_ACK_REQNAME: %w", err)
+	}
+	return nil
+}

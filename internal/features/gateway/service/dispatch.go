@@ -16,6 +16,8 @@
 //   - CZ_GLOBAL_MESSAGE (0x008c)    → ZC_NOTIFY_CHAT (single-player echo; no AOI)
 //   - CZ_CHANGE_DIRECTION (0x009b)  → ZC_CHANGE_DIRECTION (single-player echo; no AOI)
 //   - CZ_REQ_EMOTION (0x00bf)       → ZC_EMOTION (single-player echo; no AOI)
+//   - CZ_GETCHARNAMEREQUEST (0x0094) → ZC_ACK_REQNAME (name lookup by GID)
+//   - CZ_RESTART (0x00b2)            → logged (state transition deferred)
 //   - everything else              → debug-logged, connection kept alive.
 
 package service
@@ -143,6 +145,10 @@ func (h *DispatchHandler) HandlePacket(ctx context.Context, conn *domain.Connect
 		return h.handleCZChangeDir(ctx, conn, resp, frame)
 	case packet.HeaderCZREQEMOTION:
 		return h.handleCZReqEmotion(ctx, conn, resp, frame)
+	case packet.HeaderCZGETCHARNAMEREQUEST:
+		return h.handleCZGetCharNameRequest(ctx, conn, resp, frame)
+	case packet.HeaderCZRESTART:
+		return h.handleCZRestart(ctx, conn, resp, frame)
 	default:
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
@@ -1378,6 +1384,133 @@ func (h *DispatchHandler) handleCZReqEmotion(_ context.Context, conn *domain.Con
 
 	if err := resp.SendPacket(buf.Bytes()); err != nil {
 		return fmt.Errorf("send ZC_EMOTION: %w", err)
+	}
+	return nil
+}
+
+// handleCZGetCharNameRequest responds to CZ_GETCHARNAMEREQUEST (0x0094) —
+// the client requesting a character name by GID. rAthena's
+// clif_parse_GetCharNameRequest (rathena/src/map/clif.cpp:11469-11503)
+// resolves the GID via map_id2bl and calls clif_name(sd, bl, SELF) to
+// send the full ZC_ACK_REQNAMEALL response. The gateway has no entity
+// registry yet, so we respond with the character name only when the
+// requested GID matches the player's own CharID; for any other GID we
+// respond with an empty name (the client handles this gracefully by
+// showing "Unknown" or the GID itself).
+//
+// The response uses the compact ZC_ACK_REQNAME (0x0095) format:
+// [2:cmd][4:GID int32][24:name char[24]] = 30 bytes. This is the
+// pre-20180207 NPC name response shape that carries only the GID and
+// name — no party/guild/position fields. The client accepts this for
+// player name lookups on Thai Classic PACKETVER 20250604.
+func (h *DispatchHandler) handleCZGetCharNameRequest(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZGetCharNameRequest(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_GETCHARNAMEREQUEST; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("req_gid", req.GID).
+			Msg("CZ_GETCHARNAMEREQUEST without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	name := ""
+	if req.GID == conn.CharID {
+		char, err := h.fetchCharacterByConn(conn)
+		if err != nil {
+			h.logger.Warn().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint32("char_id", conn.CharID).
+				Msg("failed to fetch character for name request")
+		} else if char != nil {
+			name = char.GetName()
+		}
+	}
+
+	ack := packet.AckReqNameResponse{
+		GID:  req.GID,
+		Name: name,
+	}
+
+	var buf bytes.Buffer
+	if err := ack.Encode(&buf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("req_gid", req.GID).
+			Msg("encode ZC_ACK_REQNAME failed; dropping packet")
+		return nil
+	}
+
+	h.logger.Debug().
+		Uint64("conn", conn.ID).
+		Uint32("req_gid", req.GID).
+		Uint32("char_id", conn.CharID).
+		Str("name", name).
+		Msg("name request")
+
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_ACK_REQNAME: %w", err)
+	}
+	return nil
+}
+
+// handleCZRestart responds to CZ_RESTART (0x00b2) — the client
+// requesting either a respawn (type=0) or a return to the character
+// select screen (type=1). rAthena's clif_parse_Restart
+// (rathena/src/map/clif.cpp:11837-11854) branches on the type byte:
+// 0x00 calls pc_respawn, 0x01 calls chrif_charselectreq (which sends
+// the client back to the char server).
+//
+// The gateway does not yet implement the connection state machine
+// required for a char-select transition (that requires tearing down
+// the zone session and re-entering the char-select handshake), so both
+// types are logged and dropped. The client will retry or the player
+// can disconnect manually.
+func (h *DispatchHandler) handleCZRestart(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZRestart(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_RESTART; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint8("type", req.Type).
+			Msg("CZ_RESTART without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	switch req.Type {
+	case 0x00:
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Msg("CZ_RESTART respawn requested (deferred)")
+	case 0x01:
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Msg("CZ_RESTART char select requested (deferred)")
+	default:
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint8("type", req.Type).
+			Msg("CZ_RESTART unknown type; dropping")
 	}
 	return nil
 }

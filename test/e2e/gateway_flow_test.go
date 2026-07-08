@@ -52,6 +52,9 @@ const (
 	// zcEmotionSize is the fixed length of ZC_EMOTION (M12):
 	// [2:cmd][4:GID][1:type] = 7 bytes.
 	zcEmotionSize = 7
+	// zcAckReqNameSize is the fixed length of ZC_ACK_REQNAME (M13):
+	// [2:cmd][4:GID int32][24:name char[24]] = 30 bytes.
+	zcAckReqNameSize = 30
 )
 
 // acceptEnterHeaderSize is the fixed prefix length of HC_ACCEPT_ENTER
@@ -644,6 +647,80 @@ func stageCZReqEmotion(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadl
 	t.Logf("CZ_REQ_EMOTION ok: type=ET_OK gid=%d", aid)
 }
 
+// stageCZGetCharNameRequest sends CZ_GETCHARNAMEREQUEST for the
+// player's own CharID and asserts ZC_ACK_REQNAME carries the expected
+// character name. Wire layout is
+//
+//	[0:2]   cmd 0x0095
+//	[2:6]   GID (uint32 LE)
+//	[6:30]  name[24] (NUL-padded)
+func stageCZGetCharNameRequest(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, charID uint32, wantName string) {
+	t.Helper()
+	if err := (packet.CZGetCharNameRequestRequest{GID: charID}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_GETCHARNAMEREQUEST: %v", err)
+	}
+
+	cmd, nameFrame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_ACK_REQNAME: %v", err)
+	}
+	if cmd != packet.HeaderZCACKREQNAME {
+		t.Fatalf("CZ_GETCHARNAMEREQUEST response cmd = 0x%04x, want 0x%04x (ZC_ACK_REQNAME); frame=% x",
+			cmd, packet.HeaderZCACKREQNAME, nameFrame)
+	}
+	if len(nameFrame) != zcAckReqNameSize {
+		t.Fatalf("ZC_ACK_REQNAME length = %d, want %d (frame=% x)",
+			len(nameFrame), zcAckReqNameSize, nameFrame)
+	}
+	if gid := binary.LittleEndian.Uint32(nameFrame[2:6]); gid != charID {
+		t.Errorf("ZC_ACK_REQNAME GID = %d, want %d", gid, charID)
+	}
+	gotName := cstrBytes(nameFrame[6:30])
+	if gotName != wantName {
+		t.Errorf("ZC_ACK_REQNAME name = %q, want %q", gotName, wantName)
+	}
+	t.Logf("CZ_GETCHARNAMEREQUEST ok: name=%q gid=%d", gotName, charID)
+}
+
+// stageCZRestart sends CZ_RESTART with type=1 (return to char select)
+// and asserts no response is written (the gateway logs the request but
+// does not implement the state transition yet).
+func stageCZRestart(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration) {
+	t.Helper()
+	if err := (packet.CZRestartRequest{Type: 0x01}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_RESTART: %v", err)
+	}
+
+	// CZ_RESTART is logged only — no response is expected. Verify that
+	// the next read times out (no packet was written back).
+	if err := conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	chunk := make([]byte, 4096)
+	for {
+		cmd, _, derr := dec.Next()
+		if derr == nil {
+			t.Fatalf("unexpected response packet 0x%04x after CZ_RESTART", cmd)
+		}
+		if derr != netcodec.ErrIncomplete {
+			break
+		}
+		n, rerr := conn.Read(chunk)
+		if n > 0 {
+			dec.Feed(chunk[:n])
+			continue
+		}
+		if rerr == nil {
+			break
+		}
+		if netErr, ok := rerr.(net.Error); ok && netErr.Timeout() {
+			break
+		}
+		t.Fatalf("read after CZ_RESTART: %v", rerr)
+	}
+	t.Logf("CZ_RESTART ok: no response (logged only)")
+}
+
 // TestE2E_GatewayFullFlow_TCP speaks the raw kRO binary packet protocol
 // over a single TCP connection to the running gateway and exercises the
 // full login → char → map → move round-trip across every real
@@ -704,6 +781,11 @@ func TestE2E_GatewayFullFlow_TCP(t *testing.T) {
 	// the srcId/GID slot.
 	stageCZChangeDir(t, conn, dec, ioDeadline, aid)
 	stageCZReqEmotion(t, conn, dec, ioDeadline, aid)
+	// M13: name request + restart. Name request echoes the character
+	// name when the GID matches the player's own CharID. Restart is
+	// logged only (state transition to char select is deferred).
+	stageCZGetCharNameRequest(t, conn, dec, ioDeadline, slot0GID, charName)
+	stageCZRestart(t, conn, dec, ioDeadline)
 }
 
 // cstrBytes returns the NUL-terminated prefix of b as a string, or the
