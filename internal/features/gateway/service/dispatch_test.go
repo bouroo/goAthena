@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -1301,17 +1302,18 @@ func TestDispatchHandler_CZNotifyActorInit_StatusBurst(t *testing.T) {
 		}
 	}
 
-	// (8) M14: NPC spawn packets (ZC_SET_UNIT_IDLE, 0x09ff) must
-	// follow the empty list packets. Four NPCs are defined with GIDs
-	// starting at 110000001.
-	wantNPCGIDs := []uint32{110000001, 110000002, 110000003, 110000004}
-	if len(npcGIDs) != len(wantNPCGIDs) {
-		t.Fatalf("NPC spawn packets seen = %d, want %d (GIDs: %v)",
-			len(npcGIDs), len(wantNPCGIDs), npcGIDs)
+	// (8) M14 + M17: NPC and monster spawn packets (ZC_SET_UNIT_IDLE,
+	// 0x09ff) must follow the empty list packets. Four NPCs (GIDs
+	// 110000001-110000004) are defined first, then four monsters
+	// (GIDs 110000005-110000008).
+	wantSpawnGIDs := []uint32{110000001, 110000002, 110000003, 110000004, 110000005, 110000006, 110000007, 110000008}
+	if len(npcGIDs) != len(wantSpawnGIDs) {
+		t.Fatalf("spawn packets seen = %d, want %d (GIDs: %v)",
+			len(npcGIDs), len(wantSpawnGIDs), npcGIDs)
 	}
-	for i, want := range wantNPCGIDs {
+	for i, want := range wantSpawnGIDs {
 		if npcGIDs[i] != want {
-			t.Errorf("NPC spawn[%d] GID = %d, want %d", i, npcGIDs[i], want)
+			t.Errorf("spawn[%d] GID = %d, want %d", i, npcGIDs[i], want)
 		}
 	}
 }
@@ -2934,5 +2936,212 @@ func TestDispatchHandler_CZPCPurchaseItemList_PreAuthGuard_DropsSilently(t *test
 	}
 	if got := resp.buf.Len(); got != 0 {
 		t.Fatalf("responder wrote %d bytes for pre-auth purchase, want 0 (drop)", got)
+	}
+}
+
+// TestDispatchHandler_CZNotifyActorInit_MonsterSpawn — M17: the
+// CZ_NOTIFY_ACTORINIT response must include four monster spawn packets
+// (ZC_SET_UNIT_IDLE 0x09ff, objectType=0x05) for Poring, Lunatic,
+// Drops, and Spore with GIDs 110000005-110000008. The four NPC spawns
+// (objectType=0x06) at GIDs 110000001-110000004 must still be present
+// in the documented order (NPCs first, then monsters).
+func TestDispatchHandler_CZNotifyActorInit_MonsterSpawn(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(
+		&fakeIdentityClient{
+			getCharacterFn: func(_ context.Context, _ *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+				return &identityv1.GetCharacterResponse{
+					Success: true,
+					Character: &identityv1.CharacterDetail{
+						CharId: 9001, Name: "alpha", ClassId: 7, BaseLevel: 50, JobLevel: 25,
+						Hp: 1234, MaxHp: 2000, Sp: 100, MaxSp: 200,
+						Str: 30, Agi: 20, Vit: 25, Int: 15, Dex: 40, Luk: 10,
+						StatusPoint: 5, SkillPoint: 3,
+					},
+				}, nil
+			},
+		},
+		&fakeZoneClient{}, 20250604, newDispatchTestLogger(t),
+		"prontera", parseIPv4("127.0.0.1"), 5121,
+	)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZNOTIFYACTORINIT, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	out := resp.buf.Bytes()
+
+	// Re-parse the burst to find the per-idle offsets. The
+	// parseStatusBurst helper already knows the leading
+	// non-idle layouts; we replay the same walk to capture the
+	// starting offset of every ZC_SET_UNIT_IDLE frame.
+	type idleRec struct {
+		gid     uint32
+		objType uint8
+		hp      int32
+		maxHP   int32
+		job     int16
+		speed   int16
+		clevel  int16
+		name    string
+	}
+	var idles []idleRec
+	offset := 8 // skip leading 8-byte ZC_MAPPROPERTY_R2
+	for offset+2 <= len(out) {
+		cmd := binary.LittleEndian.Uint16(out[offset:])
+		switch cmd {
+		case 0x00b0, 0x00b1:
+			offset += 8
+		case 0x00bd:
+			offset += 44
+		case 0x00a3, 0x00a4, 0x010f:
+			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
+			offset += plen
+		case 0x02b9:
+			offset += 191
+		case 0x09ff:
+			gid := binary.LittleEndian.Uint32(out[offset+5 : offset+9])
+			objType := out[offset+4]
+			speed := int16(binary.LittleEndian.Uint16(out[offset+13 : offset+15]))
+			job := int16(binary.LittleEndian.Uint16(out[offset+23 : offset+25]))
+			clevel := int16(binary.LittleEndian.Uint16(out[offset+68 : offset+70]))
+			maxHP := int32(binary.LittleEndian.Uint32(out[offset+72 : offset+76]))
+			hp := int32(binary.LittleEndian.Uint32(out[offset+76 : offset+80]))
+			name := string(out[offset+83 : offset+83+24])
+			if idx := strings.IndexByte(name, 0); idx >= 0 {
+				name = name[:idx]
+			}
+			idles = append(idles, idleRec{
+				gid: gid, objType: objType, hp: hp, maxHP: maxHP,
+				job: job, speed: speed, clevel: clevel, name: name,
+			})
+			offset += 107
+		default:
+			t.Fatalf("unexpected packet header 0x%04x at offset %d (buf=% x)", cmd, offset, out)
+		}
+	}
+	if offset != len(out) {
+		t.Fatalf("trailing %d unparsed bytes at offset %d (buf=% x)", len(out)-offset, offset, out)
+	}
+
+	wantMonsters := []struct {
+		gid     uint32
+		name    string
+		hp      int32
+		maxHP   int32
+		job     int16
+		speed   int16
+		clevel  int16
+		objType uint8
+	}{
+		{gid: 110000005, name: "Poring", hp: 50, maxHP: 50, job: 1002, speed: 400, clevel: 1, objType: 0x05},
+		{gid: 110000006, name: "Lunatic", hp: 150, maxHP: 150, job: 1063, speed: 400, clevel: 3, objType: 0x05},
+		{gid: 110000007, name: "Drops", hp: 55, maxHP: 55, job: 1113, speed: 400, clevel: 1, objType: 0x05},
+		{gid: 110000008, name: "Spore", hp: 120, maxHP: 120, job: 1157, speed: 400, clevel: 2, objType: 0x05},
+	}
+	if len(idles) != 8 {
+		t.Fatalf("ZC_SET_UNIT_IDLE packet count = %d, want 8 (4 NPC + 4 monster)", len(idles))
+	}
+	// First 4 must be NPCs (objectType=0x06), next 4 must be monsters
+	// (objectType=0x05).
+	for i := 0; i < 4; i++ {
+		if idles[i].objType != 0x06 {
+			t.Errorf("idle[%d] objectType = 0x%02x, want 0x06 (NPC_EVT); gid=%d", i, idles[i].objType, idles[i].gid)
+		}
+	}
+	for i, want := range wantMonsters {
+		got := idles[4+i]
+		if got.objType != want.objType {
+			t.Errorf("monster[%d] objectType = 0x%02x, want 0x%02x", i, got.objType, want.objType)
+		}
+		if got.gid != want.gid {
+			t.Errorf("monster[%d] GID = %d, want %d", i, got.gid, want.gid)
+		}
+		if got.name != want.name {
+			t.Errorf("monster[%d] name = %q, want %q", i, got.name, want.name)
+		}
+		if got.hp != want.hp {
+			t.Errorf("monster[%d] HP = %d, want %d", i, got.hp, want.hp)
+		}
+		if got.maxHP != want.maxHP {
+			t.Errorf("monster[%d] MaxHP = %d, want %d", i, got.maxHP, want.maxHP)
+		}
+		if got.job != want.job {
+			t.Errorf("monster[%d] job/spriteID = %d, want %d", i, got.job, want.job)
+		}
+		if got.speed != want.speed {
+			t.Errorf("monster[%d] speed = %d, want %d", i, got.speed, want.speed)
+		}
+		if got.clevel != want.clevel {
+			t.Errorf("monster[%d] clevel = %d, want %d", i, got.clevel, want.clevel)
+		}
+	}
+}
+
+// TestDispatchHandler_CZNotifyActorInit_MonsterCount — M17: the burst
+// must contain exactly 8 ZC_SET_UNIT_IDLE packets (4 NPCs from M14
+// plus 4 monsters). Simple count of opcodes 0x09ff in the response.
+func TestDispatchHandler_CZNotifyActorInit_MonsterCount(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(
+		&fakeIdentityClient{
+			getCharacterFn: func(_ context.Context, _ *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+				return &identityv1.GetCharacterResponse{
+					Success: true,
+					Character: &identityv1.CharacterDetail{
+						CharId: 9001, Name: "alpha", ClassId: 7, BaseLevel: 50, JobLevel: 25,
+						Hp: 1234, MaxHp: 2000, Sp: 100, MaxSp: 200,
+						Str: 30, Agi: 20, Vit: 25, Int: 15, Dex: 40, Luk: 10,
+						StatusPoint: 5, SkillPoint: 3,
+					},
+				}, nil
+			},
+		},
+		&fakeZoneClient{}, 20250604, newDispatchTestLogger(t),
+		"prontera", parseIPv4("127.0.0.1"), 5121,
+	)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZNOTIFYACTORINIT, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	out := resp.buf.Bytes()
+
+	idleCount := 0
+	for offset := 0; offset+2 <= len(out); {
+		cmd := binary.LittleEndian.Uint16(out[offset:])
+		if cmd == 0x09ff {
+			idleCount++
+			offset += 107
+			continue
+		}
+		// Skip non-idle packets using their known lengths.
+		switch cmd {
+		case 0x099b:
+			offset += 8
+		case 0x00b0, 0x00b1:
+			offset += 8
+		case 0x00bd:
+			offset += 44
+		case 0x00a3, 0x00a4, 0x010f:
+			if offset+4 > len(out) {
+				t.Fatalf("truncated empty list packet 0x%04x at offset %d", cmd, offset)
+			}
+			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
+			offset += plen
+		case 0x02b9:
+			offset += 191
+		default:
+			t.Fatalf("unexpected packet 0x%04x at offset %d (buf=% x)", cmd, offset, out)
+		}
+	}
+	if idleCount != 8 {
+		t.Fatalf("ZC_SET_UNIT_IDLE packet count = %d, want 8 (4 NPC + 4 monster)", idleCount)
 	}
 }
