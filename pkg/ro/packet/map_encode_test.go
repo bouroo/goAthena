@@ -1985,3 +1985,176 @@ func TestSetUnitIdleResponse_Encode_NameTruncation(t *testing.T) {
 		t.Errorf("truncated name = %q, want 24 'N's", got[83:107])
 	}
 }
+
+// M15: NPC dialog interaction — ZC_SAY_DIALOG2, ZC_WAIT_DIALOG2, ZC_CLOSE_DIALOG.
+
+func TestSayDialog2Response_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := SayDialog2Response{
+		NpcID:   110000001,
+		Type:    0,
+		Message: "Welcome to goAthena! This is Kafra Employee.",
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	// Header: 0x0972 LE.
+	if got[0] != 0x72 || got[1] != 0x09 {
+		t.Errorf("header bytes = %02x %02x, want 72 09 (LE 0x0972)", got[0], got[1])
+	}
+
+	// PacketLength at [2:4] = 2+2+4+1+len(msg)+1.
+	wantLen := 2 + 2 + 4 + 1 + len(resp.Message) + 1
+	if plen := binary.LittleEndian.Uint16(got[2:4]); int(plen) != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+
+	// NpcID at [4:8] = 110000001.
+	if nid := binary.LittleEndian.Uint32(got[4:8]); nid != 110000001 {
+		t.Errorf("NpcID = %d, want 110000001", nid)
+	}
+
+	// Type at [8] = 0.
+	if got[8] != 0 {
+		t.Errorf("type = %d, want 0", got[8])
+	}
+
+	// Message at [9:] = "Welcome to goAthena! This is Kafra Employee." + NUL.
+	msgEnd := 9 + len(resp.Message)
+	gotMsg := string(got[9:msgEnd])
+	if gotMsg != resp.Message {
+		t.Errorf("message = %q, want %q", gotMsg, resp.Message)
+	}
+	if got[msgEnd] != 0 {
+		t.Errorf("NUL terminator = 0x%02x, want 0x00", got[msgEnd])
+	}
+}
+
+func TestSayDialog2Response_Encode_EmptyMessage(t *testing.T) {
+	t.Parallel()
+
+	resp := SayDialog2Response{
+		NpcID:   110000001,
+		Type:    0,
+		Message: "",
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	// 2+2+4+1+0+1 = 10 bytes.
+	if len(got) != 10 {
+		t.Fatalf("len(got) = %d, want 10", len(got))
+	}
+	if got[9] != 0 {
+		t.Errorf("NUL terminator = 0x%02x, want 0x00", got[9])
+	}
+}
+
+func TestSayDialog2Response_Encode_MessageTooLong(t *testing.T) {
+	t.Parallel()
+
+	longMsg := strings.Repeat("X", 0xfff6)
+	resp := SayDialog2Response{
+		NpcID:   110000001,
+		Type:    0,
+		Message: longMsg,
+	}
+
+	var buf bytes.Buffer
+	err := resp.Encode(&buf)
+	if err == nil {
+		t.Fatal("Encode() error = nil, want non-nil for oversized message")
+	}
+	if !strings.Contains(err.Error(), "too long") {
+		t.Errorf("error %q does not contain 'too long'", err.Error())
+	}
+}
+
+func TestWaitDialog2Response_Size(t *testing.T) {
+	t.Parallel()
+
+	var r WaitDialog2Response
+	if got, want := r.Size(), sizeZCWaitDialog2; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestWaitDialog2Response_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := WaitDialog2Response{
+		NpcID: 110000001,
+		Type:  0,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != sizeZCWaitDialog2 {
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCWaitDialog2)
+	}
+
+	// Header: 0x0973 LE.
+	if got[0] != 0x73 || got[1] != 0x09 {
+		t.Errorf("header bytes = %02x %02x, want 73 09 (LE 0x0973)", got[0], got[1])
+	}
+
+	// NpcID at [2:6] = 110000001.
+	if nid := binary.LittleEndian.Uint32(got[2:6]); nid != 110000001 {
+		t.Errorf("NpcID = %d, want 110000001", nid)
+	}
+
+	// Type at [6] = 0.
+	if got[6] != 0 {
+		t.Errorf("type = %d, want 0", got[6])
+	}
+}
+
+func TestCloseDialogResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r CloseDialogResponse
+	if got, want := r.Size(), sizeZCCloseDialog; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestCloseDialogResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := CloseDialogResponse{
+		NpcID: 110000001,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != sizeZCCloseDialog {
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCCloseDialog)
+	}
+
+	// Header: 0x00b6 LE.
+	if got[0] != 0xb6 || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want b6 00 (LE 0x00b6)", got[0], got[1])
+	}
+
+	// NpcID at [2:6] = 110000001.
+	if nid := binary.LittleEndian.Uint32(got[2:6]); nid != 110000001 {
+		t.Errorf("NpcID = %d, want 110000001", nid)
+	}
+}

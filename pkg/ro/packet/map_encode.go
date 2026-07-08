@@ -933,3 +933,109 @@ func (r AckReqNameResponse) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// SayDialog2Response encodes a ZC_SAY_DIALOG2 packet (command 0x0972,
+// variable length, PACKETVER >= 20220504). The server sends this to
+// display dialog text in the NPC dialog window.
+//
+// Wire layout (rathena/src/map/packets_struct.hpp: ZC_SAY_DIALOG2):
+//
+//	int16  packetType   (0x0972)
+//	int16  packetLength (total size)
+//	uint32 NpcID
+//	uint8  type         (dialog type, 0 = normal)
+//	char   message[]    (null-terminated dialog text)
+//
+// The wire length is 2+2+4+1 + len(message)+1 (one byte for the NUL
+// terminator). The NUL is appended unconditionally.
+type SayDialog2Response struct {
+	// NpcID is the NPC entity ID.
+	NpcID uint32
+	// Type is the dialog type (0 = normal).
+	Type uint8
+	// Message is the dialog text (UTF-8 for Thai Classic).
+	Message string
+}
+
+// Encode writes the ZC_SAY_DIALOG2 packet to w.
+func (r SayDialog2Response) Encode(w io.Writer) error {
+	msgBytes := []byte(r.Message)
+	// 2 (cmd) + 2 (packetLength) + 4 (NpcID) + 1 (type) + len(msg) + 1 (NUL).
+	total := 2 + 2 + 4 + 1 + len(msgBytes) + 1
+	if total > 0xffff {
+		return fmt.Errorf("packet: write ZC_SAY_DIALOG2: message too long (%d bytes)", len(msgBytes))
+	}
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSAYDIALOG2)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint32(buf[4:], r.NpcID)
+	buf[8] = r.Type
+	copy(buf[9:], msgBytes)
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_SAY_DIALOG2: %w", err)
+	}
+	return nil
+}
+
+// WaitDialog2Response encodes a ZC_WAIT_DIALOG2 packet (command 0x0973,
+// 7 bytes fixed, PACKETVER >= 20220504). The server sends this to show
+// the "Next" button in the NPC dialog window.
+//
+// Wire layout (rathena/src/map/packets_struct.hpp: ZC_WAIT_DIALOG2):
+//
+//	int16  packetType (0x0973)
+//	uint32 NpcID
+//	uint8  type       (dialog type, 0 = normal)
+type WaitDialog2Response struct {
+	// NpcID is the NPC entity ID.
+	NpcID uint32
+	// Type is the dialog type (0 = normal).
+	Type uint8
+}
+
+// Size returns the on-wire byte length that Encode will write (always 7).
+func (r WaitDialog2Response) Size() int {
+	return sizeZCWaitDialog2
+}
+
+// Encode writes the ZC_WAIT_DIALOG2 packet to w.
+func (r WaitDialog2Response) Encode(w io.Writer) error {
+	var buf [sizeZCWaitDialog2]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCWAITDIALOG2)
+	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
+	buf[6] = r.Type
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_WAIT_DIALOG2: %w", err)
+	}
+	return nil
+}
+
+// CloseDialogResponse encodes a ZC_CLOSE_DIALOG packet (command 0x00b6,
+// 6 bytes fixed). The server sends this to show the "Close" button in
+// the NPC dialog window.
+//
+// Wire layout (rathena/src/map/clif_packetdb.hpp:58):
+//
+//	int16  packetType (0x00b6)
+//	uint32 NpcID
+type CloseDialogResponse struct {
+	// NpcID is the NPC entity ID.
+	NpcID uint32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 6).
+func (r CloseDialogResponse) Size() int {
+	return sizeZCCloseDialog
+}
+
+// Encode writes the ZC_CLOSE_DIALOG packet to w.
+func (r CloseDialogResponse) Encode(w io.Writer) error {
+	var buf [sizeZCCloseDialog]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCLOSEDIALOG)
+	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_CLOSE_DIALOG: %w", err)
+	}
+	return nil
+}

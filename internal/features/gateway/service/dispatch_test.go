@@ -2264,3 +2264,328 @@ func cstrBytes(b []byte) string {
 	}
 	return string(b)
 }
+
+// M15: NPC dialog interaction tests.
+
+// TestDispatchHandler_CZContactNPC_ValidNPC_SendsDialog ensures the
+// dispatcher sends ZC_SAY_DIALOG2 + ZC_WAIT_DIALOG2 when a known NPC
+// GID is clicked.
+func TestDispatchHandler_CZContactNPC_ValidNPC_SendsDialog(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	// Click on Kafra Employee (GID 110000001).
+	req := packet.CZContactNPCRequest{AID: 110000001, Type: 0x01}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_CONTACTNPC: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZCONTACTNPC, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) == 0 {
+		t.Fatal("responder wrote 0 bytes, want ZC_SAY_DIALOG2 + ZC_WAIT_DIALOG2")
+	}
+
+	// First packet: ZC_SAY_DIALOG2 (0x0972).
+	if out[0] != 0x72 || out[1] != 0x09 {
+		t.Fatalf("first packet header = %02x %02x, want 72 09 (ZC_SAY_DIALOG2)", out[0], out[1])
+	}
+	sayLen := int(binary.LittleEndian.Uint16(out[2:4]))
+	if sayLen < 10 || sayLen > len(out) {
+		t.Fatalf("ZC_SAY_DIALOG2 packetLength = %d, want >= 10", sayLen)
+	}
+	if nid := binary.LittleEndian.Uint32(out[4:8]); nid != 110000001 {
+		t.Errorf("ZC_SAY_DIALOG2 NpcID = %d, want 110000001", nid)
+	}
+	if out[8] != 0 {
+		t.Errorf("ZC_SAY_DIALOG2 type = %d, want 0", out[8])
+	}
+	msg := cstrBytes(out[9:sayLen])
+	if msg != "Welcome to goAthena! This is Kafra Employee." {
+		t.Errorf("ZC_SAY_DIALOG2 message = %q, want %q", msg, "Welcome to goAthena! This is Kafra Employee.")
+	}
+
+	// Second packet: ZC_WAIT_DIALOG2 (0x0973), fixed 7 bytes.
+	const zcWaitDialog2Size = 7
+	waitStart := sayLen
+	if len(out) < waitStart+zcWaitDialog2Size {
+		t.Fatalf("output too short for ZC_WAIT_DIALOG2: got %d bytes, need %d", len(out), waitStart+zcWaitDialog2Size)
+	}
+	waitFrame := out[waitStart : waitStart+zcWaitDialog2Size]
+	if waitFrame[0] != 0x73 || waitFrame[1] != 0x09 {
+		t.Fatalf("second packet header = %02x %02x, want 73 09 (ZC_WAIT_DIALOG2)", waitFrame[0], waitFrame[1])
+	}
+	if nid := binary.LittleEndian.Uint32(waitFrame[2:6]); nid != 110000001 {
+		t.Errorf("ZC_WAIT_DIALOG2 NpcID = %d, want 110000001", nid)
+	}
+	if waitFrame[6] != 0 {
+		t.Errorf("ZC_WAIT_DIALOG2 type = %d, want 0", waitFrame[6])
+	}
+}
+
+// TestDispatchHandler_CZContactNPC_UnknownNPC_NoResponse ensures the
+// dispatcher does not write any response when the NPC GID is not found
+// in npcSpawns.
+func TestDispatchHandler_CZContactNPC_UnknownNPC_NoResponse(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	// Click on an unknown NPC GID.
+	req := packet.CZContactNPCRequest{AID: 999999999, Type: 0x01}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_CONTACTNPC: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZCONTACTNPC, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for unknown NPC, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZContactNPC_MalformedFrame_DropsSilently ensures
+// a truncated contact-NPC frame is dropped without writing any reply.
+func TestDispatchHandler_CZContactNPC_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 2-byte frame is shorter than the 7-byte CZ_CONTACTNPC.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZCONTACTNPC, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZContactNPC_PreAuthGuard_DropsSilently ensures
+// the pre-auth guard rejects contact-NPC requests from a connection
+// that has not yet completed CZ_ENTER.
+func TestDispatchHandler_CZContactNPC_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+
+	req := packet.CZContactNPCRequest{AID: 110000001, Type: 0x01}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_CONTACTNPC: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZCONTACTNPC, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth contact NPC, want 0 (drop)", got)
+	}
+}
+
+// TestDispatchHandler_CZReqNextScript_SendsContinuation ensures the
+// dispatcher sends ZC_SAY_DIALOG2 + ZC_CLOSE_DIALOG when the client
+// clicks "Next".
+func TestDispatchHandler_CZReqNextScript_SendsContinuation(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	req := packet.CZReqNextScriptRequest{NpcID: 110000001}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQNEXTSCRIPT: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQNEXTSCRIPT, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) == 0 {
+		t.Fatal("responder wrote 0 bytes, want ZC_SAY_DIALOG2 + ZC_CLOSE_DIALOG")
+	}
+
+	// First packet: ZC_SAY_DIALOG2 (0x0972).
+	if out[0] != 0x72 || out[1] != 0x09 {
+		t.Fatalf("first packet header = %02x %02x, want 72 09 (ZC_SAY_DIALOG2)", out[0], out[1])
+	}
+	sayLen := int(binary.LittleEndian.Uint16(out[2:4]))
+	if sayLen < 10 || sayLen > len(out) {
+		t.Fatalf("ZC_SAY_DIALOG2 packetLength = %d, want >= 10", sayLen)
+	}
+	if nid := binary.LittleEndian.Uint32(out[4:8]); nid != 110000001 {
+		t.Errorf("ZC_SAY_DIALOG2 NpcID = %d, want 110000001", nid)
+	}
+	msg := cstrBytes(out[9:sayLen])
+	if msg != "The server is under development. Enjoy exploring!" {
+		t.Errorf("ZC_SAY_DIALOG2 message = %q, want %q", msg, "The server is under development. Enjoy exploring!")
+	}
+
+	// Second packet: ZC_CLOSE_DIALOG (0x00b6), fixed 6 bytes.
+	const zcCloseDialogSize = 6
+	closeStart := sayLen
+	if len(out) < closeStart+zcCloseDialogSize {
+		t.Fatalf("output too short for ZC_CLOSE_DIALOG: got %d bytes, need %d", len(out), closeStart+zcCloseDialogSize)
+	}
+	closeFrame := out[closeStart : closeStart+zcCloseDialogSize]
+	if closeFrame[0] != 0xb6 || closeFrame[1] != 0x00 {
+		t.Fatalf("second packet header = %02x %02x, want b6 00 (ZC_CLOSE_DIALOG)", closeFrame[0], closeFrame[1])
+	}
+	if nid := binary.LittleEndian.Uint32(closeFrame[2:6]); nid != 110000001 {
+		t.Errorf("ZC_CLOSE_DIALOG NpcID = %d, want 110000001", nid)
+	}
+}
+
+// TestDispatchHandler_CZReqNextScript_MalformedFrame_DropsSilently ensures
+// a truncated next-script frame is dropped without writing any reply.
+func TestDispatchHandler_CZReqNextScript_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 2-byte frame is shorter than the 6-byte CZ_REQNEXTSCRIPT.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQNEXTSCRIPT, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZReqNextScript_PreAuthGuard_DropsSilently ensures
+// the pre-auth guard rejects next-script requests from a connection
+// that has not yet completed CZ_ENTER.
+func TestDispatchHandler_CZReqNextScript_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+
+	req := packet.CZReqNextScriptRequest{NpcID: 110000001}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQNEXTSCRIPT: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQNEXTSCRIPT, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth next script, want 0 (drop)", got)
+	}
+}
+
+// TestDispatchHandler_CZCloseDialog_NoResponse ensures the dispatcher
+// does not write any response when the client closes the dialog.
+func TestDispatchHandler_CZCloseDialog_NoResponse(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	req := packet.CZCloseDialogRequest{GID: 110000001}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_CLOSE_DIALOG: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZCLOSEDIALOG, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for close dialog, want 0 (no response)", got)
+	}
+}
+
+// TestDispatchHandler_CZCloseDialog_MalformedFrame_DropsSilently ensures
+// a truncated close-dialog frame is dropped without writing any reply.
+func TestDispatchHandler_CZCloseDialog_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 2-byte frame is shorter than the 6-byte CZ_CLOSE_DIALOG.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZCLOSEDIALOG, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZCloseDialog_PreAuthGuard_DropsSilently ensures
+// the pre-auth guard rejects close-dialog requests from a connection
+// that has not yet completed CZ_ENTER.
+func TestDispatchHandler_CZCloseDialog_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+
+	req := packet.CZCloseDialogRequest{GID: 110000001}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_CLOSE_DIALOG: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZCLOSEDIALOG, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth close dialog, want 0 (drop)", got)
+	}
+}

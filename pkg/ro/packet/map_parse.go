@@ -521,3 +521,133 @@ func (r CZRestartRequest) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// CZContactNPCRequest is the decoded form of a client → map-server
+// CZ_CONTACTNPC packet (header 0x0090, 7 bytes on the wire). Source:
+// rathena/src/map/clif_packetdb.hpp:42
+// (`parseable_packet(0x0090,7,clif_parse_NpcClicked,2,6)`) +
+// rathena/src/map/clif.cpp:10838-10855 (clif_parse_NpcClicked).
+//
+// The on-wire shape is `<AID>.L <type>.B` — the client sends the
+// NPC's block_list ID (GID) and a click type byte (1 = click).
+type CZContactNPCRequest struct {
+	// AID is the NPC's block_list ID (GID) the client clicked on.
+	AID uint32
+	// Type is the click type byte (1 = click).
+	Type uint8
+}
+
+// ParseCZContactNPC decodes a CZ_CONTACTNPC frame. The frame must
+// carry cmd 0x0090 and contain 7 bytes.
+//
+// Returns a wrapped error naming the byte count if the frame is short,
+// or naming the unexpected cmd id if the header is not 0x0090.
+func ParseCZContactNPC(frame []byte) (CZContactNPCRequest, error) {
+	if len(frame) < sizeCZContactNPC {
+		return CZContactNPCRequest{}, fmt.Errorf("packet: parse CZ_CONTACTNPC: want at least %d bytes, got %d", sizeCZContactNPC, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCONTACTNPC {
+		return CZContactNPCRequest{}, fmt.Errorf("packet: parse CZ_CONTACTNPC: unexpected cmd 0x%04x", cmd)
+	}
+	return CZContactNPCRequest{
+		AID:  binary.LittleEndian.Uint32(frame[2:6]),
+		Type: frame[6],
+	}, nil
+}
+
+// Encode writes the CZ_CONTACTNPC packet to w. Mirrors the on-wire
+// layout: [2:cmd=0x0090][4:AID uint32][1:type uint8] = 7 bytes.
+func (r CZContactNPCRequest) Encode(w io.Writer) error {
+	var buf [sizeCZContactNPC]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCONTACTNPC)
+	binary.LittleEndian.PutUint32(buf[2:], r.AID)
+	buf[6] = r.Type
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_CONTACTNPC: %w", err)
+	}
+	return nil
+}
+
+// CZReqNextScriptRequest is the decoded form of a client → map-server
+// CZ_REQNEXTSCRIPT packet (header 0x00b9, 6 bytes on the wire). Source:
+// rathena/src/map/clif_packetdb.hpp:60
+// (`parseable_packet(0x00b9,6,clif_parse_ScriptContinue,2)`) +
+// rathena/src/map/clif.cpp:10857-10872 (clif_parse_ScriptContinue).
+//
+// The on-wire shape is `<NpcID>.L` — the client sends the NPC ID
+// to request the next page of dialog text.
+type CZReqNextScriptRequest struct {
+	// NpcID is the NPC ID the client wants the next dialog page for.
+	NpcID uint32
+}
+
+// ParseCZReqNextScript decodes a CZ_REQNEXTSCRIPT frame. The frame must
+// carry cmd 0x00b9 and contain 6 bytes.
+//
+// Returns a wrapped error naming the byte count if the frame is short,
+// or naming the unexpected cmd id if the header is not 0x00b9.
+func ParseCZReqNextScript(frame []byte) (CZReqNextScriptRequest, error) {
+	if len(frame) < sizeCZReqNextScript {
+		return CZReqNextScriptRequest{}, fmt.Errorf("packet: parse CZ_REQNEXTSCRIPT: want at least %d bytes, got %d", sizeCZReqNextScript, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQNEXTSCRIPT {
+		return CZReqNextScriptRequest{}, fmt.Errorf("packet: parse CZ_REQNEXTSCRIPT: unexpected cmd 0x%04x", cmd)
+	}
+	return CZReqNextScriptRequest{
+		NpcID: binary.LittleEndian.Uint32(frame[2:6]),
+	}, nil
+}
+
+// Encode writes the CZ_REQNEXTSCRIPT packet to w. Mirrors the on-wire
+// layout: [2:cmd=0x00b9][4:NpcID uint32] = 6 bytes.
+func (r CZReqNextScriptRequest) Encode(w io.Writer) error {
+	var buf [sizeCZReqNextScript]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQNEXTSCRIPT)
+	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_REQNEXTSCRIPT: %w", err)
+	}
+	return nil
+}
+
+// CZCloseDialogRequest is the decoded form of a client → map-server
+// CZ_CLOSE_DIALOG packet (header 0x0146, 6 bytes on the wire). Source:
+// rathena/src/map/clif_packetdb.hpp:72
+// (`parseable_packet(0x0146,6,clif_parse_CloseDialog,2)`) +
+// rathena/src/map/clif.cpp:10874-10882 (clif_parse_CloseDialog).
+//
+// The on-wire shape is `<GID>.L` — the client sends the NPC GID
+// to close the dialog window.
+type CZCloseDialogRequest struct {
+	// GID is the NPC ID the client is closing the dialog for.
+	GID uint32
+}
+
+// ParseCZCloseDialog decodes a CZ_CLOSE_DIALOG frame. The frame must
+// carry cmd 0x0146 and contain 6 bytes.
+//
+// Returns a wrapped error naming the byte count if the frame is short,
+// or naming the unexpected cmd id if the header is not 0x0146.
+func ParseCZCloseDialog(frame []byte) (CZCloseDialogRequest, error) {
+	if len(frame) < sizeCZCloseDialog {
+		return CZCloseDialogRequest{}, fmt.Errorf("packet: parse CZ_CLOSE_DIALOG: want at least %d bytes, got %d", sizeCZCloseDialog, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCLOSEDIALOG {
+		return CZCloseDialogRequest{}, fmt.Errorf("packet: parse CZ_CLOSE_DIALOG: unexpected cmd 0x%04x", cmd)
+	}
+	return CZCloseDialogRequest{
+		GID: binary.LittleEndian.Uint32(frame[2:6]),
+	}, nil
+}
+
+// Encode writes the CZ_CLOSE_DIALOG packet to w. Mirrors the on-wire
+// layout: [2:cmd=0x0146][4:GID uint32] = 6 bytes.
+func (r CZCloseDialogRequest) Encode(w io.Writer) error {
+	var buf [sizeCZCloseDialog]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCLOSEDIALOG)
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_CLOSE_DIALOG: %w", err)
+	}
+	return nil
+}
