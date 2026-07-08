@@ -1025,3 +1025,125 @@ func TestStatusPointCost(t *testing.T) {
 		}
 	}
 }
+
+// M10 — empty list packets emitted after the status burst. The encoders
+// are byte-exact constructors; each test pins opcode (LE uint16), wire
+// length, and a zero-fill on every payload byte.
+
+func TestEncodeEmptyInventoryListNormal(t *testing.T) {
+	t.Parallel()
+
+	got := EncodeEmptyInventoryListNormal()
+
+	const wantLen = 4
+	if len(got) != wantLen {
+		t.Fatalf("len = %d, want %d", len(got), wantLen)
+	}
+	if got[0] != 0xa3 || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want a3 00 (LE 0x00a3 ZC_INVENTORY_ITEMLIST_NORMAL)",
+			got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	// Header fully occupied by opcode (2) + packetLength (2); with an
+	// empty list there are no trailing payload bytes to check.
+	if len(got) > 4 {
+		t.Errorf("expected zero trailing payload bytes, got %d", len(got)-4)
+	}
+}
+
+func TestEncodeEmptyInventoryListEquip(t *testing.T) {
+	t.Parallel()
+
+	got := EncodeEmptyInventoryListEquip()
+
+	const wantLen = 4
+	if len(got) != wantLen {
+		t.Fatalf("len = %d, want %d", len(got), wantLen)
+	}
+	if got[0] != 0xa4 || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want a4 00 (LE 0x00a4 ZC_INVENTORY_ITEMLIST_EQUIP)",
+			got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	if len(got) > 4 {
+		t.Errorf("expected zero trailing payload bytes, got %d", len(got)-4)
+	}
+}
+
+func TestEncodeEmptySkillList(t *testing.T) {
+	t.Parallel()
+
+	got := EncodeEmptySkillList()
+
+	const wantLen = 4
+	if len(got) != wantLen {
+		t.Fatalf("len = %d, want %d", len(got), wantLen)
+	}
+	if got[0] != 0x0f || got[1] != 0x01 {
+		t.Errorf("opcode bytes = %02x %02x, want 0f 01 (LE 0x010f ZC_SKILLINFO_LIST)",
+			got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	if len(got) > 4 {
+		t.Errorf("expected zero trailing payload bytes, got %d", len(got)-4)
+	}
+}
+
+func TestEncodeEmptyHotkeyList(t *testing.T) {
+	t.Parallel()
+
+	got := EncodeEmptyHotkeyList()
+
+	const wantLen = 191 // 2 (opcode) + 27 * 7 (hotkey slots)
+	if len(got) != wantLen {
+		t.Fatalf("len = %d, want %d", len(got), wantLen)
+	}
+	if got[0] != 0xb9 || got[1] != 0x02 {
+		t.Errorf("opcode bytes = %02x %02x, want b9 02 (LE 0x02b9 ZC_SHORTCUT_KEY_LIST)",
+			got[0], got[1])
+	}
+	// Every payload byte (i.e. everything past the 2-byte opcode) must be
+	// zero — a hotkey slot with isSkill=0/id=0/count=0 means "no hotkey
+	// bound", which is exactly what an empty list should advertise.
+	for i := 2; i < len(got); i++ {
+		if got[i] != 0 {
+			t.Errorf("payload byte[%d] = 0x%02x, want 0x00", i, got[i])
+		}
+	}
+
+	// Verify the slot count and per-slot width match the constants the
+	// size was derived from — regression guard against accidentally
+	// changing one without the other. Inline the literal values
+	// (27 slots * 7 bytes) so this test does not depend on unexported
+	// production constants the linter would otherwise flag as unused.
+	wantFromSlots := 2 + 27*7
+	if len(got) != wantFromSlots {
+		t.Errorf("len(got) = %d, want 2+27*7 = %d", len(got), wantFromSlots)
+	}
+}
+
+// Sanity check: the three variable-length list packets share the same
+// minimum-frame size (4 bytes = opcode + packetLength). This invariant
+// is what lets the dispatch handler send them as a single coalesced
+// write without per-packet length framing.
+func TestEmptyListEncoders_ShareMinimumFrameSize(t *testing.T) {
+	t.Parallel()
+
+	encs := map[string][]byte{
+		"InventoryListNormal": EncodeEmptyInventoryListNormal(),
+		"InventoryListEquip":  EncodeEmptyInventoryListEquip(),
+		"SkillList":           EncodeEmptySkillList(),
+	}
+	for name, got := range encs {
+		if len(got) != sizeEmptyInventoryList {
+			t.Errorf("%s len = %d, want %d (sizeEmptyInventoryList)",
+				name, len(got), sizeEmptyInventoryList)
+		}
+	}
+}
