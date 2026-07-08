@@ -16,7 +16,7 @@ import (
 const charSelectColumns = "char_id, account_id, char_num, name, class, base_level, job_level, " +
 	"base_exp, job_exp, zeny, max_hp, hp, max_sp, sp, hair, hair_color, clothes_color, " +
 	"weapon, shield, head_top, head_mid, head_bottom, robe, last_map, " +
-	"delete_date, unban_time, sex, str, agi, vit, int, dex, luk, status_point, skill_point"
+	"delete_date, unban_time, sex, str, agi, vit, `int`, dex, luk, status_point, skill_point"
 
 type characterRepo struct {
 	db *gorm.DB

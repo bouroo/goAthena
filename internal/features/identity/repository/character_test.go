@@ -51,7 +51,7 @@ func TestCharacterRepository_ListByAccount(t *testing.T) {
 		repo := repository.NewCharacterRepository(gormDB)
 
 		mock.ExpectQuery(regexp.QuoteMeta(
-			`SELECT char_id, account_id, char_num, name, class, base_level, job_level, base_exp, job_exp, zeny, max_hp, hp, max_sp, sp, hair, hair_color, clothes_color, weapon, shield, head_top, head_mid, head_bottom, robe, last_map, delete_date, unban_time, sex, str, agi, vit, int, dex, luk, status_point, skill_point FROM "char" WHERE account_id = $1 AND char_num < $2 ORDER BY char_num ASC`,
+			"SELECT char_id, account_id, char_num, name, class, base_level, job_level, base_exp, job_exp, zeny, max_hp, hp, max_sp, sp, hair, hair_color, clothes_color, weapon, shield, head_top, head_mid, head_bottom, robe, last_map, delete_date, unban_time, sex, str, agi, vit, `int`, dex, luk, status_point, skill_point FROM \"char\" WHERE account_id = $1 AND char_num < $2 ORDER BY char_num ASC",
 		)).
 			WithArgs(uint32(2000000), 9).
 			WillReturnRows(sampleCharRows())
