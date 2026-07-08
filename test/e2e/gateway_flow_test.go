@@ -46,6 +46,12 @@ const (
 	// zcActionResponseSize is the fixed length of ZC_ACTION_RESPONSE
 	// (M11): [2:cmd][4:GID][1:action][4:targetGID] = 11 bytes.
 	zcActionResponseSize = 11
+	// zcChangeDirSize is the fixed length of ZC_CHANGE_DIRECTION
+	// (M12): [2:cmd][4:srcId][2:headDir uint16][1:dir uint8] = 9 bytes.
+	zcChangeDirSize = 9
+	// zcEmotionSize is the fixed length of ZC_EMOTION (M12):
+	// [2:cmd][4:GID][1:type] = 7 bytes.
+	zcEmotionSize = 7
 )
 
 // acceptEnterHeaderSize is the fixed prefix length of HC_ACCEPT_ENTER
@@ -561,6 +567,83 @@ func stageCZActionRequestSit(t *testing.T, conn net.Conn, dec *netcodec.Decoder,
 	t.Logf("CZ_ACTION_REQUEST ok: action=sit gid=%d", aid)
 }
 
+// stageCZChangeDir sends CZ_CHANGE_DIRECTION with headDir=CCW + dir=SE
+// and asserts ZC_CHANGE_DIRECTION echoes the same head/dir bytes with
+// the AID stamped in the srcId slot. Wire layout is
+//
+//	[0:2]   cmd 0x009c
+//	[2:6]   srcId (uint32 LE)
+//	[6:8]   headDir (uint16 LE)
+//	[8]     dir (uint8)
+func stageCZChangeDir(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, aid uint32) {
+	t.Helper()
+	const (
+		wantHead uint16 = 0x0002 // CCW (clif.cpp:11569)
+		wantDir  uint8  = 0x05   // SE (clif.cpp:11576)
+	)
+	if err := (packet.CZChangeDirRequest{HeadDir: wantHead, Dir: wantDir}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_CHANGE_DIRECTION: %v", err)
+	}
+
+	cmd, dirFrame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_CHANGE_DIRECTION: %v", err)
+	}
+	if cmd != packet.HeaderZCCHANGEDIR {
+		t.Fatalf("CZ_CHANGE_DIRECTION response cmd = 0x%04x, want 0x%04x (ZC_CHANGE_DIRECTION); frame=% x",
+			cmd, packet.HeaderZCCHANGEDIR, dirFrame)
+	}
+	if len(dirFrame) != zcChangeDirSize {
+		t.Fatalf("ZC_CHANGE_DIRECTION length = %d, want %d (frame=% x)",
+			len(dirFrame), zcChangeDirSize, dirFrame)
+	}
+	if src := binary.LittleEndian.Uint32(dirFrame[2:6]); src != aid {
+		t.Errorf("ZC_CHANGE_DIRECTION srcId = %d, want %d (AID-as-srcId echo)", src, aid)
+	}
+	if hd := binary.LittleEndian.Uint16(dirFrame[6:8]); hd != wantHead {
+		t.Errorf("ZC_CHANGE_DIRECTION headDir = 0x%x, want 0x%x", hd, wantHead)
+	}
+	if d := dirFrame[8]; d != wantDir {
+		t.Errorf("ZC_CHANGE_DIRECTION dir = 0x%02x, want 0x%02x", d, wantDir)
+	}
+	t.Logf("CZ_CHANGE_DIRECTION ok: head=CCW dir=SE gid=%d", aid)
+}
+
+// stageCZReqEmotion sends CZ_REQ_EMOTION with emotion_type=ET_OK and
+// asserts ZC_EMOTION echoes the same type byte with the AID stamped in
+// the GID slot. Wire layout is
+//
+//	[0:2]   cmd 0x00c0
+//	[2:6]   GID (uint32 LE)
+//	[6]     type (uint8)
+func stageCZReqEmotion(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, aid uint32) {
+	t.Helper()
+	const wantType uint8 = 0x07 // ET_OK
+	if err := (packet.CZReqEmotionRequest{EmotionType: wantType}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_REQ_EMOTION: %v", err)
+	}
+
+	cmd, emoFrame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_EMOTION: %v", err)
+	}
+	if cmd != packet.HeaderZCEMOTION {
+		t.Fatalf("CZ_REQ_EMOTION response cmd = 0x%04x, want 0x%04x (ZC_EMOTION); frame=% x",
+			cmd, packet.HeaderZCEMOTION, emoFrame)
+	}
+	if len(emoFrame) != zcEmotionSize {
+		t.Fatalf("ZC_EMOTION length = %d, want %d (frame=% x)",
+			len(emoFrame), zcEmotionSize, emoFrame)
+	}
+	if gid := binary.LittleEndian.Uint32(emoFrame[2:6]); gid != aid {
+		t.Errorf("ZC_EMOTION GID = %d, want %d (AID-as-GID echo)", gid, aid)
+	}
+	if typ := emoFrame[6]; typ != wantType {
+		t.Errorf("ZC_EMOTION type = 0x%02x, want 0x%02x", typ, wantType)
+	}
+	t.Logf("CZ_REQ_EMOTION ok: type=ET_OK gid=%d", aid)
+}
+
 // TestE2E_GatewayFullFlow_TCP speaks the raw kRO binary packet protocol
 // over a single TCP connection to the running gateway and exercises the
 // full login → char → map → move round-trip across every real
@@ -616,6 +699,11 @@ func TestE2E_GatewayFullFlow_TCP(t *testing.T) {
 	// AOI broadcast yet (zone-side work in M14+).
 	stageCZGlobalMessage(t, conn, dec, ioDeadline, aid)
 	stageCZActionRequestSit(t, conn, dec, ioDeadline, aid)
+	// M12: direction change + emotion echo. Same single-player
+	// pattern — the gateway echoes the request back with the AID in
+	// the srcId/GID slot.
+	stageCZChangeDir(t, conn, dec, ioDeadline, aid)
+	stageCZReqEmotion(t, conn, dec, ioDeadline, aid)
 }
 
 // cstrBytes returns the NUL-terminated prefix of b as a string, or the

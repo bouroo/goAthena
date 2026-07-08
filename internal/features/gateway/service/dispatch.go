@@ -14,6 +14,8 @@
 //   - CZ_REQUEST_TIME (0x007e)      → ZC_NOTIFY_TIME (unix millis low 32 bits)
 //   - CZ_ACTION_REQUEST (0x0089)    → ZC_ACTION_RESPONSE (sit/stand echo; attacks ignored)
 //   - CZ_GLOBAL_MESSAGE (0x008c)    → ZC_NOTIFY_CHAT (single-player echo; no AOI)
+//   - CZ_CHANGE_DIRECTION (0x009b)  → ZC_CHANGE_DIRECTION (single-player echo; no AOI)
+//   - CZ_REQ_EMOTION (0x00bf)       → ZC_EMOTION (single-player echo; no AOI)
 //   - everything else              → debug-logged, connection kept alive.
 
 package service
@@ -137,6 +139,10 @@ func (h *DispatchHandler) HandlePacket(ctx context.Context, conn *domain.Connect
 		return h.handleCZGlobalMessage(ctx, conn, resp, frame)
 	case packet.HeaderCZACTIONREQUEST:
 		return h.handleCZActionRequest(ctx, conn, resp, frame)
+	case packet.HeaderCZCHANGEDIR:
+		return h.handleCZChangeDir(ctx, conn, resp, frame)
+	case packet.HeaderCZREQEMOTION:
+		return h.handleCZReqEmotion(ctx, conn, resp, frame)
 	default:
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
@@ -1245,6 +1251,133 @@ func (h *DispatchHandler) handleCZActionRequest(_ context.Context, conn *domain.
 
 	if err := resp.SendPacket(buf.Bytes()); err != nil {
 		return fmt.Errorf("send ZC_ACTION_RESPONSE: %w", err)
+	}
+	return nil
+}
+
+// handleCZChangeDir responds to CZ_CHANGE_DIRECTION (0x009b) — the
+// client notifying the server of its new body/head direction. rAthena
+// calls pc_setdir + clif_changed_dir(*sd, AREA_WOS) at clif.cpp:11615-11617;
+// the gateway has no AOI yet, so we echo the same values back to the
+// sender with the AID stamped in the srcId slot. When the zone service
+// takes over per-entity state (M14+) the dispatcher will forward this
+// to a zone Direction RPC and broadcast the response on the AOI ring.
+func (h *DispatchHandler) handleCZChangeDir(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZChangeDir(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_CHANGE_DIRECTION; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		// CZ_CHANGE_DIRECTION without a preceding CZ_ENTER: the
+		// client has not authenticated against the zone yet, so we
+		// have no entity to attribute the direction to. Drop
+		// silently — see handleCZRequestMove for the analogous guard.
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint16("head_dir", req.HeadDir).
+			Uint8("dir", req.Dir).
+			Msg("CZ_CHANGE_DIRECTION without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	resp2 := packet.ChangeDirResponse{
+		SrcID:   conn.AccountID, // AID-as-srcID stand-in — see handleCZGlobalMessage.
+		HeadDir: req.HeadDir,
+		Dir:     req.Dir,
+	}
+
+	var buf bytes.Buffer
+	if err := resp2.Encode(&buf); err != nil {
+		// ChangeDirResponse.Encode cannot fail in practice (no
+		// variable-width fields), but wrapcheck requires every
+		// external error be wrapped — log and drop.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Msg("encode ZC_CHANGE_DIRECTION failed; dropping packet")
+		return nil
+	}
+
+	h.logger.Debug().
+		Uint64("conn", conn.ID).
+		Uint32("aid", conn.AccountID).
+		Uint16("head_dir", resp2.HeadDir).
+		Uint8("dir", resp2.Dir).
+		Msg("direction echo")
+
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_CHANGE_DIRECTION: %w", err)
+	}
+	return nil
+}
+
+// handleCZReqEmotion responds to CZ_REQ_EMOTION (0x00bf) — the client
+// requesting to display an emotion icon (smile, cry, sweat, …). rAthena
+// runs a basic-skill check + flood throttle + ET_MAX guard at
+// clif_parse_Emotion (clif.cpp:11636-11667) before calling
+// clif_emotion(*sd, emoticon) which broadcasts ZC_EMOTION to AREA at
+// clif.cpp:9417. The gateway's M12 echo path skips the rAthena-side
+// gates (no basic-skill system, no per-connection emotion clock) and
+// forwards the byte verbatim to the sender with the AID stamped in
+// the GID slot. When the zone service takes over per-entity state
+// (M14+) the dispatcher will forward this to a zone Emotion RPC and
+// broadcast on the AOI ring.
+func (h *DispatchHandler) handleCZReqEmotion(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZReqEmotion(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_REQ_EMOTION; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		// CZ_REQ_EMOTION without a preceding CZ_ENTER: the client
+		// has not authenticated against the zone yet, so we have no
+		// entity to attribute the emotion to. Drop silently — see
+		// handleCZRequestMove for the analogous guard.
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint8("emotion_type", req.EmotionType).
+			Msg("CZ_REQ_EMOTION without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	resp2 := packet.EmotionResponse{
+		GID:  conn.AccountID, // AID-as-GID stand-in — see handleCZGlobalMessage.
+		Type: req.EmotionType,
+	}
+
+	var buf bytes.Buffer
+	if err := resp2.Encode(&buf); err != nil {
+		// EmotionResponse.Encode cannot fail in practice (no
+		// variable-width fields), but wrapcheck requires every
+		// external error be wrapped — log and drop.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Msg("encode ZC_EMOTION failed; dropping packet")
+		return nil
+	}
+
+	h.logger.Debug().
+		Uint64("conn", conn.ID).
+		Uint32("aid", conn.AccountID).
+		Uint8("emotion_type", resp2.Type).
+		Msg("emotion echo")
+
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_EMOTION: %w", err)
 	}
 	return nil
 }

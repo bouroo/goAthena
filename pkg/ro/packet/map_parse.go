@@ -322,3 +322,112 @@ func (r CZGlobalMessageRequest) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// CZChangeDirRequest is the decoded form of a client → map-server
+// CZ_CHANGE_DIRECTION packet (header 0x009b, 5 bytes on the wire).
+// Source: rathena/src/map/clif_packetdb.hpp:48
+// (`parseable_packet(0x009b,5,clif_parse_ChangeDir,2,4)`) +
+// rathena/src/map/clif.cpp:11607-11618 (clif_parse_ChangeDir).
+//
+// The on-wire shape documented in clif.cpp:11604-11605 is
+// `<head dir>.W <dir>.B`. rAthena reads headDir via RFIFOB at offset 2
+// (clif.cpp:11613) — the upper byte of the uint16 is reserved on this
+// PACKETVER and is forwarded verbatim by the gateway but not used by
+// the rAthena handler. Dir is a single byte at offset 4 (RFIFOB at
+// clif.cpp:11614).
+//
+// Direction values follow rAthena's unit.hpp direction enum:
+// 0=N, 1=NW, 2=W, 3=SW, 4=S, 5=SE, 6=E, 7=NE (clif.cpp:11571-11578).
+// HeadDir values: 0=straight, 1=CW, 2=CCW (clif.cpp:11567-11569).
+type CZChangeDirRequest struct {
+	// HeadDir is the head-facing selector (rAthena's `headdir`,
+	// uint16 on the wire; only the low byte is consumed by the
+	// rAthena handler at clif.cpp:11613).
+	HeadDir uint16
+	// Dir is the body-direction selector (rAthena's `dir`, uint8 at
+	// wire offset 4 — see clif.cpp:11571-11578 for the value table).
+	Dir uint8
+}
+
+// ParseCZChangeDir decodes a CZ_CHANGE_DIRECTION frame. The frame must
+// carry cmd 0x009b and contain 5 bytes.
+//
+// Returns a wrapped error naming the byte count if the frame is short,
+// or naming the unexpected cmd id if the header is not 0x009b.
+func ParseCZChangeDir(frame []byte) (CZChangeDirRequest, error) {
+	if len(frame) < sizeCZChangeDir {
+		return CZChangeDirRequest{}, fmt.Errorf("packet: parse CZ_CHANGE_DIRECTION: want at least %d bytes, got %d", sizeCZChangeDir, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCHANGEDIR {
+		return CZChangeDirRequest{}, fmt.Errorf("packet: parse CZ_CHANGE_DIRECTION: unexpected cmd 0x%04x", cmd)
+	}
+	return CZChangeDirRequest{
+		HeadDir: binary.LittleEndian.Uint16(frame[2:4]),
+		Dir:     frame[4],
+	}, nil
+}
+
+// Encode writes the CZ_CHANGE_DIRECTION packet to w. Mirrors the
+// on-wire layout: [2:cmd=0x009b][2:headDir uint16][1:dir uint8] = 5
+// bytes. The encoder writes both bytes of the uint16 headDir so callers
+// that supply a non-zero upper byte (out of scope for the default
+// PACKETVER but allowed by the wire format) see their value preserved
+// on the round-trip.
+func (r CZChangeDirRequest) Encode(w io.Writer) error {
+	buf := make([]byte, sizeCZChangeDir)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCHANGEDIR)
+	binary.LittleEndian.PutUint16(buf[2:], r.HeadDir)
+	buf[4] = r.Dir
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_CHANGE_DIRECTION: %w", err)
+	}
+	return nil
+}
+
+// CZReqEmotionRequest is the decoded form of a client → map-server
+// CZ_REQ_EMOTION packet (header 0x00bf, 3 bytes on the wire). Source:
+// rathena/src/map/packets.hpp:1406-1410 (`PACKET_CZ_REQ_EMOTION {
+// int16 packetType; uint8 emotion_type }`) +
+// rathena/src/map/clif.cpp:11623-11668 (clif_parse_Emotion).
+//
+// The emotion byte is rAthena's emotion_type enum (emap.hpp in
+// rathena). rAthena rejects values >= ET_MAX at clif.cpp:11630; the
+// goAthena parser preserves the byte verbatim so the dispatcher can
+// apply its own policy (basic-skill check, flood throttle, ET_MAX
+// guard) without losing information.
+type CZReqEmotionRequest struct {
+	// EmotionType is the emotion selector byte (rAthena's
+	// emotion_type enum, e.g. ET_SMILE=1, ET_CRY=2, ET_ANGER=3,
+	// ET_SWEAT=4, ET_THROB=5, ET_BLINK=6, ET_OK=7, … — see
+	// rathena/src/map/emap.hpp for the full table).
+	EmotionType uint8
+}
+
+// ParseCZReqEmotion decodes a CZ_REQ_EMOTION frame. The frame must
+// carry cmd 0x00bf and contain 3 bytes.
+//
+// Returns a wrapped error naming the byte count if the frame is short,
+// or naming the unexpected cmd id if the header is not 0x00bf.
+func ParseCZReqEmotion(frame []byte) (CZReqEmotionRequest, error) {
+	if len(frame) < sizeCZReqEmotion {
+		return CZReqEmotionRequest{}, fmt.Errorf("packet: parse CZ_REQ_EMOTION: want at least %d bytes, got %d", sizeCZReqEmotion, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQEMOTION {
+		return CZReqEmotionRequest{}, fmt.Errorf("packet: parse CZ_REQ_EMOTION: unexpected cmd 0x%04x", cmd)
+	}
+	return CZReqEmotionRequest{
+		EmotionType: frame[2],
+	}, nil
+}
+
+// Encode writes the CZ_REQ_EMOTION packet to w. Mirrors the on-wire
+// layout: [2:cmd=0x00bf][1:emotion_type] = 3 bytes.
+func (r CZReqEmotionRequest) Encode(w io.Writer) error {
+	buf := make([]byte, sizeCZReqEmotion)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQEMOTION)
+	buf[2] = r.EmotionType
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_REQ_EMOTION: %w", err)
+	}
+	return nil
+}

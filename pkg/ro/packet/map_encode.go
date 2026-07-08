@@ -805,3 +805,103 @@ func (r ActionResponse) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// ChangeDirResponse encodes a ZC_CHANGE_DIRECTION packet (command
+// 0x009c, 9 bytes fixed). The server broadcasts this to echo a
+// player's body/head direction change to nearby clients; the gateway
+// uses it as the single-player echo path for CZ_CHANGE_DIRECTION (no
+// AOI yet).
+//
+// Wire shape (rathena/src/map/packets.hpp:688-694 +
+// rathena/src/map/clif.cpp:11579-11600):
+//
+//	[2:cmd=0x009c][4:srcId uint32][2:headDir uint16][1:dir uint8] = 9 bytes
+//
+// HeadDir is the player's head-facing selector (rAthena's
+// map_session_data::head_dir). For the single-player echo we forward
+// the value the client sent in CZ_CHANGE_DIRECTION; rAthena's
+// clif_changed_dir writes the session's head_dir verbatim
+// (clif.cpp:11586).
+type ChangeDirResponse struct {
+	// SrcID is the entity ID whose direction changed (rAthena's
+	// `bl.id`). For the gateway's single-player echo the gateway
+	// substitutes the connection's authenticated AID until a true
+	// zone-resident GID is available — see the AID-as-GID convention
+	// documented on handleCZGlobalMessage.
+	SrcID uint32
+	// HeadDir is the head-facing selector (uint16 on the wire;
+	// rAthena clamps the in-memory value to 0..2 at pc_setdir).
+	HeadDir uint16
+	// Dir is the body-direction selector (uint8 at wire offset 8).
+	Dir uint8
+}
+
+// Size returns the on-wire byte length that Encode will write (always 9).
+func (r ChangeDirResponse) Size() int {
+	return sizeZCChangeDir
+}
+
+// Encode writes the ZC_CHANGE_DIRECTION packet to w.
+func (r ChangeDirResponse) Encode(w io.Writer) error {
+	buf := make([]byte, sizeZCChangeDir)
+	// int16 packetType = 0x009c (HeaderZCCHANGEDIR).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCHANGEDIR)
+	// uint32 srcId at offset 2.
+	binary.LittleEndian.PutUint32(buf[2:], r.SrcID)
+	// uint16 headDir at offset 6.
+	binary.LittleEndian.PutUint16(buf[6:], r.HeadDir)
+	// uint8 dir at offset 8.
+	buf[8] = r.Dir
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_CHANGE_DIRECTION: %w", err)
+	}
+	return nil
+}
+
+// EmotionResponse encodes a ZC_EMOTION packet (command 0x00c0, 7 bytes
+// fixed). The server broadcasts this to echo a player's emotion icon
+// to nearby clients; the gateway uses it as the single-player echo
+// path for CZ_REQ_EMOTION (no AOI yet).
+//
+// Wire shape (rathena/src/map/packets.hpp:1973-1978 +
+// rathena/src/map/clif.cpp:9407-9418):
+//
+//	[2:cmd=0x00c0][4:GID int32][1:type uint8] = 7 bytes
+//
+// The type byte is the rAthena emotion_type enum value the client sent
+// in CZ_REQ_EMOTION — the gateway forwards it verbatim. rAthena's
+// clif_emotion ignores the GID's block type and sends to AREA on its
+// own (clif.cpp:9417); the gateway's single-player path sends to SELF
+// via the responder.
+type EmotionResponse struct {
+	// GID is the entity ID of the player performing the emotion
+	// (rAthena's `bl.id`). For the single-player echo the gateway
+	// substitutes the connection's authenticated AID — see the
+	// AID-as-GID convention documented on handleCZGlobalMessage.
+	GID uint32
+	// Type is the emotion selector byte (rAthena's emotion_type
+	// enum). Copied verbatim from the CZ_REQ_EMOTION request.
+	Type uint8
+}
+
+// Size returns the on-wire byte length that Encode will write (always 7).
+func (r EmotionResponse) Size() int {
+	return sizeZCEmotion
+}
+
+// Encode writes the ZC_EMOTION packet to w.
+func (r EmotionResponse) Encode(w io.Writer) error {
+	buf := make([]byte, sizeZCEmotion)
+	// int16 packetType = 0x00c0 (HeaderZCEMOTION).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCEMOTION)
+	// int32 GID at offset 2 — written as the wire's int32 slot.
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	// uint8 type at offset 6.
+	buf[6] = r.Type
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_EMOTION: %w", err)
+	}
+	return nil
+}

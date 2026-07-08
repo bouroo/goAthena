@@ -1784,3 +1784,201 @@ func TestDispatchHandler_CZActionRequest_PreAuthGuard_DropsSilently(t *testing.T
 		t.Fatalf("responder wrote %d bytes for pre-auth action, want 0 (drop)", got)
 	}
 }
+
+// TestDispatchHandler_CZChangeDir_EncodesZCChangeDir covers the M12
+// direction-change happy path: the dispatcher must echo the client's
+// head_dir + dir bytes verbatim, stamp the AID in the srcId slot, and
+// emit a fixed 9-byte ZC_CHANGE_DIRECTION reply.
+func TestDispatchHandler_CZChangeDir_EncodesZCChangeDir(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	const wantAID uint32 = 7777
+	conn := domain.ConnectionInfo{ID: 1, AccountID: wantAID}
+
+	const wantHead uint16 = 0x0002 // CCW
+	const wantDir uint8 = 0x05     // SE
+	req := packet.CZChangeDirRequest{HeadDir: wantHead, Dir: wantDir}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_CHANGE_DIRECTION: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZCHANGEDIR, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	const wantLen = 9
+	if len(out) != wantLen {
+		t.Fatalf("ZC_CHANGE_DIRECTION length = %d, want %d (buf=% x)", len(out), wantLen, out)
+	}
+	// Opcode at [0:2] = 0x009c LE.
+	if out[0] != 0x9c || out[1] != 0x00 {
+		t.Fatalf("opcode = %02x %02x, want 9c 00 (LE 0x009c)", out[0], out[1])
+	}
+	// srcId at [2:6] = wantAID (AID-as-srcId stand-in).
+	if src := binary.LittleEndian.Uint32(out[2:6]); src != wantAID {
+		t.Errorf("srcId = %d, want %d (AID echoed)", src, wantAID)
+	}
+	// headDir at [6:8] = wantHead.
+	if hd := binary.LittleEndian.Uint16(out[6:8]); hd != wantHead {
+		t.Errorf("headDir = 0x%x, want 0x%x", hd, wantHead)
+	}
+	// dir at [8] = wantDir.
+	if out[8] != wantDir {
+		t.Errorf("dir = 0x%02x, want 0x%02x", out[8], wantDir)
+	}
+}
+
+// TestDispatchHandler_CZChangeDir_MalformedFrame_DropsSilently
+// ensures a truncated or otherwise malformed direction-change frame is
+// dropped without writing any reply and without tearing the connection
+// down.
+func TestDispatchHandler_CZChangeDir_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 2-byte frame is shorter than the 5-byte CZ_CHANGE_DIRECTION
+	// fixed header — must be dropped silently.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZCHANGEDIR, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZChangeDir_PreAuthGuard_DropsSilently ensures
+// the pre-auth guard rejects direction changes from a connection that
+// has not yet completed CZ_ENTER (conn.AccountID == 0). Mirrors the
+// chat / sit-stand pre-auth tests.
+func TestDispatchHandler_CZChangeDir_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+
+	req := packet.CZChangeDirRequest{HeadDir: 0x0001, Dir: 0x04}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_CHANGE_DIRECTION: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZCHANGEDIR, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth direction, want 0 (drop)", got)
+	}
+}
+
+// TestDispatchHandler_CZReqEmotion_EncodesZCEmotion covers the M12
+// emotion happy path: the dispatcher must echo the client's
+// emotion_type byte verbatim, stamp the AID in the GID slot, and emit
+// a fixed 7-byte ZC_EMOTION reply.
+func TestDispatchHandler_CZReqEmotion_EncodesZCEmotion(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	const wantAID uint32 = 8888
+	conn := domain.ConnectionInfo{ID: 1, AccountID: wantAID}
+
+	const wantEmotion uint8 = 0x07 // ET_OK
+	req := packet.CZReqEmotionRequest{EmotionType: wantEmotion}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQ_EMOTION: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQEMOTION, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	const wantLen = 7
+	if len(out) != wantLen {
+		t.Fatalf("ZC_EMOTION length = %d, want %d (buf=% x)", len(out), wantLen, out)
+	}
+	// Opcode at [0:2] = 0x00c0 LE.
+	if out[0] != 0xc0 || out[1] != 0x00 {
+		t.Fatalf("opcode = %02x %02x, want c0 00 (LE 0x00c0)", out[0], out[1])
+	}
+	// GID at [2:6] = wantAID (AID-as-GID stand-in).
+	if gid := binary.LittleEndian.Uint32(out[2:6]); gid != wantAID {
+		t.Errorf("GID = %d, want %d (AID echoed)", gid, wantAID)
+	}
+	// type at [6] = wantEmotion.
+	if out[6] != wantEmotion {
+		t.Errorf("type = 0x%02x, want 0x%02x", out[6], wantEmotion)
+	}
+}
+
+// TestDispatchHandler_CZReqEmotion_MalformedFrame_DropsSilently
+// ensures a truncated or otherwise malformed emotion frame is dropped
+// without writing any reply and without tearing the connection down.
+func TestDispatchHandler_CZReqEmotion_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 2-byte frame is shorter than the 3-byte CZ_REQ_EMOTION fixed
+	// header — must be dropped silently.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQEMOTION, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZReqEmotion_PreAuthGuard_DropsSilently ensures
+// the pre-auth guard rejects emotion requests from a connection that
+// has not yet completed CZ_ENTER (conn.AccountID == 0). Mirrors the
+// chat / sit-stand pre-auth tests.
+func TestDispatchHandler_CZReqEmotion_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+
+	req := packet.CZReqEmotionRequest{EmotionType: 0x02}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQ_EMOTION: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQEMOTION, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth emotion, want 0 (drop)", got)
+	}
+}

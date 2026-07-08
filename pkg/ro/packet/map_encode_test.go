@@ -1367,3 +1367,275 @@ func TestActionResponse_Encode_AttackSelector(t *testing.T) {
 		t.Errorf("targetGID = 0x%x, want 0xAABBCCDD", tgt)
 	}
 }
+
+// TestChangeDirResponse_Size pins the fixed 9-byte wire length that
+// ZC_CHANGE_DIRECTION advertises (rathena/src/map/packets.hpp:688-694).
+func TestChangeDirResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r ChangeDirResponse
+	if got, want := r.Size(), sizeZCChangeDir; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+// TestChangeDirResponse_Encode exercises the M12 direction echo wire
+// layout byte-exact: [2:cmd=0x009c][4:srcId uint32][2:headDir uint16]
+// [1:dir uint8] = 9 bytes.
+func TestChangeDirResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := ChangeDirResponse{
+		SrcID:   0xDEADBEEF,
+		HeadDir: 0x0002,
+		Dir:     0x07,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 9
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Opcode bytes at [0:2] = 0x009c (LE → 0x9c 0x00).
+	if got[0] != 0x9c || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want 9c 00 (LE 0x009c ZC_CHANGE_DIRECTION)",
+			got[0], got[1])
+	}
+	// srcId at [2:6] = 0xDEADBEEF.
+	if src := binary.LittleEndian.Uint32(got[2:6]); src != 0xDEADBEEF {
+		t.Errorf("srcId = 0x%x, want 0xDEADBEEF", src)
+	}
+	// headDir at [6:8] = 0x0002.
+	if hd := binary.LittleEndian.Uint16(got[6:8]); hd != 0x0002 {
+		t.Errorf("headDir = 0x%x, want 0x0002", hd)
+	}
+	// dir at [8] = 0x07 (NE).
+	if got[8] != 0x07 {
+		t.Errorf("dir = 0x%02x, want 0x07", got[8])
+	}
+}
+
+// TestChangeDirResponse_Encode_ZeroValues verifies the byte-exact
+// encoding for a fresh all-zero change-dir response (skipping the
+// always-non-zero opcode slot).
+func TestChangeDirResponse_Encode_ZeroValues(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	if err := (ChangeDirResponse{}).Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 9 {
+		t.Fatalf("len(got) = %d, want 9", len(got))
+	}
+	// Opcode slot [0:2] must be the literal little-endian 0x009c.
+	if got[0] != 0x9c || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want 9c 00", got[0], got[1])
+	}
+	for i := 2; i < len(got); i++ {
+		if b := got[i]; b != 0 {
+			t.Errorf("byte[%d] = 0x%02x, want 0x00", i, b)
+		}
+	}
+}
+
+// TestEmotionResponse_Size pins the fixed 7-byte wire length that
+// ZC_EMOTION advertises (rathena/src/map/packets.hpp:1973-1978).
+func TestEmotionResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r EmotionResponse
+	if got, want := r.Size(), sizeZCEmotion; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+// TestEmotionResponse_Encode exercises the M12 emotion echo wire
+// layout byte-exact: [2:cmd=0x00c0][4:GID uint32][1:type uint8] = 7
+// bytes.
+func TestEmotionResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := EmotionResponse{
+		GID:  0xDEADBEEF,
+		Type: 0x02, // ET_CRY
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 7
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Opcode bytes at [0:2] = 0x00c0 (LE → 0xc0 0x00).
+	if got[0] != 0xc0 || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want c0 00 (LE 0x00c0 ZC_EMOTION)",
+			got[0], got[1])
+	}
+	// GID at [2:6] = 0xDEADBEEF.
+	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
+		t.Errorf("GID = 0x%x, want 0xDEADBEEF", gid)
+	}
+	// type at [6] = 0x02.
+	if got[6] != 0x02 {
+		t.Errorf("type = 0x%02x, want 0x02", got[6])
+	}
+}
+
+// TestEmotionResponse_Encode_ZeroValues verifies the byte-exact
+// encoding for a fresh all-zero emotion response (skipping the
+// always-non-zero opcode slot).
+func TestEmotionResponse_Encode_ZeroValues(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	if err := (EmotionResponse{}).Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 7 {
+		t.Fatalf("len(got) = %d, want 7", len(got))
+	}
+	// Opcode slot [0:2] must be the literal little-endian 0x00c0.
+	if got[0] != 0xc0 || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want c0 00", got[0], got[1])
+	}
+	for i := 2; i < len(got); i++ {
+		if b := got[i]; b != 0 {
+			t.Errorf("byte[%d] = 0x%02x, want 0x00", i, b)
+		}
+	}
+}
+
+// TestCZChangeDirRequest_Encode_RoundTrip exercises the encoder side
+// of the M12 CZ_CHANGE_DIRECTION wire shape: [2:cmd=0x009b]
+// [2:headDir uint16][1:dir uint8] = 5 bytes.
+func TestCZChangeDirRequest_Encode_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	req := CZChangeDirRequest{HeadDir: 0x0001, Dir: 0x04}
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 5 {
+		t.Fatalf("len(got) = %d, want 5", len(got))
+	}
+	if got[0] != 0x9b || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want 9b 00", got[0], got[1])
+	}
+	if hd := binary.LittleEndian.Uint16(got[2:4]); hd != 0x0001 {
+		t.Errorf("headDir = 0x%x, want 0x0001", hd)
+	}
+	if got[4] != 0x04 {
+		t.Errorf("dir = 0x%02x, want 0x04", got[4])
+	}
+
+	// Decode it back — the round-trip must produce the original.
+	parsed, err := ParseCZChangeDir(got)
+	if err != nil {
+		t.Fatalf("ParseCZChangeDir() round-trip error: %v", err)
+	}
+	if parsed != req {
+		t.Errorf("round-trip = %+v, want %+v", parsed, req)
+	}
+}
+
+// TestCZChangeDirRequest_Encode_ZeroValues verifies the byte-exact
+// encoding for an all-zero direction-change request (skipping the
+// always-non-zero opcode slot).
+func TestCZChangeDirRequest_Encode_ZeroValues(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	if err := (CZChangeDirRequest{}).Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 5 {
+		t.Fatalf("len(got) = %d, want 5", len(got))
+	}
+	if got[0] != 0x9b || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want 9b 00", got[0], got[1])
+	}
+	for i := 2; i < len(got); i++ {
+		if b := got[i]; b != 0 {
+			t.Errorf("byte[%d] = 0x%02x, want 0x00", i, b)
+		}
+	}
+}
+
+// TestCZReqEmotionRequest_Encode_RoundTrip exercises the encoder side
+// of the M12 CZ_REQ_EMOTION wire shape: [2:cmd=0x00bf][1:type] = 3
+// bytes.
+func TestCZReqEmotionRequest_Encode_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	req := CZReqEmotionRequest{EmotionType: 0x07}
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3", len(got))
+	}
+	if got[0] != 0xbf || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want bf 00", got[0], got[1])
+	}
+	if got[2] != 0x07 {
+		t.Errorf("type = 0x%02x, want 0x07", got[2])
+	}
+
+	// Decode it back — the round-trip must produce the original.
+	parsed, err := ParseCZReqEmotion(got)
+	if err != nil {
+		t.Fatalf("ParseCZReqEmotion() round-trip error: %v", err)
+	}
+	if parsed != req {
+		t.Errorf("round-trip = %+v, want %+v", parsed, req)
+	}
+}
+
+// TestCZReqEmotionRequest_Encode_ZeroValues verifies the byte-exact
+// encoding for an all-zero emotion request (skipping the always-non-zero
+// opcode slot).
+func TestCZReqEmotionRequest_Encode_ZeroValues(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	if err := (CZReqEmotionRequest{}).Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3", len(got))
+	}
+	if got[0] != 0xbf || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want bf 00", got[0], got[1])
+	}
+	for i := 2; i < len(got); i++ {
+		if b := got[i]; b != 0 {
+			t.Errorf("byte[%d] = 0x%02x, want 0x00", i, b)
+		}
+	}
+}
