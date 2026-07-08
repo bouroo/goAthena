@@ -1026,7 +1026,8 @@ func TestDispatchHandler_CZNotifyActorInit_EncodesZCMapPropertyR2(t *testing.T) 
 	t.Parallel()
 
 	// No zone/identity calls expected — the handler responds with a
-	// fixed MAPPROPERTY_NOTHING frame.
+	// fixed MAPPROPERTY_NOTHING frame followed by the M9 status burst
+	// (zero-valued because conn has no CharID set in this test).
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
 		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
 
@@ -1043,9 +1044,12 @@ func TestDispatchHandler_CZNotifyActorInit_EncodesZCMapPropertyR2(t *testing.T) 
 	}
 
 	out := resp.buf.Bytes()
-	const wantLen = 8
-	if len(out) != wantLen {
-		t.Fatalf("ZC_MAPPROPERTY_R2 length = %d, want %d", len(out), wantLen)
+	// M9: response now contains ZC_MAPPROPERTY_R2 (8) + the status
+	// burst (12*ZC_PAR_CHANGE/ZC_LONGPAR_CHANGE + 1*ZC_STATUS = 12*8+44 = 140).
+	// Assert the leading 8 bytes are still the map property packet and
+	// that the rest is non-empty.
+	if len(out) <= 8 {
+		t.Fatalf("response length = %d, want > 8 (mapprop + status burst)", len(out))
 	}
 
 	// Opcode at [0:2] = 0x099b LE.
@@ -1059,6 +1063,187 @@ func TestDispatchHandler_CZNotifyActorInit_EncodesZCMapPropertyR2(t *testing.T) 
 	// flags at [4:8] = uint32 LE = 0.
 	if flags := binary.LittleEndian.Uint32(out[4:8]); flags != 0 {
 		t.Errorf("flags = 0x%x, want 0", flags)
+	}
+}
+
+func TestDispatchHandler_CZNotifyActorInit_StatusBurst(t *testing.T) {
+	t.Parallel()
+
+	// Identity returns a fully-populated character; the handler must
+	// emit ZC_MAPPROPERTY_R2 + a status burst that carries the real
+	// values through to the wire.
+	identity := &fakeIdentityClient{
+		getCharacterFn: func(_ context.Context, req *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+			if req.GetAccountId() != 4242 || req.GetCharId() != 9001 {
+				t.Errorf("GetCharacter req = (aid=%d, cid=%d), want (4242, 9001)",
+					req.GetAccountId(), req.GetCharId())
+			}
+			return &identityv1.GetCharacterResponse{
+				Success: true,
+				Character: &identityv1.CharacterDetail{
+					CharId:      9001,
+					Name:        "alpha",
+					ClassId:     7,
+					BaseLevel:   50,
+					JobLevel:    25,
+					Hp:          1234,
+					MaxHp:       2000,
+					Sp:          100,
+					MaxSp:       200,
+					Str:         30,
+					Agi:         20,
+					Vit:         25,
+					Int:         15,
+					Dex:         40,
+					Luk:         10,
+					StatusPoint: 5,
+					SkillPoint:  3,
+				},
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZNOTIFYACTORINIT, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+
+	// (1) First 8 bytes must be ZC_MAPPROPERTY_R2.
+	if len(out) < 8 {
+		t.Fatalf("responder wrote %d bytes, want ≥ 8 (mapprop + burst)", len(out))
+	}
+	if out[0] != 0x9b || out[1] != 0x09 {
+		t.Errorf("first packet opcode = %02x %02x, want 9b 09 (LE 0x099b ZC_MAPPROPERTY_R2)", out[0], out[1])
+	}
+
+	// (2) The remainder must contain ZC_STATUS (0x00bd) somewhere in
+	// the stream — scan for the header byte pair.
+	if !bytes.Contains(out[8:], []byte{0xbd, 0x00}) {
+		t.Fatalf("post-mapprop stream does not contain ZC_STATUS header [bd 00]; bytes=% x", out[8:])
+	}
+
+	// (3) Spot-check one ZC_PAR_CHANGE with SP_HP (varID=5, count=1234).
+	// Layout of one ZC_PAR_CHANGE: cmd(2) varID(2) count(4) = 8 bytes.
+	var hpOK bool
+	for i := 8; i+8 <= len(out); i++ {
+		if out[i] == 0xb0 && out[i+1] == 0x00 {
+			vid := binary.LittleEndian.Uint16(out[i+2 : i+4])
+			cnt := int32(binary.LittleEndian.Uint32(out[i+4 : i+8]))
+			if vid == packet.SPHP && cnt == 1234 {
+				hpOK = true
+				break
+			}
+		}
+	}
+	if !hpOK {
+		t.Errorf("no ZC_PAR_CHANGE with SP_HP=1234 found in burst; bytes=% x", out[8:])
+	}
+
+	// (4) Spot-check ZC_PAR_CHANGE SP_STATUSPOINT (varID=9, count=5).
+	var spOK bool
+	for i := 8; i+8 <= len(out); i++ {
+		if out[i] == 0xb0 && out[i+1] == 0x00 {
+			vid := binary.LittleEndian.Uint16(out[i+2 : i+4])
+			cnt := int32(binary.LittleEndian.Uint32(out[i+4 : i+8]))
+			if vid == packet.SPStatusPoint && cnt == 5 {
+				spOK = true
+				break
+			}
+		}
+	}
+	if !spOK {
+		t.Errorf("no ZC_PAR_CHANGE with SP_STATUSPOINT=5 found in burst")
+	}
+}
+
+func TestDispatchHandler_CZNotifyActorInit_NoCharacter_FallsBackToZeros(t *testing.T) {
+	t.Parallel()
+
+	// Identity returns success=false → handler must still emit the
+	// full burst with zero values (and HP clamped to 1 per rAthena).
+	identity := &fakeIdentityClient{
+		getCharacterFn: func(_ context.Context, _ *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+			return &identityv1.GetCharacterResponse{Success: false, Error: "character not found"}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZNOTIFYACTORINIT, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) < 8 {
+		t.Fatalf("responder wrote %d bytes, want ≥ 8", len(out))
+	}
+	if out[0] != 0x9b || out[1] != 0x09 {
+		t.Errorf("first packet opcode = %02x %02x, want 9b 09 (ZC_MAPPROPERTY_R2)", out[0], out[1])
+	}
+	if !bytes.Contains(out[8:], []byte{0xbd, 0x00}) {
+		t.Fatalf("post-mapprop stream does not contain ZC_STATUS header; bytes=% x", out[8:])
+	}
+
+	// Verify HP was clamped to 1 (rAthena convention).
+	var hpFound bool
+	for i := 8; i+8 <= len(out); i++ {
+		if out[i] == 0xb0 && out[i+1] == 0x00 {
+			vid := binary.LittleEndian.Uint16(out[i+2 : i+4])
+			if vid == packet.SPHP {
+				cnt := int32(binary.LittleEndian.Uint32(out[i+4 : i+8]))
+				if cnt != 1 {
+					t.Errorf("fallback ZC_PAR_CHANGE SP_HP = %d, want 1 (rAthena clamps to min 1)", cnt)
+				}
+				hpFound = true
+				break
+			}
+		}
+	}
+	if !hpFound {
+		t.Errorf("no ZC_PAR_CHANGE with SP_HP found in fallback burst")
+	}
+}
+
+func TestDispatchHandler_CZNotifyActorInit_NoConnID_StillBurstsZeros(t *testing.T) {
+	t.Parallel()
+
+	// No AccountID/CharID on conn — the handler must still send the
+	// burst with zeros. fetchCharacterByConn returns (nil, nil) without
+	// calling identity.
+	identity := &fakeIdentityClient{
+		getCharacterFn: func(_ context.Context, _ *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+			t.Fatal("GetCharacter must not be called when conn has no AccountID/CharID")
+			return nil, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1} // AccountID/CharID deliberately 0
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZNOTIFYACTORINIT, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) < 8+44 {
+		t.Fatalf("responder wrote %d bytes, want ≥ 52 (mapprop + at least one ZC_STATUS)", len(out))
+	}
+	if out[0] != 0x9b || out[1] != 0x09 {
+		t.Errorf("first packet opcode = %02x %02x, want 9b 09", out[0], out[1])
+	}
+	if !bytes.Contains(out[8:], []byte{0xbd, 0x00}) {
+		t.Fatalf("post-mapprop stream does not contain ZC_STATUS header; bytes=% x", out[8:])
 	}
 }
 

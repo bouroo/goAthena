@@ -427,3 +427,169 @@ func (r NotifyTimeResponse) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// StatusResponse encodes ZC_STATUS (0x00bd) — the initial character
+// status block sent after map load. Carries base stats, their upgrade
+// costs, and derived combat values (ATK/DEF/MATK/MDEF/HIT/FLEE/CRIT/ASPD).
+//
+// Wire layout (rathena/src/map/packets.hpp:909-938):
+//
+//	int16  packetType
+//	uint16 point           (status_point)
+//	uint8  str, uint8 standardStr
+//	uint8  agi, uint8 standardAgi
+//	uint8  vit, uint8 standardVit
+//	uint8  int, uint8 standardInt
+//	uint8  dex, uint8 standardDex
+//	uint8  luk, uint8 standardLuk
+//	int16  attPower        (ATK1 / left-side ATK)
+//	int16  refiningPower   (ATK2 / right-side ATK)
+//	int16  maxMattPower    (MATK max)
+//	int16  minMattPower    (MATK min)
+//	int16  itemdefPower    (DEF1 / left-side DEF)
+//	int16  plusdefPower    (DEF2 / right-side DEF)
+//	int16  mdefPower       (MDEF1 / left-side MDEF)
+//	int16  plusmdefPower   (MDEF2 / right-side MDEF)
+//	int16  hitSuccessValue (HIT)
+//	int16  avoidSuccessValue (FLEE)
+//	int16  plusAvoidSuccessValue (FLEE2 / 10)
+//	int16  criticalSuccessValue (CRITICAL / 10)
+//	int16  ASPD
+//	int16  plusASPD
+type StatusResponse struct {
+	StatusPoint  uint16
+	Str, NeedStr uint8
+	Agi, NeedAgi uint8
+	Vit, NeedVit uint8
+	Int, NeedInt uint8
+	Dex, NeedDex uint8
+	Luk, NeedLuk uint8
+	Atk1         int16
+	Atk2         int16
+	MatkMax      int16
+	MatkMin      int16
+	Def1         int16
+	Def2         int16
+	Mdef1        int16
+	Mdef2        int16
+	Hit          int16
+	Flee         int16
+	Flee2        int16
+	Critical     int16
+	ASPD         int16
+	PlusASPD     int16
+}
+
+// Size returns the on-wire byte length that Encode will write (always 44).
+func (r StatusResponse) Size() int {
+	return sizeZCStatus
+}
+
+// Encode writes the ZC_STATUS packet to w.
+func (r StatusResponse) Encode(w io.Writer) error {
+	var buf [sizeZCStatus]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTATUS)
+	binary.LittleEndian.PutUint16(buf[2:], r.StatusPoint)
+	buf[4] = r.Str
+	buf[5] = r.NeedStr
+	buf[6] = r.Agi
+	buf[7] = r.NeedAgi
+	buf[8] = r.Vit
+	buf[9] = r.NeedVit
+	buf[10] = r.Int
+	buf[11] = r.NeedInt
+	buf[12] = r.Dex
+	buf[13] = r.NeedDex
+	buf[14] = r.Luk
+	buf[15] = r.NeedLuk
+	binary.LittleEndian.PutUint16(buf[16:], uint16(r.Atk1))     //nolint:gosec // wire slot is unsigned
+	binary.LittleEndian.PutUint16(buf[18:], uint16(r.Atk2))     //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[20:], uint16(r.MatkMax))  //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[22:], uint16(r.MatkMin))  //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[24:], uint16(r.Def1))     //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[26:], uint16(r.Def2))     //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[28:], uint16(r.Mdef1))    //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[30:], uint16(r.Mdef2))    //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[32:], uint16(r.Hit))      //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[34:], uint16(r.Flee))     //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[36:], uint16(r.Flee2))    //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[38:], uint16(r.Critical)) //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[40:], uint16(r.ASPD))     //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[42:], uint16(r.PlusASPD)) //nolint:gosec // ditto
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_STATUS: %w", err)
+	}
+	return nil
+}
+
+// ParChangeResponse encodes ZC_PAR_CHANGE (0x00b0) — a single 32-bit
+// status parameter update. Used for HP, SP, level, stats, weight, etc.
+//
+// Wire layout (rathena/src/map/packets_struct.hpp:354-358):
+//
+//	int16  packetType
+//	uint16 varID
+//	int32  count
+type ParChangeResponse struct {
+	VarID uint16
+	Count int32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 8).
+func (r ParChangeResponse) Size() int {
+	return sizeZCParChange
+}
+
+// Encode writes the ZC_PAR_CHANGE packet to w.
+func (r ParChangeResponse) Encode(w io.Writer) error {
+	var buf [sizeZCParChange]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPARCHANGE)
+	binary.LittleEndian.PutUint16(buf[2:], r.VarID)
+	binary.LittleEndian.PutUint32(buf[4:], uint32(r.Count)) //nolint:gosec // wire slot is unsigned
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_PAR_CHANGE: %w", err)
+	}
+	return nil
+}
+
+// LongParChangeResponse encodes ZC_LONGPAR_CHANGE (0x00b1) — a single
+// 32-bit status parameter update. Used for zeny and (32-bit) exp.
+//
+// Wire layout (rathena/src/map/packets_struct.hpp:361-365):
+//
+//	int16  packetType
+//	uint16 varID
+//	int32  amount
+type LongParChangeResponse struct {
+	VarID  uint16
+	Amount int32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 8).
+func (r LongParChangeResponse) Size() int {
+	return sizeZCLongParChange
+}
+
+// Encode writes the ZC_LONGPAR_CHANGE packet to w.
+func (r LongParChangeResponse) Encode(w io.Writer) error {
+	var buf [sizeZCLongParChange]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCLONGPARCHANGE)
+	binary.LittleEndian.PutUint16(buf[2:], r.VarID)
+	binary.LittleEndian.PutUint32(buf[4:], uint32(r.Amount)) //nolint:gosec // wire slot is unsigned
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_LONGPAR_CHANGE: %w", err)
+	}
+	return nil
+}
+
+// StatusPointCost returns the status points needed to raise a stat from
+// its current value by 1, using the pre-Renewal formula.
+//
+// Source: rathena/src/map/pc.cpp:8803 (non-RENEWAL branch):
+//
+//	#define PC_STATUS_POINT_COST(low) ((1 + ((low) + 9) / 10))
+func StatusPointCost(currentVal uint8) uint8 {
+	// Promote to int before arithmetic — uint8 + 9 overflows for
+	// currentVal >= 247 and would wrap the cost back to 1.
+	return uint8(1 + (int(currentVal)+9)/10) //nolint:gosec // max return is 1+(255+9)/10 = 27
+}

@@ -66,4 +66,22 @@ type CharacterSummary struct {
 	// Sex is the character's sex; falls back to the account sex when
 	// not overridden (`sex`).
 	Sex Sex
+	// Str is the base strength stat (`str`).
+	Str uint16
+	// Agi is the base agility stat (`agi`).
+	Agi uint16
+	// Vit is the base vitality stat (`vit`).
+	Vit uint16
+	// Int is the base intelligence stat (`int`).
+	Int uint16
+	// Dex is the base dexterity stat (`dex`).
+	Dex uint16
+	// Luk is the base luck stat (`luk`).
+	Luk uint16
+	// StatusPoint is the unspent status points available to allocate
+	// into base stats (`status_point`).
+	StatusPoint uint32
+	// SkillPoint is the unspent skill points available to allocate
+	// into job skills (`skill_point`).
+	SkillPoint uint32
 }

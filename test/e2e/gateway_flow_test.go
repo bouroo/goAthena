@@ -324,9 +324,13 @@ func stageCZRequestMove(t *testing.T, conn net.Conn, dec *netcodec.Decoder, dead
 
 // stageCZNotifyActorInit sends CZ_NOTIFY_ACTORINIT (cmd-only, 2 bytes)
 // and asserts ZC_MAPPROPERTY_R2 carries MAPPROPERTY_NOTHING (type=0,
-// flags=0). The client sends this once after the map finishes
-// loading; without the response some client forks hang on a black
-// screen.
+// flags=0) followed by the M9 status burst (ZC_PAR_CHANGE /
+// ZC_LONGPAR_CHANGE / ZC_STATUS). The client sends this once after the
+// map finishes loading; without the response some client forks hang
+// on a black screen. The status burst is coalesced into a single
+// stream read; we assert the first frame is ZC_MAPPROPERTY_R2 and
+// scan the remainder for the ZC_STATUS header (0x00bd) to confirm
+// the burst was delivered.
 func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration) {
 	t.Helper()
 	// CZ_NOTIFY_ACTORINIT is cmd-only (2 bytes, no payload).
@@ -356,7 +360,52 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 	if flags := binary.LittleEndian.Uint32(propFrame[4:8]); flags != 0 {
 		t.Errorf("ZC_MAPPROPERTY_R2 flags = 0x%x, want 0", flags)
 	}
-	t.Logf("CZ_NOTIFY_ACTORINIT ok: propertyType=0 flags=0")
+
+	// M9: the response stream now also contains the status burst. Drain
+	// framed packets from the decoder until either we see a ZC_STATUS
+	// header (success) or the decoder reports ErrIncomplete / a
+	// timeout. The expected burst is: 12 ZC_PAR_CHANGE/ZC_LONGPAR_CHANGE
+	// (8 bytes each) + 1 ZC_STATUS (44 bytes) + 6 more per-stat
+	// ZC_PAR_CHANGE (8 bytes each) = 188 bytes.
+	if err := conn.SetReadDeadline(time.Now().Add(deadline)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	chunk := make([]byte, 4096)
+	sawStatus := false
+	packets := 0
+	for packets < 32 { // generous upper bound on status-burst packet count
+		fcmd, frame, derr := dec.Next()
+		if derr == nil {
+			packets++
+			if fcmd == packet.HeaderZCSTATUS {
+				if len(frame) != 44 {
+					t.Errorf("ZC_STATUS frame length = %d, want 44", len(frame))
+				}
+				sawStatus = true
+				break
+			}
+			continue
+		}
+		if derr != netcodec.ErrIncomplete {
+			break
+		}
+		n, rerr := conn.Read(chunk)
+		if n > 0 {
+			dec.Feed(chunk[:n])
+			continue
+		}
+		if rerr == nil {
+			break
+		}
+		if netErr, ok := rerr.(net.Error); ok && netErr.Timeout() {
+			break
+		}
+		t.Fatalf("read status burst: %v", rerr)
+	}
+	if !sawStatus {
+		t.Fatalf("status burst did not deliver ZC_STATUS (0x%04x) after %d framed packets", packet.HeaderZCSTATUS, packets)
+	}
+	t.Logf("CZ_NOTIFY_ACTORINIT ok: propertyType=0 flags=0 burst_packets=%d", packets)
 }
 
 // stageCZRequestTime sends CZ_REQUEST_TIME and asserts ZC_NOTIFY_TIME

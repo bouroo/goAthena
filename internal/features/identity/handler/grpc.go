@@ -179,6 +179,14 @@ func (h *grpcHandler) GetCharacter(
 			HeadBottom:   uint32(char.HeadBottom),
 			Robe:         uint32(char.Robe),
 			Sex:          sexToProtoByte(char.Sex),
+			Str:          uint32(char.Str),
+			Agi:          uint32(char.Agi),
+			Vit:          uint32(char.Vit),
+			Int:          uint32(char.Int),
+			Dex:          uint32(char.Dex),
+			Luk:          uint32(char.Luk),
+			StatusPoint:  char.StatusPoint,
+			SkillPoint:   char.SkillPoint,
 		},
 	}, nil
 }

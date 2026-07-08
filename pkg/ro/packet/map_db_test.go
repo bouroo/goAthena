@@ -15,7 +15,7 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		length    int
 		direction Direction
 	}
-	// 4 C→S + 6 S→C, all fixed-length = 10 entries total.
+	// 4 C→S + 9 S→C, all fixed-length = 13 entries total.
 	checks := []expect{
 		{HeaderCZENTER, "CZ_ENTER", sizeCZEnter, DirectionClientToServer},
 		{HeaderCZREQUESTMOVE, "CZ_REQUEST_MOVE", sizeCZRequestMove, DirectionClientToServer},
@@ -28,6 +28,9 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCSPAWNUNIT, "ZC_SPAWN_UNIT", sizeZCSpawnUnit, DirectionServerToClient},
 		{HeaderZCMAPPROPERTYR2, "ZC_MAPPROPERTY_R2", sizeZCMapPropertyR2, DirectionServerToClient},
 		{HeaderZCNOTIFYTIME, "ZC_NOTIFY_TIME", sizeZCNotifyTime, DirectionServerToClient},
+		{HeaderZCSTATUS, "ZC_STATUS", sizeZCStatus, DirectionServerToClient},
+		{HeaderZCPARCHANGE, "ZC_PAR_CHANGE", sizeZCParChange, DirectionServerToClient},
+		{HeaderZCLONGPARCHANGE, "ZC_LONGPAR_CHANGE", sizeZCLongParChange, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -37,7 +40,7 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 			continue
 		}
 		if def.Name != c.name {
-			t.Errorf("Lookup(0x%04x).Name = %q, want %q", c.cmd, c.name, def.Name)
+			t.Errorf("Lookup(0x%04x).Name = %q, want %q", c.cmd, def.Name, c.name)
 		}
 		if def.Length != c.length {
 			t.Errorf("Lookup(0x%04x).Length = %d, want %d", c.cmd, def.Length, c.length)
@@ -52,8 +55,8 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewMapServerDB()
-	// 4 C→S + 6 S→C = 10.
-	const want = 10
+	// 4 C→S + 9 S→C = 13.
+	const want = 13
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -78,6 +81,9 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCSPAWNUNIT, sizeZCSpawnUnit},
 		{HeaderZCMAPPROPERTYR2, sizeZCMapPropertyR2},
 		{HeaderZCNOTIFYTIME, sizeZCNotifyTime},
+		{HeaderZCSTATUS, sizeZCStatus},
+		{HeaderZCPARCHANGE, sizeZCParChange},
+		{HeaderZCLONGPARCHANGE, sizeZCLongParChange},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

@@ -22,6 +22,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"strconv"
@@ -518,6 +519,7 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn *domain.Connec
 	// wire (CZ_REQUEST_MOVE carries only dest x/y). Cleared on
 	// connection close by gnet dropping connState.
 	conn.AccountID = req.AccountID
+	conn.CharID = req.CharID
 
 	accept := packet.MapAcceptEnterResponse{
 		StartTime: uint32(time.Now().Unix()), //nolint:gosec // low 32 bits of unix time per rAthena startTime convention
@@ -674,6 +676,22 @@ func (h *DispatchHandler) buildSelfSpawn(
 	spawn.HP = int32(char.GetHp())       //nolint:gosec // ditto
 	spawn.Name = char.GetName()
 	return spawn
+}
+
+// fetchCharacterByConn wraps fetchCharacterForSpawn for the post-actorinit
+// status burst (M9). handleCZNotifyActorInit does not have a parsed
+// CZEnterRequest frame — only the cached conn.AccountID + conn.CharID
+// from the prior CZ_ENTER — so we rebuild the request here. Returns
+// (nil, nil) on a zero key so the caller can fall back to a zero-filled
+// status burst without an error log.
+func (h *DispatchHandler) fetchCharacterByConn(conn *domain.ConnectionInfo) (*identityv1.CharacterDetail, error) {
+	if conn.AccountID == 0 || conn.CharID == 0 {
+		return nil, nil
+	}
+	return h.fetchCharacterForSpawn(conn, packet.CZEnterRequest{
+		AccountID: conn.AccountID,
+		CharID:    conn.CharID,
+	})
 }
 
 // fetchCharacterForSpawn invokes identity.GetCharacter and returns
@@ -867,16 +885,20 @@ func (h *DispatchHandler) handleCZRequestMove(ctx context.Context, conn *domain.
 
 // handleCZNotifyActorInit responds to CZ_NOTIFY_ACTORINIT (0x007d) —
 // the client's signal that it has finished loading the map. rAthena
-// responds with clif_map_property; we send ZC_MAPPROPERTY_R2 with
-// MAPPROPERTY_NOTHING (type=0, flags=0) since no maps have PVP/GVG
-// flags yet.
+// responds with the map-property frame followed by a burst of status
+// packets (clif_parse_LoadEndAck, rathena/src/map/clif.cpp:10791-10915)
+// that populate the HP/SP bars, stats window, level display, and zeny
+// counter. We send ZC_MAPPROPERTY_R2 (MAPPROPERTY_NOTHING) followed by
+// the status burst. If the identity GetCharacter fetch fails, the
+// burst is sent with zero values — the client tolerates a default
+// stats window and the handshake still completes.
 func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder) error {
 	prop := packet.MapPropertyResponse{
 		PropertyType: 0, // MAPPROPERTY_NOTHING
 		Flags:        0,
 	}
-	var buf bytes.Buffer
-	if err := prop.Encode(&buf); err != nil {
+	var propBuf bytes.Buffer
+	if err := prop.Encode(&propBuf); err != nil {
 		// MapPropertyResponse.Encode cannot fail in practice (no
 		// variable-width fields), but we still bubble the error up
 		// rather than silently swallow it — wrapcheck requires every
@@ -890,8 +912,132 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		return nil
 	}
 	h.logger.Info().Uint64("conn", conn.ID).Msg("map property sent")
-	if err := resp.SendPacket(buf.Bytes()); err != nil {
+	if err := resp.SendPacket(propBuf.Bytes()); err != nil {
 		return fmt.Errorf("send ZC_MAPPROPERTY_R2: %w", err)
+	}
+
+	char, err := h.fetchCharacterByConn(conn)
+	if err != nil {
+		// Logged by fetchCharacterByConn; fall back to a zero-valued
+		// status burst below. The client shows 0/0 stats instead of
+		// the character's real values but the handshake still
+		// completes — preferable to tearing the connection down over
+		// a transient identity outage.
+		_ = err
+	}
+
+	// Default values for every parameter — zeny and exp are not in the
+	// proto today (M9) so they are always zero. Weight and max_weight
+	// require inventory tracking (deferred). Manner/karma are sent as
+	// zero (no system yet).
+	var (
+		hp, maxHP, sp, maxSP uint32
+		baseLevel, jobLevel  uint32
+		statusPoint          uint32
+		skillPoint           uint32
+		strV, agiV           uint8
+		vitV, intV           uint8
+		dexV, lukV           uint8
+	)
+	if char != nil {
+		hp = char.GetHp()
+		maxHP = char.GetMaxHp()
+		sp = char.GetSp()
+		maxSP = char.GetMaxSp()
+		baseLevel = char.GetBaseLevel()
+		jobLevel = char.GetJobLevel()
+		statusPoint = char.GetStatusPoint()
+		skillPoint = char.GetSkillPoint()
+		strV = uint8(char.GetStr()) //nolint:gosec // kRO str is uint8 on the wire (≤255)
+		agiV = uint8(char.GetAgi()) //nolint:gosec // ditto
+		vitV = uint8(char.GetVit()) //nolint:gosec // ditto
+		intV = uint8(char.GetInt()) //nolint:gosec // ditto
+		dexV = uint8(char.GetDex()) //nolint:gosec // ditto
+		lukV = uint8(char.GetLuk()) //nolint:gosec // ditto
+	}
+
+	// rAthena clamps HP to a minimum of 1 on LoadEndAck so the client
+	// never sees "0 / 0" during the spawn frame.
+	if hp == 0 {
+		hp = 1
+	}
+
+	// Batch every status packet into a single send so the client
+	// receives them as one coalesced write. The order matches
+	// rAthena's clif_parse_LoadEndAck sequence
+	// (rathena/src/map/clif.cpp:10791-10915).
+	var burst bytes.Buffer
+	packets := []interface {
+		Encode(io.Writer) error
+	}{
+		// Weight / max weight — zero today (no inventory tracking).
+		packet.ParChangeResponse{VarID: packet.SPWeight, Count: 0},
+		packet.ParChangeResponse{VarID: packet.SPMaxWeight, Count: 0},
+		// Speed — hardcoded 150 (rAthena's default PC amotion).
+		packet.ParChangeResponse{VarID: packet.SPSpeed, Count: 150},
+		// Base / job level.
+		packet.ParChangeResponse{VarID: packet.SPBaseLevel, Count: int32(baseLevel)}, //nolint:gosec // base_level fits in int32 (≤ MAX_LEVEL)
+		packet.ParChangeResponse{VarID: packet.SPJobLevel, Count: int32(jobLevel)},   //nolint:gosec // job_level fits in int32
+		// Status / skill points.
+		packet.ParChangeResponse{VarID: packet.SPStatusPoint, Count: int32(statusPoint)}, //nolint:gosec // status_point fits in int32
+		packet.ParChangeResponse{VarID: packet.SPSkillPoint, Count: int32(skillPoint)},   //nolint:gosec // skill_point fits in int32
+		// Max HP / SP first, then current HP / SP (rAthena order).
+		packet.ParChangeResponse{VarID: packet.SPMaxHP, Count: int32(maxHP)}, //nolint:gosec // max_hp fits in int32
+		packet.ParChangeResponse{VarID: packet.SPMaxSP, Count: int32(maxSP)}, //nolint:gosec // max_sp fits in int32
+		packet.ParChangeResponse{VarID: packet.SPHP, Count: int32(hp)},       //nolint:gosec // hp fits in int32
+		packet.ParChangeResponse{VarID: packet.SPSP, Count: int32(sp)},       //nolint:gosec // sp fits in int32
+		// Zeny + base/job exp (32-bit; ZC_LONGLONGPAR_CHANGE upgrade deferred).
+		packet.LongParChangeResponse{VarID: packet.SPZeny, Amount: 0},
+		packet.LongParChangeResponse{VarID: packet.SPBaseExp, Amount: 0},
+		packet.LongParChangeResponse{VarID: packet.SPJobExp, Amount: 0},
+		// ZC_STATUS — base stats with their upgrade costs + derived combat values (zero).
+		packet.StatusResponse{
+			StatusPoint: uint16(statusPoint), //nolint:gosec // status_point fits in uint16 for pre-renewal
+			Str:         strV,
+			NeedStr:     packet.StatusPointCost(strV),
+			Agi:         agiV,
+			NeedAgi:     packet.StatusPointCost(agiV),
+			Vit:         vitV,
+			NeedVit:     packet.StatusPointCost(vitV),
+			Int:         intV,
+			NeedInt:     packet.StatusPointCost(intV),
+			Dex:         dexV,
+			NeedDex:     packet.StatusPointCost(dexV),
+			Luk:         lukV,
+			NeedLuk:     packet.StatusPointCost(lukV),
+		},
+		// Per-stat par-changes so the UI updates after the status block.
+		packet.ParChangeResponse{VarID: packet.SPStr, Count: int32(strV)}, //nolint:gosec // str fits in int32
+		packet.ParChangeResponse{VarID: packet.SPAgi, Count: int32(agiV)}, //nolint:gosec // agi fits in int32
+		packet.ParChangeResponse{VarID: packet.SPVit, Count: int32(vitV)}, //nolint:gosec // vit fits in int32
+		packet.ParChangeResponse{VarID: packet.SPInt, Count: int32(intV)}, //nolint:gosec // int fits in int32
+		packet.ParChangeResponse{VarID: packet.SPDex, Count: int32(dexV)}, //nolint:gosec // dex fits in int32
+		packet.ParChangeResponse{VarID: packet.SPLuk, Count: int32(lukV)}, //nolint:gosec // luk fits in int32
+	}
+	for _, pkt := range packets {
+		if err := pkt.Encode(&burst); err != nil {
+			// Encode errors on these fixed-layout packets are programmer
+			// mistakes — log and bail rather than send a half-baked burst.
+			h.logger.Error().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Msg("encode status burst packet failed")
+			return nil
+		}
+	}
+
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("aid", conn.AccountID).
+		Uint32("cid", conn.CharID).
+		Uint32("hp", hp).
+		Uint32("max_hp", maxHP).
+		Uint32("base_level", baseLevel).
+		Uint32("job_level", jobLevel).
+		Msg("status burst sent")
+
+	if err := resp.SendPacket(burst.Bytes()); err != nil {
+		return fmt.Errorf("send status burst: %w", err)
 	}
 	return nil
 }
