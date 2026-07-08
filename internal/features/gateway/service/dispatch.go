@@ -1120,6 +1120,35 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		}
 	}
 
+	// M17: append monster spawn packets (ZC_SET_UNIT_IDLE, 0x09ff) after
+	// the NPC spawns. Monsters use objectType=0x05 (NPC_MOB_TYPE) and
+	// show their HP bar (positive maxHP/HP, unlike NPCs which use -1).
+	// rAthena: clif_getareachar_mob → clif_set_unit_idle for mob spawns.
+	for _, mob := range monsterSpawns {
+		idle := packet.SetUnitIdleResponse{
+			ObjectType: 0x05, // NPC_MOB_TYPE
+			AID:        mob.GID,
+			GID:        0,
+			Speed:      mob.Speed,
+			Job:        mob.SpriteID,
+			MaxHP:      mob.MaxHP,
+			HP:         mob.HP,
+			PosX:       mob.X,
+			PosY:       mob.Y,
+			Dir:        mob.Dir,
+			Name:       mob.Name,
+			CLevel:     mob.Level,
+		}
+		if err := idle.Encode(&burst); err != nil {
+			h.logger.Error().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Str("mob_name", mob.Name).
+				Msg("encode monster ZC_SET_UNIT_IDLE failed")
+			return nil
+		}
+	}
+
 	h.logger.Info().
 		Uint64("conn", conn.ID).
 		Uint32("aid", conn.AccountID).
@@ -1129,6 +1158,7 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		Uint32("base_level", baseLevel).
 		Uint32("job_level", jobLevel).
 		Int("npc_count", len(npcSpawns)).
+		Int("mob_count", len(monsterSpawns)).
 		Msg("status burst sent")
 
 	if err := resp.SendPacket(burst.Bytes()); err != nil {

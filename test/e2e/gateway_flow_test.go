@@ -403,15 +403,16 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 		t.Errorf("ZC_MAPPROPERTY_R2 flags = 0x%x, want 0", flags)
 	}
 
-	// M9+M10+M14: the response stream after MAPPROPERTY_R2 contains the
-	// status burst (ZC_PAR_CHANGE / ZC_LONGPAR_CHANGE / ZC_STATUS) and
-	// the four M10 empty list packets (ZC_INVENTORY_ITEMLIST_NORMAL /
-	// ZC_INVENTORY_ITEMLIST_EQUIP / ZC_SKILLINFO_LIST /
-	// ZC_SHORTCUT_KEY_LIST) followed by M14 NPC spawn packets
-	// (ZC_SET_UNIT_IDLE 0x09ff, 107 bytes each). Drain framed packets
-	// from the decoder until either we have observed all the required
-	// headers in the rAthena LoadEndAck order or the decoder reports
-	// ErrIncomplete / a timeout.
+	// M9+M10+M14+M17: the response stream after MAPPROPERTY_R2 contains
+	// the status burst (ZC_PAR_CHANGE / ZC_LONGPAR_CHANGE / ZC_STATUS)
+	// and the four M10 empty list packets
+	// (ZC_INVENTORY_ITEMLIST_NORMAL / ZC_INVENTORY_ITEMLIST_EQUIP /
+	// ZC_SKILLINFO_LIST / ZC_SHORTCUT_KEY_LIST) followed by M14 NPC
+	// spawn packets (ZC_SET_UNIT_IDLE 0x09ff, 107 bytes each), then
+	// M17 monster spawn packets (same opcode, objectType=0x05). Drain
+	// framed packets from the decoder until we have observed all the
+	// required headers in the rAthena LoadEndAck order or the decoder
+	// reports ErrIncomplete / a timeout.
 	if err := conn.SetReadDeadline(time.Now().Add(deadline)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
 	}
@@ -419,6 +420,7 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 	sawStatus := false
 	var emptyListCmds []uint16
 	var npcSpawnGIDs []uint32
+	var mobSpawnGIDs []uint32
 	packets := 0
 	wantEmpty := []uint16{
 		packet.HeaderZCINVENTORYITEMLISTNORMAL,
@@ -427,7 +429,8 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 		packet.HeaderZCSHORTCUTKEYLIST,
 	}
 	wantNPCGIDs := []uint32{110000001, 110000002, 110000003, 110000004}
-	for packets < 128 { // generous upper bound on status-burst + list + NPC packet count
+	wantMobGIDs := []uint32{110000005, 110000006, 110000007, 110000008}
+	for packets < 128 { // generous upper bound on status-burst + list + NPC + mob packet count
 		fcmd, frame, derr := dec.Next()
 		if derr == nil {
 			packets++
@@ -455,15 +458,26 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 				}
 				emptyListCmds = append(emptyListCmds, fcmd)
 			case packet.HeaderZCSETUNITIDLE:
-				// M14: NPC spawn packet (107 bytes fixed).
+				// M14 + M17: NPC / monster spawn packet (107 bytes
+				// fixed). AID at offset 5 is the entity GID;
+				// objectType at offset 4 distinguishes NPC (0x06)
+				// from monster (0x05).
 				if len(frame) != zcSetUnitIdleSize {
 					t.Errorf("ZC_SET_UNIT_IDLE frame length = %d, want %d", len(frame), zcSetUnitIdleSize)
 				}
-				// AID at offset 5 (uint32 LE) is the NPC GID.
 				gid := binary.LittleEndian.Uint32(frame[5:9])
-				npcSpawnGIDs = append(npcSpawnGIDs, gid)
+				objType := frame[4]
+				if objType == 0x06 {
+					npcSpawnGIDs = append(npcSpawnGIDs, gid)
+				} else if objType == 0x05 {
+					mobSpawnGIDs = append(mobSpawnGIDs, gid)
+				} else {
+					t.Errorf("ZC_SET_UNIT_IDLE objectType = 0x%02x, want 0x05 (mob) or 0x06 (NPC); gid=%d", objType, gid)
+				}
 			}
-			if sawStatus && len(emptyListCmds) == len(wantEmpty) && len(npcSpawnGIDs) == len(wantNPCGIDs) {
+			if sawStatus && len(emptyListCmds) == len(wantEmpty) &&
+				len(npcSpawnGIDs) == len(wantNPCGIDs) &&
+				len(mobSpawnGIDs) == len(wantMobGIDs) {
 				break
 			}
 			continue
@@ -506,7 +520,17 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 			t.Errorf("NPC spawn[%d] GID = %d, want %d", i, npcSpawnGIDs[i], want)
 		}
 	}
-	t.Logf("CZ_NOTIFY_ACTORINIT ok: propertyType=0 flags=0 burst_packets=%d empty_list_packets=%d npc_spawns=%d", packets, len(emptyListCmds), len(npcSpawnGIDs))
+	// M17: monster spawns follow the NPC spawns in the same burst.
+	if len(mobSpawnGIDs) != len(wantMobGIDs) {
+		t.Fatalf("monster spawn packets seen = %d, want %d (GIDs: %v)",
+			len(mobSpawnGIDs), len(wantMobGIDs), mobSpawnGIDs)
+	}
+	for i, want := range wantMobGIDs {
+		if mobSpawnGIDs[i] != want {
+			t.Errorf("monster spawn[%d] GID = %d, want %d", i, mobSpawnGIDs[i], want)
+		}
+	}
+	t.Logf("CZ_NOTIFY_ACTORINIT ok: propertyType=0 flags=0 burst_packets=%d empty_list_packets=%d npc_spawns=%d mob_spawns=%d", packets, len(emptyListCmds), len(npcSpawnGIDs), len(mobSpawnGIDs))
 }
 
 // stageCZRequestTime sends CZ_REQUEST_TIME and asserts ZC_NOTIFY_TIME

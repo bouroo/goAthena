@@ -170,10 +170,9 @@ func (r MapNotifyPlayerMoveResponse) Encode(w io.Writer) error {
 // len(Name) are null-padded, matching rAthena's memcpy-with-NUL-fill
 // pattern. Names longer than 24 bytes are truncated.
 type SpawnUnitResponse struct {
-	// ObjectType is the entity class: 0=PC, 1=NPC, 4=MOB
-	// (rAthena's TYPE_PC/TYPE_NPC/TYPE_MOB). PC is the only value the
-	// gateway emits today — the NPC and MOB spawn paths are zone-side
-	// work and are out of scope for M6c.
+	// ObjectType is the entity class: 0=PC, 5=MOB (NPC_MOB_TYPE),
+	// 6=NPC_EVT (rAthena's clif_bl_type). The gateway emits 0 for the
+	// self-spawn, 6 for NPC entities (M14), and 5 for monsters (M17).
 	ObjectType uint8
 	// AID is the account ID (rAthena's `account_id`). For a PC self-spawn
 	// this equals GID.
