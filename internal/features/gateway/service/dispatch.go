@@ -1694,7 +1694,7 @@ func (h *DispatchHandler) handleCZReqNextScript(_ context.Context, conn *domain.
 		return nil
 	}
 
-	closeD := packet.CloseDialogResponse(req)
+	closeD := packet.CloseDialogResponse{NpcID: req.NpcID} //nolint:staticcheck // explicit struct init keeps the two wire structs decoupled; a Go conversion would silently break if CloseDialogResponse ever gains a field
 	var closeBuf bytes.Buffer
 	if err := closeD.Encode(&closeBuf); err != nil {
 		h.logger.Error().
