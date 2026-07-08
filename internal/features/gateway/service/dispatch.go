@@ -948,12 +948,12 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		jobLevel = char.GetJobLevel()
 		statusPoint = char.GetStatusPoint()
 		skillPoint = char.GetSkillPoint()
-		strV = uint8(char.GetStr()) //nolint:gosec // kRO str is uint8 on the wire (≤255)
-		agiV = uint8(char.GetAgi()) //nolint:gosec // ditto
-		vitV = uint8(char.GetVit()) //nolint:gosec // ditto
-		intV = uint8(char.GetInt()) //nolint:gosec // ditto
-		dexV = uint8(char.GetDex()) //nolint:gosec // ditto
-		lukV = uint8(char.GetLuk()) //nolint:gosec // ditto
+		strV = uint8(min(char.GetStr(), 255)) //nolint:gosec // clamp to max uint8 to prevent wrap-around
+		agiV = uint8(min(char.GetAgi(), 255)) //nolint:gosec // ditto
+		vitV = uint8(min(char.GetVit(), 255)) //nolint:gosec // ditto
+		intV = uint8(min(char.GetInt(), 255)) //nolint:gosec // ditto
+		dexV = uint8(min(char.GetDex(), 255)) //nolint:gosec // ditto
+		lukV = uint8(min(char.GetLuk(), 255)) //nolint:gosec // ditto
 	}
 
 	// rAthena clamps HP to a minimum of 1 on LoadEndAck so the client

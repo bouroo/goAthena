@@ -132,6 +132,76 @@ func newDispatchTestLogger(t *testing.T) zerolog.Logger {
 	return zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.Disabled)
 }
 
+// parChangeRecord captures the (varID, count) of a single ZC_PAR_CHANGE
+// packet seen while sequentially walking a status-burst response.
+type parChangeRecord struct {
+	VarID uint16
+	Count uint32
+}
+
+// parseStatusBurst walks a status-burst response buffer sequentially
+// and returns the ZC_PAR_CHANGE records it contains, the ZC_STATUS
+// payload, and any ZC_LONGPAR_CHANGE count. This replaces the
+// byte-by-byte header scan that could misfire when a payload value
+// happened to match a packet header byte pair.
+//
+// Layout consumed: leading ZC_MAPPROPERTY_R2 (8 bytes) is skipped; then
+// 0..N ZC_PAR_CHANGE / ZC_LONGPAR_CHANGE (8 bytes each), then exactly
+// one ZC_STATUS (44 bytes). The buffer must be fully consumed.
+func parseStatusBurst(t *testing.T, buf []byte) (parChanges []parChangeRecord, longParChanges int, statusPayload []byte) {
+	t.Helper()
+	offset := 0
+	for offset+2 <= len(buf) {
+		cmd := binary.LittleEndian.Uint16(buf[offset:])
+		switch cmd {
+		case 0x099b: // ZC_MAPPROPERTY_R2
+			if offset+8 > len(buf) {
+				t.Fatalf("truncated ZC_MAPPROPERTY_R2 at offset %d (have %d bytes)", offset, len(buf)-offset)
+			}
+			offset += 8
+		case 0x00b0: // ZC_PAR_CHANGE
+			if offset+8 > len(buf) {
+				t.Fatalf("truncated ZC_PAR_CHANGE at offset %d (have %d bytes)", offset, len(buf)-offset)
+			}
+			vid := binary.LittleEndian.Uint16(buf[offset+2 : offset+4])
+			cnt := binary.LittleEndian.Uint32(buf[offset+4 : offset+8])
+			parChanges = append(parChanges, parChangeRecord{VarID: vid, Count: cnt})
+			offset += 8
+		case 0x00b1: // ZC_LONGPAR_CHANGE
+			if offset+8 > len(buf) {
+				t.Fatalf("truncated ZC_LONGPAR_CHANGE at offset %d (have %d bytes)", offset, len(buf)-offset)
+			}
+			longParChanges++
+			offset += 8
+		case 0x00bd: // ZC_STATUS
+			if offset+44 > len(buf) {
+				t.Fatalf("truncated ZC_STATUS at offset %d (have %d bytes)", offset, len(buf)-offset)
+			}
+			statusPayload = buf[offset : offset+44]
+			offset += 44
+		default:
+			t.Fatalf("unexpected packet header 0x%04x at offset %d (buf=% x)", cmd, offset, buf)
+		}
+	}
+	if offset != len(buf) {
+		t.Fatalf("trailing %d unparsed bytes at offset %d (buf=% x)", len(buf)-offset, offset, buf)
+	}
+	return parChanges, longParChanges, statusPayload
+}
+
+// findParChange scans a (sequential) ZC_PAR_CHANGE list for the first
+// record whose VarID matches; it returns the count and ok=true. Tests
+// that only care about one specific value use this instead of indexing
+// into the raw buffer.
+func findParChange(records []parChangeRecord, varID uint16) (uint32, bool) {
+	for _, r := range records {
+		if r.VarID == varID {
+			return r.Count, true
+		}
+	}
+	return 0, false
+}
+
 func TestDispatchHandler_AcceptLogin_EncodesAccept(t *testing.T) {
 	fake := &fakeIdentityClient{
 		authenticateFn: func(_ context.Context, _ *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error) {
@@ -1122,43 +1192,34 @@ func TestDispatchHandler_CZNotifyActorInit_StatusBurst(t *testing.T) {
 		t.Errorf("first packet opcode = %02x %02x, want 9b 09 (LE 0x099b ZC_MAPPROPERTY_R2)", out[0], out[1])
 	}
 
-	// (2) The remainder must contain ZC_STATUS (0x00bd) somewhere in
-	// the stream — scan for the header byte pair.
-	if !bytes.Contains(out[8:], []byte{0xbd, 0x00}) {
-		t.Fatalf("post-mapprop stream does not contain ZC_STATUS header [bd 00]; bytes=% x", out[8:])
+	// (2) Walk the rest of the buffer sequentially — no byte-by-byte
+	// scan, so a payload byte that happens to match a packet header
+	// cannot cause a false positive.
+	parChanges, longParChanges, statusPayload := parseStatusBurst(t, out[8:])
+
+	// (3) Status burst must include exactly one ZC_STATUS (44 bytes).
+	if len(statusPayload) != 44 {
+		t.Errorf("ZC_STATUS payload = %d bytes, want 44", len(statusPayload))
 	}
 
-	// (3) Spot-check one ZC_PAR_CHANGE with SP_HP (varID=5, count=1234).
-	// Layout of one ZC_PAR_CHANGE: cmd(2) varID(2) count(4) = 8 bytes.
-	var hpOK bool
-	for i := 8; i+8 <= len(out); i++ {
-		if out[i] == 0xb0 && out[i+1] == 0x00 {
-			vid := binary.LittleEndian.Uint16(out[i+2 : i+4])
-			cnt := int32(binary.LittleEndian.Uint32(out[i+4 : i+8]))
-			if vid == packet.SPHP && cnt == 1234 {
-				hpOK = true
-				break
-			}
-		}
-	}
-	if !hpOK {
-		t.Errorf("no ZC_PAR_CHANGE with SP_HP=1234 found in burst; bytes=% x", out[8:])
+	// (4) Spot-check SP_HP = 1234.
+	if cnt, ok := findParChange(parChanges, packet.SPHP); !ok {
+		t.Errorf("no ZC_PAR_CHANGE with SP_HP found in burst")
+	} else if cnt != 1234 {
+		t.Errorf("ZC_PAR_CHANGE SP_HP = %d, want 1234", cnt)
 	}
 
-	// (4) Spot-check ZC_PAR_CHANGE SP_STATUSPOINT (varID=9, count=5).
-	var spOK bool
-	for i := 8; i+8 <= len(out); i++ {
-		if out[i] == 0xb0 && out[i+1] == 0x00 {
-			vid := binary.LittleEndian.Uint16(out[i+2 : i+4])
-			cnt := int32(binary.LittleEndian.Uint32(out[i+4 : i+8]))
-			if vid == packet.SPStatusPoint && cnt == 5 {
-				spOK = true
-				break
-			}
-		}
+	// (5) Spot-check SP_STATUSPOINT = 5.
+	if cnt, ok := findParChange(parChanges, packet.SPStatusPoint); !ok {
+		t.Errorf("no ZC_PAR_CHANGE with SP_STATUSPOINT found in burst")
+	} else if cnt != 5 {
+		t.Errorf("ZC_PAR_CHANGE SP_STATUSPOINT = %d, want 5", cnt)
 	}
-	if !spOK {
-		t.Errorf("no ZC_PAR_CHANGE with SP_STATUSPOINT=5 found in burst")
+
+	// (6) M9 adds long-param broadcasts (Zeny, StatusPoint, etc.) via
+	// ZC_LONGPAR_CHANGE — there must be at least one.
+	if longParChanges == 0 {
+		t.Errorf("expected at least one ZC_LONGPAR_CHANGE in burst, got 0")
 	}
 }
 
@@ -1189,27 +1250,22 @@ func TestDispatchHandler_CZNotifyActorInit_NoCharacter_FallsBackToZeros(t *testi
 	if out[0] != 0x9b || out[1] != 0x09 {
 		t.Errorf("first packet opcode = %02x %02x, want 9b 09 (ZC_MAPPROPERTY_R2)", out[0], out[1])
 	}
-	if !bytes.Contains(out[8:], []byte{0xbd, 0x00}) {
-		t.Fatalf("post-mapprop stream does not contain ZC_STATUS header; bytes=% x", out[8:])
+
+	// Walk the burst sequentially so a payload byte that happens to
+	// look like a packet header can't cause a false positive.
+	parChanges, _, statusPayload := parseStatusBurst(t, out[8:])
+
+	// ZC_STATUS must be present and 44 bytes.
+	if len(statusPayload) != 44 {
+		t.Errorf("ZC_STATUS payload = %d bytes, want 44", len(statusPayload))
 	}
 
 	// Verify HP was clamped to 1 (rAthena convention).
-	var hpFound bool
-	for i := 8; i+8 <= len(out); i++ {
-		if out[i] == 0xb0 && out[i+1] == 0x00 {
-			vid := binary.LittleEndian.Uint16(out[i+2 : i+4])
-			if vid == packet.SPHP {
-				cnt := int32(binary.LittleEndian.Uint32(out[i+4 : i+8]))
-				if cnt != 1 {
-					t.Errorf("fallback ZC_PAR_CHANGE SP_HP = %d, want 1 (rAthena clamps to min 1)", cnt)
-				}
-				hpFound = true
-				break
-			}
-		}
-	}
-	if !hpFound {
+	cnt, ok := findParChange(parChanges, packet.SPHP)
+	if !ok {
 		t.Errorf("no ZC_PAR_CHANGE with SP_HP found in fallback burst")
+	} else if cnt != 1 {
+		t.Errorf("fallback ZC_PAR_CHANGE SP_HP = %d, want 1 (rAthena clamps to min 1)", cnt)
 	}
 }
 
@@ -1242,8 +1298,12 @@ func TestDispatchHandler_CZNotifyActorInit_NoConnID_StillBurstsZeros(t *testing.
 	if out[0] != 0x9b || out[1] != 0x09 {
 		t.Errorf("first packet opcode = %02x %02x, want 9b 09", out[0], out[1])
 	}
-	if !bytes.Contains(out[8:], []byte{0xbd, 0x00}) {
-		t.Fatalf("post-mapprop stream does not contain ZC_STATUS header; bytes=% x", out[8:])
+
+	// Walk the burst sequentially; this verifies ZC_STATUS is
+	// present and the burst is well-formed.
+	_, _, statusPayload := parseStatusBurst(t, out[8:])
+	if len(statusPayload) != 44 {
+		t.Errorf("ZC_STATUS payload = %d bytes, want 44", len(statusPayload))
 	}
 }
 

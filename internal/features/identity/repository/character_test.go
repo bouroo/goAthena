@@ -24,6 +24,7 @@ var charColumns = []string{
 	"max_hp", "hp", "max_sp", "sp", "hair", "hair_color",
 	"clothes_color", "weapon", "shield", "head_top", "head_mid",
 	"head_bottom", "robe", "last_map", "delete_date", "unban_time", "sex",
+	"str", "agi", "vit", "int", "dex", "luk", "status_point", "skill_point",
 }
 
 func sampleCharRows() *sqlmock.Rows {
@@ -33,12 +34,16 @@ func sampleCharRows() *sqlmock.Rows {
 		uint32(4000), uint32(3500), uint32(200), uint32(150), uint8(1), uint16(2),
 		uint16(0), uint16(1), uint16(0), uint16(0), uint16(0),
 		uint16(0), uint16(0), "prontera", int64(0), int64(0), "M",
+		uint16(5), uint16(5), uint16(5), uint16(5), uint16(5), uint16(5),
+		uint32(12), uint32(3),
 	).AddRow(
 		uint32(150002), uint32(2000000), int8(1), "beta", uint16(4001),
 		uint32(70), uint32(45), uint64(500000), uint64(90000), uint32(500),
 		uint32(3000), uint32(2500), uint32(150), uint32(100), uint8(5), uint16(3),
 		uint16(1), uint16(2), uint16(1), uint16(0), uint16(0),
 		uint16(0), uint16(0), "geffen", int64(1700000000), int64(0), "F",
+		uint16(8), uint16(12), uint16(7), uint16(3), uint16(15), uint16(2),
+		uint32(0), uint32(7),
 	)
 }
 
@@ -69,11 +74,22 @@ func TestCharacterRepository_ListByAccount(t *testing.T) {
 		assert.Equal(t, "prontera", got[0].LastMap)
 		assert.Equal(t, domain.SexMale, got[0].Sex)
 		assert.True(t, got[0].DeleteDate.IsZero(), "delete_date=0 must map to zero time")
+		assert.Equal(t, uint16(5), got[0].Str)
+		assert.Equal(t, uint16(5), got[0].Agi)
+		assert.Equal(t, uint16(5), got[0].Vit)
+		assert.Equal(t, uint16(5), got[0].Int)
+		assert.Equal(t, uint16(5), got[0].Dex)
+		assert.Equal(t, uint16(5), got[0].Luk)
+		assert.Equal(t, uint32(12), got[0].StatusPoint)
+		assert.Equal(t, uint32(3), got[0].SkillPoint)
 
 		assert.Equal(t, "beta", got[1].Name)
 		assert.Equal(t, uint8(1), got[1].Slot)
 		assert.Equal(t, int64(1700000000), got[1].DeleteDate.Unix(), "non-zero delete_date decodes to unix seconds")
 		assert.Equal(t, domain.SexFemale, got[1].Sex)
+		assert.Equal(t, uint16(8), got[1].Str)
+		assert.Equal(t, uint16(15), got[1].Dex)
+		assert.Equal(t, uint32(7), got[1].SkillPoint)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
@@ -139,6 +155,8 @@ func TestCharacterRepository_GetByID(t *testing.T) {
 			uint32(4000), uint32(3500), uint32(200), uint32(150), uint8(5), uint16(2),
 			uint16(0), uint16(1101), uint16(0), uint16(0), uint16(0),
 			uint16(0), uint16(0), "prontera", int64(0), int64(0), "M",
+			uint16(30), uint16(20), uint16(25), uint16(15), uint16(40), uint16(10),
+			uint32(5), uint32(3),
 		)
 		mock.ExpectQuery(`SELECT .* FROM "char" WHERE account_id = \$1 AND char_id = \$2`).
 			WithArgs(uint32(2000000), uint32(150001), 1).
