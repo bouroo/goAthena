@@ -141,14 +141,24 @@ type parChangeRecord struct {
 
 // parseStatusBurst walks a status-burst response buffer sequentially
 // and returns the ZC_PAR_CHANGE records it contains, the ZC_STATUS
-// payload, and any ZC_LONGPAR_CHANGE count. This replaces the
-// byte-by-byte header scan that could misfire when a payload value
-// happened to match a packet header byte pair.
+// payload, the ZC_LONGPAR_CHANGE count, and the M10 empty list
+// packet records. This replaces the byte-by-byte header scan that
+// could misfire when a payload value happened to match a packet
+// header byte pair.
 //
 // Layout consumed: leading ZC_MAPPROPERTY_R2 (8 bytes) is skipped; then
 // 0..N ZC_PAR_CHANGE / ZC_LONGPAR_CHANGE (8 bytes each), then exactly
-// one ZC_STATUS (44 bytes). The buffer must be fully consumed.
-func parseStatusBurst(t *testing.T, buf []byte) (parChanges []parChangeRecord, longParChanges int, statusPayload []byte) {
+// one ZC_STATUS (44 bytes), then the four M10 empty list packets
+// (ZC_INVENTORY_ITEMLIST_NORMAL 0x00a3 / ZC_INVENTORY_ITEMLIST_EQUIP
+// 0x00a4 / ZC_SKILLINFO_LIST 0x010f are 4 bytes each, and
+// ZC_SHORTCUT_KEY_LIST 0x02b9 is 191 bytes). The buffer must be fully
+// consumed.
+func parseStatusBurst(t *testing.T, buf []byte) (
+	parChanges []parChangeRecord,
+	longParChanges int,
+	statusPayload []byte,
+	emptyListPackets []uint16,
+) {
 	t.Helper()
 	offset := 0
 	for offset+2 <= len(buf) {
@@ -179,6 +189,43 @@ func parseStatusBurst(t *testing.T, buf []byte) (parChanges []parChangeRecord, l
 			}
 			statusPayload = buf[offset : offset+44]
 			offset += 44
+		case 0x00a3: // ZC_INVENTORY_ITEMLIST_NORMAL (M10, empty = 4 bytes)
+			if offset+4 > len(buf) {
+				t.Fatalf("truncated ZC_INVENTORY_ITEMLIST_NORMAL at offset %d (have %d bytes)", offset, len(buf)-offset)
+			}
+			plen := binary.LittleEndian.Uint16(buf[offset+2 : offset+4])
+			if plen != 4 {
+				t.Fatalf("ZC_INVENTORY_ITEMLIST_NORMAL packetLength = %d, want 4 (empty)", plen)
+			}
+			emptyListPackets = append(emptyListPackets, cmd)
+			offset += int(plen)
+		case 0x00a4: // ZC_INVENTORY_ITEMLIST_EQUIP (M10, empty = 4 bytes)
+			if offset+4 > len(buf) {
+				t.Fatalf("truncated ZC_INVENTORY_ITEMLIST_EQUIP at offset %d (have %d bytes)", offset, len(buf)-offset)
+			}
+			plen := binary.LittleEndian.Uint16(buf[offset+2 : offset+4])
+			if plen != 4 {
+				t.Fatalf("ZC_INVENTORY_ITEMLIST_EQUIP packetLength = %d, want 4 (empty)", plen)
+			}
+			emptyListPackets = append(emptyListPackets, cmd)
+			offset += int(plen)
+		case 0x010f: // ZC_SKILLINFO_LIST (M10, empty = 4 bytes)
+			if offset+4 > len(buf) {
+				t.Fatalf("truncated ZC_SKILLINFO_LIST at offset %d (have %d bytes)", offset, len(buf)-offset)
+			}
+			plen := binary.LittleEndian.Uint16(buf[offset+2 : offset+4])
+			if plen != 4 {
+				t.Fatalf("ZC_SKILLINFO_LIST packetLength = %d, want 4 (empty)", plen)
+			}
+			emptyListPackets = append(emptyListPackets, cmd)
+			offset += int(plen)
+		case 0x02b9: // ZC_SHORTCUT_KEY_LIST (M10, fixed 191 bytes)
+			const hotkeySize = 191
+			if offset+hotkeySize > len(buf) {
+				t.Fatalf("truncated ZC_SHORTCUT_KEY_LIST at offset %d (have %d bytes)", offset, len(buf)-offset)
+			}
+			emptyListPackets = append(emptyListPackets, cmd)
+			offset += hotkeySize
 		default:
 			t.Fatalf("unexpected packet header 0x%04x at offset %d (buf=% x)", cmd, offset, buf)
 		}
@@ -186,7 +233,7 @@ func parseStatusBurst(t *testing.T, buf []byte) (parChanges []parChangeRecord, l
 	if offset != len(buf) {
 		t.Fatalf("trailing %d unparsed bytes at offset %d (buf=% x)", len(buf)-offset, offset, buf)
 	}
-	return parChanges, longParChanges, statusPayload
+	return parChanges, longParChanges, statusPayload, emptyListPackets
 }
 
 // findParChange scans a (sequential) ZC_PAR_CHANGE list for the first
@@ -1195,7 +1242,7 @@ func TestDispatchHandler_CZNotifyActorInit_StatusBurst(t *testing.T) {
 	// (2) Walk the rest of the buffer sequentially — no byte-by-byte
 	// scan, so a payload byte that happens to match a packet header
 	// cannot cause a false positive.
-	parChanges, longParChanges, statusPayload := parseStatusBurst(t, out[8:])
+	parChanges, longParChanges, statusPayload, emptyListPackets := parseStatusBurst(t, out[8:])
 
 	// (3) Status burst must include exactly one ZC_STATUS (44 bytes).
 	if len(statusPayload) != 44 {
@@ -1220,6 +1267,26 @@ func TestDispatchHandler_CZNotifyActorInit_StatusBurst(t *testing.T) {
 	// ZC_LONGPAR_CHANGE — there must be at least one.
 	if longParChanges == 0 {
 		t.Errorf("expected at least one ZC_LONGPAR_CHANGE in burst, got 0")
+	}
+
+	// (7) M10: the four empty list packets (inventory normal, inventory
+	// equip, skill, hotkey) must follow the status burst in the
+	// documented rAthena LoadEndAck order
+	// (rathena/src/map/clif.cpp:10791-10915).
+	wantEmpty := []uint16{
+		0x00a3, // ZC_INVENTORY_ITEMLIST_NORMAL
+		0x00a4, // ZC_INVENTORY_ITEMLIST_EQUIP
+		0x010f, // ZC_SKILLINFO_LIST
+		0x02b9, // ZC_SHORTCUT_KEY_LIST
+	}
+	if len(emptyListPackets) != len(wantEmpty) {
+		t.Fatalf("empty-list packets seen = %d, want %d (opcodes: % x)",
+			len(emptyListPackets), len(wantEmpty), emptyListPackets)
+	}
+	for i, want := range wantEmpty {
+		if emptyListPackets[i] != want {
+			t.Errorf("empty-list packet[%d] = 0x%04x, want 0x%04x", i, emptyListPackets[i], want)
+		}
 	}
 }
 
@@ -1253,7 +1320,7 @@ func TestDispatchHandler_CZNotifyActorInit_NoCharacter_FallsBackToZeros(t *testi
 
 	// Walk the burst sequentially so a payload byte that happens to
 	// look like a packet header can't cause a false positive.
-	parChanges, _, statusPayload := parseStatusBurst(t, out[8:])
+	parChanges, _, statusPayload, _ := parseStatusBurst(t, out[8:])
 
 	// ZC_STATUS must be present and 44 bytes.
 	if len(statusPayload) != 44 {
@@ -1300,10 +1367,17 @@ func TestDispatchHandler_CZNotifyActorInit_NoConnID_StillBurstsZeros(t *testing.
 	}
 
 	// Walk the burst sequentially; this verifies ZC_STATUS is
-	// present and the burst is well-formed.
-	_, _, statusPayload := parseStatusBurst(t, out[8:])
+	// present and the burst is well-formed. M10 also asserts the
+	// four empty-list packets follow in the documented rAthena
+	// LoadEndAck order.
+	_, _, statusPayload, emptyListPackets := parseStatusBurst(t, out[8:])
 	if len(statusPayload) != 44 {
 		t.Errorf("ZC_STATUS payload = %d bytes, want 44", len(statusPayload))
+	}
+	wantEmpty := []uint16{0x00a3, 0x00a4, 0x010f, 0x02b9}
+	if len(emptyListPackets) != len(wantEmpty) {
+		t.Errorf("empty-list packets seen = %d, want %d (opcodes: % x)",
+			len(emptyListPackets), len(wantEmpty), emptyListPackets)
 	}
 }
 

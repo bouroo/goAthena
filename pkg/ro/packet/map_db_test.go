@@ -15,7 +15,9 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		length    int
 		direction Direction
 	}
-	// 4 C→S + 9 S→C, all fixed-length = 13 entries total.
+	// 4 C→S + 13 S→C = 17 entries total. The three variable-length list
+	// packets (inventory normal/equip, skill list) and the fixed-length
+	// hotkey list (0x02b9, 191 bytes) were added in M10.
 	checks := []expect{
 		{HeaderCZENTER, "CZ_ENTER", sizeCZEnter, DirectionClientToServer},
 		{HeaderCZREQUESTMOVE, "CZ_REQUEST_MOVE", sizeCZRequestMove, DirectionClientToServer},
@@ -31,6 +33,10 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCSTATUS, "ZC_STATUS", sizeZCStatus, DirectionServerToClient},
 		{HeaderZCPARCHANGE, "ZC_PAR_CHANGE", sizeZCParChange, DirectionServerToClient},
 		{HeaderZCLONGPARCHANGE, "ZC_LONGPAR_CHANGE", sizeZCLongParChange, DirectionServerToClient},
+		{HeaderZCINVENTORYITEMLISTNORMAL, "ZC_INVENTORY_ITEMLIST_NORMAL", VariableLength, DirectionServerToClient},
+		{HeaderZCINVENTORYITEMLISTEQUIP, "ZC_INVENTORY_ITEMLIST_EQUIP", VariableLength, DirectionServerToClient},
+		{HeaderZCSKILLINFOLIST, "ZC_SKILLINFO_LIST", VariableLength, DirectionServerToClient},
+		{HeaderZCSHORTCUTKEYLIST, "ZC_SHORTCUT_KEY_LIST", sizeZCShortcutKeyList, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -55,8 +61,8 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewMapServerDB()
-	// 4 C→S + 9 S→C = 13.
-	const want = 13
+	// 4 C→S + 13 S→C = 17.
+	const want = 17
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -84,6 +90,10 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCSTATUS, sizeZCStatus},
 		{HeaderZCPARCHANGE, sizeZCParChange},
 		{HeaderZCLONGPARCHANGE, sizeZCLongParChange},
+		{HeaderZCINVENTORYITEMLISTNORMAL, VariableLength},
+		{HeaderZCINVENTORYITEMLISTEQUIP, VariableLength},
+		{HeaderZCSKILLINFOLIST, VariableLength},
+		{HeaderZCSHORTCUTKEYLIST, sizeZCShortcutKeyList},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

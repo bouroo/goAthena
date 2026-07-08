@@ -593,3 +593,81 @@ func StatusPointCost(currentVal uint8) uint8 {
 	// currentVal >= 247 and would wrap the cost back to 1.
 	return uint8(1 + (int(currentVal)+9)/10) //nolint:gosec // max return is 1+(255+9)/10 = 27
 }
+
+// EncodeEmptyInventoryListNormal returns the on-wire bytes for an empty
+// ZC_INVENTORY_ITEMLIST_NORMAL packet (opcode 0x00a3, 4 bytes).
+//
+// Layout: [2:cmd=0x00a3][2:packetLength=4] (no NORMALITEM_INFO entries).
+//
+// rAthena's clif_inventorylist (rathena/src/map/clif.cpp:3060) only sends
+// this packet when at least one stackable item is present; for a fresh
+// character with no items, an empty frame still needs to arrive so the
+// client initializes its inventory UI. Sending the 4-byte header with
+// packetLength=4 matches the rAthena minimum-frame convention: the
+// flexible-array count is implicit (wire length minus the header
+// divided by the per-entry size = 0).
+//
+// Source: rathena/src/map/packets_struct.hpp packet_itemlist_normal
+// (ZC_INVENTORY_ITEMLIST_NORMAL); opcode at rathena/src/map/
+// clif_packetdb.hpp.
+func EncodeEmptyInventoryListNormal() []byte {
+	buf := make([]byte, sizeEmptyInventoryList)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTNORMAL)
+	binary.LittleEndian.PutUint16(buf[2:], sizeEmptyInventoryList)
+	return buf
+}
+
+// EncodeEmptyInventoryListEquip returns the on-wire bytes for an empty
+// ZC_INVENTORY_ITEMLIST_EQUIP packet (opcode 0x00a4, 4 bytes).
+//
+// Layout: [2:cmd=0x00a4][2:packetLength=4] (no EQUIPITEM_INFO entries).
+//
+// See EncodeEmptyInventoryListNormal for the empty-frame rationale. The
+// equip variant carries the player's currently-equipped items, so for
+// a fresh character without gear both list packets must arrive empty
+// to populate the equipment and inventory slots in the client UI.
+func EncodeEmptyInventoryListEquip() []byte {
+	buf := make([]byte, sizeEmptyInventoryList)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTEQUIP)
+	binary.LittleEndian.PutUint16(buf[2:], sizeEmptyInventoryList)
+	return buf
+}
+
+// EncodeEmptySkillList returns the on-wire bytes for an empty
+// ZC_SKILLINFO_LIST packet (opcode 0x010f, 4 bytes).
+//
+// Layout: [2:cmd=0x010f][2:packetLength=4] (no SKILLDATA entries).
+//
+// rAthena's clif_skillinfoblock (rathena/src/map/clif.cpp:5694) sends
+// this only when the player has at least one learned skill; for a
+// fresh novice character the empty 4-byte header is what the client
+// expects to see so it initializes the skill list pane without
+// leaving it in an indeterminate state.
+func EncodeEmptySkillList() []byte {
+	buf := make([]byte, sizeEmptyInventoryList)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSKILLINFOLIST)
+	binary.LittleEndian.PutUint16(buf[2:], sizeEmptyInventoryList)
+	return buf
+}
+
+// EncodeEmptyHotkeyList returns the on-wire bytes for an empty
+// ZC_SHORTCUT_KEY_LIST packet (opcode 0x02b9, 191 bytes).
+//
+// Layout: [2:cmd=0x02b9] then 27 zero-filled hotkey_data slots, each
+// 7 bytes wide (int8 isSkill + uint32 id + int16 count). Total wire
+// length is 2 + 27*7 = 191 bytes.
+//
+// Unlike the inventory/skill lists, the hotkey list is fixed-length:
+// rAthena always emits every slot regardless of how many the client
+// actually configured, and the slot count is encoded in the PACKETVER
+// struct shape (rathena/src/map/packets_struct.hpp:1613-1619 — the
+// PACKETVER < 20090603 branch gives MAX_HOTKEYS_PACKET=27 and opcode
+// 0x02b9). Zero-filling every slot means "no hotkey bound" for the
+// client. hotkey_data is declared at
+// rathena/src/map/packets_struct.hpp:1576-1580.
+func EncodeEmptyHotkeyList() []byte {
+	buf := make([]byte, sizeZCShortcutKeyList)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSHORTCUTKEYLIST)
+	// Remaining 189 bytes are zero (make already initializes to 0).
+	return buf
+}

@@ -37,6 +37,12 @@ const (
 	// zcNotifyTimeSize is the fixed length of ZC_NOTIFY_TIME
 	// (rathena/src/map/clif.cpp:11186-11193).
 	zcNotifyTimeSize = 6
+	// zcShortcutKeyListSize is the fixed length of ZC_SHORTCUT_KEY_LIST
+	// (rathena/src/map/packets_struct.hpp:1613-1619 — the PACKETVER
+	// < 20090603 branch that gives opcode 0x02b9 with
+	// MAX_HOTKEYS_PACKET=27). Total = 2 (opcode) + 27 * 7
+	// (hotkey_data) = 191 bytes.
+	zcShortcutKeyListSize = 191
 )
 
 // acceptEnterHeaderSize is the fixed prefix length of HC_ACCEPT_ENTER
@@ -361,27 +367,60 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 		t.Errorf("ZC_MAPPROPERTY_R2 flags = 0x%x, want 0", flags)
 	}
 
-	// M9: the response stream now also contains the status burst. Drain
-	// framed packets from the decoder until either we see a ZC_STATUS
-	// header (success) or the decoder reports ErrIncomplete / a
-	// timeout. The expected burst is: 12 ZC_PAR_CHANGE/ZC_LONGPAR_CHANGE
-	// (8 bytes each) + 1 ZC_STATUS (44 bytes) + 6 more per-stat
-	// ZC_PAR_CHANGE (8 bytes each) = 188 bytes.
+	// M9+M10: the response stream after MAPPROPERTY_R2 contains the
+	// status burst (ZC_PAR_CHANGE / ZC_LONGPAR_CHANGE / ZC_STATUS) and
+	// the four M10 empty list packets (ZC_INVENTORY_ITEMLIST_NORMAL /
+	// ZC_INVENTORY_ITEMLIST_EQUIP / ZC_SKILLINFO_LIST /
+	// ZC_SHORTCUT_KEY_LIST). Drain framed packets from the decoder
+	// until either we have observed all the required headers in the
+	// rAthena LoadEndAck order or the decoder reports ErrIncomplete /
+	// a timeout. The expected burst is: 12 ZC_PAR_CHANGE/
+	// ZC_LONGPAR_CHANGE (8 bytes each) + 1 ZC_STATUS (44 bytes) + 6
+	// per-stat ZC_PAR_CHANGE (8 bytes each) + 3 variable-length list
+	// packets (4 bytes each) + 1 fixed-length ZC_SHORTCUT_KEY_LIST
+	// (191 bytes) = 287 bytes.
 	if err := conn.SetReadDeadline(time.Now().Add(deadline)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
 	}
 	chunk := make([]byte, 4096)
 	sawStatus := false
+	var emptyListCmds []uint16
 	packets := 0
-	for packets < 32 { // generous upper bound on status-burst packet count
+	wantEmpty := []uint16{
+		packet.HeaderZCINVENTORYITEMLISTNORMAL,
+		packet.HeaderZCINVENTORYITEMLISTEQUIP,
+		packet.HeaderZCSKILLINFOLIST,
+		packet.HeaderZCSHORTCUTKEYLIST,
+	}
+	for packets < 64 { // generous upper bound on status-burst + list packet count
 		fcmd, frame, derr := dec.Next()
 		if derr == nil {
 			packets++
-			if fcmd == packet.HeaderZCSTATUS {
+			switch fcmd {
+			case packet.HeaderZCSTATUS:
 				if len(frame) != 44 {
 					t.Errorf("ZC_STATUS frame length = %d, want 44", len(frame))
 				}
 				sawStatus = true
+			case packet.HeaderZCINVENTORYITEMLISTNORMAL,
+				packet.HeaderZCINVENTORYITEMLISTEQUIP,
+				packet.HeaderZCSKILLINFOLIST:
+				// Variable-length list packets with an empty payload
+				// must be exactly 4 bytes (cmd + packetLength=4, no
+				// entries).
+				if len(frame) != 4 {
+					t.Errorf("empty list packet 0x%04x frame length = %d, want 4", fcmd, len(frame))
+				}
+				emptyListCmds = append(emptyListCmds, fcmd)
+			case packet.HeaderZCSHORTCUTKEYLIST:
+				// Fixed 191-byte payload: 2 (opcode) + 27 * 7
+				// (zero-filled hotkey slots).
+				if len(frame) != zcShortcutKeyListSize {
+					t.Errorf("ZC_SHORTCUT_KEY_LIST frame length = %d, want %d", len(frame), zcShortcutKeyListSize)
+				}
+				emptyListCmds = append(emptyListCmds, fcmd)
+			}
+			if sawStatus && len(emptyListCmds) == len(wantEmpty) {
 				break
 			}
 			continue
@@ -405,7 +444,17 @@ func stageCZNotifyActorInit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, 
 	if !sawStatus {
 		t.Fatalf("status burst did not deliver ZC_STATUS (0x%04x) after %d framed packets", packet.HeaderZCSTATUS, packets)
 	}
-	t.Logf("CZ_NOTIFY_ACTORINIT ok: propertyType=0 flags=0 burst_packets=%d", packets)
+	if len(emptyListCmds) != len(wantEmpty) {
+		t.Fatalf("empty-list packets seen = %d, want %d (cmds: % x)",
+			len(emptyListCmds), len(wantEmpty), emptyListCmds)
+	}
+	for i, want := range wantEmpty {
+		if emptyListCmds[i] != want {
+			t.Errorf("empty-list packet[%d] = 0x%04x, want 0x%04x (rAthena LoadEndAck order)",
+				i, emptyListCmds[i], want)
+		}
+	}
+	t.Logf("CZ_NOTIFY_ACTORINIT ok: propertyType=0 flags=0 burst_packets=%d empty_list_packets=%d", packets, len(emptyListCmds))
 }
 
 // stageCZRequestTime sends CZ_REQUEST_TIME and asserts ZC_NOTIFY_TIME

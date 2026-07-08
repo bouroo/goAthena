@@ -25,15 +25,19 @@ const (
 	HeaderCZREQUESTTIME     uint16 = 0x007e // rathena/src/map/clif.cpp:11198 (CZ_REQUEST_TIME / TickSend)
 
 	// S→C — map server → client.
-	HeaderZCACCEPTENTER      uint16 = 0x02eb // rathena/src/map/packets.hpp:571 (ZC_ACCEPT_ENTER, PACKETVER >= 20160330 branch)
-	HeaderZCREFUSEENTER      uint16 = 0x0074 // rathena/src/map/packets.hpp:590 (ZC_REFUSE_ENTER)
-	HeaderZCNOTIFYPLAYERMOVE uint16 = 0x0087 // rathena/src/map/packets.hpp (ZC_NOTIFY_PLAYERMOVE)
-	HeaderZCSPAWNUNIT        uint16 = 0x09fe // rathena/src/map/packets.hpp ZC_SPAWN_UNIT (PACKETVER >= 20150513 branch)
-	HeaderZCMAPPROPERTYR2    uint16 = 0x099b // rathena/src/map/clif.cpp:6869 (ZC_MAPPROPERTY_R2, PACKETVER >= 20121010)
-	HeaderZCNOTIFYTIME       uint16 = 0x007f // rathena/src/map/clif.cpp:11186 (ZC_NOTIFY_TIME)
-	HeaderZCSTATUS           uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
-	HeaderZCPARCHANGE        uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
-	HeaderZCLONGPARCHANGE    uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
+	HeaderZCACCEPTENTER             uint16 = 0x02eb // rathena/src/map/packets.hpp:571 (ZC_ACCEPT_ENTER, PACKETVER >= 20160330 branch)
+	HeaderZCREFUSEENTER             uint16 = 0x0074 // rathena/src/map/packets.hpp:590 (ZC_REFUSE_ENTER)
+	HeaderZCNOTIFYPLAYERMOVE        uint16 = 0x0087 // rathena/src/map/packets.hpp (ZC_NOTIFY_PLAYERMOVE)
+	HeaderZCSPAWNUNIT               uint16 = 0x09fe // rathena/src/map/packets.hpp ZC_SPAWN_UNIT (PACKETVER >= 20150513 branch)
+	HeaderZCMAPPROPERTYR2           uint16 = 0x099b // rathena/src/map/clif.cpp:6869 (ZC_MAPPROPERTY_R2, PACKETVER >= 20121010)
+	HeaderZCNOTIFYTIME              uint16 = 0x007f // rathena/src/map/clif.cpp:11186 (ZC_NOTIFY_TIME)
+	HeaderZCSTATUS                  uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
+	HeaderZCPARCHANGE               uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
+	HeaderZCLONGPARCHANGE           uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
+	HeaderZCINVENTORYITEMLISTNORMAL uint16 = 0x00a3 // rathena/src/map/clif_packetdb.hpp (ZC_INVENTORY_ITEMLIST_NORMAL)
+	HeaderZCINVENTORYITEMLISTEQUIP  uint16 = 0x00a4 // rathena/src/map/clif_packetdb.hpp (ZC_INVENTORY_ITEMLIST_EQUIP)
+	HeaderZCSKILLINFOLIST           uint16 = 0x010f // rathena/src/map/packets_struct.hpp:4279 (ZC_SKILLINFO_LIST)
+	HeaderZCSHORTCUTKEYLIST         uint16 = 0x02b9 // rathena/src/map/packets_struct.hpp:1619 (ZC_SHORTCUT_KEY_LIST, PACKETVER < 20090603)
 )
 
 // SP_* status parameter IDs from rathena/src/map/map.hpp:498-505.
@@ -124,6 +128,21 @@ const (
 	// sizeZCLongParChange = int16 packetType + uint16 varID + int32 amount = 2+2+4 = 8
 	// (rathena/src/map/packets_struct.hpp:361-365).
 	sizeZCLongParChange = 8
+	// sizeEmptyInventoryList = int16 packetType + int16 packetLength = 2+2 = 4.
+	// Used for ZC_INVENTORY_ITEMLIST_NORMAL / ZC_INVENTORY_ITEMLIST_EQUIP /
+	// ZC_SKILLINFO_LIST when the list is empty (count=0). The trailing
+	// NORMALITEM_INFO / EQUIPITEM_INFO / SKILLDATA flexible array is
+	// omitted entirely; rAthena's clif_send path only writes the header
+	// in that case. See rathena/src/map/clif.cpp clif_inventorylist
+	// (~:3060) and clif_skillinfoblock (~:5694).
+	sizeEmptyInventoryList = 4
+	// sizeZCShortcutKeyList = int16 packetType + 27 * hotkey_data =
+	// 2 + 27*(int8 isSkill + uint32 id + int16 count) = 2 + 27*7 = 191
+	// (rathena/src/map/packets_struct.hpp:1613-1619 — the PACKETVER
+	// < 20090603 branch that gives opcode 0x02b9 with MAX_HOTKEYS_PACKET=27).
+	// All 27 slots are zero-filled for a fresh character. hotkey_data is
+	// declared at rathena/src/map/packets_struct.hpp:1576-1580.
+	sizeZCShortcutKeyList = 191
 )
 
 // NewMapServerDB returns a packet database pre-populated with all known
@@ -220,6 +239,40 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCLONGPARCHANGE,
 		Name:      "ZC_LONGPAR_CHANGE",
 		Length:    sizeZCLongParChange,
+		Direction: DirectionServerToClient,
+	})
+	// M10: empty list packets emitted after the status burst. The three
+	// list packets (inventory normal/equip, skill) are variable-length —
+	// the wire length is encoded in the int16 packetLength slot and the
+	// trailing flexible array may be zero entries — so we register
+	// VariableLength (-1) and rely on the codec to read the wire length
+	// at decode time. ZC_SHORTCUT_KEY_LIST (0x02b9) is fixed at 191
+	// bytes (2-byte opcode + 27 zero-filled hotkey slots of 7 bytes
+	// each) regardless of how many slots the client actually has
+	// configured; the slot count is encoded in the PACKETVER's struct
+	// shape, not the wire data.
+	db.Register(Definition{
+		ID:        HeaderZCINVENTORYITEMLISTNORMAL,
+		Name:      "ZC_INVENTORY_ITEMLIST_NORMAL",
+		Length:    VariableLength,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCINVENTORYITEMLISTEQUIP,
+		Name:      "ZC_INVENTORY_ITEMLIST_EQUIP",
+		Length:    VariableLength,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCSKILLINFOLIST,
+		Name:      "ZC_SKILLINFO_LIST",
+		Length:    VariableLength,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCSHORTCUTKEYLIST,
+		Name:      "ZC_SHORTCUT_KEY_LIST",
+		Length:    sizeZCShortcutKeyList,
 		Direction: DirectionServerToClient,
 	})
 

@@ -1026,6 +1026,29 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		}
 	}
 
+	// M10: append the four empty list packets to the burst. The order
+	// matches rAthena's clif_parse_LoadEndAck sequence
+	// (rathena/src/map/clif.cpp:10791-10915 — the inventory normal
+	// list, then equip list, then skill list, then hotkey list). Each
+	// encoder is a byte-exact constructor and cannot fail, so a Write
+	// error here is a fatal buffer failure; log and bail rather than
+	// send a half-baked burst.
+	emptyListPackets := [][]byte{
+		packet.EncodeEmptyInventoryListNormal(),
+		packet.EncodeEmptyInventoryListEquip(),
+		packet.EncodeEmptySkillList(),
+		packet.EncodeEmptyHotkeyList(),
+	}
+	for _, pkt := range emptyListPackets {
+		if _, err := burst.Write(pkt); err != nil {
+			h.logger.Error().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Msg("append empty list packet to burst failed")
+			return nil
+		}
+	}
+
 	h.logger.Info().
 		Uint64("conn", conn.ID).
 		Uint32("aid", conn.AccountID).
