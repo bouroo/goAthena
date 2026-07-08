@@ -2158,3 +2158,211 @@ func TestCloseDialogResponse_Encode(t *testing.T) {
 		t.Errorf("NpcID = %d, want 110000001", nid)
 	}
 }
+
+// M16: NPC shop interaction — SelectDealtypeResponse, PurchaseItemListResponse,
+// PurchaseResultResponse.
+
+func TestSelectDealtypeResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r SelectDealtypeResponse
+	if got, want := r.Size(), sizeZCSelectDealtype; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestSelectDealtypeResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := SelectDealtypeResponse{NpcID: 110000002}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != sizeZCSelectDealtype {
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCSelectDealtype)
+	}
+
+	// Header: 0x00c4 LE.
+	if got[0] != 0xc4 || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want c4 00 (LE 0x00c4)", got[0], got[1])
+	}
+
+	// NpcID at [2:6] = 110000002.
+	if nid := binary.LittleEndian.Uint32(got[2:6]); nid != 110000002 {
+		t.Errorf("NpcID = %d, want 110000002", nid)
+	}
+}
+
+func TestPurchaseItemListResponse_Encode_SingleItem(t *testing.T) {
+	t.Parallel()
+
+	resp := PurchaseItemListResponse{
+		Items: []ShopBuyItem{
+			{ItemID: 501, Price: 50, DiscountPrice: 50, ItemType: 0, ViewSprite: 0, Location: 0},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	// Total length: 4 (header) + 1*19 = 23.
+	wantLen := 4 + sizeShopBuyItem
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Header: 0x0b77 LE.
+	if got[0] != 0x77 || got[1] != 0x0b {
+		t.Errorf("header bytes = %02x %02x, want 77 0b (LE 0x0b77)", got[0], got[1])
+	}
+
+	// packetLength at [2:4] = 23.
+	if plen := binary.LittleEndian.Uint16(got[2:4]); int(plen) != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+
+	// First (only) item: starts at offset 4.
+	off := 4
+	if id := binary.LittleEndian.Uint32(got[off : off+4]); id != 501 {
+		t.Errorf("item[0] itemId = %d, want 501", id)
+	}
+	if price := binary.LittleEndian.Uint32(got[off+4 : off+8]); price != 50 {
+		t.Errorf("item[0] price = %d, want 50", price)
+	}
+	if dp := binary.LittleEndian.Uint32(got[off+8 : off+12]); dp != 50 {
+		t.Errorf("item[0] discountPrice = %d, want 50", dp)
+	}
+	if got[off+12] != 0 {
+		t.Errorf("item[0] itemType = %d, want 0 (IT_HEALING)", got[off+12])
+	}
+	if sprite := binary.LittleEndian.Uint16(got[off+13 : off+15]); sprite != 0 {
+		t.Errorf("item[0] viewSprite = %d, want 0", sprite)
+	}
+	if loc := binary.LittleEndian.Uint32(got[off+15 : off+19]); loc != 0 {
+		t.Errorf("item[0] location = %d, want 0", loc)
+	}
+}
+
+func TestPurchaseItemListResponse_Encode_MultipleItems(t *testing.T) {
+	t.Parallel()
+
+	resp := PurchaseItemListResponse{
+		Items: []ShopBuyItem{
+			{ItemID: 501, Price: 50, DiscountPrice: 50, ItemType: 0, ViewSprite: 0, Location: 0},
+			{ItemID: 502, Price: 200, DiscountPrice: 200, ItemType: 0, ViewSprite: 0, Location: 0},
+			{ItemID: 1201, Price: 500, DiscountPrice: 500, ItemType: 3, ViewSprite: 1, Location: 2},
+			{ItemID: 1101, Price: 1500, DiscountPrice: 1500, ItemType: 3, ViewSprite: 2, Location: 2},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	wantLen := 4 + 4*sizeShopBuyItem
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); int(plen) != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+
+	// Spot-check the third item (1201 / 500 / 3 / 1 / 2) at offset
+	// 4 + 2*19 = 42.
+	off := 4 + 2*sizeShopBuyItem
+	if id := binary.LittleEndian.Uint32(got[off : off+4]); id != 1201 {
+		t.Errorf("item[2] itemId = %d, want 1201", id)
+	}
+	if price := binary.LittleEndian.Uint32(got[off+4 : off+8]); price != 500 {
+		t.Errorf("item[2] price = %d, want 500", price)
+	}
+	if got[off+12] != 3 {
+		t.Errorf("item[2] itemType = %d, want 3 (IT_WEAPON)", got[off+12])
+	}
+	if sprite := binary.LittleEndian.Uint16(got[off+13 : off+15]); sprite != 1 {
+		t.Errorf("item[2] viewSprite = %d, want 1", sprite)
+	}
+	if loc := binary.LittleEndian.Uint32(got[off+15 : off+19]); loc != 2 {
+		t.Errorf("item[2] location = %d, want 2 (EQP_HAND_R)", loc)
+	}
+}
+
+func TestPurchaseItemListResponse_Encode_EmptyList(t *testing.T) {
+	t.Parallel()
+
+	resp := PurchaseItemListResponse{}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	// Total length: 4 (header) only.
+	if len(got) != 4 {
+		t.Fatalf("len(got) = %d, want 4", len(got))
+	}
+	if got[0] != 0x77 || got[1] != 0x0b {
+		t.Errorf("header bytes = %02x %02x, want 77 0b (LE 0x0b77)", got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != 4 {
+		t.Errorf("packetLength = %d, want 4", plen)
+	}
+}
+
+func TestPurchaseResultResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r PurchaseResultResponse
+	if got, want := r.Size(), sizeZCPCPurchaseResult; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestPurchaseResultResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		result uint8
+	}{
+		{name: "result=success", result: 0x00},
+		{name: "result=fail", result: 0x01},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			resp := PurchaseResultResponse{Result: tc.result}
+
+			var buf bytes.Buffer
+			if err := resp.Encode(&buf); err != nil {
+				t.Fatalf("Encode() unexpected error: %v", err)
+			}
+			got := buf.Bytes()
+
+			if len(got) != sizeZCPCPurchaseResult {
+				t.Fatalf("len(got) = %d, want %d", len(got), sizeZCPCPurchaseResult)
+			}
+
+			// Header: 0x00ca LE.
+			if got[0] != 0xca || got[1] != 0x00 {
+				t.Errorf("header bytes = %02x %02x, want ca 00 (LE 0x00ca)", got[0], got[1])
+			}
+
+			// Result at [2] = tc.result.
+			if got[2] != tc.result {
+				t.Errorf("result = %d, want %d", got[2], tc.result)
+			}
+		})
+	}
+}

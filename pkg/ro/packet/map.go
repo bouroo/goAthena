@@ -106,7 +106,20 @@ const (
 	// ZC_CLOSE_DIALOG (0x00b6) — server shows "Close" button.
 	// rathena/src/map/clif_packetdb.hpp:58 (`packet(0x00b6,6,clif_parse_CloseDialog,0)`).
 	// Fixed 6 bytes: [2:cmd][4:NpcID].
-	HeaderZCCLOSEDIALOG             uint16 = 0x00b6
+	HeaderZCCLOSEDIALOG uint16 = 0x00b6
+	// M16: NPC shop interaction. CZ_ACK_SELECT_DEALTYPE / ZC_SELECT_DEALTYPE
+	// carry the deal-type selection (Buy / Sell / Cancel) that follows
+	// CZ_CONTACTNPC for shop-type NPCs. CZ_PC_PURCHASE_ITEMLIST /
+	// ZC_PC_PURCHASE_ITEMLIST carry the buy item list and the player's
+	// purchase request. ZC_PC_PURCHASE_RESULT acknowledges the purchase
+	// outcome (success / not enough zeny / not enough slots / overweight).
+	// Sources cited per constant; the modern pre-Renewal / Renewal shop
+	// opcodes are in rathena/src/map/clif_packetdb.hpp.
+	HeaderCZACKSELECTDEALTYPE       uint16 = 0x00c5 // CZ_ACK_SELECT_DEALTYPE
+	HeaderCZPCPURCHASEITEMLIST      uint16 = 0x00c8 // CZ_PC_PURCHASE_ITEMLIST
+	HeaderZCSELECTDEALTYPE          uint16 = 0x00c4 // ZC_SELECT_DEALTYPE
+	HeaderZCPCPURCHASEITEMLIST      uint16 = 0x0b77 // ZC_PC_PURCHASE_ITEMLIST (PACKETVER >= 20210203)
+	HeaderZCPCPURCHASERESULT        uint16 = 0x00ca // ZC_PC_PURCHASE_RESULT
 	HeaderZCSTATUS                  uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
 	HeaderZCPARCHANGE               uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
 	HeaderZCLONGPARCHANGE           uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
@@ -279,6 +292,26 @@ const (
 	// sizeZCCloseDialog = int16 packetType + uint32 NpcID = 2+4 = 6
 	// (rathena/src/map/clif_packetdb.hpp:58).
 	sizeZCCloseDialog = 6
+	// sizeZCSelectDealtype = int16 packetType + uint32 NpcID = 2+4 = 6
+	// (rathena/src/map/packets.hpp: ZC_SELECT_DEALTYPE).
+	sizeZCSelectDealtype = 6
+	// sizeCZAckSelectDealtype = int16 packetType + uint32 NpcID +
+	// uint8 type = 2+4+1 = 7 (rathena/src/map/clif_packetdb.hpp —
+	// CZ_ACK_SELECT_DEALTYPE).
+	sizeCZAckSelectDealtype = 7
+	// sizeShopBuyItem is the per-item size in ZC_PC_PURCHASE_ITEMLIST:
+	// uint32 itemId + uint32 price + uint32 discountPrice +
+	// uint8 itemType + uint16 viewSprite + uint32 location = 4+4+4+1+2+4 = 19
+	// (rathena/src/map/packets_struct.hpp: PACKET_ZC_PC_PURCHASE_ITEMLIST
+	// / ITEM_INFO entry, PACKETVER >= 20210203).
+	sizeShopBuyItem = 19
+	// sizeShopBuyEntry is the per-entry size in CZ_PC_PURCHASE_ITEMLIST:
+	// uint32 itemId + uint16 amount = 4+2 = 6 (rathena/src/map/
+	// clif_packetdb.hpp — CZ_PC_PURCHASE_ITEMLIST).
+	sizeShopBuyEntry = 6
+	// sizeZCPCPurchaseResult = int16 packetType + uint8 result = 2+1 = 3
+	// (rathena/src/map/packets.hpp: ZC_PC_PURCHASE_RESULT).
+	sizeZCPCPurchaseResult = 3
 )
 
 // NewMapServerDB returns a packet database pre-populated with all known
@@ -538,6 +571,40 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCCLOSEDIALOG,
 		Name:      "ZC_CLOSE_DIALOG",
 		Length:    sizeZCCloseDialog,
+		Direction: DirectionServerToClient,
+	})
+	// M16: NPC shop interaction — CZ_ACK_SELECT_DEALTYPE (fixed 7 bytes),
+	// CZ_PC_PURCHASE_ITEMLIST (variable length), ZC_SELECT_DEALTYPE
+	// (fixed 6 bytes), ZC_PC_PURCHASE_ITEMLIST (variable length),
+	// ZC_PC_PURCHASE_RESULT (fixed 3 bytes).
+	db.Register(Definition{
+		ID:        HeaderCZACKSELECTDEALTYPE,
+		Name:      "CZ_ACK_SELECT_DEALTYPE",
+		Length:    sizeCZAckSelectDealtype,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZPCPURCHASEITEMLIST,
+		Name:      "CZ_PC_PURCHASE_ITEMLIST",
+		Length:    VariableLength,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCSELECTDEALTYPE,
+		Name:      "ZC_SELECT_DEALTYPE",
+		Length:    sizeZCSelectDealtype,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCPCPURCHASEITEMLIST,
+		Name:      "ZC_PC_PURCHASE_ITEMLIST",
+		Length:    VariableLength,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCPCPURCHASERESULT,
+		Name:      "ZC_PC_PURCHASE_RESULT",
+		Length:    sizeZCPCPurchaseResult,
 		Direction: DirectionServerToClient,
 	})
 

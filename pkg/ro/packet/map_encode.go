@@ -1039,3 +1039,135 @@ func (r CloseDialogResponse) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// SelectDealtypeResponse encodes a ZC_SELECT_DEALTYPE packet (command
+// 0x00c4, 6 bytes fixed). The server sends this after CZ_CONTACTNPC
+// for shop-type NPCs so the client can pop up the Buy / Sell / Cancel
+// deal-type selector. Dialog-type NPCs use the M15 dialog flow
+// (ZC_SAY_DIALOG2 + ZC_WAIT_DIALOG2) instead.
+//
+// Wire layout (rathena/src/map/packets.hpp: ZC_SELECT_DEALTYPE):
+//
+//	int16  packetType (0x00c4)
+//	uint32 NpcID
+type SelectDealtypeResponse struct {
+	// NpcID is the NPC entity ID the deal window is for.
+	NpcID uint32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 6).
+func (r SelectDealtypeResponse) Size() int {
+	return sizeZCSelectDealtype
+}
+
+// Encode writes the ZC_SELECT_DEALTYPE packet to w.
+func (r SelectDealtypeResponse) Encode(w io.Writer) error {
+	var buf [sizeZCSelectDealtype]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSELECTDEALTYPE)
+	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_SELECT_DEALTYPE: %w", err)
+	}
+	return nil
+}
+
+// ShopBuyItem is the per-item entry in a ZC_PC_PURCHASE_ITEMLIST
+// packet (rathena/src/map/packets_struct.hpp ITEM_INFO / PACKETVER >=
+// 20210203). The on-wire size is 19 bytes:
+//
+//	uint32 itemId        // item database ID
+//	uint32 price         // base price in zeny
+//	uint32 discountPrice // discounted price (often equal to price)
+//	uint8  itemType      // 0=healing, 2=etc, 3=weapon, 4=armor, 5=card, 6=pet egg / ammunition
+//	uint16 viewSprite    // sprite number for equipment
+//	uint32 location      // equip location bitmask (EQP_* rAthena flags)
+type ShopBuyItem struct {
+	// ItemID is the item database ID.
+	ItemID uint32
+	// Price is the base price in zeny.
+	Price uint32
+	// DiscountPrice is the discounted price in zeny (often equal to
+	// Price when the shop is not running a discount).
+	DiscountPrice uint32
+	// ItemType is the rAthena IT_* type byte (0=healing, 2=etc,
+	// 3=weapon, 4=armor, 5=card, 6=pet egg/ammunition).
+	ItemType uint8
+	// ViewSprite is the sprite number rAthena's client uses to render
+	// the item icon for equipment (0 for non-equippable items).
+	ViewSprite uint16
+	// Location is the EQP_* bitmask rAthena uses to restrict where the
+	// item can be equipped (0 for non-equippable items).
+	Location uint32
+}
+
+// PurchaseItemListResponse encodes a ZC_PC_PURCHASE_ITEMLIST packet
+// (command 0x0b77, variable length, PACKETVER >= 20210203). The server
+// sends this in response to CZ_ACK_SELECT_DEALTYPE (type=Buy) so the
+// client can pop up the buy window with the NPC's stock list.
+//
+// Wire layout (rathena/src/map/packets_struct.hpp:
+// PACKET_ZC_PC_PURCHASE_ITEMLIST, PACKETVER >= 20210203):
+//
+//	int16  packetType   (0x0b77)
+//	int16  packetLength (4 + 19 * len(Items))
+//	[per item, 19 bytes:] ShopBuyItem
+type PurchaseItemListResponse struct {
+	// Items is the list of items the NPC has for sale.
+	Items []ShopBuyItem
+}
+
+// Encode writes the ZC_PC_PURCHASE_ITEMLIST packet to w. The wire
+// length is 4 + 19 * len(Items); the encoder computes packetLength
+// from the entry count so the caller cannot accidentally emit a frame
+// whose length slot disagrees with the trailing bytes.
+func (r PurchaseItemListResponse) Encode(w io.Writer) error {
+	total := 4 + len(r.Items)*sizeShopBuyItem
+	if total > 0xffff {
+		return fmt.Errorf("packet: write ZC_PC_PURCHASE_ITEMLIST: too many items (%d)", len(r.Items))
+	}
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCPURCHASEITEMLIST)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	for i, it := range r.Items {
+		off := 4 + i*sizeShopBuyItem
+		binary.LittleEndian.PutUint32(buf[off:off+4], it.ItemID)
+		binary.LittleEndian.PutUint32(buf[off+4:off+8], it.Price)
+		binary.LittleEndian.PutUint32(buf[off+8:off+12], it.DiscountPrice)
+		buf[off+12] = it.ItemType
+		binary.LittleEndian.PutUint16(buf[off+13:off+15], it.ViewSprite)
+		binary.LittleEndian.PutUint32(buf[off+15:off+19], it.Location)
+	}
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_PC_PURCHASE_ITEMLIST: %w", err)
+	}
+	return nil
+}
+
+// PurchaseResultResponse encodes a ZC_PC_PURCHASE_RESULT packet
+// (command 0x00ca, 3 bytes fixed). The server sends this to acknowledge
+// a CZ_PC_PURCHASE_ITEMLIST request.
+//
+// Wire layout (rathena/src/map/packets.hpp: ZC_PC_PURCHASE_RESULT):
+//
+//	int16 packetType (0x00ca)
+//	uint8 result     (0=success, 1=zeny/weight/slots failed)
+type PurchaseResultResponse struct {
+	// Result is the purchase outcome byte (0=success, 1=failed).
+	Result uint8
+}
+
+// Size returns the on-wire byte length that Encode will write (always 3).
+func (r PurchaseResultResponse) Size() int {
+	return sizeZCPCPurchaseResult
+}
+
+// Encode writes the ZC_PC_PURCHASE_RESULT packet to w.
+func (r PurchaseResultResponse) Encode(w io.Writer) error {
+	var buf [sizeZCPCPurchaseResult]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCPURCHASERESULT)
+	buf[2] = r.Result
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_PC_PURCHASE_RESULT: %w", err)
+	}
+	return nil
+}

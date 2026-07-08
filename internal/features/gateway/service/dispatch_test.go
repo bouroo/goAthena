@@ -2589,3 +2589,350 @@ func TestDispatchHandler_CZCloseDialog_PreAuthGuard_DropsSilently(t *testing.T) 
 		t.Fatalf("responder wrote %d bytes for pre-auth close dialog, want 0 (drop)", got)
 	}
 }
+
+// M16: NPC shop interaction tests.
+
+// TestDispatchHandler_CZContactNPC_ShopNPC_SendsSelectDealtype ensures
+// the dispatcher opens the deal-type window (ZC_SELECT_DEALTYPE) when a
+// shop-type NPC is clicked. The Weapon Shop NPC (GID 110000002) is
+// ShopType=1 with 4 stock items.
+func TestDispatchHandler_CZContactNPC_ShopNPC_SendsSelectDealtype(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	req := packet.CZContactNPCRequest{AID: 110000002, Type: 0x01}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_CONTACTNPC: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZCONTACTNPC, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	const wantLen = 6 // sizeZCSelectDealtype
+	if len(out) != wantLen {
+		t.Fatalf("responder wrote %d bytes, want %d (ZC_SELECT_DEALTYPE)", len(out), wantLen)
+	}
+
+	// Header: 0x00c4 LE.
+	if out[0] != 0xc4 || out[1] != 0x00 {
+		t.Fatalf("header bytes = %02x %02x, want c4 00 (LE 0x00c4)", out[0], out[1])
+	}
+	if nid := binary.LittleEndian.Uint32(out[2:6]); nid != 110000002 {
+		t.Errorf("NpcID = %d, want 110000002 (Weapon Shop)", nid)
+	}
+}
+
+// TestDispatchHandler_CZAckSelectDealType_Buy_SendsPurchaseItemList
+// ensures the dispatcher sends ZC_PC_PURCHASE_ITEMLIST with the NPC's
+// stock list when the client picks "Buy" (type=0).
+func TestDispatchHandler_CZAckSelectDealType_Buy_SendsPurchaseItemList(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	req := packet.CZAckSelectDealTypeRequest{NpcID: 110000002, Type: 0x00} // Buy
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACK_SELECT_DEALTYPE: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACKSELECTDEALTYPE, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+
+	// Header: 0x0b77 LE.
+	if out[0] != 0x77 || out[1] != 0x0b {
+		t.Fatalf("header bytes = %02x %02x, want 77 0b (LE 0x0b77)", out[0], out[1])
+	}
+	plen := int(binary.LittleEndian.Uint16(out[2:4]))
+	const wantItemCount = 4
+	const shopBuyItemWireSize = 19 // per-item size in ZC_PC_PURCHASE_ITEMLIST
+	wantLen := 4 + wantItemCount*shopBuyItemWireSize
+	if plen != wantLen {
+		t.Errorf("packetLength = %d, want %d (%d items × %d bytes + header)",
+			plen, wantLen, wantItemCount, shopBuyItemWireSize)
+	}
+	if len(out) != wantLen {
+		t.Fatalf("responder wrote %d bytes, want %d", len(out), wantLen)
+	}
+
+	// Spot-check the items match the Weapon Shop stock list.
+	type wantItem struct {
+		itemID uint32
+		price  uint32
+		itemTy uint8
+		sprite uint16
+		loc    uint32
+	}
+	wants := []wantItem{
+		{501, 50, 0, 0, 0},
+		{502, 200, 0, 0, 0},
+		{1201, 500, 3, 1, 2},
+		{1101, 1500, 3, 2, 2},
+	}
+	for i, w := range wants {
+		off := 4 + i*shopBuyItemWireSize
+		if id := binary.LittleEndian.Uint32(out[off : off+4]); id != w.itemID {
+			t.Errorf("item[%d] itemId = %d, want %d", i, id, w.itemID)
+		}
+		if price := binary.LittleEndian.Uint32(out[off+4 : off+8]); price != w.price {
+			t.Errorf("item[%d] price = %d, want %d", i, price, w.price)
+		}
+		if ty := out[off+12]; ty != w.itemTy {
+			t.Errorf("item[%d] itemType = %d, want %d", i, ty, w.itemTy)
+		}
+		if sprite := binary.LittleEndian.Uint16(out[off+13 : off+15]); sprite != w.sprite {
+			t.Errorf("item[%d] viewSprite = %d, want %d", i, sprite, w.sprite)
+		}
+		if loc := binary.LittleEndian.Uint32(out[off+15 : off+19]); loc != w.loc {
+			t.Errorf("item[%d] location = %d, want %d", i, loc, w.loc)
+		}
+	}
+}
+
+// TestDispatchHandler_CZAckSelectDealType_Sell_NoResponse ensures the
+// dispatcher does not write any response when the client picks "Sell"
+// (type=1) — the sell flow is deferred until the inventory system
+// lands.
+func TestDispatchHandler_CZAckSelectDealType_Sell_NoResponse(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	req := packet.CZAckSelectDealTypeRequest{NpcID: 110000002, Type: 0x01} // Sell
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACK_SELECT_DEALTYPE: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACKSELECTDEALTYPE, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for Sell, want 0 (sell deferred)", got)
+	}
+}
+
+// TestDispatchHandler_CZAckSelectDealType_Cancel_NoResponse ensures the
+// dispatcher does not write any response when the client picks
+// "Cancel" (type=2) — the client closes the deal window locally.
+func TestDispatchHandler_CZAckSelectDealType_Cancel_NoResponse(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	req := packet.CZAckSelectDealTypeRequest{NpcID: 110000002, Type: 0x02} // Cancel
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACK_SELECT_DEALTYPE: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACKSELECTDEALTYPE, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for Cancel, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZAckSelectDealType_UnknownNPC_NoResponse ensures
+// the dispatcher does not write any response for a deal-type pick
+// against an NPC GID that is not in npcSpawns.
+func TestDispatchHandler_CZAckSelectDealType_UnknownNPC_NoResponse(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	req := packet.CZAckSelectDealTypeRequest{NpcID: 999999999, Type: 0x00}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACK_SELECT_DEALTYPE: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACKSELECTDEALTYPE, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for unknown NPC, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZAckSelectDealType_MalformedFrame_DropsSilently
+// ensures a truncated deal-type frame is dropped without writing any
+// reply.
+func TestDispatchHandler_CZAckSelectDealType_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 2-byte frame is shorter than the 7-byte CZ_ACK_SELECT_DEALTYPE.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACKSELECTDEALTYPE, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZAckSelectDealType_PreAuthGuard_DropsSilently
+// ensures the pre-auth guard rejects deal-type picks from a connection
+// that has not yet completed CZ_ENTER.
+func TestDispatchHandler_CZAckSelectDealType_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+
+	req := packet.CZAckSelectDealTypeRequest{NpcID: 110000002, Type: 0x00}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACK_SELECT_DEALTYPE: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACKSELECTDEALTYPE, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth deal type, want 0 (drop)", got)
+	}
+}
+
+// TestDispatchHandler_CZPCPurchaseItemList_EncodesZCPCPurchaseResult
+// ensures the dispatcher replies with ZC_PC_PURCHASE_RESULT (result=0)
+// when a client submits a purchase list. zeny deduction / inventory
+// mutation is deferred.
+func TestDispatchHandler_CZPCPurchaseItemList_EncodesZCPCPurchaseResult(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+
+	req := packet.CZPCPurchaseItemListRequest{
+		Entries: []packet.CZPCPurchaseItemListEntry{
+			{ItemID: 501, Amount: 1},
+		},
+	}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_PC_PURCHASE_ITEMLIST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZPCPURCHASEITEMLIST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	const wantLen = 3 // sizeZCPCPurchaseResult
+	if len(out) != wantLen {
+		t.Fatalf("responder wrote %d bytes, want %d (ZC_PC_PURCHASE_RESULT)", len(out), wantLen)
+	}
+
+	// Header: 0x00ca LE.
+	if out[0] != 0xca || out[1] != 0x00 {
+		t.Fatalf("header bytes = %02x %02x, want ca 00 (LE 0x00ca)", out[0], out[1])
+	}
+	// Result at [2] = 0 (success).
+	if out[2] != 0x00 {
+		t.Errorf("result = %d, want 0 (success)", out[2])
+	}
+}
+
+// TestDispatchHandler_CZPCPurchaseItemList_MalformedFrame_DropsSilently
+// ensures a truncated purchase-list frame is dropped without writing
+// any reply. A 5-byte body (4-byte header + 1 stray byte) is
+// misaligned and must be rejected by the parser.
+func TestDispatchHandler_CZPCPurchaseItemList_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 4-byte header with 1 stray byte (5 total) — misaligned.
+	frame := make([]byte, 5)
+	binary.LittleEndian.PutUint16(frame[0:], packet.HeaderCZPCPURCHASEITEMLIST)
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZPCPURCHASEITEMLIST, frame); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZPCPurchaseItemList_PreAuthGuard_DropsSilently
+// ensures the pre-auth guard rejects purchase requests from a
+// connection that has not yet completed CZ_ENTER.
+func TestDispatchHandler_CZPCPurchaseItemList_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+
+	req := packet.CZPCPurchaseItemListRequest{
+		Entries: []packet.CZPCPurchaseItemListEntry{
+			{ItemID: 501, Amount: 1},
+		},
+	}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_PC_PURCHASE_ITEMLIST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZPCPURCHASEITEMLIST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth purchase, want 0 (drop)", got)
+	}
+}

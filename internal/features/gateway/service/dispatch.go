@@ -18,9 +18,12 @@
 //   - CZ_REQ_EMOTION (0x00bf)       → ZC_EMOTION (single-player echo; no AOI)
 //   - CZ_GETCHARNAMEREQUEST (0x0094) → ZC_ACK_REQNAME (name lookup by GID)
 //   - CZ_RESTART (0x00b2)            → logged (state transition deferred)
-//   - CZ_CONTACTNPC (0x0090)         → ZC_SAY_DIALOG2 + ZC_WAIT_DIALOG2 (hardcoded dialog)
+//   - CZ_CONTACTNPC (0x0090)         → ZC_SAY_DIALOG2 + ZC_WAIT_DIALOG2 (dialog NPC)
+//                                  or ZC_SELECT_DEALTYPE (shop NPC)
 //   - CZ_REQNEXTSCRIPT (0x00b9)      → ZC_SAY_DIALOG2 + ZC_CLOSE_DIALOG (dialog continuation)
 //   - CZ_CLOSE_DIALOG (0x0146)       → logged (client closes dialog locally)
+//   - CZ_ACK_SELECT_DEALTYPE (0x00c5) → ZC_PC_PURCHASE_ITEMLIST (Buy) / logged (Sell / Cancel)
+//   - CZ_PC_PURCHASE_ITEMLIST (0x00c8) → ZC_PC_PURCHASE_RESULT (always success; zeny / inventory deferred)
 //   - everything else              → debug-logged, connection kept alive.
 
 package service
@@ -161,17 +164,32 @@ func (h *DispatchHandler) handleMapPacket(ctx context.Context, conn *domain.Conn
 		return h.handleCZGetCharNameRequest(ctx, conn, resp, frame)
 	case packet.HeaderCZRESTART:
 		return h.handleCZRestart(ctx, conn, resp, frame)
+	default:
+		return h.handleMapPacketNPC(ctx, conn, resp, cmd, frame)
+	}
+}
+
+// handleMapPacketNPC dispatches the NPC-interaction (M15 dialog + M16
+// shop) sub-group of map-phase packets. Extracted from
+// handleMapPacket to keep that function's switch under the gocyclo
+// limit (the table grew past 15 cases in M16).
+func (h *DispatchHandler) handleMapPacketNPC(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
+	switch cmd {
 	case packet.HeaderCZCONTACTNPC:
 		return h.handleCZContactNPC(ctx, conn, resp, frame)
 	case packet.HeaderCZREQNEXTSCRIPT:
 		return h.handleCZReqNextScript(ctx, conn, resp, frame)
 	case packet.HeaderCZCLOSEDIALOG:
 		return h.handleCZCloseDialog(ctx, conn, resp, frame)
+	case packet.HeaderCZACKSELECTDEALTYPE:
+		return h.handleCZAckSelectDealType(ctx, conn, resp, frame)
+	case packet.HeaderCZPCPURCHASEITEMLIST:
+		return h.handleCZPCPurchaseItemList(ctx, conn, resp, frame)
 	default:
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
 			Uint16("cmd", cmd).
-			Msg("unhandled login/char packet")
+			Msg("unhandled map packet")
 		return nil
 	}
 }
@@ -1565,14 +1583,18 @@ func (h *DispatchHandler) handleCZRestart(_ context.Context, conn *domain.Connec
 
 // handleCZContactNPC responds to CZ_CONTACTNPC (0x0090) — the client
 // clicking on an NPC. The handler looks up the NPC in the hardcoded
-// npcSpawns slice by GID and sends a two-packet dialog sequence:
+// npcSpawns slice by GID and branches on the NPC's ShopType:
 //
-//  1. ZC_SAY_DIALOG2 with a welcome message
-//  2. ZC_WAIT_DIALOG2 to show the "Next" button
+//   - ShopType == 1 (shop NPC): send ZC_SELECT_DEALTYPE so the client
+//     pops up the Buy / Sell / Cancel deal-type selector. Sell is
+//     deferred (M16 only supports Buy); Cancel is a no-op response.
+//   - ShopType == 0 (dialog NPC): send the M15 dialog sequence
+//     (ZC_SAY_DIALOG2 + ZC_WAIT_DIALOG2).
 //
 // If the NPC GID is not found in npcSpawns, the handler logs a warning
 // and returns nil (no response). The full script engine (DEL-04) is
-// deferred to Phase 3; M15 provides hardcoded dialog text for each NPC.
+// deferred to Phase 3; M15/M16 provide hardcoded dialog text and a
+// hardcoded stock list for each NPC.
 func (h *DispatchHandler) handleCZContactNPC(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZContactNPC(frame)
 	if err != nil {
@@ -1592,14 +1614,14 @@ func (h *DispatchHandler) handleCZContactNPC(_ context.Context, conn *domain.Con
 		return nil
 	}
 
-	var npcName string
-	for _, npc := range npcSpawns {
-		if npc.GID == req.AID {
-			npcName = npc.Name
+	var npc *npcSpawn
+	for i := range npcSpawns {
+		if npcSpawns[i].GID == req.AID {
+			npc = &npcSpawns[i]
 			break
 		}
 	}
-	if npcName == "" {
+	if npc == nil {
 		h.logger.Warn().
 			Uint64("conn", conn.ID).
 			Uint32("npc_aid", req.AID).
@@ -1607,10 +1629,36 @@ func (h *DispatchHandler) handleCZContactNPC(_ context.Context, conn *domain.Con
 		return nil
 	}
 
+	if npc.ShopType == 1 {
+		// Shop NPC — open the deal-type window.
+		selectDt := packet.SelectDealtypeResponse{NpcID: req.AID}
+		var buf bytes.Buffer
+		if err := selectDt.Encode(&buf); err != nil {
+			h.logger.Error().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint32("npc_aid", req.AID).
+				Str("npc_name", npc.Name).
+				Msg("encode ZC_SELECT_DEALTYPE failed; dropping packet")
+			return nil
+		}
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("npc_aid", req.AID).
+			Str("npc_name", npc.Name).
+			Int("shop_items", len(npc.ShopItems)).
+			Msg("NPC shop opened")
+		if err := resp.SendPacket(buf.Bytes()); err != nil {
+			return fmt.Errorf("send ZC_SELECT_DEALTYPE: %w", err)
+		}
+		return nil
+	}
+
+	// Dialog NPC — M15 welcome sequence.
 	say := packet.SayDialog2Response{
 		NpcID:   req.AID,
 		Type:    0,
-		Message: "Welcome to goAthena! This is " + npcName + ".",
+		Message: "Welcome to goAthena! This is " + npc.Name + ".",
 	}
 	var sayBuf bytes.Buffer
 	if err := say.Encode(&sayBuf); err != nil {
@@ -1639,7 +1687,7 @@ func (h *DispatchHandler) handleCZContactNPC(_ context.Context, conn *domain.Con
 	h.logger.Info().
 		Uint64("conn", conn.ID).
 		Uint32("npc_aid", req.AID).
-		Str("npc_name", npcName).
+		Str("npc_name", npc.Name).
 		Msg("NPC dialog started")
 
 	if err := resp.SendPacket(sayBuf.Bytes()); err != nil {
@@ -1647,6 +1695,157 @@ func (h *DispatchHandler) handleCZContactNPC(_ context.Context, conn *domain.Con
 	}
 	if err := resp.SendPacket(waitBuf.Bytes()); err != nil {
 		return fmt.Errorf("send ZC_WAIT_DIALOG2: %w", err)
+	}
+	return nil
+}
+
+// handleCZAckSelectDealType responds to CZ_ACK_SELECT_DEALTYPE (0x00c5)
+// — the client picking Buy / Sell / Cancel in the deal-type window
+// opened by ZC_SELECT_DEALTYPE. The handler dispatches on the type
+// byte:
+//
+//	0x00 = Buy  → ZC_PC_PURCHASE_ITEMLIST (the NPC's stock)
+//	0x01 = Sell → logged, no response (sell flow deferred)
+//	0x02 = Cancel → logged, no response
+//
+// Unknown type bytes are treated like Cancel (logged + dropped) so a
+// client sending a malformed selector does not break the connection.
+// NPCs that are not in npcSpawns (e.g. the client typed a bogus
+// NpcID) are also dropped without response.
+func (h *DispatchHandler) handleCZAckSelectDealType(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZAckSelectDealType(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_ACK_SELECT_DEALTYPE; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Msg("CZ_ACK_SELECT_DEALTYPE without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	var npc *npcSpawn
+	for i := range npcSpawns {
+		if npcSpawns[i].GID == req.NpcID {
+			npc = &npcSpawns[i]
+			break
+		}
+	}
+	if npc == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Msg("CZ_ACK_SELECT_DEALTYPE for unknown NPC GID; dropping")
+		return nil
+	}
+
+	switch req.Type {
+	case 0x00:
+		// Buy — send the NPC's stock list.
+		items := make([]packet.ShopBuyItem, 0, len(npc.ShopItems))
+		for _, it := range npc.ShopItems {
+			items = append(items, packet.ShopBuyItem(it))
+		}
+		list := packet.PurchaseItemListResponse{Items: items}
+		var buf bytes.Buffer
+		if err := list.Encode(&buf); err != nil {
+			h.logger.Error().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint32("npc_id", req.NpcID).
+				Str("npc_name", npc.Name).
+				Int("shop_items", len(items)).
+				Msg("encode ZC_PC_PURCHASE_ITEMLIST failed; dropping packet")
+			return nil
+		}
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Str("npc_name", npc.Name).
+			Int("shop_items", len(items)).
+			Msg("NPC shop buy list sent")
+		if err := resp.SendPacket(buf.Bytes()); err != nil {
+			return fmt.Errorf("send ZC_PC_PURCHASE_ITEMLIST: %w", err)
+		}
+		return nil
+	case 0x01:
+		// Sell — deferred until the inventory system lands.
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Str("npc_name", npc.Name).
+			Msg("NPC shop sell requested (deferred)")
+		return nil
+	case 0x02:
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Str("npc_name", npc.Name).
+			Msg("NPC shop deal cancelled by client")
+		return nil
+	default:
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Uint8("type", req.Type).
+			Msg("CZ_ACK_SELECT_DEALTYPE unknown type; dropping")
+		return nil
+	}
+}
+
+// handleCZPCPurchaseItemList responds to CZ_PC_PURCHASE_ITEMLIST
+// (0x00c8) — the player's purchase request. The handler logs the
+// entries and replies with ZC_PC_PURCHASE_RESULT carrying result=0
+// (success) so the client closes the buy window cleanly. Actual zeny
+// deduction and inventory mutation are deferred until the inventory
+// system lands; the current path is a no-op-on-success acknowledgement
+// used to keep the M16 happy-path exercisable end-to-end.
+func (h *DispatchHandler) handleCZPCPurchaseItemList(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZPCPurchaseItemList(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_PC_PURCHASE_ITEMLIST; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Int("entries", len(req.Entries)).
+			Msg("CZ_PC_PURCHASE_ITEMLIST without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("aid", conn.AccountID).
+		Int("entries", len(req.Entries)).
+		Msg("NPC shop purchase requested (zeny/inventory deferred; result=success)")
+
+	result := packet.PurchaseResultResponse{Result: 0}
+	var buf bytes.Buffer
+	if err := result.Encode(&buf); err != nil {
+		// PurchaseResultResponse.Encode cannot fail in practice (no
+		// variable-width fields), but wrapcheck requires every
+		// external error be wrapped — log and drop.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Msg("encode ZC_PC_PURCHASE_RESULT failed; dropping packet")
+		return nil
+	}
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_PC_PURCHASE_RESULT: %w", err)
 	}
 	return nil
 }
