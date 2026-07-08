@@ -13,6 +13,7 @@ import (
 	"github.com/bouroo/goAthena/internal/config"
 	"github.com/bouroo/goAthena/internal/features/zone/di"
 	"github.com/bouroo/goAthena/internal/infrastructure/agones"
+	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
 )
 
 func TestRegister_ReturnsNil(t *testing.T) {
@@ -54,6 +55,14 @@ func TestRegister_ReturnsNil(t *testing.T) {
 	do.ProvideValue(c, &l)
 	var ag agones.Lifecycle = agones.NewLocal(&l)
 	do.ProvideValue(c, ag)
+
+	// The zone DI requires *natsinfra.Client because it wires a NATS
+	// Publisher; this unit test does not exercise the broadcast path,
+	// so a nil client is fine — the natsPublisher adapter short-circuits
+	// with a wrapped error if Publish is ever called with c==nil. No tick
+	// loop is started in this test, so no publish ever fires.
+	var nc *natsinfra.Client
+	do.ProvideValue(c, nc)
 
 	require.NoError(t, di.Register(c))
 }

@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package zone.v1;
+
+option go_package = "github.com/bouroo/goAthena/api/pb/zone/v1;zonev1";
+
+// ZoneEvent represents an event occurring within a zone (map).
+// These events are broadcast via NATS.
+message ZoneEvent {
+  oneof event {
+    EntityMoved moved = 1;
+    EntitySpawned spawned = 2;
+    EntityVanished vanished = 3;
+  }
+}
+
+// EntityMoved indicates an entity has started moving to a new cell.
+message EntityMoved {
+  uint32 entity_id = 1;
+  uint32 dest_x = 2;
+  uint32 dest_y = 3;
+  uint32 src_x = 4;
+  uint32 src_y = 5;
+  uint64 move_start_time = 6; // Unix timestamp in milliseconds
+}
+
+// EntitySpawned indicates an entity appeared in the map.
+message EntitySpawned {
+  uint32 entity_id = 1;
+  uint32 entity_type = 2; // Matches domain.EntityType
+  uint32 x = 3;
+  uint32 y = 4;
+  string name = 5;
+}
+
+// EntityVanished indicates an entity disappeared from the map.
+message EntityVanished {
+  uint32 entity_id = 1;
+  uint32 type = 2; // 0=out of sight, 1=logged out, 2=teleported, etc.
+}

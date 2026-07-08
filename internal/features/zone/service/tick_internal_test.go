@@ -27,7 +27,7 @@ func silentLogger() *zerolog.Logger {
 func newTickLoop(t *testing.T, w, h int, tickRate time.Duration) *TickLoop {
 	t.Helper()
 	md := newSyntheticMapSized(w, h)
-	tl := NewTickLoop(md, tickRate, silentLogger())
+	tl := NewTickLoop(md, tickRate, silentLogger(), nopPublisher{})
 	require.NotNil(t, tl)
 	return tl
 }
@@ -148,7 +148,7 @@ func TestTickLoop_StartIsIdempotent(t *testing.T) {
 func TestTickLoop_PathComputation(t *testing.T) {
 	t.Parallel()
 	md := newSyntheticMapSized(50, 50)
-	tl := NewTickLoop(md, 50*time.Millisecond, silentLogger())
+	tl := NewTickLoop(md, 50*time.Millisecond, silentLogger(), nopPublisher{})
 
 	e := &domain.Entity{ID: 1, Type: domain.EntityMob, X: 5, Y: 5, MoveSpeed: 150}
 	ctx := context.Background()

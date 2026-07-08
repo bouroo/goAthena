@@ -25,18 +25,20 @@ import (
 	"github.com/bouroo/goAthena/internal/features/zone/handler"
 	"github.com/bouroo/goAthena/internal/features/zone/service"
 	"github.com/bouroo/goAthena/internal/infrastructure/agones"
+	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
 	"github.com/bouroo/goAthena/internal/shared/server"
 	"github.com/bouroo/goAthena/pkg/ro/romap"
 )
 
 // Register wires the zone feature (map instances, AOI, tick loop,
 // pathfinding, gRPC transport) into the DI container. It depends on
-// *config.Config, *zerolog.Logger and agones.Lifecycle being already
-// registered.
+// *config.Config, *zerolog.Logger, agones.Lifecycle, and *natsinfra.Client
+// being already registered.
 func Register(c do.Injector) error {
 	cfg := do.MustInvoke[*config.Config](c)
 	logger := do.MustInvoke[*zerolog.Logger](c)
 	ag := do.MustInvoke[agones.Lifecycle](c)
+	nc := do.MustInvoke[*natsinfra.Client](c)
 
 	md, err := loadMap(cfg.Zone.MapDir, cfg.Zone.DefaultMap)
 	if err != nil {
@@ -51,7 +53,7 @@ func Register(c do.Injector) error {
 		md = syntheticMap(cfg.Zone.DefaultMap)
 	}
 
-	tickLoop := service.NewTickLoop(md, cfg.Zone.TickRate, logger)
+	tickLoop := service.NewTickLoop(md, cfg.Zone.TickRate, logger, NewNATSPublisher(nc))
 
 	zoneSvc := service.NewZoneService(
 		tickLoop,

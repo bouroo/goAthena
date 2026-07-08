@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/identity/domain"
 	zonedomain "github.com/bouroo/goAthena/internal/features/zone/domain"
@@ -25,6 +27,18 @@ func silentLogger() *zerolog.Logger {
 	l := zerolog.Nop()
 	return &l
 }
+
+// nopPublisher is a no-op domain.Publisher. The E2E suite exercises the
+// zone service's local API only (AddEntity / MoveEntity / GetVisible);
+// the broadcast path is asserted by separate unit tests against the
+// domain mock. The publisher is wired up only to satisfy NewTickLoop.
+type nopPublisher struct{}
+
+func (nopPublisher) PublishEvent(_ context.Context, _ string, _ proto.Message) error {
+	return nil
+}
+
+var _ zonedomain.Publisher = nopPublisher{}
 
 // newSyntheticMap builds a fully-walkable map data fixture suitable
 // for the zone service's tick loop + pathfinder. Mirrors the helper
@@ -51,7 +65,7 @@ func newSyntheticMap(name string, w, h int) *romap.MapData {
 func newLocalZoneService(t *testing.T) *service.ZoneService {
 	t.Helper()
 	md := newSyntheticMap("e2e_test", 64, 64)
-	tl := service.NewTickLoop(md, 50*time.Millisecond, silentLogger())
+	tl := service.NewTickLoop(md, 50*time.Millisecond, silentLogger(), nopPublisher{})
 	require.NotNil(t, tl)
 	zs := service.NewZoneService(tl, agones.NewLocal(silentLogger()), 150, 0, silentLogger())
 	require.NotNil(t, zs)

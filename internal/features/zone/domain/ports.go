@@ -3,6 +3,8 @@ package domain
 import (
 	"context"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/bouroo/goAthena/pkg/ro/romap"
 )
 
@@ -47,4 +49,19 @@ type MapRepository interface {
 	// LoadMap parses a map by name and returns its grid. Returns an error
 	// if the map files are missing or malformed.
 	LoadMap(ctx context.Context, name string) (*romap.MapData, error)
+}
+
+// Publisher is the outbound port for publishing zone events to the cluster.
+// Implementations marshal the proto message and publish it to the address
+// space their transport expects (currently: a NATS subject per map).
+//
+// All methods are context-aware so callers can apply request-scoped
+// deadlines or cancellation. Implementations must return wrapped errors
+// so the caller can use errors.Is / errors.As to inspect root causes.
+type Publisher interface {
+	// PublishEvent marshals event and publishes it to the given map's
+	// zone-event subject. The mapName selects the subject partition; the
+	// message is any protobuf message (typically a *zonev1.ZoneEvent
+	// carrying a Moved/Spawned/Vanished oneof).
+	PublishEvent(ctx context.Context, mapName string, event proto.Message) error
 }
