@@ -97,6 +97,18 @@ type DispatchHandler struct {
 	zonePort uint16
 	// respawnDelay is the time to wait before respawning a killed monster.
 	respawnDelay time.Duration
+
+	// areaSender is the on-enter area-spawner that lets a newly-entering
+	// player see every other session already on its map (rAthena's
+	// clif_getareachar_unit direction). It is set by the DI composition
+	// root after construction via SetAreaSender and remains nil in unit
+	// tests that do not exercise the broadcast path; the call-site
+	// (sendSelfSpawnAndUpdateRegistry) guards against a nil interface.
+	// Declared as the AreaSender interface (not *BroadcastSubscriber) so
+	// the dispatch handler does not depend on the NATS-backed
+	// implementation — a future in-process test double or a different
+	// transport can satisfy the same contract.
+	areaSender AreaSender
 }
 
 // NewDispatchHandler constructs a dispatch-backed PacketHandler.
@@ -133,6 +145,15 @@ func NewDispatchHandler(
 		registry:     registry,
 		respawnDelay: 5 * time.Second,
 	}
+}
+
+// SetAreaSender installs the broadcast area-spawner used to show a
+// newly-entering player the entities already present on its map. It is
+// set by the DI composition root after construction; the field is nil
+// in unit tests that do not exercise the broadcast path, and the
+// call-site guards against a nil interface.
+func (h *DispatchHandler) SetAreaSender(as AreaSender) {
+	h.areaSender = as
 }
 
 // HandlePacket dispatches a single decoded kRO packet. Parse errors on
@@ -715,6 +736,17 @@ func (h *DispatchHandler) sendSelfSpawnAndUpdateRegistry(
 			Uint64("conn", conn.ID).
 			Uint32("aid", req.AccountID).
 			Msg("send ZC_SPAWN_UNIT failed; map enter partially delivered")
+	}
+
+	// Tell the entering player about every other session already on this
+	// map (rAthena's clif_getareachar_unit direction). Without this the
+	// second player to enter would never see the first until the first
+	// moved, because the first's EntitySpawned event fired before this
+	// player existed. The area sender is nil in unit tests that bypass the
+	// broadcast path; a nil interface is guarded here (a nil *BroadcastSubscriber
+	// would be nil-receiver-safe, but the field is the interface type).
+	if h.areaSender != nil {
+		h.areaSender.SendAreaEntities(conn.MapName, conn.AccountID, resp)
 	}
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
 	"github.com/bouroo/goAthena/internal/features/gateway/handler"
 	"github.com/bouroo/goAthena/internal/features/gateway/service"
+	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -88,6 +89,28 @@ func Register(c do.Injector) error {
 		return service.NewSessionRegistry(), nil
 	})
 
+	// Broadcast subscriber: subscribes to zone.event.> over NATS and fans
+	// movement/spawn/vanish events out to observer sessions. The same
+	// instance backs the dispatch handler's on-enter area-spawn path via
+	// SetAreaSender. Requires *natsinfra.Client (registered by the app
+	// composition root via nats.Register) — lazy, so Register itself does
+	// not connect.
+	do.Provide(c, func(i do.Injector) (*service.BroadcastSubscriber, error) {
+		nc, err := do.Invoke[*natsinfra.Client](i)
+		if err != nil {
+			return nil, fmt.Errorf("resolve nats client for broadcast: %w", err)
+		}
+		registry, err := do.Invoke[service.SessionRegistry](i)
+		if err != nil {
+			return nil, err
+		}
+		logger, err := do.Invoke[*zerolog.Logger](i)
+		if err != nil {
+			return nil, err
+		}
+		return service.NewBroadcastSubscriber(nc, registry, *logger), nil
+	})
+
 	do.Provide(c, provideDispatchHandler)
 	do.Provide(c, provideTCPHandler)
 	do.Provide(c, provideWSHandler)
@@ -134,7 +157,21 @@ func provideDispatchHandler(i do.Injector) (domain.PacketHandler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildDispatchHandler(identityClient, zoneClient, cfg, *logger, registry)
+	h, err := buildDispatchHandler(identityClient, zoneClient, cfg, *logger, registry)
+	if err != nil {
+		return nil, err
+	}
+	// Wire the broadcast area-spawner onto the dispatch handler.
+	// Best-effort: a unit-test DI container that omits nats leaves the
+	// handler with a nil area sender (the call-site guards nil). Production
+	// always has the broadcaster — app.go registers nats before invoking
+	// the TCP/WS handlers.
+	if bs, bsErr := do.Invoke[*service.BroadcastSubscriber](i); bsErr == nil {
+		h.SetAreaSender(bs)
+	} else {
+		logger.Warn().Err(bsErr).Msg("gateway di: broadcast subscriber not resolved; on-enter area spawn disabled")
+	}
+	return h, nil
 }
 
 // provideTCPHandler wires the gnet TCP handler from the DI
