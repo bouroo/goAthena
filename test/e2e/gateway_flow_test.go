@@ -59,6 +59,12 @@ const (
 	// same struct layout as ZC_SPAWN_UNIT (0x09fe) but opcode 0x09ff.
 	// [2:cmd][2:packetLength][103:payload] = 107 bytes.
 	zcSetUnitIdleSize = 107
+	// zcWaitDialog2Size is the fixed length of ZC_WAIT_DIALOG2 (M15):
+	// [2:cmd=0x0973][4:NpcID][1:type] = 7 bytes.
+	zcWaitDialog2Size = 7
+	// zcCloseDialogSize is the fixed length of ZC_CLOSE_DIALOG (M15):
+	// [2:cmd=0x00b6][4:NpcID] = 6 bytes.
+	zcCloseDialogSize = 6
 )
 
 // acceptEnterHeaderSize is the fixed prefix length of HC_ACCEPT_ENTER
@@ -741,6 +747,164 @@ func stageCZRestart(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline
 	t.Logf("CZ_RESTART ok: no response (logged only)")
 }
 
+// stageCZContactNPC sends CZ_CONTACTNPC with a known NPC GID and
+// asserts the server responds with ZC_SAY_DIALOG2 + ZC_WAIT_DIALOG2.
+// Wire layout for ZC_SAY_DIALOG2 (0x0972):
+//
+//	[0:2]   cmd 0x0972
+//	[2:4]   packetLength (uint16 LE)
+//	[4:8]   NpcID (uint32 LE)
+//	[8]     type (uint8)
+//	[9:]    message (NUL-terminated)
+//
+// Wire layout for ZC_WAIT_DIALOG2 (0x0973):
+//
+//	[0:2]   cmd 0x0973
+//	[2:6]   NpcID (uint32 LE)
+//	[6]     type (uint8)
+func stageCZContactNPC(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, npcGID uint32, wantName string) {
+	t.Helper()
+	if err := (packet.CZContactNPCRequest{AID: npcGID, Type: 0x01}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_CONTACTNPC: %v", err)
+	}
+
+	// First response: ZC_SAY_DIALOG2.
+	cmd, sayFrame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_SAY_DIALOG2: %v", err)
+	}
+	if cmd != packet.HeaderZCSAYDIALOG2 {
+		t.Fatalf("CZ_CONTACTNPC response cmd = 0x%04x, want 0x%04x (ZC_SAY_DIALOG2); frame=% x",
+			cmd, packet.HeaderZCSAYDIALOG2, sayFrame)
+	}
+	sayLen := int(binary.LittleEndian.Uint16(sayFrame[2:4]))
+	if sayLen < 10 || sayLen > len(sayFrame) {
+		t.Fatalf("ZC_SAY_DIALOG2 packetLength = %d, want >= 10 (frame len=%d)", sayLen, len(sayFrame))
+	}
+	if nid := binary.LittleEndian.Uint32(sayFrame[4:8]); nid != npcGID {
+		t.Errorf("ZC_SAY_DIALOG2 NpcID = %d, want %d", nid, npcGID)
+	}
+	if sayFrame[8] != 0 {
+		t.Errorf("ZC_SAY_DIALOG2 type = %d, want 0", sayFrame[8])
+	}
+	gotMsg := cstrBytes(sayFrame[9:sayLen])
+	wantMsg := "Welcome to goAthena! This is " + wantName + "."
+	if gotMsg != wantMsg {
+		t.Errorf("ZC_SAY_DIALOG2 message = %q, want %q", gotMsg, wantMsg)
+	}
+
+	// Second response: ZC_WAIT_DIALOG2.
+	cmd, waitFrame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_WAIT_DIALOG2: %v", err)
+	}
+	if cmd != packet.HeaderZCWAITDIALOG2 {
+		t.Fatalf("CZ_CONTACTNPC second response cmd = 0x%04x, want 0x%04x (ZC_WAIT_DIALOG2); frame=% x",
+			cmd, packet.HeaderZCWAITDIALOG2, waitFrame)
+	}
+	if len(waitFrame) != zcWaitDialog2Size {
+		t.Fatalf("ZC_WAIT_DIALOG2 length = %d, want %d (frame=% x)",
+			len(waitFrame), zcWaitDialog2Size, waitFrame)
+	}
+	if nid := binary.LittleEndian.Uint32(waitFrame[2:6]); nid != npcGID {
+		t.Errorf("ZC_WAIT_DIALOG2 NpcID = %d, want %d", nid, npcGID)
+	}
+	if waitFrame[6] != 0 {
+		t.Errorf("ZC_WAIT_DIALOG2 type = %d, want 0", waitFrame[6])
+	}
+	t.Logf("CZ_CONTACTNPC ok: npc=%q gid=%d", wantName, npcGID)
+}
+
+// stageCZReqNextScript sends CZ_REQNEXTSCRIPT and asserts the server
+// responds with ZC_SAY_DIALOG2 + ZC_CLOSE_DIALOG.
+// Wire layout for ZC_CLOSE_DIALOG (0x00b6):
+//
+//	[0:2]   cmd 0x00b6
+//	[2:6]   NpcID (uint32 LE)
+func stageCZReqNextScript(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, npcID uint32) {
+	t.Helper()
+	if err := (packet.CZReqNextScriptRequest{NpcID: npcID}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_REQNEXTSCRIPT: %v", err)
+	}
+
+	// First response: ZC_SAY_DIALOG2.
+	cmd, sayFrame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_SAY_DIALOG2: %v", err)
+	}
+	if cmd != packet.HeaderZCSAYDIALOG2 {
+		t.Fatalf("CZ_REQNEXTSCRIPT response cmd = 0x%04x, want 0x%04x (ZC_SAY_DIALOG2); frame=% x",
+			cmd, packet.HeaderZCSAYDIALOG2, sayFrame)
+	}
+	sayLen := int(binary.LittleEndian.Uint16(sayFrame[2:4]))
+	if sayLen < 10 || sayLen > len(sayFrame) {
+		t.Fatalf("ZC_SAY_DIALOG2 packetLength = %d, want >= 10 (frame len=%d)", sayLen, len(sayFrame))
+	}
+	if nid := binary.LittleEndian.Uint32(sayFrame[4:8]); nid != npcID {
+		t.Errorf("ZC_SAY_DIALOG2 NpcID = %d, want %d", nid, npcID)
+	}
+	gotMsg := cstrBytes(sayFrame[9:sayLen])
+	const wantMsg = "The server is under development. Enjoy exploring!"
+	if gotMsg != wantMsg {
+		t.Errorf("ZC_SAY_DIALOG2 message = %q, want %q", gotMsg, wantMsg)
+	}
+
+	// Second response: ZC_CLOSE_DIALOG.
+	cmd, closeFrame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_CLOSE_DIALOG: %v", err)
+	}
+	if cmd != packet.HeaderZCCLOSEDIALOG {
+		t.Fatalf("CZ_REQNEXTSCRIPT second response cmd = 0x%04x, want 0x%04x (ZC_CLOSE_DIALOG); frame=% x",
+			cmd, packet.HeaderZCCLOSEDIALOG, closeFrame)
+	}
+	if len(closeFrame) != zcCloseDialogSize {
+		t.Fatalf("ZC_CLOSE_DIALOG length = %d, want %d (frame=% x)",
+			len(closeFrame), zcCloseDialogSize, closeFrame)
+	}
+	if nid := binary.LittleEndian.Uint32(closeFrame[2:6]); nid != npcID {
+		t.Errorf("ZC_CLOSE_DIALOG NpcID = %d, want %d", nid, npcID)
+	}
+	t.Logf("CZ_REQNEXTSCRIPT ok: npc_id=%d", npcID)
+}
+
+// stageCZCloseDialog sends CZ_CLOSE_DIALOG and asserts no response is
+// written (the client closes the dialog locally).
+func stageCZCloseDialog(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, npcGID uint32) {
+	t.Helper()
+	if err := (packet.CZCloseDialogRequest{GID: npcGID}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_CLOSE_DIALOG: %v", err)
+	}
+
+	// CZ_CLOSE_DIALOG is logged only — no response is expected.
+	if err := conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	chunk := make([]byte, 4096)
+	for {
+		cmd, _, derr := dec.Next()
+		if derr == nil {
+			t.Fatalf("unexpected response packet 0x%04x after CZ_CLOSE_DIALOG", cmd)
+		}
+		if derr != netcodec.ErrIncomplete {
+			break
+		}
+		n, rerr := conn.Read(chunk)
+		if n > 0 {
+			dec.Feed(chunk[:n])
+			continue
+		}
+		if rerr == nil {
+			break
+		}
+		if netErr, ok := rerr.(net.Error); ok && netErr.Timeout() {
+			break
+		}
+		t.Fatalf("read after CZ_CLOSE_DIALOG: %v", rerr)
+	}
+	t.Logf("CZ_CLOSE_DIALOG ok: no response (logged only)")
+}
+
 // TestE2E_GatewayFullFlow_TCP speaks the raw kRO binary packet protocol
 // over a single TCP connection to the running gateway and exercises the
 // full login → char → map → move round-trip across every real
@@ -806,6 +970,12 @@ func TestE2E_GatewayFullFlow_TCP(t *testing.T) {
 	// logged only (state transition to char select is deferred).
 	stageCZGetCharNameRequest(t, conn, dec, ioDeadline, slot0GID, charName)
 	stageCZRestart(t, conn, dec, ioDeadline)
+	// M15: NPC dialog interaction. Click on Kafra Employee (GID 110000001),
+	// verify dialog text + "Next" button, then continue to "Close" button,
+	// then close the dialog.
+	stageCZContactNPC(t, conn, dec, ioDeadline, 110000001, "Kafra Employee")
+	stageCZReqNextScript(t, conn, dec, ioDeadline, 110000001)
+	stageCZCloseDialog(t, conn, dec, ioDeadline, 110000001)
 }
 
 // cstrBytes returns the NUL-terminated prefix of b as a string, or the

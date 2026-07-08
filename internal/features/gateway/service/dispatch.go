@@ -18,6 +18,9 @@
 //   - CZ_REQ_EMOTION (0x00bf)       → ZC_EMOTION (single-player echo; no AOI)
 //   - CZ_GETCHARNAMEREQUEST (0x0094) → ZC_ACK_REQNAME (name lookup by GID)
 //   - CZ_RESTART (0x00b2)            → logged (state transition deferred)
+//   - CZ_CONTACTNPC (0x0090)         → ZC_SAY_DIALOG2 + ZC_WAIT_DIALOG2 (hardcoded dialog)
+//   - CZ_REQNEXTSCRIPT (0x00b9)      → ZC_SAY_DIALOG2 + ZC_CLOSE_DIALOG (dialog continuation)
+//   - CZ_CLOSE_DIALOG (0x0146)       → logged (client closes dialog locally)
 //   - everything else              → debug-logged, connection kept alive.
 
 package service
@@ -129,6 +132,15 @@ func (h *DispatchHandler) HandlePacket(ctx context.Context, conn *domain.Connect
 		return h.handleCHEnter(ctx, conn, resp, frame)
 	case packet.HeaderCHSELECTCHAR:
 		return h.handleCHSelectChar(ctx, conn, resp, frame)
+	default:
+		return h.handleMapPacket(ctx, conn, resp, cmd, frame)
+	}
+}
+
+// handleMapPacket dispatches map-phase (CZ_*) packets. Extracted from
+// HandlePacket to keep the top-level switch under the gocyclo limit.
+func (h *DispatchHandler) handleMapPacket(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
+	switch cmd {
 	case packet.HeaderCZENTER:
 		return h.handleCZEnter(ctx, conn, resp, frame)
 	case packet.HeaderCZREQUESTMOVE:
@@ -149,6 +161,12 @@ func (h *DispatchHandler) HandlePacket(ctx context.Context, conn *domain.Connect
 		return h.handleCZGetCharNameRequest(ctx, conn, resp, frame)
 	case packet.HeaderCZRESTART:
 		return h.handleCZRestart(ctx, conn, resp, frame)
+	case packet.HeaderCZCONTACTNPC:
+		return h.handleCZContactNPC(ctx, conn, resp, frame)
+	case packet.HeaderCZREQNEXTSCRIPT:
+		return h.handleCZReqNextScript(ctx, conn, resp, frame)
+	case packet.HeaderCZCLOSEDIALOG:
+		return h.handleCZCloseDialog(ctx, conn, resp, frame)
 	default:
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
@@ -1542,6 +1560,193 @@ func (h *DispatchHandler) handleCZRestart(_ context.Context, conn *domain.Connec
 			Uint8("type", req.Type).
 			Msg("CZ_RESTART unknown type; dropping")
 	}
+	return nil
+}
+
+// handleCZContactNPC responds to CZ_CONTACTNPC (0x0090) — the client
+// clicking on an NPC. The handler looks up the NPC in the hardcoded
+// npcSpawns slice by GID and sends a two-packet dialog sequence:
+//
+//  1. ZC_SAY_DIALOG2 with a welcome message
+//  2. ZC_WAIT_DIALOG2 to show the "Next" button
+//
+// If the NPC GID is not found in npcSpawns, the handler logs a warning
+// and returns nil (no response). The full script engine (DEL-04) is
+// deferred to Phase 3; M15 provides hardcoded dialog text for each NPC.
+func (h *DispatchHandler) handleCZContactNPC(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZContactNPC(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_CONTACTNPC; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("npc_aid", req.AID).
+			Msg("CZ_CONTACTNPC without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	var npcName string
+	for _, npc := range npcSpawns {
+		if npc.GID == req.AID {
+			npcName = npc.Name
+			break
+		}
+	}
+	if npcName == "" {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("npc_aid", req.AID).
+			Msg("CZ_CONTACTNPC for unknown NPC GID; dropping")
+		return nil
+	}
+
+	say := packet.SayDialog2Response{
+		NpcID:   req.AID,
+		Type:    0,
+		Message: "Welcome to goAthena! This is " + npcName + ".",
+	}
+	var sayBuf bytes.Buffer
+	if err := say.Encode(&sayBuf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("npc_aid", req.AID).
+			Msg("encode ZC_SAY_DIALOG2 failed; dropping packet")
+		return nil
+	}
+
+	wait := packet.WaitDialog2Response{
+		NpcID: req.AID,
+		Type:  0,
+	}
+	var waitBuf bytes.Buffer
+	if err := wait.Encode(&waitBuf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("npc_aid", req.AID).
+			Msg("encode ZC_WAIT_DIALOG2 failed; dropping packet")
+		return nil
+	}
+
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("npc_aid", req.AID).
+		Str("npc_name", npcName).
+		Msg("NPC dialog started")
+
+	if err := resp.SendPacket(sayBuf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_SAY_DIALOG2: %w", err)
+	}
+	if err := resp.SendPacket(waitBuf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_WAIT_DIALOG2: %w", err)
+	}
+	return nil
+}
+
+// handleCZReqNextScript responds to CZ_REQNEXTSCRIPT (0x00b9) — the
+// client clicking "Next" in the NPC dialog. The handler sends the
+// second part of the dialog:
+//
+//  1. ZC_SAY_DIALOG2 with a continuation message
+//  2. ZC_CLOSE_DIALOG to show the "Close" button
+//
+// The full script engine (DEL-04) is deferred to Phase 3; M15 provides
+// a single hardcoded continuation message for every NPC.
+func (h *DispatchHandler) handleCZReqNextScript(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZReqNextScript(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_REQNEXTSCRIPT; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Msg("CZ_REQNEXTSCRIPT without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	say := packet.SayDialog2Response{
+		NpcID:   req.NpcID,
+		Type:    0,
+		Message: "The server is under development. Enjoy exploring!",
+	}
+	var sayBuf bytes.Buffer
+	if err := say.Encode(&sayBuf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Msg("encode ZC_SAY_DIALOG2 failed; dropping packet")
+		return nil
+	}
+
+	closeD := packet.CloseDialogResponse{NpcID: req.NpcID} //nolint:staticcheck // explicit struct init keeps the two wire structs decoupled; a Go conversion would silently break if CloseDialogResponse ever gains a field
+	var closeBuf bytes.Buffer
+	if err := closeD.Encode(&closeBuf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Msg("encode ZC_CLOSE_DIALOG failed; dropping packet")
+		return nil
+	}
+
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("npc_id", req.NpcID).
+		Msg("NPC dialog continued")
+
+	if err := resp.SendPacket(sayBuf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_SAY_DIALOG2: %w", err)
+	}
+	if err := resp.SendPacket(closeBuf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_CLOSE_DIALOG: %w", err)
+	}
+	return nil
+}
+
+// handleCZCloseDialog responds to CZ_CLOSE_DIALOG (0x0146) — the
+// client clicking "Close" in the NPC dialog. The client closes the
+// dialog window locally; the server does not need to send a response.
+// The handler logs the close event and returns nil.
+func (h *DispatchHandler) handleCZCloseDialog(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZCloseDialog(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_CLOSE_DIALOG; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("npc_gid", req.GID).
+			Msg("CZ_CLOSE_DIALOG without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("npc_gid", req.GID).
+		Msg("NPC dialog closed")
+
 	return nil
 }
 

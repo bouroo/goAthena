@@ -926,3 +926,272 @@ func TestParseCZRestart_AcceptsTrailingBytes(t *testing.T) {
 		t.Errorf("ParseCZRestart() = %+v, want %+v", got, want)
 	}
 }
+
+func TestParseCZContactNPC(t *testing.T) {
+	t.Parallel()
+
+	goodFrame := func() []byte {
+		f := make([]byte, sizeCZContactNPC)
+		writeLE16(f[0:], HeaderCZCONTACTNPC)
+		writeLE32(f[2:], 0x068E36C1) // 110000001 = rAthena START_NPC_NUM + 1
+		f[6] = 0x01
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZContactNPCRequest
+	}{
+		{
+			name:    "valid known frame",
+			frame:   goodFrame,
+			wantErr: false,
+			want:    CZContactNPCRequest{AID: 0x068E36C1, Type: 0x01},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZContactNPC-1),
+			wantErr:    true,
+			wantErrSub: "6",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, sizeCZContactNPC)
+				writeLE16(f[0:], HeaderCZREQUESTMOVE)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZContactNPC(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZContactNPC() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZContactNPC() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseCZContactNPC() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseCZContactNPC_AcceptsTrailingBytes(t *testing.T) {
+	t.Parallel()
+
+	base := make([]byte, sizeCZContactNPC)
+	writeLE16(base[0:], HeaderCZCONTACTNPC)
+	writeLE32(base[2:], 0x068E36C1)
+	base[6] = 0x01
+	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
+
+	got, err := ParseCZContactNPC(frame)
+	if err != nil {
+		t.Fatalf("ParseCZContactNPC() unexpected error: %v", err)
+	}
+	want := CZContactNPCRequest{AID: 0x068E36C1, Type: 0x01}
+	if got != want {
+		t.Errorf("ParseCZContactNPC() = %+v, want %+v", got, want)
+	}
+}
+
+func TestParseCZReqNextScript(t *testing.T) {
+	t.Parallel()
+
+	goodFrame := func() []byte {
+		f := make([]byte, sizeCZReqNextScript)
+		writeLE16(f[0:], HeaderCZREQNEXTSCRIPT)
+		writeLE32(f[2:], 0x068E36C1)
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZReqNextScriptRequest
+	}{
+		{
+			name:    "valid known frame",
+			frame:   goodFrame,
+			wantErr: false,
+			want:    CZReqNextScriptRequest{NpcID: 0x068E36C1},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZReqNextScript-1),
+			wantErr:    true,
+			wantErrSub: "5",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, sizeCZReqNextScript)
+				writeLE16(f[0:], HeaderCZREQUESTMOVE)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZReqNextScript(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZReqNextScript() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZReqNextScript() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseCZReqNextScript() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseCZReqNextScript_AcceptsTrailingBytes(t *testing.T) {
+	t.Parallel()
+
+	base := make([]byte, sizeCZReqNextScript)
+	writeLE16(base[0:], HeaderCZREQNEXTSCRIPT)
+	writeLE32(base[2:], 0x068E36C1)
+	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
+
+	got, err := ParseCZReqNextScript(frame)
+	if err != nil {
+		t.Fatalf("ParseCZReqNextScript() unexpected error: %v", err)
+	}
+	want := CZReqNextScriptRequest{NpcID: 0x068E36C1}
+	if got != want {
+		t.Errorf("ParseCZReqNextScript() = %+v, want %+v", got, want)
+	}
+}
+
+func TestParseCZCloseDialog(t *testing.T) {
+	t.Parallel()
+
+	goodFrame := func() []byte {
+		f := make([]byte, sizeCZCloseDialog)
+		writeLE16(f[0:], HeaderCZCLOSEDIALOG)
+		writeLE32(f[2:], 0x068E36C1)
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZCloseDialogRequest
+	}{
+		{
+			name:    "valid known frame",
+			frame:   goodFrame,
+			wantErr: false,
+			want:    CZCloseDialogRequest{GID: 0x068E36C1},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZCloseDialog-1),
+			wantErr:    true,
+			wantErrSub: "5",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, sizeCZCloseDialog)
+				writeLE16(f[0:], HeaderCZREQUESTMOVE)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZCloseDialog(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZCloseDialog() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZCloseDialog() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseCZCloseDialog() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseCZCloseDialog_AcceptsTrailingBytes(t *testing.T) {
+	t.Parallel()
+
+	base := make([]byte, sizeCZCloseDialog)
+	writeLE16(base[0:], HeaderCZCLOSEDIALOG)
+	writeLE32(base[2:], 0x068E36C1)
+	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
+
+	got, err := ParseCZCloseDialog(frame)
+	if err != nil {
+		t.Fatalf("ParseCZCloseDialog() unexpected error: %v", err)
+	}
+	want := CZCloseDialogRequest{GID: 0x068E36C1}
+	if got != want {
+		t.Errorf("ParseCZCloseDialog() = %+v, want %+v", got, want)
+	}
+}

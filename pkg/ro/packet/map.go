@@ -82,7 +82,31 @@ const (
 	// CZ_RESTART (0x00b2) — client requests respawn or return to char select.
 	// rathena/src/map/clif_packetdb.hpp:61 (`parseable_packet(0x00b2,3,clif_parse_Restart,2)`).
 	// Fixed 3 bytes: [2:cmd][1:type uint8] (0=respawn, 1=return to char select).
-	HeaderCZRESTART                 uint16 = 0x00b2
+	HeaderCZRESTART uint16 = 0x00b2
+	// CZ_CONTACTNPC (0x0090) — client clicks an NPC. rathena/src/map/
+	// clif_packetdb.hpp:42 (`parseable_packet(0x0090,7,clif_parse_NpcClicked,2,6)`).
+	// Fixed 7 bytes: [2:cmd][4:AID uint32][1:type uint8] (1=click).
+	HeaderCZCONTACTNPC uint16 = 0x0090
+	// CZ_REQNEXTSCRIPT (0x00b9) — client clicks "Next" in a dialog.
+	// rathena/src/map/clif_packetdb.hpp:60 (`parseable_packet(0x00b9,6,clif_parse_ScriptContinue,2)`).
+	// Fixed 6 bytes: [2:cmd][4:NpcID uint32].
+	HeaderCZREQNEXTSCRIPT uint16 = 0x00b9
+	// CZ_CLOSE_DIALOG (0x0146) — client clicks "Close" in a dialog.
+	// rathena/src/map/clif_packetdb.hpp:72 (`parseable_packet(0x0146,6,clif_parse_CloseDialog,2)`).
+	// Fixed 6 bytes: [2:cmd][4:GID uint32].
+	HeaderCZCLOSEDIALOG uint16 = 0x0146
+	// ZC_SAY_DIALOG2 (0x0972) — server sends dialog text (PACKETVER >= 20220504).
+	// rathena/src/map/packets_struct.hpp: ZC_SAY_DIALOG2.
+	// Variable length: [2:cmd][2:packetLength][4:NpcID][1:type][n:message+null].
+	HeaderZCSAYDIALOG2 uint16 = 0x0972
+	// ZC_WAIT_DIALOG2 (0x0973) — server shows "Next" button (PACKETVER >= 20220504).
+	// rathena/src/map/packets_struct.hpp: ZC_WAIT_DIALOG2.
+	// Fixed 7 bytes: [2:cmd][4:NpcID][1:type].
+	HeaderZCWAITDIALOG2 uint16 = 0x0973
+	// ZC_CLOSE_DIALOG (0x00b6) — server shows "Close" button.
+	// rathena/src/map/clif_packetdb.hpp:58 (`packet(0x00b6,6,clif_parse_CloseDialog,0)`).
+	// Fixed 6 bytes: [2:cmd][4:NpcID].
+	HeaderZCCLOSEDIALOG             uint16 = 0x00b6
 	HeaderZCSTATUS                  uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
 	HeaderZCPARCHANGE               uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
 	HeaderZCLONGPARCHANGE           uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
@@ -240,6 +264,21 @@ const (
 	// sizeCZRestart = int16 packetType + uint8 type = 2+1 = 3
 	// (rathena/src/map/clif_packetdb.hpp:61).
 	sizeCZRestart = 3
+	// sizeCZContactNPC = int16 packetType + uint32 AID + uint8 type = 2+4+1 = 7
+	// (rathena/src/map/clif_packetdb.hpp:42).
+	sizeCZContactNPC = 7
+	// sizeCZReqNextScript = int16 packetType + uint32 NpcID = 2+4 = 6
+	// (rathena/src/map/clif_packetdb.hpp:60).
+	sizeCZReqNextScript = 6
+	// sizeCZCloseDialog = int16 packetType + uint32 GID = 2+4 = 6
+	// (rathena/src/map/clif_packetdb.hpp:72).
+	sizeCZCloseDialog = 6
+	// sizeZCWaitDialog2 = int16 packetType + uint32 NpcID + uint8 type = 2+4+1 = 7
+	// (rathena/src/map/packets_struct.hpp: ZC_WAIT_DIALOG2).
+	sizeZCWaitDialog2 = 7
+	// sizeZCCloseDialog = int16 packetType + uint32 NpcID = 2+4 = 6
+	// (rathena/src/map/clif_packetdb.hpp:58).
+	sizeZCCloseDialog = 6
 )
 
 // NewMapServerDB returns a packet database pre-populated with all known
@@ -459,6 +498,46 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCSETUNITIDLE,
 		Name:      "ZC_SET_UNIT_IDLE",
 		Length:    sizeZCSetUnitIdle,
+		Direction: DirectionServerToClient,
+	})
+	// M15: NPC dialog interaction — CZ_CONTACTNPC (fixed 7 bytes),
+	// CZ_REQNEXTSCRIPT (fixed 6 bytes), CZ_CLOSE_DIALOG (fixed 6 bytes).
+	db.Register(Definition{
+		ID:        HeaderCZCONTACTNPC,
+		Name:      "CZ_CONTACTNPC",
+		Length:    sizeCZContactNPC,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQNEXTSCRIPT,
+		Name:      "CZ_REQNEXTSCRIPT",
+		Length:    sizeCZReqNextScript,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZCLOSEDIALOG,
+		Name:      "CZ_CLOSE_DIALOG",
+		Length:    sizeCZCloseDialog,
+		Direction: DirectionClientToServer,
+	})
+	// M15: ZC_SAY_DIALOG2 (variable length), ZC_WAIT_DIALOG2 (fixed 7 bytes),
+	// ZC_CLOSE_DIALOG (fixed 6 bytes).
+	db.Register(Definition{
+		ID:        HeaderZCSAYDIALOG2,
+		Name:      "ZC_SAY_DIALOG2",
+		Length:    VariableLength,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCWAITDIALOG2,
+		Name:      "ZC_WAIT_DIALOG2",
+		Length:    sizeZCWaitDialog2,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCCLOSEDIALOG,
+		Name:      "ZC_CLOSE_DIALOG",
+		Length:    sizeZCCloseDialog,
 		Direction: DirectionServerToClient,
 	})
 
