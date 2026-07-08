@@ -16,7 +16,7 @@ import (
 const charSelectColumns = "char_id, account_id, char_num, name, class, base_level, job_level, " +
 	"base_exp, job_exp, zeny, max_hp, hp, max_sp, sp, hair, hair_color, clothes_color, " +
 	"weapon, shield, head_top, head_mid, head_bottom, robe, last_map, " +
-	"delete_date, unban_time, sex"
+	"delete_date, unban_time, sex, str, agi, vit, `int`, dex, luk, status_point, skill_point"
 
 type characterRepo struct {
 	db *gorm.DB
@@ -127,5 +127,13 @@ func charModelToDomain(m *CharModel) domain.CharacterSummary {
 		DeleteDate:   unixOrZero(m.DeleteDate),
 		UnbanTime:    unixOrZero(m.UnbanTime),
 		Sex:          m.Sex,
+		Str:          m.Str,
+		Agi:          m.Agi,
+		Vit:          m.Vit,
+		Int:          m.Int,
+		Dex:          m.Dex,
+		Luk:          m.Luk,
+		StatusPoint:  m.StatusPoint,
+		SkillPoint:   m.SkillPoint,
 	}
 }

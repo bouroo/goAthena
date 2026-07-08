@@ -8,17 +8,19 @@ import "context"
 // once at OnOpen time and threaded through the PacketHandler so handlers
 // can log the peer and timestamp without re-querying gnet.Conn.
 //
-// AccountID is the only mutable field: the dispatch handler sets it after
-// a successful CZ_ENTER so subsequent CZ_REQUEST_MOVE packets can be
-// attributed to the right zone entity without re-deriving the AID from
-// the wire (the move packet carries no AID). The handler chain takes the
-// info by pointer so mutations persist across packets on the same
-// connection.
+// AccountID and CharID are the only mutable fields: the dispatch handler
+// sets them after a successful CZ_ENTER so subsequent CZ_REQUEST_MOVE
+// packets can be attributed to the right zone entity without re-deriving
+// the AID from the wire (the move packet carries no AID) and the
+// post-actorinit status burst (M9) can fetch the character's stats via
+// identity.GetCharacter. The handler chain takes the info by pointer so
+// mutations persist across packets on the same connection.
 type ConnectionInfo struct {
 	ID        uint64
 	RemoteIP  string
 	OpenedAt  int64  // unix nanos
 	AccountID uint32 // set by handleCZEnter on successful map enter
+	CharID    uint32 // set by handleCZEnter on successful map enter
 }
 
 // Responder sends serialized packets back to the client. Each transport

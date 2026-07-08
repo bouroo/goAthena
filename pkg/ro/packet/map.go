@@ -31,6 +31,36 @@ const (
 	HeaderZCSPAWNUNIT        uint16 = 0x09fe // rathena/src/map/packets.hpp ZC_SPAWN_UNIT (PACKETVER >= 20150513 branch)
 	HeaderZCMAPPROPERTYR2    uint16 = 0x099b // rathena/src/map/clif.cpp:6869 (ZC_MAPPROPERTY_R2, PACKETVER >= 20121010)
 	HeaderZCNOTIFYTIME       uint16 = 0x007f // rathena/src/map/clif.cpp:11186 (ZC_NOTIFY_TIME)
+	HeaderZCSTATUS           uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
+	HeaderZCPARCHANGE        uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
+	HeaderZCLONGPARCHANGE    uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
+)
+
+// SP_* status parameter IDs from rathena/src/map/map.hpp:498-505.
+// Used as the varID field in ZC_PAR_CHANGE / ZC_LONGPAR_CHANGE packets.
+const (
+	SPSpeed       uint16 = 0  // SP_SPEED
+	SPBaseExp     uint16 = 1  // SP_BASEEXP
+	SPJobExp      uint16 = 2  // SP_JOBEXP
+	SPKarma       uint16 = 3  // SP_KARMA
+	SPManner      uint16 = 4  // SP_MANNER
+	SPHP          uint16 = 5  // SP_HP
+	SPMaxHP       uint16 = 6  // SP_MAXHP
+	SPSP          uint16 = 7  // SP_SP
+	SPMaxSP       uint16 = 8  // SP_MAXSP
+	SPStatusPoint uint16 = 9  // SP_STATUSPOINT
+	SPBaseLevel   uint16 = 11 // SP_BASELEVEL
+	SPSkillPoint  uint16 = 12 // SP_SKILLPOINT
+	SPStr         uint16 = 13 // SP_STR
+	SPAgi         uint16 = 14 // SP_AGI
+	SPVit         uint16 = 15 // SP_VIT
+	SPInt         uint16 = 16 // SP_INT
+	SPDex         uint16 = 17 // SP_DEX
+	SPLuk         uint16 = 18 // SP_LUK
+	SPZeny        uint16 = 20 // SP_ZENY
+	SPWeight      uint16 = 24 // SP_WEIGHT
+	SPMaxWeight   uint16 = 25 // SP_MAXWEIGHT
+	SPJobLevel    uint16 = 55 // SP_JOBLEVEL
 )
 
 // Fixed on-wire byte lengths derived from the packed struct layouts in
@@ -84,6 +114,16 @@ const (
 	// sizeZCNotifyTime = int16 packetType + uint32 time = 2+4 = 6
 	// (rathena/src/map/clif.cpp:11186-11193).
 	sizeZCNotifyTime = 6
+	// sizeZCStatus = int16 packetType + uint16 point + 6*(uint8 stat +
+	// uint8 need) + 12*int16 derived = 2+2+12+24 = 44
+	// (rathena/src/map/packets.hpp:909-938).
+	sizeZCStatus = 44
+	// sizeZCParChange = int16 packetType + uint16 varID + int32 count = 2+2+4 = 8
+	// (rathena/src/map/packets_struct.hpp:354-358).
+	sizeZCParChange = 8
+	// sizeZCLongParChange = int16 packetType + uint16 varID + int32 amount = 2+2+4 = 8
+	// (rathena/src/map/packets_struct.hpp:361-365).
+	sizeZCLongParChange = 8
 )
 
 // NewMapServerDB returns a packet database pre-populated with all known
@@ -162,6 +202,24 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCNOTIFYTIME,
 		Name:      "ZC_NOTIFY_TIME",
 		Length:    sizeZCNotifyTime,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCSTATUS,
+		Name:      "ZC_STATUS",
+		Length:    sizeZCStatus,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCPARCHANGE,
+		Name:      "ZC_PAR_CHANGE",
+		Length:    sizeZCParChange,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCLONGPARCHANGE,
+		Name:      "ZC_LONGPAR_CHANGE",
+		Length:    sizeZCLongParChange,
 		Direction: DirectionServerToClient,
 	})
 

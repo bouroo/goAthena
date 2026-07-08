@@ -719,6 +719,14 @@ type CharacterDetail struct {
 	HeadBottom    uint32                 `protobuf:"varint,17,opt,name=head_bottom,json=headBottom,proto3" json:"head_bottom,omitempty"`
 	Robe          uint32                 `protobuf:"varint,18,opt,name=robe,proto3" json:"robe,omitempty"`
 	Sex           uint32                 `protobuf:"varint,19,opt,name=sex,proto3" json:"sex,omitempty"`
+	Str           uint32                 `protobuf:"varint,20,opt,name=str,proto3" json:"str,omitempty"`
+	Agi           uint32                 `protobuf:"varint,21,opt,name=agi,proto3" json:"agi,omitempty"`
+	Vit           uint32                 `protobuf:"varint,22,opt,name=vit,proto3" json:"vit,omitempty"`
+	Int           uint32                 `protobuf:"varint,23,opt,name=int,proto3" json:"int,omitempty"`
+	Dex           uint32                 `protobuf:"varint,24,opt,name=dex,proto3" json:"dex,omitempty"`
+	Luk           uint32                 `protobuf:"varint,25,opt,name=luk,proto3" json:"luk,omitempty"`
+	StatusPoint   uint32                 `protobuf:"varint,26,opt,name=status_point,json=statusPoint,proto3" json:"status_point,omitempty"`
+	SkillPoint    uint32                 `protobuf:"varint,27,opt,name=skill_point,json=skillPoint,proto3" json:"skill_point,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -886,6 +894,62 @@ func (x *CharacterDetail) GetSex() uint32 {
 	return 0
 }
 
+func (x *CharacterDetail) GetStr() uint32 {
+	if x != nil {
+		return x.Str
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetAgi() uint32 {
+	if x != nil {
+		return x.Agi
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetVit() uint32 {
+	if x != nil {
+		return x.Vit
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetInt() uint32 {
+	if x != nil {
+		return x.Int
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetDex() uint32 {
+	if x != nil {
+		return x.Dex
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetLuk() uint32 {
+	if x != nil {
+		return x.Luk
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetStatusPoint() uint32 {
+	if x != nil {
+		return x.StatusPoint
+	}
+	return 0
+}
+
+func (x *CharacterDetail) GetSkillPoint() uint32 {
+	if x != nil {
+		return x.SkillPoint
+	}
+	return 0
+}
+
 type GetCharacterResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
@@ -1009,7 +1073,7 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\x13GetCharacterRequest\x12\x1d\n" +
 	"\n" +
 	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
-	"\achar_id\x18\x02 \x01(\rR\x06charId\"\xe8\x03\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\"\x98\x05\n" +
 	"\x0fCharacterDetail\x12\x17\n" +
 	"\achar_id\x18\x01 \x01(\rR\x06charId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x19\n" +
@@ -1033,7 +1097,16 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\vhead_bottom\x18\x11 \x01(\rR\n" +
 	"headBottom\x12\x12\n" +
 	"\x04robe\x18\x12 \x01(\rR\x04robe\x12\x10\n" +
-	"\x03sex\x18\x13 \x01(\rR\x03sex\"\x82\x01\n" +
+	"\x03sex\x18\x13 \x01(\rR\x03sex\x12\x10\n" +
+	"\x03str\x18\x14 \x01(\rR\x03str\x12\x10\n" +
+	"\x03agi\x18\x15 \x01(\rR\x03agi\x12\x10\n" +
+	"\x03vit\x18\x16 \x01(\rR\x03vit\x12\x10\n" +
+	"\x03int\x18\x17 \x01(\rR\x03int\x12\x10\n" +
+	"\x03dex\x18\x18 \x01(\rR\x03dex\x12\x10\n" +
+	"\x03luk\x18\x19 \x01(\rR\x03luk\x12!\n" +
+	"\fstatus_point\x18\x1a \x01(\rR\vstatusPoint\x12\x1f\n" +
+	"\vskill_point\x18\x1b \x01(\rR\n" +
+	"skillPoint\"\x82\x01\n" +
 	"\x14GetCharacterResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12:\n" +
 	"\tcharacter\x18\x02 \x01(\v2\x1c.identity.v1.CharacterDetailR\tcharacter\x12\x14\n" +

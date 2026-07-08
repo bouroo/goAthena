@@ -83,6 +83,14 @@ type CharModel struct {
 	InventorySize int16      `gorm:"column:inventory_slots"`
 	Fame          int32      `gorm:"column:fame"`
 	Manner        int16      `gorm:"column:manner"`
+	Str           uint16     `gorm:"column:str"`
+	Agi           uint16     `gorm:"column:agi"`
+	Vit           uint16     `gorm:"column:vit"`
+	Int           uint16     `gorm:"column:int"`
+	Dex           uint16     `gorm:"column:dex"`
+	Luk           uint16     `gorm:"column:luk"`
+	StatusPoint   uint32     `gorm:"column:status_point"`
+	SkillPoint    uint32     `gorm:"column:skill_point"`
 }
 
 // TableName pins the rAthena-canonical table name.

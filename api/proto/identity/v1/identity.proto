@@ -124,6 +124,14 @@ message CharacterDetail {
   uint32 head_bottom = 17;
   uint32 robe = 18;
   uint32 sex = 19;
+  uint32 str = 20;
+  uint32 agi = 21;
+  uint32 vit = 22;
+  uint32 int = 23;
+  uint32 dex = 24;
+  uint32 luk = 25;
+  uint32 status_point = 26;
+  uint32 skill_point = 27;
 }
 
 message GetCharacterResponse {

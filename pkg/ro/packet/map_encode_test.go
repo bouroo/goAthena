@@ -807,3 +807,221 @@ func TestCZRequestTimeRequest_Encode_LayoutSpotCheck(t *testing.T) {
 		t.Errorf("clientTick = 0x%x, want 0xDEADBEEF", tick)
 	}
 }
+
+// ZC_STATUS (0x00bd, 44 bytes) tests.
+
+func TestStatusResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r StatusResponse
+	if got, want := r.Size(), sizeZCStatus; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestStatusResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := StatusResponse{
+		StatusPoint: 42,
+		Str:         10, NeedStr: 2,
+		Agi: 20, NeedAgi: 3,
+		Vit: 15, NeedVit: 2,
+		Int: 5, NeedInt: 1,
+		Dex: 25, NeedDex: 3,
+		Luk: 7, NeedLuk: 1,
+		Atk1: 100, Atk2: 50,
+		MatkMax: 30, MatkMin: 10,
+		Def1: 40, Def2: 20,
+		Mdef1: 15, Mdef2: 5,
+		Hit: 200, Flee: 100,
+		Flee2: 10, Critical: 5,
+		ASPD: 150, PlusASPD: 0,
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 44
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Opcode at [0:2] = 0x00bd LE.
+	if got[0] != 0xbd || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want bd 00 (LE 0x00bd)", got[0], got[1])
+	}
+
+	// statusPoint at [2:4] = uint16 LE = 42.
+	if pt := binary.LittleEndian.Uint16(got[2:4]); pt != 42 {
+		t.Errorf("statusPoint = %d, want 42", pt)
+	}
+
+	// Stat pairs at [4:16]: (str,needStr) (agi,needAgi) (vit,needVit)
+	// (int,needInt) (dex,needDex) (luk,needLuk).
+	if got[4] != 10 || got[5] != 2 {
+		t.Errorf("str/needStr = (%d,%d), want (10,2)", got[4], got[5])
+	}
+	if got[6] != 20 || got[7] != 3 {
+		t.Errorf("agi/needAgi = (%d,%d), want (20,3)", got[6], got[7])
+	}
+	if got[8] != 15 || got[9] != 2 {
+		t.Errorf("vit/needVit = (%d,%d), want (15,2)", got[8], got[9])
+	}
+	if got[10] != 5 || got[11] != 1 {
+		t.Errorf("int/needInt = (%d,%d), want (5,1)", got[10], got[11])
+	}
+	if got[12] != 25 || got[13] != 3 {
+		t.Errorf("dex/needDex = (%d,%d), want (25,3)", got[12], got[13])
+	}
+	if got[14] != 7 || got[15] != 1 {
+		t.Errorf("luk/needLuk = (%d,%d), want (7,1)", got[14], got[15])
+	}
+
+	// Derived combat values at [16:44]: 12 int16 LE fields.
+	wantInt16 := []int16{100, 50, 30, 10, 40, 20, 15, 5, 200, 100, 10, 5, 150, 0}
+	for i, want := range wantInt16 {
+		off := 16 + i*2
+		if got := int16(binary.LittleEndian.Uint16(got[off : off+2])); got != want {
+			t.Errorf("derived[%d] at [%d:%d] = %d, want %d", i, off, off+2, got, want)
+		}
+	}
+}
+
+func TestStatusResponse_Encode_ZeroValues(t *testing.T) {
+	t.Parallel()
+
+	var resp StatusResponse
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 44 {
+		t.Fatalf("len(got) = %d, want 44", len(got))
+	}
+	// Header must still be the right opcode even on a zero packet.
+	if got[0] != 0xbd || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want bd 00", got[0], got[1])
+	}
+}
+
+// ZC_PAR_CHANGE (0x00b0, 8 bytes) tests.
+
+func TestParChangeResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r ParChangeResponse
+	if got, want := r.Size(), sizeZCParChange; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestParChangeResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := ParChangeResponse{VarID: SPHP, Count: 100}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 8
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+	if got[0] != 0xb0 || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want b0 00 (LE 0x00b0)", got[0], got[1])
+	}
+	if vid := binary.LittleEndian.Uint16(got[2:4]); vid != SPHP {
+		t.Errorf("varID = %d, want %d (SPHP)", vid, SPHP)
+	}
+	if cnt := int32(binary.LittleEndian.Uint32(got[4:8])); cnt != 100 {
+		t.Errorf("count = %d, want 100", cnt)
+	}
+}
+
+func TestParChangeResponse_Encode_NegativeCount(t *testing.T) {
+	t.Parallel()
+
+	// Negative values are legal on the wire (damage = -count). The
+	// encoder must write the bit pattern verbatim.
+	resp := ParChangeResponse{VarID: SPHP, Count: -50}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+	want := uint32(0xffffffce) // two's complement of -50
+	if raw := binary.LittleEndian.Uint32(got[4:8]); raw != want {
+		t.Errorf("count raw bits = 0x%x, want 0x%x", raw, want)
+	}
+}
+
+// ZC_LONGPAR_CHANGE (0x00b1, 8 bytes) tests.
+
+func TestLongParChangeResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r LongParChangeResponse
+	if got, want := r.Size(), sizeZCLongParChange; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestLongParChangeResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := LongParChangeResponse{VarID: SPZeny, Amount: 5000}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 8
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+	if got[0] != 0xb1 || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want b1 00 (LE 0x00b1)", got[0], got[1])
+	}
+	if vid := binary.LittleEndian.Uint16(got[2:4]); vid != SPZeny {
+		t.Errorf("varID = %d, want %d (SPZeny)", vid, SPZeny)
+	}
+	if amt := int32(binary.LittleEndian.Uint32(got[4:8])); amt != 5000 {
+		t.Errorf("amount = %d, want 5000", amt)
+	}
+}
+
+// StatusPointCost tests — pre-Renewal formula (rathena/src/map/pc.cpp:8803).
+// cost = 1 + (val + 9) / 10.
+func TestStatusPointCost(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		val  uint8
+		want uint8
+	}{
+		{1, 2},    // 1+(1+9)/10 = 2
+		{5, 2},    // 1+(5+9)/10 = 2
+		{10, 2},   // 1+(10+9)/10 = 2
+		{11, 3},   // 1+(11+9)/10 = 3
+		{20, 3},   // 1+(20+9)/10 = 3
+		{21, 4},   // 1+(21+9)/10 = 4
+		{50, 6},   // 1+(50+9)/10 = 6
+		{99, 11},  // 1+(99+9)/10 = 11
+		{0, 1},    // edge: 1+(0+9)/10 = 1
+		{255, 27}, // edge: max uint8 → 1+(255+9)/10 = 27
+	}
+	for _, tc := range cases {
+		if got := StatusPointCost(tc.val); got != tc.want {
+			t.Errorf("StatusPointCost(%d) = %d, want %d", tc.val, got, tc.want)
+		}
+	}
+}
