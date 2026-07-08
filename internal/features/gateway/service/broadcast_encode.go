@@ -20,8 +20,6 @@ import (
 // dots still round-trip cleanly. rAthena map names do not contain
 // dots, but the gateway must not assume the format is single-token —
 // the contract is "everything after the prefix is the map name".
-//
-//nolint:unused // pure encoder — wired into the fan-out dispatcher in a later slice
 func parseMapFromSubject(subject string) (mapName string, ok bool) {
 	prefix := natsinfra.SubjectZoneEventPrefix + "."
 	if !strings.HasPrefix(subject, prefix) {
@@ -45,8 +43,6 @@ func parseMapFromSubject(subject string) (mapName string, ok bool) {
 // matching the self-spawn zero-fill contract documented on
 // domain.ViewData. XSize/YSize are hardcoded to 5/5 (PC collision
 // size, matching the self-spawn).
-//
-//nolint:unused // pure encoder — wired into the fan-out dispatcher in a later slice
 func unitWalkingFromEvent(view domain.ViewData, e *zonev1.EntityMoved) packet.UnitWalkingResponse {
 	// Guard against nil event — recurse with a zero event so the
 	// caller can call this unconditionally from the fan-out dispatcher.
@@ -94,8 +90,6 @@ func unitWalkingFromEvent(view domain.ViewData, e *zonev1.EntityMoved) packet.Un
 // Font, IsBoss, Body) are left at their zero value — matching the
 // self-spawn zero-fill contract documented on domain.ViewData.
 // XSize/YSize are hardcoded to 5/5 (PC collision size).
-//
-//nolint:unused // pure encoder — wired into the fan-out dispatcher in a later slice
 func spawnFromView(view domain.ViewData, posX, posY int16) packet.SpawnUnitResponse {
 	return packet.SpawnUnitResponse{
 		ObjectType:  view.ObjectType,
@@ -131,8 +125,6 @@ func spawnFromView(view domain.ViewData, posX, posY int16) packet.SpawnUnitRespo
 // LOGOUT=1, TELEPORT=2 — rAthena's clr_type enum, mapped verbatim).
 // Unknown type values fold to OUT_OF_SIGHT (0) so a malformed event
 // cannot crash the fan-out.
-//
-//nolint:unused // pure encoder — wired into the fan-out dispatcher in a later slice
 func vanishFromEvent(e *zonev1.EntityVanished) packet.NotifyVanishResponse {
 	if e == nil {
 		e = &zonev1.EntityVanished{}
