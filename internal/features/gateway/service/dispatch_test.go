@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -1501,5 +1502,228 @@ func TestClampMapCoord(t *testing.T) {
 	// clamp exists to prevent.
 	if got := clampMapCoord(40000); got < 0 {
 		t.Fatalf("clampMapCoord(40000) = %d, must not be negative; the int16 overflow regression has returned", got)
+	}
+}
+
+// TestDispatchHandler_CZGlobalMessage_Success_EncodesZCNotifyChat
+// covers the M11 chat echo happy path: the dispatcher must read the
+// message text verbatim from the incoming frame, stamp the GID slot
+// with the connection's authenticated AID, and emit a ZC_NOTIFY_CHAT
+// reply of the expected byte-exact layout.
+func TestDispatchHandler_CZGlobalMessage_Success_EncodesZCNotifyChat(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	const wantAID uint32 = 4242
+	conn := domain.ConnectionInfo{ID: 1, AccountID: wantAID}
+
+	const wantMessage = "hello world"
+	req := packet.CZGlobalMessageRequest{Message: wantMessage}
+	var reqBuf bytes.Buffer
+	if err := (req).Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_GLOBAL_MESSAGE: %v", err)
+	}
+	if _, err := reqBuf.Write([]byte{0x00}); err != nil { // explicit NUL terminator
+		t.Fatalf("append NUL: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZGLOBALMESSAGE, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	// 4 (header) + 4 (GID) + len("hello world") + 1 (NUL) = 4 + 4 + 11 + 1 = 20.
+	const wantLen = 20
+	if len(out) != wantLen {
+		t.Fatalf("ZC_NOTIFY_CHAT length = %d, want %d (buf=% x)", len(out), wantLen, out)
+	}
+	// Opcode at [0:2] = 0x008d LE.
+	if out[0] != 0x8d || out[1] != 0x00 {
+		t.Fatalf("opcode = %02x %02x, want 8d 00 (LE 0x008d)", out[0], out[1])
+	}
+	// packetLength at [2:4] = 20 LE.
+	if plen := binary.LittleEndian.Uint16(out[2:4]); plen != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	// GID at [4:8] = wantAID (AID-as-GID stand-in).
+	if gid := binary.LittleEndian.Uint32(out[4:8]); gid != wantAID {
+		t.Errorf("GID = %d, want %d (AID echoed)", gid, wantAID)
+	}
+	// Message bytes at [8:19] = "hello world".
+	if !bytes.Equal(out[8:19], []byte(wantMessage)) {
+		t.Errorf("message = %q, want %q", out[8:19], wantMessage)
+	}
+	// NUL terminator at [19].
+	if out[19] != 0 {
+		t.Errorf("NUL terminator at [19] = 0x%02x, want 0x00", out[19])
+	}
+}
+
+// TestDispatchHandler_CZGlobalMessage_MalformedFrame_DropsSilently
+// ensures a truncated or otherwise malformed chat frame is dropped
+// without writing any reply and without tearing the connection down
+// (rAthena treats the same shape — the client retries after
+// re-reading its addressbook).
+func TestDispatchHandler_CZGlobalMessage_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 2-byte frame is shorter than the 4-byte CZ_GLOBAL_MESSAGE
+	// header — must be dropped silently.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZGLOBALMESSAGE, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZActionRequest_Sit_EncodesZCActionResponse
+// covers the M11 sit path (action=1). The handler must reply with a
+// fixed 11-byte ZC_ACTION_RESPONSE carrying the AID as the GID, the
+// action byte echoed verbatim, and targetGID=0.
+func TestDispatchHandler_CZActionRequest_Sit_EncodesZCActionResponse(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	const wantAID uint32 = 9999
+	conn := domain.ConnectionInfo{ID: 1, AccountID: wantAID}
+
+	req := packet.CZActionRequestRequest{TargetGID: wantAID, Action: 1}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	const wantLen = 11
+	if len(out) != wantLen {
+		t.Fatalf("ZC_ACTION_RESPONSE length = %d, want %d (buf=% x)", len(out), wantLen, out)
+	}
+	// Opcode at [0:2] = 0x008b LE.
+	if out[0] != 0x8b || out[1] != 0x00 {
+		t.Fatalf("opcode = %02x %02x, want 8b 00 (LE 0x008b)", out[0], out[1])
+	}
+	// GID at [2:6] = wantAID.
+	if gid := binary.LittleEndian.Uint32(out[2:6]); gid != wantAID {
+		t.Errorf("GID = %d, want %d", gid, wantAID)
+	}
+	// action at [6] = 1 (sit).
+	if out[6] != 0x01 {
+		t.Errorf("action = 0x%02x, want 0x01 (sit)", out[6])
+	}
+	// targetGID at [7:11] = 0 (self-targeted, no separate target).
+	if tgt := binary.LittleEndian.Uint32(out[7:11]); tgt != 0 {
+		t.Errorf("targetGID = %d, want 0", tgt)
+	}
+}
+
+// TestDispatchHandler_CZActionRequest_Stand_EncodesZCActionResponse
+// covers the M11 stand path (action=0). Mirrors the sit test; we
+// keep it as a separate test so a future refactor that accidentally
+// drops the 0-branch (the action=0 and action=1 cases look very
+// similar) is caught by a failing test name.
+func TestDispatchHandler_CZActionRequest_Stand_EncodesZCActionResponse(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 1}
+
+	req := packet.CZActionRequestRequest{TargetGID: 1, Action: 0}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 11 {
+		t.Fatalf("ZC_ACTION_RESPONSE length = %d, want 11 (buf=% x)", len(out), out)
+	}
+	if out[6] != 0x00 {
+		t.Errorf("action = 0x%02x, want 0x00 (stand)", out[6])
+	}
+}
+
+// TestDispatchHandler_CZActionRequest_Attack_NoReply covers the
+// M11 attack branches (action=2 and action=3). The dispatch must drop
+// them silently — no combat system yet — without writing a reply.
+func TestDispatchHandler_CZActionRequest_Attack_NoReply(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	for _, action := range []uint8{2, 3, 7, 12} {
+		action := action
+		t.Run(fmt.Sprintf("action_%d", action), func(t *testing.T) {
+			t.Parallel()
+
+			resp := &bufResponder{}
+			conn := domain.ConnectionInfo{ID: 1, AccountID: 42}
+
+			req := packet.CZActionRequestRequest{TargetGID: 42, Action: action}
+			var reqBuf bytes.Buffer
+			if err := req.Encode(&reqBuf); err != nil {
+				t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+			}
+
+			if err := h.HandlePacket(context.Background(), &conn, resp,
+				packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+				t.Fatalf("HandlePacket err = %v, want nil", err)
+			}
+			if got := resp.buf.Len(); got != 0 {
+				t.Fatalf("responder wrote %d bytes for attack action=%d, want 0 (drop)",
+					got, action)
+			}
+		})
+	}
+}
+
+// TestDispatchHandler_CZActionRequest_MalformedFrame_DropsSilently
+// covers the truncated-frame path: the dispatcher must drop the
+// packet silently (no reply, no connection tear-down).
+func TestDispatchHandler_CZActionRequest_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	// 2-byte frame is shorter than the 7-byte CZ_ACTION_REQUEST
+	// fixed header.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
 	}
 }

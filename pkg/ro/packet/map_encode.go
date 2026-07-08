@@ -691,3 +691,114 @@ func EncodeEmptySkillList() []byte {
 func EncodeEmptyHotkeyList() []byte {
 	return emptyHotkeyList
 }
+
+// NotifyChatResponse encodes a ZC_NOTIFY_CHAT packet (command 0x008d,
+// variable length). The server sends this to broadcast a public chat
+// message to nearby clients; the gateway uses it as the single-player
+// echo path for CZ_GLOBAL_MESSAGE (no AOI yet).
+//
+// Source: rathena/src/map/packets_struct.hpp:2337
+// (`PACKET_ZC_NOTIFY_CHAT { int16 PacketType; int16 PacketLength;
+// uint32 GID; char Message[] }`) +
+// rathena/src/map/clif.cpp:6752-6769 (clif_GlobalMessage). rAthena
+// broadcasts `<name> : <text>` — the dispatcher layer is responsible
+// for prepending the name; this encoder writes the message verbatim.
+//
+// The wire length is 2+2+4 + len(message)+1 (one byte for the NUL
+// terminator rAthena writes via safestrncpy). The NUL is appended
+// unconditionally even when message already ends with one — matching
+// rAthena's `safestrncpy(p->Message, message, len)` semantics where
+// `len = strlen(message) + 1`.
+type NotifyChatResponse struct {
+	// GID is the entity ID of the speaker (rAthena's `bl.id`). For the
+	// gateway's single-player echo the gateway substitutes the
+	// connection's authenticated AID until a true zone-resident GID is
+	// available — AID is the only persistent identifier the gateway
+	// caches today.
+	GID uint32
+	// Message is the text the client sees in the chat log. UTF-8 for
+	// Thai Classic.
+	Message string
+}
+
+// Encode writes the ZC_NOTIFY_CHAT packet to w. The wire shape is
+// [2:cmd=0x008d][2:packetLength][4:GID][n:message+null]; the encoder
+// computes packetLength from the message size rather than trusting a
+// precomputed field so the caller cannot accidentally emit a packet
+// whose length slot disagrees with the trailing bytes.
+func (r NotifyChatResponse) Encode(w io.Writer) error {
+	msgBytes := []byte(r.Message)
+	// 4 (header) + 4 (GID) + len(msg) + 1 (NUL terminator).
+	total := 4 + 4 + len(msgBytes) + 1
+	buf := make([]byte, total)
+	// int16 packetType = 0x008d (HeaderZCNOTIFYCHAT).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYCHAT)
+	// int16 packetLength at offset 2 — full frame length including header.
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // total fits in uint16 for any message under CHAT_SIZE_MAX (≈ 255)
+	// uint32 GID at offset 4.
+	binary.LittleEndian.PutUint32(buf[4:], r.GID)
+	// char Message[] at offset 8 + trailing NUL.
+	copy(buf[8:], msgBytes)
+	// buf[8+len(msgBytes)] is already 0x00 from make().
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_NOTIFY_CHAT: %w", err)
+	}
+	return nil
+}
+
+// ActionResponse encodes a ZC_ACTION_RESPONSE packet (command 0x008b,
+// 11 bytes fixed). The server broadcasts this to echo a player's
+// sit/stand/attack action back to nearby clients; the gateway uses it
+// as the single-player echo path for CZ_ACTION_REQUEST (no AOI yet).
+//
+// Wire shape: [2:cmd=0x008b][4:GID][1:action][4:targetGID] = 11 bytes.
+//
+// rAthena's modern sit/stand broadcast actually goes through
+// ZC_NOTIFY_ACT (0x008a) — see clif_sitting/clif_standing in
+// rathena/src/map/clif.cpp:5327-5358. We use the compact 0x008b shape
+// for the single-player echo path because (a) it is what the rAthena
+// packetdb registers at clif_packetdb.hpp:39 and (b) the only client
+// behavior that depends on the opcode is the on-screen sprite update,
+// which 0x008b also drives correctly for the local player.
+//
+// Source: rathena/src/map/clif_packetdb.hpp:39 +
+// clif_parse_ActionRequest at rathena/src/map/clif.cpp:11816-11829
+// (the request side) for the field naming.
+type ActionResponse struct {
+	// GID is the entity ID of the actor — the player whose action is
+	// being echoed. For sit/stand this is the player's own GID.
+	GID uint32
+	// Action is the action selector byte, copied verbatim from the
+	// incoming CZ_ACTION_REQUEST.
+	Action uint8
+	// TargetGID is the entity the action targets — for sit/stand this
+	// is the player's own GID (self-targeted); for attack it is the
+	// victim's GID. The single-player echo always sends 0 since there
+	// is no separate "self" field on the wire that the client can
+	// disambiguate from "no target".
+	TargetGID uint32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 11).
+func (r ActionResponse) Size() int {
+	return sizeZCActionResponse
+}
+
+// Encode writes the ZC_ACTION_RESPONSE packet to w.
+func (r ActionResponse) Encode(w io.Writer) error {
+	buf := make([]byte, sizeZCActionResponse)
+	// int16 packetType = 0x008b (HeaderZCACTIONRESPONSE).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACTIONRESPONSE)
+	// uint32 GID at offset 2.
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	// uint8 action at offset 6.
+	buf[6] = r.Action
+	// uint32 targetGID at offset 7.
+	binary.LittleEndian.PutUint32(buf[7:], r.TargetGID)
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_ACTION_RESPONSE: %w", err)
+	}
+	return nil
+}

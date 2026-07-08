@@ -15,14 +15,16 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		length    int
 		direction Direction
 	}
-	// 4 C→S + 13 S→C = 17 entries total. The three variable-length list
-	// packets (inventory normal/equip, skill list) and the fixed-length
-	// hotkey list (0x02b9, 191 bytes) were added in M10.
+	// 6 C→S + 15 S→C = 21 entries total. M11 added CZ_ACTION_REQUEST,
+	// CZ_GLOBAL_MESSAGE, ZC_NOTIFY_CHAT, and ZC_ACTION_RESPONSE for the
+	// chat + sit/stand handlers.
 	checks := []expect{
 		{HeaderCZENTER, "CZ_ENTER", sizeCZEnter, DirectionClientToServer},
 		{HeaderCZREQUESTMOVE, "CZ_REQUEST_MOVE", sizeCZRequestMove, DirectionClientToServer},
 		{HeaderCZNOTIFYACTORINIT, "CZ_NOTIFY_ACTORINIT", sizeCZNotifyActorInit, DirectionClientToServer},
 		{HeaderCZREQUESTTIME, "CZ_REQUEST_TIME", sizeCZRequestTime, DirectionClientToServer},
+		{HeaderCZACTIONREQUEST, "CZ_ACTION_REQUEST", sizeCZActionRequest, DirectionClientToServer},
+		{HeaderCZGLOBALMESSAGE, "CZ_GLOBAL_MESSAGE", VariableLength, DirectionClientToServer},
 
 		{HeaderZCREFUSEENTER, "ZC_REFUSE_ENTER", sizeZCRefuseEnter, DirectionServerToClient},
 		{HeaderZCACCEPTENTER, "ZC_ACCEPT_ENTER", sizeZCAcceptEnter, DirectionServerToClient},
@@ -37,6 +39,8 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCINVENTORYITEMLISTEQUIP, "ZC_INVENTORY_ITEMLIST_EQUIP", VariableLength, DirectionServerToClient},
 		{HeaderZCSKILLINFOLIST, "ZC_SKILLINFO_LIST", VariableLength, DirectionServerToClient},
 		{HeaderZCSHORTCUTKEYLIST, "ZC_SHORTCUT_KEY_LIST", sizeZCShortcutKeyList, DirectionServerToClient},
+		{HeaderZCNOTIFYCHAT, "ZC_NOTIFY_CHAT", VariableLength, DirectionServerToClient},
+		{HeaderZCACTIONRESPONSE, "ZC_ACTION_RESPONSE", sizeZCActionResponse, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -61,8 +65,8 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewMapServerDB()
-	// 4 C→S + 13 S→C = 17.
-	const want = 17
+	// 6 C→S + 15 S→C = 21.
+	const want = 21
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -81,6 +85,8 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderCZREQUESTMOVE, sizeCZRequestMove},
 		{HeaderCZNOTIFYACTORINIT, sizeCZNotifyActorInit},
 		{HeaderCZREQUESTTIME, sizeCZRequestTime},
+		{HeaderCZACTIONREQUEST, sizeCZActionRequest},
+		{HeaderCZGLOBALMESSAGE, VariableLength},
 		{HeaderZCACCEPTENTER, sizeZCAcceptEnter},
 		{HeaderZCREFUSEENTER, sizeZCRefuseEnter},
 		{HeaderZCNOTIFYPLAYERMOVE, sizeZCNotifyPlayerMove},
@@ -94,6 +100,8 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCINVENTORYITEMLISTEQUIP, VariableLength},
 		{HeaderZCSKILLINFOLIST, VariableLength},
 		{HeaderZCSHORTCUTKEYLIST, sizeZCShortcutKeyList},
+		{HeaderZCNOTIFYCHAT, VariableLength},
+		{HeaderZCACTIONRESPONSE, sizeZCActionResponse},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

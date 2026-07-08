@@ -43,6 +43,9 @@ const (
 	// MAX_HOTKEYS_PACKET=27). Total = 2 (opcode) + 27 * 7
 	// (hotkey_data) = 191 bytes.
 	zcShortcutKeyListSize = 191
+	// zcActionResponseSize is the fixed length of ZC_ACTION_RESPONSE
+	// (M11): [2:cmd][4:GID][1:action][4:targetGID] = 11 bytes.
+	zcActionResponseSize = 11
 )
 
 // acceptEnterHeaderSize is the fixed prefix length of HC_ACCEPT_ENTER
@@ -484,6 +487,80 @@ func stageCZRequestTime(t *testing.T, conn net.Conn, dec *netcodec.Decoder, dead
 	t.Logf("CZ_REQUEST_TIME ok: client_tick=%d", clientTick)
 }
 
+// stageCZGlobalMessage sends CZ_GLOBAL_MESSAGE and asserts ZC_NOTIFY_CHAT
+// arrives carrying the same message text and the AID as the GID (M11
+// echo path — no AOI yet). The wire layout is
+//
+//	[0:2]   cmd 0x008d
+//	[2:4]   packetLength
+//	[4:8]   GID
+//	[8:n+8] message bytes
+//	[n+8]   NUL terminator
+func stageCZGlobalMessage(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, aid uint32) {
+	t.Helper()
+	const message = "hello e2e"
+	if err := (packet.CZGlobalMessageRequest{Message: message}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_GLOBAL_MESSAGE: %v", err)
+	}
+
+	cmd, chatFrame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_NOTIFY_CHAT: %v", err)
+	}
+	if cmd != packet.HeaderZCNOTIFYCHAT {
+		t.Fatalf("CZ_GLOBAL_MESSAGE response cmd = 0x%04x, want 0x%04x (ZC_NOTIFY_CHAT); frame=% x",
+			cmd, packet.HeaderZCNOTIFYCHAT, chatFrame)
+	}
+	const wantLen = 4 + 4 + len(message) + 1 // header + GID + msg + NUL
+	if len(chatFrame) != wantLen {
+		t.Fatalf("ZC_NOTIFY_CHAT length = %d, want %d (frame=% x)",
+			len(chatFrame), wantLen, chatFrame)
+	}
+	if plen := binary.LittleEndian.Uint16(chatFrame[2:4]); int(plen) != wantLen {
+		t.Errorf("ZC_NOTIFY_CHAT packetLength = %d, want %d", plen, wantLen)
+	}
+	if gid := binary.LittleEndian.Uint32(chatFrame[4:8]); gid != aid {
+		t.Errorf("ZC_NOTIFY_CHAT GID = %d, want %d (AID-as-GID echo)", gid, aid)
+	}
+	if got := cstrBytes(chatFrame[8:]); got != message {
+		t.Errorf("ZC_NOTIFY_CHAT message = %q, want %q", got, message)
+	}
+	t.Logf("CZ_GLOBAL_MESSAGE ok: message=%q", message)
+}
+
+// stageCZActionRequestSit sends CZ_ACTION_REQUEST with action=1 (sit)
+// and asserts ZC_ACTION_RESPONSE echoes the same action byte back with
+// the AID stamped in the GID slot and targetGID=0.
+func stageCZActionRequestSit(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadline time.Duration, aid uint32) {
+	t.Helper()
+	if err := (packet.CZActionRequestRequest{TargetGID: aid, Action: 1}).Encode(conn); err != nil {
+		t.Fatalf("encode CZ_ACTION_REQUEST (sit): %v", err)
+	}
+
+	cmd, actFrame, err := feedAndNext(t, conn, dec, deadline)
+	if err != nil {
+		t.Fatalf("read ZC_ACTION_RESPONSE: %v", err)
+	}
+	if cmd != packet.HeaderZCACTIONRESPONSE {
+		t.Fatalf("CZ_ACTION_REQUEST response cmd = 0x%04x, want 0x%04x (ZC_ACTION_RESPONSE); frame=% x",
+			cmd, packet.HeaderZCACTIONRESPONSE, actFrame)
+	}
+	if len(actFrame) != zcActionResponseSize {
+		t.Fatalf("ZC_ACTION_RESPONSE length = %d, want %d",
+			len(actFrame), zcActionResponseSize)
+	}
+	if gid := binary.LittleEndian.Uint32(actFrame[2:6]); gid != aid {
+		t.Errorf("ZC_ACTION_RESPONSE GID = %d, want %d (AID-as-GID echo)", gid, aid)
+	}
+	if actFrame[6] != 0x01 {
+		t.Errorf("ZC_ACTION_RESPONSE action = %d, want 1 (sit)", actFrame[6])
+	}
+	if tgt := binary.LittleEndian.Uint32(actFrame[7:11]); tgt != 0 {
+		t.Errorf("ZC_ACTION_RESPONSE targetGID = %d, want 0", tgt)
+	}
+	t.Logf("CZ_ACTION_REQUEST ok: action=sit gid=%d", aid)
+}
+
 // TestE2E_GatewayFullFlow_TCP speaks the raw kRO binary packet protocol
 // over a single TCP connection to the running gateway and exercises the
 // full login → char → map → move round-trip across every real
@@ -534,6 +611,11 @@ func TestE2E_GatewayFullFlow_TCP(t *testing.T) {
 	stageCZNotifyActorInit(t, conn, dec, ioDeadline)
 	stageCZRequestTime(t, conn, dec, ioDeadline)
 	stageCZRequestMove(t, conn, dec, ioDeadline, spawnX, spawnY)
+	// M11: chat + sit/stand echo. The single-player echo path drops
+	// packets back to the sender with the AID stamped as the GID — no
+	// AOI broadcast yet (zone-side work in M14+).
+	stageCZGlobalMessage(t, conn, dec, ioDeadline, aid)
+	stageCZActionRequestSit(t, conn, dec, ioDeadline, aid)
 }
 
 // cstrBytes returns the NUL-terminated prefix of b as a string, or the
