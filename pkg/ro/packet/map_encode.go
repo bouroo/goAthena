@@ -594,8 +594,37 @@ func StatusPointCost(currentVal uint8) uint8 {
 	return uint8(1 + (int(currentVal)+9)/10) //nolint:gosec // max return is 1+(255+9)/10 = 27
 }
 
-// EncodeEmptyInventoryListNormal returns the on-wire bytes for an empty
-// ZC_INVENTORY_ITEMLIST_NORMAL packet (opcode 0x00a3, 4 bytes).
+// The four empty list packets are completely static — their bytes never
+// change — so they are built once at package init and shared by every
+// caller. Callers must treat the returned slices as read-only.
+var (
+	emptyInventoryListNormal []byte
+	emptyInventoryListEquip  []byte
+	emptySkillList           []byte
+	emptyHotkeyList          []byte
+)
+
+func init() {
+	emptyInventoryListNormal = make([]byte, sizeEmptyInventoryList)
+	binary.LittleEndian.PutUint16(emptyInventoryListNormal[0:], HeaderZCINVENTORYITEMLISTNORMAL)
+	binary.LittleEndian.PutUint16(emptyInventoryListNormal[2:], sizeEmptyInventoryList)
+
+	emptyInventoryListEquip = make([]byte, sizeEmptyInventoryList)
+	binary.LittleEndian.PutUint16(emptyInventoryListEquip[0:], HeaderZCINVENTORYITEMLISTEQUIP)
+	binary.LittleEndian.PutUint16(emptyInventoryListEquip[2:], sizeEmptyInventoryList)
+
+	emptySkillList = make([]byte, sizeEmptyInventoryList)
+	binary.LittleEndian.PutUint16(emptySkillList[0:], HeaderZCSKILLINFOLIST)
+	binary.LittleEndian.PutUint16(emptySkillList[2:], sizeEmptyInventoryList)
+
+	emptyHotkeyList = make([]byte, sizeZCShortcutKeyList)
+	binary.LittleEndian.PutUint16(emptyHotkeyList[0:], HeaderZCSHORTCUTKEYLIST)
+	// Remaining 189 bytes are zero (make already initializes to 0).
+}
+
+// EncodeEmptyInventoryListNormal returns the pre-allocated on-wire bytes
+// for an empty ZC_INVENTORY_ITEMLIST_NORMAL packet (opcode 0x00a3, 4
+// bytes). Callers must not modify the returned slice.
 //
 // Layout: [2:cmd=0x00a3][2:packetLength=4] (no NORMALITEM_INFO entries).
 //
@@ -611,14 +640,12 @@ func StatusPointCost(currentVal uint8) uint8 {
 // (ZC_INVENTORY_ITEMLIST_NORMAL); opcode at rathena/src/map/
 // clif_packetdb.hpp.
 func EncodeEmptyInventoryListNormal() []byte {
-	buf := make([]byte, sizeEmptyInventoryList)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTNORMAL)
-	binary.LittleEndian.PutUint16(buf[2:], sizeEmptyInventoryList)
-	return buf
+	return emptyInventoryListNormal
 }
 
-// EncodeEmptyInventoryListEquip returns the on-wire bytes for an empty
-// ZC_INVENTORY_ITEMLIST_EQUIP packet (opcode 0x00a4, 4 bytes).
+// EncodeEmptyInventoryListEquip returns the pre-allocated on-wire bytes
+// for an empty ZC_INVENTORY_ITEMLIST_EQUIP packet (opcode 0x00a4, 4
+// bytes). Callers must not modify the returned slice.
 //
 // Layout: [2:cmd=0x00a4][2:packetLength=4] (no EQUIPITEM_INFO entries).
 //
@@ -627,14 +654,12 @@ func EncodeEmptyInventoryListNormal() []byte {
 // a fresh character without gear both list packets must arrive empty
 // to populate the equipment and inventory slots in the client UI.
 func EncodeEmptyInventoryListEquip() []byte {
-	buf := make([]byte, sizeEmptyInventoryList)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTEQUIP)
-	binary.LittleEndian.PutUint16(buf[2:], sizeEmptyInventoryList)
-	return buf
+	return emptyInventoryListEquip
 }
 
-// EncodeEmptySkillList returns the on-wire bytes for an empty
-// ZC_SKILLINFO_LIST packet (opcode 0x010f, 4 bytes).
+// EncodeEmptySkillList returns the pre-allocated on-wire bytes for an
+// empty ZC_SKILLINFO_LIST packet (opcode 0x010f, 4 bytes). Callers must
+// not modify the returned slice.
 //
 // Layout: [2:cmd=0x010f][2:packetLength=4] (no SKILLDATA entries).
 //
@@ -644,14 +669,12 @@ func EncodeEmptyInventoryListEquip() []byte {
 // expects to see so it initializes the skill list pane without
 // leaving it in an indeterminate state.
 func EncodeEmptySkillList() []byte {
-	buf := make([]byte, sizeEmptyInventoryList)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSKILLINFOLIST)
-	binary.LittleEndian.PutUint16(buf[2:], sizeEmptyInventoryList)
-	return buf
+	return emptySkillList
 }
 
-// EncodeEmptyHotkeyList returns the on-wire bytes for an empty
-// ZC_SHORTCUT_KEY_LIST packet (opcode 0x02b9, 191 bytes).
+// EncodeEmptyHotkeyList returns the pre-allocated on-wire bytes for an
+// empty ZC_SHORTCUT_KEY_LIST packet (opcode 0x02b9, 191 bytes). Callers
+// must not modify the returned slice.
 //
 // Layout: [2:cmd=0x02b9] then 27 zero-filled hotkey_data slots, each
 // 7 bytes wide (int8 isSkill + uint32 id + int16 count). Total wire
@@ -666,8 +689,5 @@ func EncodeEmptySkillList() []byte {
 // client. hotkey_data is declared at
 // rathena/src/map/packets_struct.hpp:1576-1580.
 func EncodeEmptyHotkeyList() []byte {
-	buf := make([]byte, sizeZCShortcutKeyList)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSHORTCUTKEYLIST)
-	// Remaining 189 bytes are zero (make already initializes to 0).
-	return buf
+	return emptyHotkeyList
 }
