@@ -498,6 +498,295 @@ func TestSpawnUnitResponse_Encode_ZeroValues(t *testing.T) {
 	}
 }
 
+func TestUnitWalkingResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r UnitWalkingResponse
+	if got, want := r.Size(), sizeZCUnitWalking; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestUnitWalkingResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := UnitWalkingResponse{
+		ObjectType:    0, // PC
+		AID:           4242,
+		GID:           4242,
+		Speed:         150,
+		BodyState:     0,
+		HealthState:   0,
+		EffectState:   0,
+		Job:           1, // swordsman
+		Head:          5,
+		Weapon:        0x00010002,
+		Shield:        0x00010003,
+		Accessory:     0x0004,
+		MoveStartTime: 0x12345678,
+		Accessory2:    0x0005,
+		Accessory3:    0x0006,
+		HeadPalette:   7,
+		BodyPalette:   8,
+		HeadDir:       0,
+		Robe:          9,
+		GUID:          0,
+		GEmblemVer:    0,
+		Honor:         0,
+		Virtue:        0,
+		IsPKModeON:    0,
+		Sex:           1, // male
+		SrcX:          150,
+		SrcY:          200,
+		DestX:         165,
+		DestY:         210,
+		XSize:         5,
+		YSize:         5,
+		CLevel:        50,
+		Font:          0,
+		MaxHP:         1000,
+		HP:            1000,
+		IsBoss:        0,
+		Body:          0,
+		Name:          "Tester",
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	// 1. Total size must be exactly 114 bytes.
+	const wantLen = 114
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// 2. Opcode at [0:2] = 0x09fd LE.
+	if got[0] != 0xfd || got[1] != 0x09 {
+		t.Errorf("opcode bytes = %02x %02x, want fd 09 (LE 0x09fd)", got[0], got[1])
+	}
+
+	// 3. PacketLength at [2:4] = 114 LE.
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != 114 {
+		t.Errorf("packetLength = %d, want 114", plen)
+	}
+
+	// 4. Spot-check all field offsets with byte-exact values.
+	if got[4] != 0 {
+		t.Errorf("objectType = %d, want 0 (PC)", got[4])
+	}
+	if aid := binary.LittleEndian.Uint32(got[5:9]); aid != 4242 {
+		t.Errorf("AID = %d, want 4242", aid)
+	}
+	if gid := binary.LittleEndian.Uint32(got[9:13]); gid != 4242 {
+		t.Errorf("GID = %d, want 4242", gid)
+	}
+	if speed := binary.LittleEndian.Uint16(got[13:15]); speed != 150 {
+		t.Errorf("speed = %d, want 150", speed)
+	}
+	if bodyState := binary.LittleEndian.Uint16(got[15:17]); bodyState != 0 {
+		t.Errorf("bodyState = %d, want 0", bodyState)
+	}
+	if healthState := binary.LittleEndian.Uint16(got[17:19]); healthState != 0 {
+		t.Errorf("healthState = %d, want 0", healthState)
+	}
+	if effectState := binary.LittleEndian.Uint32(got[19:23]); effectState != 0 {
+		t.Errorf("effectState = %d, want 0", effectState)
+	}
+	if job := binary.LittleEndian.Uint16(got[23:25]); job != 1 {
+		t.Errorf("job = %d, want 1", job)
+	}
+	if head := binary.LittleEndian.Uint16(got[25:27]); head != 5 {
+		t.Errorf("head = %d, want 5", head)
+	}
+	if weapon := binary.LittleEndian.Uint32(got[27:31]); weapon != 0x00010002 {
+		t.Errorf("weapon = 0x%08x, want 0x00010002", weapon)
+	}
+	if shield := binary.LittleEndian.Uint32(got[31:35]); shield != 0x00010003 {
+		t.Errorf("shield = 0x%08x, want 0x00010003", shield)
+	}
+	if acc := binary.LittleEndian.Uint16(got[35:37]); acc != 0x0004 {
+		t.Errorf("accessory = 0x%04x, want 0x0004", acc)
+	}
+	// moveStartTime is inserted at offset 37 (vs ZC_SPAWN_UNIT which has
+	// accessory2 here).
+	if ms := binary.LittleEndian.Uint32(got[37:41]); ms != 0x12345678 {
+		t.Errorf("moveStartTime = 0x%x, want 0x12345678", ms)
+	}
+	if acc2 := binary.LittleEndian.Uint16(got[41:43]); acc2 != 0x0005 {
+		t.Errorf("accessory2 = 0x%04x, want 0x0005", acc2)
+	}
+	if acc3 := binary.LittleEndian.Uint16(got[43:45]); acc3 != 0x0006 {
+		t.Errorf("accessory3 = 0x%04x, want 0x0006", acc3)
+	}
+	if hp := binary.LittleEndian.Uint16(got[45:47]); hp != 7 {
+		t.Errorf("headPalette = %d, want 7", hp)
+	}
+	if bp := binary.LittleEndian.Uint16(got[47:49]); bp != 8 {
+		t.Errorf("bodyPalette = %d, want 8", bp)
+	}
+	if hd := binary.LittleEndian.Uint16(got[49:51]); hd != 0 {
+		t.Errorf("headDir = %d, want 0", hd)
+	}
+	if robe := binary.LittleEndian.Uint16(got[51:53]); robe != 9 {
+		t.Errorf("robe = %d, want 9", robe)
+	}
+	if guid := binary.LittleEndian.Uint32(got[53:57]); guid != 0 {
+		t.Errorf("GUID = %d, want 0", guid)
+	}
+	if gev := binary.LittleEndian.Uint16(got[57:59]); gev != 0 {
+		t.Errorf("GEmblemVer = %d, want 0", gev)
+	}
+	if honor := binary.LittleEndian.Uint16(got[59:61]); honor != 0 {
+		t.Errorf("honor = %d, want 0", honor)
+	}
+	if virtue := binary.LittleEndian.Uint32(got[61:65]); virtue != 0 {
+		t.Errorf("virtue = %d, want 0", virtue)
+	}
+	if got[65] != 0 {
+		t.Errorf("isPKModeON = %d, want 0", got[65])
+	}
+	if got[66] != 1 {
+		t.Errorf("sex = %d, want 1 (male)", got[66])
+	}
+
+	// 5. MoveData[6] at [67:73] must round-trip src then dest through
+	// encodePos/decodePos.
+	gotSrcX, gotSrcY, gotSrcDir := decodePos(got[67:70])
+	if gotSrcX != 150 || gotSrcY != 200 || gotSrcDir != 0 {
+		t.Errorf("srcPos unpacked = (%d, %d, dir=%d), want (150, 200, 0); bytes = %x",
+			gotSrcX, gotSrcY, gotSrcDir, got[67:70])
+	}
+	var wantSrc [3]byte
+	encodePos(wantSrc[:], 150, 200, 0)
+	if !bytes.Equal(got[67:70], wantSrc[:]) {
+		t.Errorf("srcPos = %v, want %v", got[67:70], wantSrc[:])
+	}
+	gotDestX, gotDestY, gotDestDir := decodePos(got[70:73])
+	if gotDestX != 165 || gotDestY != 210 || gotDestDir != 0 {
+		t.Errorf("destPos unpacked = (%d, %d, dir=%d), want (165, 210, 0); bytes = %x",
+			gotDestX, gotDestY, gotDestDir, got[70:73])
+	}
+	var wantDest [3]byte
+	encodePos(wantDest[:], 165, 210, 0)
+	if !bytes.Equal(got[70:73], wantDest[:]) {
+		t.Errorf("destPos = %v, want %v", got[70:73], wantDest[:])
+	}
+
+	// 6. Sizes + level + HP at [73:88].
+	if got[73] != 5 {
+		t.Errorf("xSize = %d, want 5", got[73])
+	}
+	if got[74] != 5 {
+		t.Errorf("ySize = %d, want 5", got[74])
+	}
+	if clevel := binary.LittleEndian.Uint16(got[75:77]); clevel != 50 {
+		t.Errorf("clevel = %d, want 50", clevel)
+	}
+	if font := binary.LittleEndian.Uint16(got[77:79]); font != 0 {
+		t.Errorf("font = %d, want 0", font)
+	}
+	if maxHP := binary.LittleEndian.Uint32(got[79:83]); maxHP != 1000 {
+		t.Errorf("maxHP = %d, want 1000", maxHP)
+	}
+	if hp := binary.LittleEndian.Uint32(got[83:87]); hp != 1000 {
+		t.Errorf("HP = %d, want 1000", hp)
+	}
+	if got[87] != 0 {
+		t.Errorf("isBoss = %d, want 0", got[87])
+	}
+
+	// 7. Body at [88:90] and name at [90:114] (24 bytes).
+	if body := binary.LittleEndian.Uint16(got[88:90]); body != 0 {
+		t.Errorf("body = %d, want 0", body)
+	}
+	nameBytes := got[90:114]
+	wantName := []byte("Tester")
+	if !bytes.Equal(nameBytes[:len(wantName)], wantName) {
+		t.Errorf("name prefix = %q, want %q", nameBytes[:len(wantName)], wantName)
+	}
+	for i := len(wantName); i < 24; i++ {
+		if nameBytes[i] != 0 {
+			t.Errorf("name byte at [%d] = 0x%02x, want 0x00 (null pad)", i, nameBytes[i])
+		}
+	}
+}
+
+func TestUnitWalkingResponse_Encode_NameTruncation(t *testing.T) {
+	t.Parallel()
+
+	// Names longer than 24 bytes must be truncated to 24 bytes — same
+	// rAthena memcpy(name, src, 24) pattern as ZC_SPAWN_UNIT.
+	longName := strings.Repeat("B", 40)
+	resp := UnitWalkingResponse{Name: longName}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 114 {
+		t.Fatalf("len(got) = %d, want 114", len(got))
+	}
+	wantName := []byte(strings.Repeat("B", 24))
+	if !bytes.Equal(got[90:114], wantName) {
+		t.Errorf("truncated name = %q, want 24 'B's", got[90:114])
+	}
+}
+
+func TestUnitWalkingResponse_Encode_ZeroValues(t *testing.T) {
+	t.Parallel()
+
+	// Zero-value encode must still produce 114 bytes with all fields
+	// at zero and a 24-byte NUL-padded name field. Src == dest == (0,0)
+	// is a degenerate-but-legal observer broadcast (an entity that
+	// "moves" without actually changing cells).
+	resp := UnitWalkingResponse{}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	if len(got) != 114 {
+		t.Fatalf("zero-value len = %d, want 114", len(got))
+	}
+	if got[0] != 0xfd || got[1] != 0x09 {
+		t.Errorf("opcode = %02x %02x, want fd 09", got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != 114 {
+		t.Errorf("packetLength = %d, want 114", plen)
+	}
+	if aid := binary.LittleEndian.Uint32(got[5:9]); aid != 0 {
+		t.Errorf("AID = %d, want 0", aid)
+	}
+	if gid := binary.LittleEndian.Uint32(got[9:13]); gid != 0 {
+		t.Errorf("GID = %d, want 0", gid)
+	}
+	if ms := binary.LittleEndian.Uint32(got[37:41]); ms != 0 {
+		t.Errorf("moveStartTime = %d, want 0", ms)
+	}
+	// Name field must be 24 zero bytes.
+	for i := 90; i < 114; i++ {
+		if got[i] != 0 {
+			t.Errorf("name byte at [%d] = 0x%02x, want 0x00", i, got[i])
+		}
+	}
+	// Src and dest pos both round-trip to (0, 0, 0).
+	gotX, gotY, gotDir := decodePos(got[67:70])
+	if gotX != 0 || gotY != 0 || gotDir != 0 {
+		t.Errorf("srcPos = (%d, %d, dir=%d), want (0, 0, 0)", gotX, gotY, gotDir)
+	}
+	gotX, gotY, gotDir = decodePos(got[70:73])
+	if gotX != 0 || gotY != 0 || gotDir != 0 {
+		t.Errorf("destPos = (%d, %d, dir=%d), want (0, 0, 0)", gotX, gotY, gotDir)
+	}
+}
+
 // CZEnterRequest round-trip tests — exercise the request-side encoder that
 // is the inverse of ParseCZEnter.
 

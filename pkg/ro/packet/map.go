@@ -50,6 +50,7 @@ const (
 	HeaderZCNOTIFYPLAYERMOVE uint16 = 0x0087 // rathena/src/map/packets.hpp (ZC_NOTIFY_PLAYERMOVE)
 	HeaderZCSPAWNUNIT        uint16 = 0x09fe // rathena/src/map/packets.hpp ZC_SPAWN_UNIT (PACKETVER >= 20150513 branch)
 	HeaderZCSETUNITIDLE      uint16 = 0x09ff // rathena/src/map/packets.hpp ZC_SET_UNIT_IDLE (same layout as ZC_SPAWN_UNIT, different opcode)
+	HeaderZCUNITWALKING      uint16 = 0x09fd // rathena/src/map/packets_struct.hpp unit_walkingType (PACKETVER >= 20150513)
 	HeaderZCMAPPROPERTYR2    uint16 = 0x099b // rathena/src/map/clif.cpp:6869 (ZC_MAPPROPERTY_R2, PACKETVER >= 20121010)
 	HeaderZCNOTIFYTIME       uint16 = 0x007f // rathena/src/map/clif.cpp:11186 (ZC_NOTIFY_TIME)
 	// ZC_ACTION_RESPONSE (0x008b) — sit/stand/attack broadcast echo. rAthena
@@ -203,6 +204,21 @@ const (
 	// PACKETVER 20250604. rAthena's clif_set_unit_idle writes the same
 	// packet_idle_unit struct with the same field order and size.
 	sizeZCSetUnitIdle = 107
+	// sizeZCUnitWalking = uint16 packetType + uint16 packetLength +
+	// uint8 objectType + uint32 AID + uint32 GID + int16 speed + int16 bodyState
+	// + int16 healthState + int32 effectState + int16 job + uint16 head
+	// + uint32 weapon + uint32 shield + uint16 accessory + uint32 moveStartTime
+	// + uint16 accessory2 + uint16 accessory3 + int16 headPalette + int16 bodyPalette
+	// + int16 headDir + uint16 robe + uint32 GUID + int16 GEmblemVer + int16 honor
+	// + int32 virtue + uint8 isPKModeON + uint8 sex + uint8 moveData[6]
+	// + uint8 xSize + uint8 ySize + int16 clevel + int16 font
+	// + int32 maxHP + int32 HP + uint8 isBoss + int16 body + char name[24]
+	// = 2+2+1+4+4+2+2+2+4+2+2+4+4+2+4+2+2+2+2+2+2+4+2+2+4+1+1+6+1+1+2+2+4+4+1+2+24
+	// = 114 (rathena/src/map/packets_struct.hpp:758-830, PACKETVER >= 20150513
+	// branch). Compared to ZC_SPAWN_UNIT the moveStartTime field is inserted
+	// after accessory and the single posDir[3] slot is replaced by a 6-byte
+	// src+dest pair (total +7 bytes: 107 → 114).
+	sizeZCUnitWalking = 114
 	// sizeSpawnUnitName is the on-wire name field width in
 	// ZC_SPAWN_UNIT (rathena/src/map/packets.hpp ZC_SPAWN_UNIT::name).
 	sizeSpawnUnitName = 24
@@ -566,6 +582,18 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCSETUNITIDLE,
 		Name:      "ZC_SET_UNIT_IDLE",
 		Length:    sizeZCSetUnitIdle,
+		Direction: DirectionServerToClient,
+	})
+	// M-phase1: ZC_UNIT_WALKING (fixed 114 bytes) — observer movement
+	// broadcast. rAthena's clif_set_unit_walking writes the
+	// packet_unit_walking struct (rathena/src/map/packets_struct.hpp:758-830,
+	// PACKETVER >= 20150513 branch) and sends it via the area-WIDE path,
+	// excluding the moving entity itself. The self-only move ack is
+	// ZC_NOTIFY_PLAYERMOVE (0x0087); this packet is the broadcast leg.
+	db.Register(Definition{
+		ID:        HeaderZCUNITWALKING,
+		Name:      "ZC_UNIT_WALKING",
+		Length:    sizeZCUnitWalking,
 		Direction: DirectionServerToClient,
 	})
 	// M15: NPC dialog interaction — CZ_CONTACTNPC (fixed 7 bytes),

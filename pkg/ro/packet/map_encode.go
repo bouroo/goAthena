@@ -335,6 +335,223 @@ func (r SetUnitIdleResponse) Encode(w io.Writer) error {
 	return encodeSpawnUnitLike(w, HeaderZCSETUNITIDLE, SpawnUnitResponse(r))
 }
 
+// UnitWalkingResponse encodes a ZC_UNIT_WALKING packet (command 0x09fd,
+// active for PACKETVER >= 20150513 — which covers Thai Classic 20250604).
+// The server broadcasts this to nearby clients every time an entity
+// moves, so each peer can interpolate the sprite from src to dest.
+// Layout source:
+//
+//	rathena/src/map/clif.cpp clif_set_unit_walking (line 1369 — the
+//		area-WIDE broadcast, excluding the mover itself)
+//	rathena/src/map/packets_struct.hpp packet_unit_walking (758-830,
+//		PACKETVER >= 20150513 branch — same field set as packet_spawn_unit
+//		with a moveStartTime inserted after accessory and the posDir[3]
+//		slot replaced by a 6-byte src+dest pair).
+//
+// Fixed wire length: 114 bytes. Field layout:
+//
+//	uint16 packetType   (0x09fd)
+//	uint16 packetLength (114)
+//	uint8  objectType
+//	uint32 AID
+//	uint32 GID
+//	int16  speed
+//	int16  bodyState
+//	int16  healthState
+//	int32  effectState
+//	int16  job
+//	uint16 head
+//	uint32 weapon
+//	uint32 shield
+//	uint16 accessory
+//	uint32 moveStartTime   ← inserted after accessory (vs ZC_SPAWN_UNIT)
+//	uint16 accessory2
+//	uint16 accessory3
+//	int16  headPalette
+//	int16  bodyPalette
+//	int16  headDir
+//	uint16 robe
+//	uint32 GUID
+//	int16  GEmblemVer
+//	int16  honor
+//	int32  virtue
+//	uint8  isPKModeON
+//	uint8  sex
+//	uint8  moveData[6]    ← src posDir[3] ++ dest posDir[3]
+//	uint8  xSize
+//	uint8  ySize
+//	int16  clevel
+//	int16  font
+//	int32  maxHP
+//	int32  HP
+//	uint8  isBoss
+//	int16  body
+//	char   name[24]
+//
+// The moveData[6] slot uses rAthena's kRO 3-byte packed position
+// encoding (clif.cpp:173-178 WBUFPOS) twice — once for the source cell
+// and once for the destination cell — with the direction byte of each
+// fixed to 0 because the broadcast packet only describes the path
+// endpoints, not the per-cell facing.
+//
+// MoveStartTime is the server's monotone tick at the moment the move
+// was accepted — rAthena writes the same value into ZC_NOTIFY_PLAYERMOVE
+// (0x0087, the self-only move ack) so the local player can use it for
+// anti-DoS checking; on the observer side it drives client-side path
+// interpolation timing.
+//
+// This packet is distinct from ZC_NOTIFY_PLAYERMOVE (0x0087): that one
+// is the self-only move-ack sent to the mover, this one is the
+// observer broadcast sent to every other client in the area.
+//
+// Name is written as a fixed-width 24-byte field; callers must supply
+// a UTF-8 name and any bytes past len(Name) are null-padded, matching
+// rAthena's memcpy-with-NUL-fill pattern. Names longer than 24 bytes
+// are truncated.
+type UnitWalkingResponse struct {
+	// ObjectType is the entity class: 0=PC, 5=MOB, 6=NPC_EVT.
+	ObjectType uint8
+	// AID is the account ID (rAthena's `account_id`). For a PC walk
+	// this equals GID.
+	AID uint32
+	// GID is the entity ID (rAthena's `id`). For a PC walk this
+	// equals AID.
+	GID uint32
+	// Speed is the walk speed in kRO units (150 = default PC).
+	Speed int16
+	// BodyState is the body animation state (0 = standing).
+	BodyState int16
+	// HealthState is the health overlay state (0 = normal).
+	HealthState int16
+	// EffectState is the cumulative status-effect bitmask (0 = none).
+	EffectState int32
+	// Job is the job class ID (0 = novice, 1 = swordsman, etc.).
+	Job int16
+	// Head is the hair-style view sprite ID.
+	Head uint16
+	// Weapon is the equipped weapon view sprite.
+	Weapon uint32
+	// Shield is the equipped shield view sprite.
+	Shield uint32
+	// Accessory is the headgear (bottom) view sprite.
+	Accessory uint16
+	// MoveStartTime is the server's monotone tick at the moment the
+	// move was accepted — observers use it to drive sprite
+	// interpolation timing.
+	MoveStartTime uint32
+	// Accessory2 is the headgear (top) view sprite.
+	Accessory2 uint16
+	// Accessory3 is the headgear (mid) view sprite.
+	Accessory3 uint16
+	// HeadPalette is the hair color (palette index).
+	HeadPalette int16
+	// BodyPalette is the body/clothes color (palette index).
+	BodyPalette int16
+	// HeadDir is the head-facing direction (separate from body dir,
+	// used for "looking sideways" overlays).
+	HeadDir int16
+	// Robe is the robe overlay sprite ID.
+	Robe uint16
+	// GUID is the guild ID (0 = no guild).
+	GUID uint32
+	// GEmblemVer is the guild-emblem version (0 = no emblem).
+	GEmblemVer int16
+	// Honor is the honor/rank points (rAthena's `honor`).
+	Honor int16
+	// Virtue is the fame/virtue value (rAthena's `virtue`).
+	Virtue int32
+	// IsPKModeON is the PK-mode flag (0 = off, 1 = on).
+	IsPKModeON uint8
+	// Sex is the sex byte: 0=female, 1=male, 2=server.
+	Sex uint8
+	// SrcX, SrcY are the cell coordinates the move started from.
+	SrcX int16
+	SrcY int16
+	// DestX, DestY are the cell coordinates the move targets.
+	DestX int16
+	DestY int16
+	// XSize, YSize are the collision-size hints (rAthena hardcodes 5
+	// for PCs; clients tolerate any value but the server convention is
+	// 5/5).
+	XSize uint8
+	YSize uint8
+	// CLevel is the character level.
+	CLevel int16
+	// Font is the font ID for the client-side name overlay (0 = default).
+	Font int16
+	// MaxHP is the maximum HP.
+	MaxHP int32
+	// HP is the current HP at the moment of the broadcast.
+	HP int32
+	// IsBoss is the boss-monster flag (0 = normal; non-zero for MOB
+	// walks only — the PC walk always writes 0).
+	IsBoss uint8
+	// Body is the body/clothes sprite ID.
+	Body int16
+	// Name is the character name (UTF-8 for Thai Classic). The encoder
+	// null-pads to 24 bytes; names longer than 24 bytes are truncated.
+	Name string
+}
+
+// Size returns the on-wire byte length that Encode will write (always 114).
+func (r UnitWalkingResponse) Size() int {
+	return sizeZCUnitWalking
+}
+
+// Encode writes the ZC_UNIT_WALKING packet to w.
+func (r UnitWalkingResponse) Encode(w io.Writer) error {
+	buf := make([]byte, sizeZCUnitWalking)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCUNITWALKING)
+	binary.LittleEndian.PutUint16(buf[2:], sizeZCUnitWalking)
+	buf[4] = r.ObjectType
+	binary.LittleEndian.PutUint32(buf[5:], r.AID)
+	binary.LittleEndian.PutUint32(buf[9:], r.GID)
+	binary.LittleEndian.PutUint16(buf[13:], uint16(r.Speed))       //nolint:gosec // wire slot is unsigned
+	binary.LittleEndian.PutUint16(buf[15:], uint16(r.BodyState))   //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[17:], uint16(r.HealthState)) //nolint:gosec // ditto
+	binary.LittleEndian.PutUint32(buf[19:], uint32(r.EffectState)) //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[23:], uint16(r.Job))         //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[25:], r.Head)
+	binary.LittleEndian.PutUint32(buf[27:], r.Weapon)
+	binary.LittleEndian.PutUint32(buf[31:], r.Shield)
+	binary.LittleEndian.PutUint16(buf[35:], r.Accessory)
+	// uint32 moveStartTime at offset 37 — inserted here (vs ZC_SPAWN_UNIT).
+	binary.LittleEndian.PutUint32(buf[37:], r.MoveStartTime)
+	binary.LittleEndian.PutUint16(buf[41:], r.Accessory2)
+	binary.LittleEndian.PutUint16(buf[43:], r.Accessory3)
+	binary.LittleEndian.PutUint16(buf[45:], uint16(r.HeadPalette)) //nolint:gosec // wire slot is unsigned
+	binary.LittleEndian.PutUint16(buf[47:], uint16(r.BodyPalette)) //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[49:], uint16(r.HeadDir))     //nolint:gosec // ditto
+	binary.LittleEndian.PutUint16(buf[51:], r.Robe)
+	binary.LittleEndian.PutUint32(buf[53:], r.GUID)
+	binary.LittleEndian.PutUint16(buf[57:], uint16(r.GEmblemVer)) //nolint:gosec // wire slot is unsigned
+	binary.LittleEndian.PutUint16(buf[59:], uint16(r.Honor))      //nolint:gosec // ditto
+	binary.LittleEndian.PutUint32(buf[61:], uint32(r.Virtue))     //nolint:gosec // ditto
+	buf[65] = r.IsPKModeON
+	buf[66] = r.Sex
+	// uint8 moveData[6] at offset 67 — kRO 3-byte packed src pos ++ dest pos.
+	encodePos(buf[67:70], r.SrcX, r.SrcY, 0)
+	encodePos(buf[70:73], r.DestX, r.DestY, 0)
+	buf[73] = r.XSize
+	buf[74] = r.YSize
+	binary.LittleEndian.PutUint16(buf[75:], uint16(r.CLevel)) //nolint:gosec // wire slot is unsigned
+	binary.LittleEndian.PutUint16(buf[77:], uint16(r.Font))   //nolint:gosec // ditto
+	binary.LittleEndian.PutUint32(buf[79:], uint32(r.MaxHP))  //nolint:gosec // ditto
+	binary.LittleEndian.PutUint32(buf[83:], uint32(r.HP))     //nolint:gosec // ditto
+	buf[87] = r.IsBoss
+	binary.LittleEndian.PutUint16(buf[88:], uint16(r.Body)) //nolint:gosec // wire slot is unsigned
+	nameBytes := []byte(r.Name)
+	if len(nameBytes) > sizeSpawnUnitName {
+		nameBytes = nameBytes[:sizeSpawnUnitName]
+	}
+	copy(buf[90:90+len(nameBytes)], nameBytes)
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_UNIT_WALKING: %w", err)
+	}
+	return nil
+}
+
 // MapPropertyResponse is the ZC_MAPPROPERTY_R2 packet (0x099b, 8 bytes).
 // It tells the client the map's property type (PVP, GVG, normal) and
 // feature flags. For normal maps PropertyType=0 (MAPPROPERTY_NOTHING)
