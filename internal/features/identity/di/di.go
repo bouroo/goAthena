@@ -24,6 +24,8 @@ import (
 	"github.com/bouroo/goAthena/internal/features/identity/handler"
 	"github.com/bouroo/goAthena/internal/features/identity/repository"
 	"github.com/bouroo/goAthena/internal/features/identity/service"
+	inventorydomain "github.com/bouroo/goAthena/internal/features/inventory/domain"
+	inventoryrepo "github.com/bouroo/goAthena/internal/features/inventory/repository"
 )
 
 // Register wires the identity feature (login, char roster, warehouse
@@ -41,6 +43,7 @@ func Register(c do.Injector) error {
 	charRepo := repository.NewCharacterRepository(db)
 	sessionRepo := repository.NewSessionRepository(vk)
 	warehouseLock := repository.NewWarehouseLock(vk)
+	inventoryRepo := inventoryrepo.NewInventoryRepository(db)
 
 	identitySvc := service.NewIdentityService(
 		accountRepo,
@@ -49,6 +52,8 @@ func Register(c do.Injector) error {
 		logger,
 		cfg.Identity.UseMD5Passwords,
 		cfg.Identity.MaxChars,
+		inventoryRepo,
+		inventorydomain.ZeroItemWeight{},
 	)
 
 	identityv1.RegisterIdentityServiceServer(grpcServer, handler.NewGRPCHandler(identitySvc))

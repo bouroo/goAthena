@@ -198,6 +198,12 @@ func (h *DispatchHandler) handleMapPacket(ctx context.Context, conn *domain.Conn
 		return h.handleCZGetCharNameRequest(ctx, conn, resp, frame)
 	case packet.HeaderCZRESTART:
 		return h.handleCZRestart(ctx, conn, resp, frame)
+	case packet.HeaderCZUSEITEM2:
+		return h.handleCZUseItem(ctx, conn, resp, frame)
+	case packet.HeaderCZREQWEAREQUIPV5:
+		return h.handleCZReqWearEquip(ctx, conn, resp, frame)
+	case packet.HeaderCZREQTAKEOFFEQUIP:
+		return h.handleCZReqTakeoffEquip(ctx, conn, resp, frame)
 	default:
 		return h.handleMapPacketNPC(ctx, conn, resp, cmd, frame)
 	}
@@ -1043,7 +1049,7 @@ func (h *DispatchHandler) handleCZRequestMove(ctx context.Context, conn *domain.
 // the status burst. If the identity GetCharacter fetch fails, the
 // burst is sent with zero values — the client tolerates a default
 // stats window and the handshake still completes.
-func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder) error {
+func (h *DispatchHandler) handleCZNotifyActorInit(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder) error {
 	prop := packet.MapPropertyResponse{
 		PropertyType: 0, // MAPPROPERTY_NOTHING
 		Flags:        0,
@@ -1179,14 +1185,16 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 		}
 	}
 
-	// M10: append the four empty list packets to the burst. The order
-	// matches rAthena's clif_parse_LoadEndAck sequence
-	// (rathena/src/map/clif.cpp:10791-10915 — the inventory normal
-	// list, then equip list, then skill list, then hotkey list).
-	// bytes.Buffer.Write never returns an error, so the results are
-	// discarded.
-	_, _ = burst.Write(packet.EncodeEmptyInventoryListNormal())
-	_, _ = burst.Write(packet.EncodeEmptyInventoryListEquip())
+	// P2A: replace the M10 empty inventory list stubs with real items
+	// sourced from identity.GetInventory. The order matches rAthena's
+	// clif_parse_LoadEndAck sequence (rathena/src/map/clif.cpp:10791-10915
+	// — the inventory normal list, then equip list, then skill list,
+	// then hotkey list). On any identity failure (gRPC error, nil
+	// response) we fall back to the empty list — the client initialises
+	// its inventory grid with the 4-byte header, and the player is
+	// already in the map. bytes.Buffer.Write never returns an error
+	// so the results are discarded.
+	_, _ = burst.Write(h.encodeInventoryLists(ctx, conn))
 	_, _ = burst.Write(packet.EncodeEmptySkillList())
 	_, _ = burst.Write(packet.EncodeEmptyHotkeyList())
 
@@ -1272,6 +1280,565 @@ func (h *DispatchHandler) handleCZNotifyActorInit(_ context.Context, conn *domai
 
 	if err := resp.SendPacket(burst.Bytes()); err != nil {
 		return fmt.Errorf("send status burst: %w", err)
+	}
+	return nil
+}
+
+// encodeInventoryLists returns the on-wire bytes for
+// ZC_INVENTORY_ITEMLIST_NORMAL followed by ZC_INVENTORY_ITEMLIST_EQUIP,
+// sourced from identity.GetInventory. On any identity failure
+// (gRPC error, nil response) the two empty-list stubs are returned
+// instead so the client always sees the 4-byte header that
+// initialises its inventory grid — the player is already in the
+// map and a missing list is preferable to a torn connection.
+//
+// The split between normal and equip items mirrors rAthena's
+// `inventory.equip` column semantics: a non-zero EQP_* bitmask puts
+// the row on the equip list; a zero bitmask puts it on the normal
+// list. Today the proto InventoryItem has no `equip` field of its
+// own — the inventory service is the single point that maps
+// inventory.equip to the wire, and the dispatcher treats the
+// presence of an `equip` field on the wire as the split key. The
+// P2A proto models `equip` as InventoryItem.equip, so we use that
+// directly. TODO(P2A-WEIGHT): the total weight, max-weight, and
+// per-slot weight checks land in a later workstream; this path
+// always writes weight=0 / max-weight=0 because the InventoryItem
+// proto does not yet carry the per-item weight.
+func (h *DispatchHandler) encodeInventoryLists(ctx context.Context, conn *domain.ConnectionInfo) []byte {
+	if h.identity == nil {
+		h.logger.Error().
+			Uint64("conn", conn.ID).
+			Msg("identity client not configured; emitting empty inventory lists")
+		return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
+	}
+	if conn.AccountID == 0 || conn.CharID == 0 {
+		return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
+	}
+
+	resp, err := h.identity.GetInventory(ctx, &identityv1.GetInventoryRequest{
+		AccountId: conn.AccountID,
+		CharId:    conn.CharID,
+	})
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Msg("identity GetInventory cancelled (client gone)")
+			return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
+		}
+		st, _ := status.FromError(err)
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint32("cid", conn.CharID).
+			Str("grpc_code", st.Code().String()).
+			Msg("identity GetInventory RPC failed; emitting empty inventory lists")
+		return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
+	}
+	if resp == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint32("cid", conn.CharID).
+			Msg("identity returned nil GetInventory response; emitting empty inventory lists")
+		return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
+	}
+
+	items := resp.GetItems()
+	normal := make([]packet.InventoryNormalItem, 0, len(items))
+	equip := make([]packet.InventoryEquipItem, 0, len(items))
+	invIndexMap := make(map[uint16]uint32, len(items))
+	var pos uint16
+	for _, it := range items {
+		if it == nil {
+			continue
+		}
+		invIndexMap[pos] = it.GetId()
+
+		nameid := it.GetNameid()
+		var nameidWire uint16
+		if nameid <= 0xffff {
+			nameidWire = uint16(nameid)
+		}
+		if it.GetEquip() == 0 {
+			normal = append(normal, packet.InventoryNormalItem{
+				Index: pos,
+				ITID:  nameidWire,
+				Type:  uint8(it.GetAttribute() & 0xff),
+				Count: uint16(it.GetAmount() & 0xffff), //nolint:gosec // amount slot is 16-bit on the wire
+				Flag:  boolToIdentifiedBit(it.GetIdentify()),
+			})
+		} else {
+			equip = append(equip, packet.InventoryEquipItem{
+				Index:            pos,
+				ITID:             nameidWire,
+				Type:             uint8(it.GetAttribute() & 0xff),
+				Location:         it.GetEquip(),
+				RefiningLevel:    uint8(it.GetRefine() & 0xff),
+				ItemSpriteNumber: 0,
+				Flag:             boolToEquipIdentifiedBit(it.GetIdentify()),
+			})
+		}
+		pos++
+	}
+	conn.SetInventoryIndex(invIndexMap)
+
+	var buf bytes.Buffer
+	normalResp := packet.InventoryListNormalResponse{Items: normal}
+	if err := normalResp.Encode(&buf); err != nil {
+		// Encode errors only fire on >0xffff total length, which
+		// cannot happen for a 26-byte per-item layout unless the
+		// player has more than ~2500 items. Treat as a programming
+		// error and fall back to empty lists so the handshake
+		// completes.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("items", len(normal)).
+			Msg("encode ZC_INVENTORY_ITEMLIST_NORMAL failed; emitting empty list")
+		buf.Reset()
+		_, _ = buf.Write(packet.EncodeEmptyInventoryListNormal())
+	}
+	equipResp := packet.InventoryListEquipResponse{Items: equip}
+	if err := equipResp.Encode(&buf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("items", len(equip)).
+			Msg("encode ZC_INVENTORY_ITEMLIST_EQUIP failed; emitting empty list")
+		// Drop the trailing partial equip frame; the previous normal
+		// frame is already in buf and the client tolerates a missing
+		// equip list when the normal list is present.
+		// TODO(P2A-WEIGHT): on rollback we lose the normal list too;
+		// future work could keep the prefix and reset only after.
+		buf.Reset()
+		_, _ = buf.Write(packet.EncodeEmptyInventoryListNormal())
+		_, _ = buf.Write(packet.EncodeEmptyInventoryListEquip())
+	}
+
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("aid", conn.AccountID).
+		Uint32("cid", conn.CharID).
+		Int("normal_items", len(normal)).
+		Int("equip_items", len(equip)).
+		Msg("inventory lists sent")
+
+	return buf.Bytes()
+}
+
+// concat is a tiny []byte concatenator. The two empty-list stubs are
+// always 4 bytes each, so an explicit loop saves an import on
+// bytes.NewBuffer for callers that don't need one.
+func concat(parts ...[]byte) []byte {
+	total := 0
+	for _, p := range parts {
+		total += len(p)
+	}
+	out := make([]byte, 0, total)
+	for _, p := range parts {
+		out = append(out, p...)
+	}
+	return out
+}
+
+// boolToIdentifiedBit maps an InventoryItem.identify (1=identified)
+// to the NORMALITEM_INFO post-20120925 Flag byte (bit 0 = IsIdentified).
+func boolToIdentifiedBit(identified uint32) uint8 {
+	if identified == 0 {
+		return 0
+	}
+	return 0x01
+}
+
+// boolToEquipIdentifiedBit maps an InventoryItem.identify to the
+// EQUIPITEM_INFO post-20120925 Flag byte (bit 0 = IsIdentified,
+// bit 1 = IsDamaged, bit 2 = PlaceETCTab).
+func boolToEquipIdentifiedBit(identified uint32) uint8 {
+	if identified == 0 {
+		return 0
+	}
+	return 0x01
+}
+
+// handleCZUseItem responds to CZ_USE_ITEM2 (0x0439) — the client
+// requesting to use a consumable item. The handler forwards the
+// inventory index to identity.UseItem and emits the
+// ZC_USE_ITEM_ACK2 (0x01c8) ack the client expects.
+//
+// Wire failures (identity gRPC error, missing account_id on a
+// not-yet-entered connection, identity-side success=false) are
+// logged and surfaced to the client via the ack's `result` byte
+// — the client must see a ZC_USE_ITEM_ACK2 to update its UI; a
+// silent drop leaves the item in the "being used" state.
+func (h *DispatchHandler) handleCZUseItem(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZUseItem(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_USE_ITEM2; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint16("inv_index", req.Index).
+			Msg("CZ_USE_ITEM2 without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	if req.Index < 2 {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("invalid inventory index")
+		return h.sendUseItemAck(resp, conn.AccountID, req.Index, 0, 0, false)
+	}
+	pos := req.Index - 2
+	itemID, ok := conn.ResolveInventoryID(pos)
+	if !ok {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("unknown inventory position")
+		return h.sendUseItemAck(resp, conn.AccountID, req.Index, 0, 0, false)
+	}
+
+	if h.identity == nil {
+		// DI misconfiguration — surface a failure ack so the client
+		// exits the "using item" state rather than hangs.
+		h.logger.Error().
+			Uint64("conn", conn.ID).
+			Msg("identity client not configured; rejecting CZ_USE_ITEM2")
+		return h.sendUseItemAck(resp, conn.AccountID, req.Index, 0, 0, false)
+	}
+
+	rpcCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	gResp, err := h.identity.UseItem(rpcCtx, &identityv1.UseItemRequest{
+		AccountId: conn.AccountID,
+		CharId:    conn.CharID,
+		ItemId:    itemID,
+	})
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint16("inv_index", req.Index).
+				Msg("identity call cancelled (client gone)")
+			return nil
+		}
+		st, _ := status.FromError(err)
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("inv_index", req.Index).
+			Str("grpc_code", st.Code().String()).
+			Msg("identity UseItem RPC failed; sending fail ack")
+		return h.sendUseItemAck(resp, conn.AccountID, req.Index, 0, 0, false)
+	}
+	if gResp == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("inv_index", req.Index).
+			Msg("identity returned nil UseItem response; sending fail ack")
+		return h.sendUseItemAck(resp, conn.AccountID, req.Index, 0, 0, false)
+	}
+
+	// Surface success=false as a failure ack (result=0); the
+	// identity service populates `error` with the reason.
+	ok = gResp.GetSuccess()
+	var itemIDWire uint16
+	if nameid := gResp.GetItemId(); nameid <= 0xffff {
+		itemIDWire = uint16(nameid) //nolint:gosec // ITID slot is 16-bit on the wire for PACKETVER 20250604
+	}
+	remaining := uint16(gResp.GetRemainingAmount()) //nolint:gosec // amount slot is 16-bit on the wire
+	if !ok {
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("inv_index", req.Index).
+			Str("error", gResp.GetError()).
+			Msg("identity rejected UseItem")
+	}
+	return h.sendUseItemAck(resp, conn.AccountID, req.Index, itemIDWire, remaining, ok)
+}
+
+// sendUseItemAck encodes ZC_USE_ITEM_ACK2 and writes it. Always
+// returns nil for encode errors (the buffer is small and the wire
+// layout is fixed — an encode failure indicates a programmer error
+// we want surfaced via SendPacket).
+func (h *DispatchHandler) sendUseItemAck(resp domain.Responder, aid uint32, invIndex uint16, itemID uint16, remaining uint16, ok bool) error {
+	var resultByte uint8
+	if ok {
+		resultByte = 1
+	}
+	ack := packet.UseItemAck2Response{
+		Index:  invIndex + 2, // clif.cpp:4482: server row index + 2 for the wire
+		ItemID: itemID,
+		AID:    aid,
+		Amount: remaining,
+		Result: resultByte,
+	}
+	var buf bytes.Buffer
+	if err := ack.Encode(&buf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint32("aid", aid).
+			Msg("encode ZC_USE_ITEM_ACK2 failed; dropping ack")
+		return nil
+	}
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_USE_ITEM_ACK2: %w", err)
+	}
+	return nil
+}
+
+// handleCZReqWearEquip responds to CZ_REQ_WEAR_EQUIP_V5 (0x0998) —
+// the client requesting to equip an item. The handler forwards
+// (inventory index, EQP_* position) to identity.EquipItem and
+// emits the ZC_REQ_WEAR_EQUIP_ACK_V5 (0x0999) ack.
+//
+// Wire failures (identity gRPC error, missing account_id, identity
+// success=false) are logged and surfaced to the client via the
+// ack's `result` byte. The client must see a ZC_REQ_WEAR_EQUIP_ACK
+// to update its inventory UI; a silent drop leaves the item in
+// the "being equipped" state.
+func (h *DispatchHandler) handleCZReqWearEquip(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZReqWearEquip(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_REQ_WEAR_EQUIP_V5; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint16("inv_index", req.Index).
+			Msg("CZ_REQ_WEAR_EQUIP_V5 without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	if req.Index < 2 {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("invalid inventory index")
+		return h.sendWearEquipAck(resp, req.Index, req.Position, 0, 0)
+	}
+	pos := req.Index - 2
+	itemID, ok := conn.ResolveInventoryID(pos)
+	if !ok {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("unknown inventory position")
+		return h.sendWearEquipAck(resp, req.Index, req.Position, 0, 0)
+	}
+
+	if h.identity == nil {
+		h.logger.Error().
+			Uint64("conn", conn.ID).
+			Msg("identity client not configured; rejecting CZ_REQ_WEAR_EQUIP_V5")
+		return h.sendWearEquipAck(resp, req.Index, req.Position, 0, 0)
+	}
+
+	rpcCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	gResp, err := h.identity.EquipItem(rpcCtx, &identityv1.EquipItemRequest{
+		AccountId:     conn.AccountID,
+		CharId:        conn.CharID,
+		ItemId:        itemID,
+		EquipPosition: req.Position,
+	})
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint16("inv_index", req.Index).
+				Msg("identity call cancelled (client gone)")
+			return nil
+		}
+		st, _ := status.FromError(err)
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("inv_index", req.Index).
+			Str("grpc_code", st.Code().String()).
+			Msg("identity EquipItem RPC failed; sending fail ack")
+		return h.sendWearEquipAck(resp, req.Index, req.Position, 0, 0)
+	}
+	if gResp == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("inv_index", req.Index).
+			Msg("identity returned nil EquipItem response; sending fail ack")
+		return h.sendWearEquipAck(resp, req.Index, req.Position, 0, 0)
+	}
+
+	// Map identity success bool to the rAthena result byte: 0=fail,
+	// 1=ok, 2=low-level fail (clif.cpp:4306-4309). The identity
+	// service does not surface the "low-level" reason in the proto
+	// today, so we collapse fail/success to {0, 1}.
+	var resultByte uint8
+	if gResp.GetSuccess() {
+		resultByte = 1
+	} else {
+		resultByte = 0
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("inv_index", req.Index).
+			Str("error", gResp.GetError()).
+			Msg("identity rejected EquipItem")
+	}
+	return h.sendWearEquipAck(resp, req.Index, gResp.GetEquipPosition(), 0, resultByte)
+}
+
+// sendWearEquipAck encodes ZC_REQ_WEAR_EQUIP_ACK_V5 and writes it.
+func (h *DispatchHandler) sendWearEquipAck(resp domain.Responder, invIndex uint16, wearLocation uint32, sprite uint16, result uint8) error {
+	ack := packet.ReqWearEquipAckResponse{
+		Index:            invIndex + 2, // client-side index = server row + 2
+		WearLocation:     wearLocation,
+		ItemSpriteNumber: sprite,
+		Result:           result,
+	}
+	var buf bytes.Buffer
+	if err := ack.Encode(&buf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint16("inv_index", invIndex).
+			Msg("encode ZC_REQ_WEAR_EQUIP_ACK_V5 failed; dropping ack")
+		return nil
+	}
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_REQ_WEAR_EQUIP_ACK_V5: %w", err)
+	}
+	return nil
+}
+
+// handleCZReqTakeoffEquip responds to CZ_REQ_TAKEOFF_EQUIP (0x00ab) —
+// the client requesting to unequip an item. The handler forwards
+// the inventory index to identity.UnequipItem and emits the
+// ZC_REQ_TAKEOFF_EQUIP_ACK (0x099a) ack.
+//
+// Wire failures (identity gRPC error, missing account_id, identity
+// success=false) are logged and surfaced to the client via the
+// ack's `flag` byte. For PACKETVER >= 20110824 the flag is
+// inverted on the wire (clif.cpp:4338): flag=0 means success.
+func (h *DispatchHandler) handleCZReqTakeoffEquip(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZReqTakeoffEquip(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_REQ_TAKEOFF_EQUIP; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint16("inv_index", req.Index).
+			Msg("CZ_REQ_TAKEOFF_EQUIP without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	if req.Index < 2 {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("invalid inventory index")
+		return h.sendTakeoffEquipAck(resp, req.Index, 0, 1)
+	}
+	pos := req.Index - 2
+	itemID, ok := conn.ResolveInventoryID(pos)
+	if !ok {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("unknown inventory position")
+		return h.sendTakeoffEquipAck(resp, req.Index, 0, 1)
+	}
+
+	if h.identity == nil {
+		h.logger.Error().
+			Uint64("conn", conn.ID).
+			Msg("identity client not configured; rejecting CZ_REQ_TAKEOFF_EQUIP")
+		return h.sendTakeoffEquipAck(resp, req.Index, 0, 1) // flag=1 = failure (inverted)
+	}
+
+	rpcCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	gResp, err := h.identity.UnequipItem(rpcCtx, &identityv1.UnequipItemRequest{
+		AccountId: conn.AccountID,
+		CharId:    conn.CharID,
+		ItemId:    itemID,
+	})
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint16("inv_index", req.Index).
+				Msg("identity call cancelled (client gone)")
+			return nil
+		}
+		st, _ := status.FromError(err)
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("inv_index", req.Index).
+			Str("grpc_code", st.Code().String()).
+			Msg("identity UnequipItem RPC failed; sending fail ack")
+		return h.sendTakeoffEquipAck(resp, req.Index, 0, 1)
+	}
+	if gResp == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("inv_index", req.Index).
+			Msg("identity returned nil UnequipItem response; sending fail ack")
+		return h.sendTakeoffEquipAck(resp, req.Index, 0, 1)
+	}
+
+	// flag is wire-inverted for PACKETVER >= 20110824: 0=success, 1=failure.
+	var flag uint8
+	if gResp.GetSuccess() {
+		flag = 0
+	} else {
+		flag = 1
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("inv_index", req.Index).
+			Str("error", gResp.GetError()).
+			Msg("identity rejected UnequipItem")
+	}
+	// WearLocation: the unequip path derives the EQP_* position from
+	// the row's previous `equip` column; the proto does not yet
+	// return the prior location. Pass 0 — the client's UI does not
+	// require a specific value on the success path (it just clears
+	// the equip slot on its own).
+	return h.sendTakeoffEquipAck(resp, req.Index, gResp.GetEquipPosition(), flag)
+}
+
+// sendTakeoffEquipAck encodes ZC_REQ_TAKEOFF_EQUIP_ACK and writes it.
+func (h *DispatchHandler) sendTakeoffEquipAck(resp domain.Responder, invIndex uint16, wearLocation uint32, flag uint8) error {
+	ack := packet.ReqTakeoffEquipAckResponse{
+		Index:        invIndex + 2, // client-side index = server row + 2
+		WearLocation: wearLocation,
+		Flag:         flag,
+	}
+	var buf bytes.Buffer
+	if err := ack.Encode(&buf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint16("inv_index", invIndex).
+			Msg("encode ZC_REQ_TAKEOFF_EQUIP_ACK failed; dropping ack")
+		return nil
+	}
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_REQ_TAKEOFF_EQUIP_ACK: %w", err)
 	}
 	return nil
 }

@@ -19,6 +19,8 @@ import (
 
 	"github.com/bouroo/goAthena/internal/features/identity/domain"
 	"github.com/bouroo/goAthena/internal/features/identity/repository"
+	inventorydomain "github.com/bouroo/goAthena/internal/features/inventory/domain"
+	inventoryrepo "github.com/bouroo/goAthena/internal/features/inventory/repository"
 )
 
 // nopLogger returns a zerolog.Logger that discards everything.
@@ -130,12 +132,13 @@ func TestLogin_FullFlow_Integration(t *testing.T) {
 	accountRepo := repository.NewAccountRepository(db)
 	charRepo := repository.NewCharacterRepository(db)
 	sessRepo := repository.NewSessionRepository(client)
+	invRepo := inventoryrepo.NewInventoryRepository(db)
 
 	t.Cleanup(func() {
 		_ = sessRepo.Delete(ctx, 2000000)
 	})
 
-	svc := NewIdentityService(accountRepo, charRepo, sessRepo, nopLogger(), false, 15)
+	svc := NewIdentityService(accountRepo, charRepo, sessRepo, nopLogger(), false, 15, invRepo, inventorydomain.ZeroItemWeight{})
 
 	ip := netip.MustParseAddr("203.0.113.55")
 	resp, err := svc.Login(ctx, domain.LoginRequest{
@@ -181,8 +184,9 @@ func TestLogin_WrongPassword_Integration(t *testing.T) {
 	accountRepo := repository.NewAccountRepository(db)
 	charRepo := repository.NewCharacterRepository(db)
 	sessRepo := repository.NewSessionRepository(client)
+	invRepo := inventoryrepo.NewInventoryRepository(db)
 
-	svc := NewIdentityService(accountRepo, charRepo, sessRepo, nopLogger(), false, 15)
+	svc := NewIdentityService(accountRepo, charRepo, sessRepo, nopLogger(), false, 15, invRepo, inventorydomain.ZeroItemWeight{})
 
 	ip := netip.MustParseAddr("203.0.113.99")
 	_, err := svc.Login(ctx, domain.LoginRequest{
@@ -243,7 +247,8 @@ func TestListCharacters_Integration(t *testing.T) {
 		acct, userID+"_outofrange",
 	).Error)
 
-	svc := NewIdentityService(accountRepo, charRepo, sessRepo, nopLogger(), false, 15)
+	invRepo := inventoryrepo.NewInventoryRepository(db)
+	svc := NewIdentityService(accountRepo, charRepo, sessRepo, nopLogger(), false, 15, invRepo, inventorydomain.ZeroItemWeight{})
 	got, err := svc.ListCharacters(ctx, acct)
 	require.NoError(t, err)
 	require.Len(t, got, 3, "only the in-range seeds must be returned, slot-ordered")

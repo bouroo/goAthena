@@ -43,6 +43,23 @@ type ConnectionInfo struct {
 	BaseExp int32
 	// JobExp tracks the accumulated job experience (M19).
 	JobExp int32
+	// invIndex maps 0-based inventory position to DB item ID.
+	invIndex map[uint16]uint32
+}
+
+// SetInventoryIndex replaces the inventory index map.
+func (c *ConnectionInfo) SetInventoryIndex(m map[uint16]uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.invIndex = m
+}
+
+// ResolveInventoryID returns the DB id for a 0-based position.
+func (c *ConnectionInfo) ResolveInventoryID(pos uint16) (uint32, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id, ok := c.invIndex[pos]
+	return id, ok
 }
 
 // InitMonsterHP initializes the ConnectionInfo's MonsterHP map from a slice of MonsterSpawns.

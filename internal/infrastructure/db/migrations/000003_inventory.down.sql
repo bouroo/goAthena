@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS `cart_inventory`;
+DROP TABLE IF EXISTS `inventory`;

@@ -4,11 +4,12 @@ package identity.v1;
 
 option go_package = "github.com/bouroo/goAthena/api/pb/identity/v1;identityv1";
 
-// IdentityService handles login authentication, character CRUD, and warehouse
-// operations. The gateway forwards decoded kRO login packets here as structured
-// RPCs.
+// IdentityService handles login authentication, character CRUD, warehouse,
+// and inventory operations. The gateway forwards decoded kRO login
+// packets here as structured RPCs.
 //
 // Login handshake reference: rathena/src/login/loginclif.cpp
+// Inventory reference:      rathena/src/map/clif.cpp (CZ_USE_ITEM / CZ_REQ_EQUIP / ZC_ACK_REQ_EQUIP)
 service IdentityService {
   // Authenticate processes a client login (CA_LOGIN* variants 0x64/0x1dd/0x1fa/0x27c/...).
   // Returns auth result + char-server list on success (AC_ACCEPT_LOGIN 0xac4).
@@ -23,6 +24,27 @@ service IdentityService {
   // account. The gateway calls this on CZ_ENTER to populate the entity
   // spawn packet (ZC_SPAWN_UNIT 0x09fe) with real character data.
   rpc GetCharacter(GetCharacterRequest) returns (GetCharacterResponse);
+
+  // GetInventory returns every item the character owns. Backed by the
+  // `inventory` table (rathena/sql-files/main.sql); consumed by the
+  // gateway when building the inventory view on map enter and after
+  // each successful item mutation.
+  rpc GetInventory(GetInventoryRequest) returns (GetInventoryResponse);
+
+  // EquipItem moves an item from the inventory grid to an equipment slot
+  // (CZ_REQ_EQUIP / ZC_ACK_REQ_EQUIP). The equip position is the rAthena
+  // EQP_* bitmask (pc.h). Item ownership by the calling character is
+  // enforced server-side.
+  rpc EquipItem(EquipItemRequest) returns (EquipItemResponse);
+
+  // UnequipItem moves an equipped item back into the inventory grid
+  // (equip bitmask cleared to 0).
+  rpc UnequipItem(UnequipItemRequest) returns (UnequipItemResponse);
+
+  // UseItem decrements the stack count of an item by one. When the
+  // remaining amount reaches zero the row is deleted. Consumables only;
+  // equipment items are not stackable on rAthena's wire.
+  rpc UseItem(UseItemRequest) returns (UseItemResponse);
 }
 
 // AuthMethod identifies which CA_LOGIN variant the client sent.
@@ -138,4 +160,72 @@ message GetCharacterResponse {
   bool success = 1;
   CharacterDetail character = 2;
   string error = 3;
+}
+
+// GetInventoryRequest asks for every inventory item belonging to (account_id, char_id).
+// The account_id is a defensive cross-check; today the inventory is keyed
+// only by char_id, but carrying account_id lets the service refuse a
+// cross-account fetch before any DB round-trip.
+message GetInventoryRequest {
+  uint32 account_id = 1;
+  uint32 char_id = 2;
+}
+
+// InventoryItem is the wire-relevant subset of `inventory` (rathena
+// main.sql). Cards, refine bless/curse, options, expire_time, favorite,
+// bound, unique_id, equip_switch and enchantgrade are omitted for now
+// — they can be added as separate proto fields without breaking the
+// wire layout (they live at higher field numbers).
+message InventoryItem {
+  uint32 id = 1;          // `id` — primary key
+  uint32 nameid = 2;      // `nameid` — item_db.yml id
+  uint32 amount = 3;      // `amount` — stack count
+  uint32 equip = 4;       // `equip` — EQP_* bitmask; 0 = in grid
+  uint32 identify = 5;    // `identify` — 1 = identified
+  uint32 refine = 6;      // `refine` — +0..+10
+  uint32 attribute = 7;   // `attribute` — broken / elemental flag
+}
+
+message GetInventoryResponse {
+  repeated InventoryItem items = 1;
+}
+
+message EquipItemRequest {
+  uint32 account_id = 1;
+  uint32 char_id = 2;
+  uint32 item_id = 3;
+  uint32 equip_position = 4; // EQP_* bitmask (pc.h)
+}
+
+message EquipItemResponse {
+  bool success = 1;
+  uint32 item_id = 2;
+  uint32 equip_position = 3;
+  string error = 4; // populated when success=false
+}
+
+message UnequipItemRequest {
+  uint32 account_id = 1;
+  uint32 char_id = 2;
+  uint32 item_id = 3;
+}
+
+message UnequipItemResponse {
+  bool success = 1;
+  uint32 item_id = 2;
+  uint32 equip_position = 3; // the EQP_* bitmask before the row was cleared
+  string error = 4;
+}
+
+message UseItemRequest {
+  uint32 account_id = 1;
+  uint32 char_id = 2;
+  uint32 item_id = 3;
+}
+
+message UseItemResponse {
+  bool success = 1;
+  uint32 item_id = 2;
+  uint32 remaining_amount = 3; // stack size after the use, 0 if row was deleted
+  string error = 4;
 }

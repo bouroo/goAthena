@@ -14,6 +14,7 @@ import (
 	reflect "reflect"
 
 	domain "github.com/bouroo/goAthena/internal/features/identity/domain"
+	domain0 "github.com/bouroo/goAthena/internal/features/inventory/domain"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -41,6 +42,34 @@ func (m *MockIdentityService) EXPECT() *MockIdentityServiceMockRecorder {
 	return m.recorder
 }
 
+// CheckWeight mocks base method.
+func (m *MockIdentityService) CheckWeight(ctx context.Context, accountID, charID, addNameID, addAmount uint32) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CheckWeight", ctx, accountID, charID, addNameID, addAmount)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CheckWeight indicates an expected call of CheckWeight.
+func (mr *MockIdentityServiceMockRecorder) CheckWeight(ctx, accountID, charID, addNameID, addAmount any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckWeight", reflect.TypeOf((*MockIdentityService)(nil).CheckWeight), ctx, accountID, charID, addNameID, addAmount)
+}
+
+// EquipItem mocks base method.
+func (m *MockIdentityService) EquipItem(ctx context.Context, accountID, charID, itemID, equipPos uint32) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EquipItem", ctx, accountID, charID, itemID, equipPos)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// EquipItem indicates an expected call of EquipItem.
+func (mr *MockIdentityServiceMockRecorder) EquipItem(ctx, accountID, charID, itemID, equipPos any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EquipItem", reflect.TypeOf((*MockIdentityService)(nil).EquipItem), ctx, accountID, charID, itemID, equipPos)
+}
+
 // GetCharacter mocks base method.
 func (m *MockIdentityService) GetCharacter(ctx context.Context, accountID, charID uint32) (*domain.CharacterSummary, error) {
 	m.ctrl.T.Helper()
@@ -54,6 +83,21 @@ func (m *MockIdentityService) GetCharacter(ctx context.Context, accountID, charI
 func (mr *MockIdentityServiceMockRecorder) GetCharacter(ctx, accountID, charID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCharacter", reflect.TypeOf((*MockIdentityService)(nil).GetCharacter), ctx, accountID, charID)
+}
+
+// GetInventory mocks base method.
+func (m *MockIdentityService) GetInventory(ctx context.Context, accountID, charID uint32) ([]domain0.InventoryItem, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetInventory", ctx, accountID, charID)
+	ret0, _ := ret[0].([]domain0.InventoryItem)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetInventory indicates an expected call of GetInventory.
+func (mr *MockIdentityServiceMockRecorder) GetInventory(ctx, accountID, charID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInventory", reflect.TypeOf((*MockIdentityService)(nil).GetInventory), ctx, accountID, charID)
 }
 
 // ListCharacters mocks base method.
@@ -84,4 +128,34 @@ func (m *MockIdentityService) Login(ctx context.Context, req domain.LoginRequest
 func (mr *MockIdentityServiceMockRecorder) Login(ctx, req any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Login", reflect.TypeOf((*MockIdentityService)(nil).Login), ctx, req)
+}
+
+// UnequipItem mocks base method.
+func (m *MockIdentityService) UnequipItem(ctx context.Context, accountID, charID, itemID uint32) (uint32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UnequipItem", ctx, accountID, charID, itemID)
+	ret0, _ := ret[0].(uint32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UnequipItem indicates an expected call of UnequipItem.
+func (mr *MockIdentityServiceMockRecorder) UnequipItem(ctx, accountID, charID, itemID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnequipItem", reflect.TypeOf((*MockIdentityService)(nil).UnequipItem), ctx, accountID, charID, itemID)
+}
+
+// UseItem mocks base method.
+func (m *MockIdentityService) UseItem(ctx context.Context, accountID, charID, itemID uint32) (uint32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UseItem", ctx, accountID, charID, itemID)
+	ret0, _ := ret[0].(uint32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UseItem indicates an expected call of UseItem.
+func (mr *MockIdentityServiceMockRecorder) UseItem(ctx, accountID, charID, itemID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UseItem", reflect.TypeOf((*MockIdentityService)(nil).UseItem), ctx, accountID, charID, itemID)
 }

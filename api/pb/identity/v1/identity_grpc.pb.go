@@ -23,17 +23,22 @@ const (
 	IdentityService_Authenticate_FullMethodName     = "/identity.v1.IdentityService/Authenticate"
 	IdentityService_GetCharacterList_FullMethodName = "/identity.v1.IdentityService/GetCharacterList"
 	IdentityService_GetCharacter_FullMethodName     = "/identity.v1.IdentityService/GetCharacter"
+	IdentityService_GetInventory_FullMethodName     = "/identity.v1.IdentityService/GetInventory"
+	IdentityService_EquipItem_FullMethodName        = "/identity.v1.IdentityService/EquipItem"
+	IdentityService_UnequipItem_FullMethodName      = "/identity.v1.IdentityService/UnequipItem"
+	IdentityService_UseItem_FullMethodName          = "/identity.v1.IdentityService/UseItem"
 )
 
 // IdentityServiceClient is the client API for IdentityService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// IdentityService handles login authentication, character CRUD, and warehouse
-// operations. The gateway forwards decoded kRO login packets here as structured
-// RPCs.
+// IdentityService handles login authentication, character CRUD, warehouse,
+// and inventory operations. The gateway forwards decoded kRO login
+// packets here as structured RPCs.
 //
 // Login handshake reference: rathena/src/login/loginclif.cpp
+// Inventory reference:      rathena/src/map/clif.cpp (CZ_USE_ITEM / CZ_REQ_EQUIP / ZC_ACK_REQ_EQUIP)
 type IdentityServiceClient interface {
 	// Authenticate processes a client login (CA_LOGIN* variants 0x64/0x1dd/0x1fa/0x27c/...).
 	// Returns auth result + char-server list on success (AC_ACCEPT_LOGIN 0xac4).
@@ -46,6 +51,23 @@ type IdentityServiceClient interface {
 	// account. The gateway calls this on CZ_ENTER to populate the entity
 	// spawn packet (ZC_SPAWN_UNIT 0x09fe) with real character data.
 	GetCharacter(ctx context.Context, in *GetCharacterRequest, opts ...grpc.CallOption) (*GetCharacterResponse, error)
+	// GetInventory returns every item the character owns. Backed by the
+	// `inventory` table (rathena/sql-files/main.sql); consumed by the
+	// gateway when building the inventory view on map enter and after
+	// each successful item mutation.
+	GetInventory(ctx context.Context, in *GetInventoryRequest, opts ...grpc.CallOption) (*GetInventoryResponse, error)
+	// EquipItem moves an item from the inventory grid to an equipment slot
+	// (CZ_REQ_EQUIP / ZC_ACK_REQ_EQUIP). The equip position is the rAthena
+	// EQP_* bitmask (pc.h). Item ownership by the calling character is
+	// enforced server-side.
+	EquipItem(ctx context.Context, in *EquipItemRequest, opts ...grpc.CallOption) (*EquipItemResponse, error)
+	// UnequipItem moves an equipped item back into the inventory grid
+	// (equip bitmask cleared to 0).
+	UnequipItem(ctx context.Context, in *UnequipItemRequest, opts ...grpc.CallOption) (*UnequipItemResponse, error)
+	// UseItem decrements the stack count of an item by one. When the
+	// remaining amount reaches zero the row is deleted. Consumables only;
+	// equipment items are not stackable on rAthena's wire.
+	UseItem(ctx context.Context, in *UseItemRequest, opts ...grpc.CallOption) (*UseItemResponse, error)
 }
 
 type identityServiceClient struct {
@@ -86,15 +108,56 @@ func (c *identityServiceClient) GetCharacter(ctx context.Context, in *GetCharact
 	return out, nil
 }
 
+func (c *identityServiceClient) GetInventory(ctx context.Context, in *GetInventoryRequest, opts ...grpc.CallOption) (*GetInventoryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetInventoryResponse)
+	err := c.cc.Invoke(ctx, IdentityService_GetInventory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *identityServiceClient) EquipItem(ctx context.Context, in *EquipItemRequest, opts ...grpc.CallOption) (*EquipItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EquipItemResponse)
+	err := c.cc.Invoke(ctx, IdentityService_EquipItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *identityServiceClient) UnequipItem(ctx context.Context, in *UnequipItemRequest, opts ...grpc.CallOption) (*UnequipItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnequipItemResponse)
+	err := c.cc.Invoke(ctx, IdentityService_UnequipItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *identityServiceClient) UseItem(ctx context.Context, in *UseItemRequest, opts ...grpc.CallOption) (*UseItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UseItemResponse)
+	err := c.cc.Invoke(ctx, IdentityService_UseItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IdentityServiceServer is the server API for IdentityService service.
 // All implementations must embed UnimplementedIdentityServiceServer
 // for forward compatibility.
 //
-// IdentityService handles login authentication, character CRUD, and warehouse
-// operations. The gateway forwards decoded kRO login packets here as structured
-// RPCs.
+// IdentityService handles login authentication, character CRUD, warehouse,
+// and inventory operations. The gateway forwards decoded kRO login
+// packets here as structured RPCs.
 //
 // Login handshake reference: rathena/src/login/loginclif.cpp
+// Inventory reference:      rathena/src/map/clif.cpp (CZ_USE_ITEM / CZ_REQ_EQUIP / ZC_ACK_REQ_EQUIP)
 type IdentityServiceServer interface {
 	// Authenticate processes a client login (CA_LOGIN* variants 0x64/0x1dd/0x1fa/0x27c/...).
 	// Returns auth result + char-server list on success (AC_ACCEPT_LOGIN 0xac4).
@@ -107,6 +170,23 @@ type IdentityServiceServer interface {
 	// account. The gateway calls this on CZ_ENTER to populate the entity
 	// spawn packet (ZC_SPAWN_UNIT 0x09fe) with real character data.
 	GetCharacter(context.Context, *GetCharacterRequest) (*GetCharacterResponse, error)
+	// GetInventory returns every item the character owns. Backed by the
+	// `inventory` table (rathena/sql-files/main.sql); consumed by the
+	// gateway when building the inventory view on map enter and after
+	// each successful item mutation.
+	GetInventory(context.Context, *GetInventoryRequest) (*GetInventoryResponse, error)
+	// EquipItem moves an item from the inventory grid to an equipment slot
+	// (CZ_REQ_EQUIP / ZC_ACK_REQ_EQUIP). The equip position is the rAthena
+	// EQP_* bitmask (pc.h). Item ownership by the calling character is
+	// enforced server-side.
+	EquipItem(context.Context, *EquipItemRequest) (*EquipItemResponse, error)
+	// UnequipItem moves an equipped item back into the inventory grid
+	// (equip bitmask cleared to 0).
+	UnequipItem(context.Context, *UnequipItemRequest) (*UnequipItemResponse, error)
+	// UseItem decrements the stack count of an item by one. When the
+	// remaining amount reaches zero the row is deleted. Consumables only;
+	// equipment items are not stackable on rAthena's wire.
+	UseItem(context.Context, *UseItemRequest) (*UseItemResponse, error)
 	mustEmbedUnimplementedIdentityServiceServer()
 }
 
@@ -125,6 +205,18 @@ func (UnimplementedIdentityServiceServer) GetCharacterList(context.Context, *Get
 }
 func (UnimplementedIdentityServiceServer) GetCharacter(context.Context, *GetCharacterRequest) (*GetCharacterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCharacter not implemented")
+}
+func (UnimplementedIdentityServiceServer) GetInventory(context.Context, *GetInventoryRequest) (*GetInventoryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetInventory not implemented")
+}
+func (UnimplementedIdentityServiceServer) EquipItem(context.Context, *EquipItemRequest) (*EquipItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EquipItem not implemented")
+}
+func (UnimplementedIdentityServiceServer) UnequipItem(context.Context, *UnequipItemRequest) (*UnequipItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UnequipItem not implemented")
+}
+func (UnimplementedIdentityServiceServer) UseItem(context.Context, *UseItemRequest) (*UseItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UseItem not implemented")
 }
 func (UnimplementedIdentityServiceServer) mustEmbedUnimplementedIdentityServiceServer() {}
 func (UnimplementedIdentityServiceServer) testEmbeddedByValue()                         {}
@@ -201,6 +293,78 @@ func _IdentityService_GetCharacter_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IdentityService_GetInventory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetInventoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).GetInventory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_GetInventory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).GetInventory(ctx, req.(*GetInventoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IdentityService_EquipItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EquipItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).EquipItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_EquipItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).EquipItem(ctx, req.(*EquipItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IdentityService_UnequipItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnequipItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).UnequipItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_UnequipItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).UnequipItem(ctx, req.(*UnequipItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IdentityService_UseItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UseItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).UseItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_UseItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).UseItem(ctx, req.(*UseItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IdentityService_ServiceDesc is the grpc.ServiceDesc for IdentityService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -219,6 +383,22 @@ var IdentityService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCharacter",
 			Handler:    _IdentityService_GetCharacter_Handler,
+		},
+		{
+			MethodName: "GetInventory",
+			Handler:    _IdentityService_GetInventory_Handler,
+		},
+		{
+			MethodName: "EquipItem",
+			Handler:    _IdentityService_EquipItem_Handler,
+		},
+		{
+			MethodName: "UnequipItem",
+			Handler:    _IdentityService_UnequipItem_Handler,
+		},
+		{
+			MethodName: "UseItem",
+			Handler:    _IdentityService_UseItem_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -3,6 +3,8 @@ package domain
 import (
 	"context"
 	"net/netip"
+
+	inventorydomain "github.com/bouroo/goAthena/internal/features/inventory/domain"
 )
 
 // LoginRequest carries decoded CA_LOGIN fields from the gateway. The
@@ -71,4 +73,40 @@ type IdentityService interface {
 	// charID == 0 is rejected with ErrCharacterNotFound so callers can't
 	// accidentally query the all-zeros key.
 	GetCharacter(ctx context.Context, accountID, charID uint32) (*CharacterSummary, error)
+
+	// GetInventory returns every item the given character owns. The
+	// (accountID, charID) pair is treated defensively — both must be
+	// non-zero and the row must belong to charID. Wraps
+	// inventorydomain.ErrItemNotFound (a no-op for ListByChar, which
+	// returns an empty slice instead) so callers can still distinguish
+	// missing inventory from outright repo failure.
+	GetInventory(ctx context.Context, accountID, charID uint32) ([]inventorydomain.InventoryItem, error)
+
+	// EquipItem moves the item into the requested EQP_* bitmask. It
+	// verifies ownership before mutating; a mismatch surfaces as a
+	// wrapped ErrItemNotFound so the handler can map it onto
+	// success=false. Weight recalculation is intentionally NOT applied
+	// here — that is a separate concern (see TODO(P2A-WEIGHT) in the
+	// service).
+	EquipItem(ctx context.Context, accountID, charID, itemID, equipPos uint32) error
+
+	// UnequipItem clears the EQP_* bitmask back to 0 (in-grid). Same
+	// ownership check as EquipItem. Returns the equip-position bitmask
+	// that was cleared (i.e. the one before setting to 0).
+	UnequipItem(ctx context.Context, accountID, charID, itemID uint32) (priorEquipPos uint32, err error)
+
+	// UseItem decrements the stack count by one; the row is deleted
+	// when the resulting amount is zero. Returns the post-decrement
+	// amount (0 when removed).
+	UseItem(ctx context.Context, accountID, charID, itemID uint32) (remaining uint32, err error)
+
+	// CheckWeight validates that acquiring addAmount units of addNameID
+	// would not push charID's carried weight past MaxWeight (pre-re
+	// base + str*300). Returns inventorydomain.ErrWeightExceeded when
+	// the addition exceeds capacity. The STR stat is loaded from the
+	// character row via characters.GetByID — pass the owning accountID
+	// so a cross-account charID cannot drive a weight probe. Equipping
+	// an already-owned item does NOT call this — weight is enforced on
+	// acquisition only.
+	CheckWeight(ctx context.Context, accountID, charID, addNameID, addAmount uint32) error
 }
