@@ -52,6 +52,11 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCREQWEAREQUIPACKV5, "ZC_REQ_WEAR_EQUIP_ACK_V5", sizeZCReqWearEquipAckV5, DirectionServerToClient},
 		{HeaderZCREQTAKEOFFEQUIPACK, "ZC_REQ_TAKEOFF_EQUIP_ACK", sizeZCReqTakeoffEquipAck, DirectionServerToClient},
 		{HeaderZCUSEITEMACK2, "ZC_USE_ITEM_ACK2", sizeZCUseItemAck2, DirectionServerToClient},
+		// P2B: shop sell flow — see NewMapServerDB for the rAthena
+		// packetdb citations.
+		{HeaderCZPCSELLITEMLIST, "CZ_PC_SELL_ITEMLIST", VariableLength, DirectionClientToServer},
+		{HeaderZCPCSELLITEMLIST, "ZC_PC_SELL_ITEMLIST", VariableLength, DirectionServerToClient},
+		{HeaderZCPCSELLRESULT, "ZC_PC_SELL_RESULT", sizeZCPCSellResult, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -79,8 +84,10 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// 18 C→S + 31 S→C = 49 (P2A adds the inventory equip/use
 	// family: CZ_USE_ITEM2, CZ_REQ_WEAR_EQUIP_V5, CZ_REQ_TAKEOFF_EQUIP,
 	// ZC_REQ_WEAR_EQUIP_ACK_V5, ZC_REQ_TAKEOFF_EQUIP_ACK,
-	// ZC_USE_ITEM_ACK2).
-	const want = 49
+	// ZC_USE_ITEM_ACK2). P2B adds 3 sell-flow entries
+	// (CZ_PC_SELL_ITEMLIST, ZC_PC_SELL_ITEMLIST, ZC_PC_SELL_RESULT)
+	// for a grand total of 52.
+	const want = 52
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -132,6 +139,10 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCREQWEAREQUIPACKV5, sizeZCReqWearEquipAckV5},
 		{HeaderZCREQTAKEOFFEQUIPACK, sizeZCReqTakeoffEquipAck},
 		{HeaderZCUSEITEMACK2, sizeZCUseItemAck2},
+		// P2B: shop sell flow.
+		{HeaderCZPCSELLITEMLIST, VariableLength},
+		{HeaderZCPCSELLITEMLIST, VariableLength},
+		{HeaderZCPCSELLRESULT, sizeZCPCSellResult},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

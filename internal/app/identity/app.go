@@ -14,6 +14,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/app/common"
 	"github.com/bouroo/goAthena/internal/config"
+	economydi "github.com/bouroo/goAthena/internal/features/economy/di"
 	identitydi "github.com/bouroo/goAthena/internal/features/identity/di"
 	inventorydi "github.com/bouroo/goAthena/internal/features/inventory/di"
 	"github.com/bouroo/goAthena/internal/infrastructure/db"
@@ -76,6 +77,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	if err := inventorydi.Register(injector); err != nil {
 		return fmt.Errorf("register inventory feature: %w", err)
+	}
+
+	if err := economydi.Register(injector); err != nil {
+		return fmt.Errorf("register economy feature: %w", err)
 	}
 
 	application := server.NewApplication(injector, cfg, logger)

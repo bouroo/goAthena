@@ -3,6 +3,7 @@
 package packet
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -287,6 +288,163 @@ func TestParseCZPCPurchaseItemList_AcceptsTrailingBytes(t *testing.T) {
 	}
 	if got.Entries[1] != (CZPCPurchaseItemListEntry{ItemID: 502, Amount: 20}) {
 		t.Errorf("entry[1] = %+v, want {502 20}", got.Entries[1])
+	}
+}
+
+func TestParseCZPCSellItemList(t *testing.T) {
+	t.Parallel()
+
+	// One entry: cmd 0x00c9, packetLength=4+4=8, index=5, amount=3.
+	oneEntry := func() []byte {
+		f := make([]byte, 4+sizeCZPCSellItemListEntry)
+		writeLE16(f[0:], HeaderCZPCSELLITEMLIST)
+		writeLE16(f[2:], 4+sizeCZPCSellItemListEntry)
+		writeLE16(f[4:], 5)
+		writeLE16(f[6:], 3)
+		return f
+	}()
+
+	// Two entries: cmd 0x00c9, packetLength=4+8=12.
+	twoEntries := func() []byte {
+		f := make([]byte, 4+2*sizeCZPCSellItemListEntry)
+		writeLE16(f[0:], HeaderCZPCSELLITEMLIST)
+		writeLE16(f[2:], 4+2*sizeCZPCSellItemListEntry)
+		writeLE16(f[4:], 5)
+		writeLE16(f[6:], 3)
+		writeLE16(f[8:], 11)
+		writeLE16(f[10:], 1)
+		return f
+	}()
+
+	// Empty list: 4-byte header, packetLength=4, no entries.
+	empty := func() []byte {
+		f := make([]byte, 4)
+		writeLE16(f[0:], HeaderCZPCSELLITEMLIST)
+		writeLE16(f[2:], 4)
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZPCSellItemListRequest
+	}{
+		{
+			name:    "valid single entry",
+			frame:   oneEntry,
+			wantErr: false,
+			want: CZPCSellItemListRequest{
+				Entries: []CZPCSellItemListEntry{{Index: 5, Amount: 3}},
+			},
+		},
+		{
+			name:    "valid multiple entries",
+			frame:   twoEntries,
+			wantErr: false,
+			want: CZPCSellItemListRequest{
+				Entries: []CZPCSellItemListEntry{
+					{Index: 5, Amount: 3},
+					{Index: 11, Amount: 1},
+				},
+			},
+		},
+		{
+			name:    "valid empty list",
+			frame:   empty,
+			wantErr: false,
+			want:    CZPCSellItemListRequest{Entries: nil},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, 3),
+			wantErr:    true,
+			wantErrSub: "3",
+		},
+		{
+			name:       "empty frame reports byte count",
+			frame:      []byte{},
+			wantErr:    true,
+			wantErrSub: "0",
+		},
+		{
+			name: "wrong cmd reports unexpected cmd id",
+			frame: func() []byte {
+				f := make([]byte, 4+sizeCZPCSellItemListEntry)
+				writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+		{
+			name: "unaligned body reports misalignment",
+			frame: func() []byte {
+				// 4-byte header + 1 stray byte (5 bytes total) — not a
+				// whole multiple of 4.
+				f := make([]byte, 5)
+				writeLE16(f[0:], HeaderCZPCSELLITEMLIST)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "aligned",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseCZPCSellItemList(tc.frame)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseCZPCSellItemList() error = nil, want non-nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseCZPCSellItemList() unexpected error: %v", err)
+			}
+			if len(got.Entries) != len(tc.want.Entries) {
+				t.Fatalf("ParseCZPCSellItemList() len(Entries) = %d, want %d",
+					len(got.Entries), len(tc.want.Entries))
+			}
+			for i, e := range got.Entries {
+				if e != tc.want.Entries[i] {
+					t.Errorf("entry[%d] = %+v, want %+v", i, e, tc.want.Entries[i])
+				}
+			}
+		})
+	}
+}
+
+func TestCZPCSellItemListRequest_EncodeDecodeRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	orig := CZPCSellItemListRequest{Entries: []CZPCSellItemListEntry{
+		{Index: 0, Amount: 5},
+		{Index: 7, Amount: 2},
+		{Index: 23, Amount: 99},
+	}}
+	var buf bytes.Buffer
+	if err := orig.Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, err := ParseCZPCSellItemList(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(got.Entries) != len(orig.Entries) {
+		t.Fatalf("len(Entries) = %d, want %d", len(got.Entries), len(orig.Entries))
+	}
+	for i, e := range got.Entries {
+		if e != orig.Entries[i] {
+			t.Errorf("Entries[%d] = %+v, want %+v", i, e, orig.Entries[i])
+		}
 	}
 }
 

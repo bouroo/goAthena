@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
+	economydomain "github.com/bouroo/goAthena/internal/features/economy/domain"
 	"github.com/bouroo/goAthena/internal/features/identity/domain"
 	"github.com/bouroo/goAthena/internal/features/identity/service"
 	inventorydomain "github.com/bouroo/goAthena/internal/features/inventory/domain"
@@ -29,14 +30,17 @@ const errItemNotOwnedByChar = "item not found or not owned by this character"
 // (surfaced as a gRPC status error).
 type grpcHandler struct {
 	identityv1.UnimplementedIdentityServiceServer
-	svc domain.IdentityService
+	svc  domain.IdentityService
+	shop economydomain.ShopService
 }
 
-// NewGRPCHandler creates a gRPC handler for the IdentityService. The
-// returned value is registered onto a *grpc.Server by the identity DI
-// package via identityv1.RegisterIdentityServiceServer.
-func NewGRPCHandler(svc domain.IdentityService) identityv1.IdentityServiceServer {
-	return &grpcHandler{svc: svc}
+// NewGRPCHandler creates a gRPC handler for the IdentityService. shop is
+// the NPC-shop economy use-case (BuyFromShop / SellToShop) wired in
+// from the economy feature. The returned value is registered onto a
+// *grpc.Server by the identity DI package via
+// identityv1.RegisterIdentityServiceServer.
+func NewGRPCHandler(svc domain.IdentityService, shop economydomain.ShopService) identityv1.IdentityServiceServer {
+	return &grpcHandler{svc: svc, shop: shop}
 }
 
 // Authenticate handles CA_LOGIN* packets forwarded from the gateway as
@@ -321,6 +325,83 @@ func (h *grpcHandler) UseItem(
 	}, nil
 }
 
+// BuyFromShop commits one or more shop buy orders for a character.
+// Like the other inventory mutations, expected business outcomes
+// (insufficient zeny, lock busy) are returned inside the response as a
+// BuyResult code; only a backend failure (db / lock outage) surfaces
+// as gRPC Internal. The server validates each order's UnitPrice against
+// the economy catalog (D-204) — the client-supplied price is not
+// trusted end-to-end.
+func (h *grpcHandler) BuyFromShop(
+	ctx context.Context,
+	req *identityv1.BuyFromShopRequest,
+) (*identityv1.BuyFromShopResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 || req.GetCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id and char_id must be non-zero")
+	}
+
+	orders := make([]economydomain.ShopOrder, 0, len(req.GetOrders()))
+	for _, o := range req.GetOrders() {
+		orders = append(orders, economydomain.ShopOrder{
+			ItemID:    o.GetItemId(),
+			Amount:    o.GetAmount(),
+			UnitPrice: o.GetUnitPrice(),
+		})
+	}
+
+	newZeny, result, err := h.shop.BuyFromShop(ctx, req.GetCharId(), orders)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "buy from shop: %v", err)
+	}
+
+	resp := &identityv1.BuyFromShopResponse{
+		Result: mapBuyResult(result),
+	}
+	if result == economydomain.BuyOK {
+		resp.NewZeny = newZeny
+	}
+	return resp, nil
+}
+
+// SellToShop credits a character for one or more inventory items sold
+// to an NPC. Same wire-vs-internal dichotomy as BuyFromShop.
+func (h *grpcHandler) SellToShop(
+	ctx context.Context,
+	req *identityv1.SellToShopRequest,
+) (*identityv1.SellToShopResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 || req.GetCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id and char_id must be non-zero")
+	}
+
+	sales := make([]economydomain.SellLine, 0, len(req.GetSales()))
+	for _, s := range req.GetSales() {
+		sales = append(sales, economydomain.SellLine{
+			InvID:     s.GetInvId(),
+			Amount:    s.GetAmount(),
+			UnitPrice: s.GetUnitPrice(),
+		})
+	}
+
+	newZeny, result, err := h.shop.SellToShop(ctx, req.GetCharId(), sales)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "sell to shop: %v", err)
+	}
+
+	resp := &identityv1.SellToShopResponse{
+		Result: mapSellResult(result),
+	}
+	if result == economydomain.SellOK {
+		resp.NewZeny = newZeny
+	}
+	return resp, nil
+}
+
 // inventoryItemToProto projects a domain InventoryItem onto the
 // wire-relevant subset declared in identity.proto. Cards, options,
 // expire_time, favorite, bound, unique_id, equip_switch and
@@ -433,4 +514,38 @@ func mapLoginError(err error) *identityv1.AuthenticateResponse {
 		Result:    identityv1.AuthResult_AUTH_RESULT_SERVER_CLOSED,
 		ErrorCode: 99,
 	}
+}
+
+// mapBuyResult projects the economy domain.BuyResult onto the proto
+// BuyResult. BuyOK → OK; the two failure outcomes map onto their named
+// proto enums. A zero BuyResult (the iota zero value) collapses to
+// UNSPECIFIED so a programmer who forgets to set the result never
+// reads back as success.
+func mapBuyResult(r economydomain.BuyResult) identityv1.BuyResult {
+	switch r {
+	case economydomain.BuyOK:
+		return identityv1.BuyResult_BUY_RESULT_OK
+	case economydomain.BuyFailInsufficientZeny:
+		return identityv1.BuyResult_BUY_RESULT_INSUFFICIENT_ZENY
+	case economydomain.BuyFailLockBusy:
+		return identityv1.BuyResult_BUY_RESULT_LOCK_BUSY
+	}
+	return identityv1.BuyResult_BUY_RESULT_UNSPECIFIED
+}
+
+// mapSellResult projects the economy domain.SellResult onto the proto
+// SellResult. SellOK → OK; the three failure outcomes map onto their
+// named proto enums. A zero SellResult collapses to UNSPECIFIED.
+func mapSellResult(r economydomain.SellResult) identityv1.SellResult {
+	switch r {
+	case economydomain.SellOK:
+		return identityv1.SellResult_SELL_RESULT_OK
+	case economydomain.SellFailZenyFull:
+		return identityv1.SellResult_SELL_RESULT_ZENY_FULL
+	case economydomain.SellFailInvalidItem:
+		return identityv1.SellResult_SELL_RESULT_INVALID_ITEM
+	case economydomain.SellFailLockBusy:
+		return identityv1.SellResult_SELL_RESULT_LOCK_BUSY
+	}
+	return identityv1.SellResult_SELL_RESULT_UNSPECIFIED
 }

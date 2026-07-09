@@ -45,6 +45,19 @@ service IdentityService {
   // remaining amount reaches zero the row is deleted. Consumables only;
   // equipment items are not stackable on rAthena's wire.
   rpc UseItem(UseItemRequest) returns (UseItemResponse);
+
+  // BuyFromShop commits one or more buy orders from an NPC shop for the
+  // given character. The gateway computes the unit prices from its own
+  // shop catalog (D-204); the server never trusts a client-supplied
+  // price. Returns a BuyResult outcome + the post-transaction zeny
+  // balance (0 on non-OK).
+  rpc BuyFromShop(BuyFromShopRequest) returns (BuyFromShopResponse);
+
+  // SellToShop credits the character for one or more inventory items
+  // sold to an NPC shop. The inv_id is the inventory row id (not a
+  // wire slot). Returns a SellResult outcome + the post-transaction
+  // zeny balance (0 on non-OK).
+  rpc SellToShop(SellToShopRequest) returns (SellToShopResponse);
 }
 
 // AuthMethod identifies which CA_LOGIN variant the client sent.
@@ -228,4 +241,65 @@ message UseItemResponse {
   uint32 item_id = 2;
   uint32 remaining_amount = 3; // stack size after the use, 0 if row was deleted
   string error = 4;
+}
+
+// ShopOrder is a single line item in a buy transaction. UnitPrice is
+// carried over the wire so the server has a stable receipt even if the
+// gateway recomputes it; the server still validates against its own
+// catalog (D-204) before committing.
+message ShopOrder {
+  uint32 item_id = 1;
+  uint32 amount = 2;
+  uint32 unit_price = 3;
+}
+
+// SellLine is a single line item in a sell transaction. inv_id is the
+// inventory row id (the `id` column of the `inventory` table), not a
+// wire slot index.
+message SellLine {
+  uint32 inv_id = 1;
+  uint32 amount = 2;
+  uint32 unit_price = 3;
+}
+
+message BuyFromShopRequest {
+  uint32 account_id = 1;   // defensive cross-check (mirror GetInventoryRequest)
+  uint32 char_id = 2;
+  repeated ShopOrder orders = 3;
+}
+
+// BuyResult mirrors economy domain.BuyResult. UNSPECIFIED is reserved
+// for "we forgot to set the result" and should never reach the wire.
+enum BuyResult {
+  BUY_RESULT_UNSPECIFIED = 0;
+  BUY_RESULT_OK = 1;
+  BUY_RESULT_INSUFFICIENT_ZENY = 2;
+  BUY_RESULT_LOCK_BUSY = 3;
+}
+
+message BuyFromShopResponse {
+  BuyResult result = 1;
+  uint32 new_zeny = 2;  // post-tx balance (0 on non-OK); gateway emits ZC_*PAR_CHANGE
+  string error = 3;     // populated only on transport/internal failure paths
+}
+
+message SellToShopRequest {
+  uint32 account_id = 1;
+  uint32 char_id = 2;
+  repeated SellLine sales = 3;
+}
+
+// SellResult mirrors economy domain.SellResult.
+enum SellResult {
+  SELL_RESULT_UNSPECIFIED = 0;
+  SELL_RESULT_OK = 1;
+  SELL_RESULT_ZENY_FULL = 2;
+  SELL_RESULT_INVALID_ITEM = 3;
+  SELL_RESULT_LOCK_BUSY = 4;
+}
+
+message SellToShopResponse {
+  SellResult result = 1;
+  uint32 new_zeny = 2;
+  string error = 3;
 }

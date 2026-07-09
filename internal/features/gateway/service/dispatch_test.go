@@ -38,6 +38,14 @@ type fakeIdentityClient struct {
 	equipItemFn     func(context.Context, *identityv1.EquipItemRequest) (*identityv1.EquipItemResponse, error)
 	unequipItemFn   func(context.Context, *identityv1.UnequipItemRequest) (*identityv1.UnequipItemResponse, error)
 	useItemFn       func(context.Context, *identityv1.UseItemRequest) (*identityv1.UseItemResponse, error)
+	// P2B: shop economy. buyFromShopFn / sellToShopFn drive the
+	// handleCZPCPurchaseItemList + handleCZPCSellItemList happy and
+	// edge-case paths; buyReqs / sellReqs capture the (verifiable)
+	// inputs the dispatcher forwards.
+	buyFromShopFn func(context.Context, *identityv1.BuyFromShopRequest) (*identityv1.BuyFromShopResponse, error)
+	sellToShopFn  func(context.Context, *identityv1.SellToShopRequest) (*identityv1.SellToShopResponse, error)
+	buyReqs       []*identityv1.BuyFromShopRequest
+	sellReqs      []*identityv1.SellToShopRequest
 }
 
 func (f *fakeIdentityClient) Authenticate(ctx context.Context, req *identityv1.AuthenticateRequest, _ ...grpc.CallOption) (*identityv1.AuthenticateResponse, error) {
@@ -121,6 +129,32 @@ func (f *fakeIdentityClient) UseItem(ctx context.Context, req *identityv1.UseIte
 	f.mu.Unlock()
 	if fn == nil {
 		return &identityv1.UseItemResponse{Success: false, Error: "no useItem fn installed"}, nil
+	}
+	return fn(ctx, req)
+}
+
+// P2B: shop economy RPCs. Tests that exercise the shop handlers
+// install buyFromShopFn / sellToShopFn; tests that don't get a
+// guard false-result so the dispatch path falls back to its fail
+// encoding without aborting the handshake.
+func (f *fakeIdentityClient) BuyFromShop(ctx context.Context, req *identityv1.BuyFromShopRequest, _ ...grpc.CallOption) (*identityv1.BuyFromShopResponse, error) {
+	f.mu.Lock()
+	f.buyReqs = append(f.buyReqs, req)
+	fn := f.buyFromShopFn
+	f.mu.Unlock()
+	if fn == nil {
+		return &identityv1.BuyFromShopResponse{Result: identityv1.BuyResult_BUY_RESULT_INSUFFICIENT_ZENY, NewZeny: 0}, nil
+	}
+	return fn(ctx, req)
+}
+
+func (f *fakeIdentityClient) SellToShop(ctx context.Context, req *identityv1.SellToShopRequest, _ ...grpc.CallOption) (*identityv1.SellToShopResponse, error) {
+	f.mu.Lock()
+	f.sellReqs = append(f.sellReqs, req)
+	fn := f.sellToShopFn
+	f.mu.Unlock()
+	if fn == nil {
+		return &identityv1.SellToShopResponse{Result: identityv1.SellResult_SELL_RESULT_INVALID_ITEM, NewZeny: 0}, nil
 	}
 	return fn(ctx, req)
 }
@@ -3048,17 +3082,25 @@ func TestDispatchHandler_CZAckSelectDealType_PreAuthGuard_DropsSilently(t *testi
 }
 
 // TestDispatchHandler_CZPCPurchaseItemList_EncodesZCPCPurchaseResult
-// ensures the dispatcher replies with ZC_PC_PURCHASE_RESULT (result=0)
-// when a client submits a purchase list. zeny deduction / inventory
-// mutation is deferred.
+// covers the P2B happy path: with the active shop NPC anchored via
+// SetShopNPC, a valid catalog order returns result=0 + a zeny
+// LongParChange. The previous "always result=0 stub" behaviour is
+// obsolete; the contract is now that real zeny moves through the
+// identity RPC and the helper result packet carries the outcome.
 func TestDispatchHandler_CZPCPurchaseItemList_EncodesZCPCPurchaseResult(t *testing.T) {
 	t.Parallel()
 
-	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+	identity := &fakeIdentityClient{
+		buyFromShopFn: func(_ context.Context, _ *identityv1.BuyFromShopRequest) (*identityv1.BuyFromShopResponse, error) {
+			return &identityv1.BuyFromShopResponse{Result: identityv1.BuyResult_BUY_RESULT_OK, NewZeny: 100}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
 		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
 
 	resp := &bufResponder{}
-	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	conn.SetShopNPC(shopWeaponNpcGID)
 
 	req := packet.CZPCPurchaseItemListRequest{
 		Entries: []packet.CZPCPurchaseItemListEntry{
@@ -3076,18 +3118,28 @@ func TestDispatchHandler_CZPCPurchaseItemList_EncodesZCPCPurchaseResult(t *testi
 	}
 
 	out := resp.buf.Bytes()
-	const wantLen = 3 // sizeZCPCPurchaseResult
-	if len(out) != wantLen {
-		t.Fatalf("responder wrote %d bytes, want %d (ZC_PC_PURCHASE_RESULT)", len(out), wantLen)
+	if len(out) < 3 {
+		t.Fatalf("responder wrote %d bytes, want >= 3 (ZC_PC_PURCHASE_RESULT + ZC_LONGPAR_CHANGE)",
+			len(out))
 	}
 
 	// Header: 0x00ca LE.
 	if out[0] != 0xca || out[1] != 0x00 {
 		t.Fatalf("header bytes = %02x %02x, want ca 00 (LE 0x00ca)", out[0], out[1])
 	}
-	// Result at [2] = 0 (success).
+	// First packet result at [2] = 0 (success).
 	if out[2] != 0x00 {
-		t.Errorf("result = %d, want 0 (success)", out[2])
+		t.Errorf("result byte = %d, want 0 (success)", out[2])
+	}
+	// Followed by a ZC_LONGPAR_CHANGE carrying the post-tx zeny
+	// (NewZeny=100 from the fake identity client).
+	cmd, payload := packetAt(t, out, 1)
+	if cmd != packet.HeaderZCLONGPARCHANGE {
+		t.Fatalf("packet[1] = 0x%04x, want 0x%04x (ZC_LONGPAR_CHANGE)",
+			cmd, packet.HeaderZCLONGPARCHANGE)
+	}
+	if amt := int32(binary.LittleEndian.Uint32(payload[4:8])); amt != 100 {
+		t.Errorf("LongParChange amount = %d, want 100", amt)
 	}
 }
 
@@ -4093,5 +4145,485 @@ func TestDispatchHandler_CZReqTakeoffEquip_MalformedFrame_DropsSilently(t *testi
 	}
 	if got := resp.buf.Len(); got != 0 {
 		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// P2B: NPC shop economy — buy / sell list emission, real zeny
+// deduction / credit through identity RPCs, and zeny LongParChange
+// update on success.
+
+// shopWeaponNpcGID is the hardcoded GID of the Weapon Shop NPC from
+// the gateway's npcSpawns catalog (npc_spawns.go).
+const shopWeaponNpcGID uint32 = 110000002
+
+// sizeZCPCSellItemListItem is re-declared here for the test (the
+// production package's private constant is not exported).
+const sizeZCPCSellItemListItem = 10
+
+// packetAt returns the (cmd, payload) pair for the i'th packet in
+// the responder buffer by sequential parse. The fixed / variable
+// dispatch mirrors parseStatusBurst but applies to the shop-result /
+// zeny-update frames that follow it.
+func packetAt(t *testing.T, buf []byte, i int) (cmd uint16, payload []byte) {
+	t.Helper()
+	offset := 0
+	idx := 0
+	for offset+2 <= len(buf) {
+		c := binary.LittleEndian.Uint16(buf[offset:])
+		var plen int
+		switch c {
+		case packet.HeaderZCPCPURCHASERESULT, packet.HeaderZCPCSELLRESULT:
+			plen = 3
+		case packet.HeaderZCLONGPARCHANGE, packet.HeaderZCPARCHANGE:
+			plen = 8
+		default:
+			if offset+4 > len(buf) {
+				t.Fatalf("truncated packet at offset %d", offset)
+			}
+			plen = int(binary.LittleEndian.Uint16(buf[offset+2:]))
+			if plen < 4 {
+				t.Fatalf("packet 0x%04x at offset %d has plen=%d", c, offset, plen)
+			}
+		}
+		if offset+plen > len(buf) {
+			t.Fatalf("truncated packet 0x%04x at offset %d (want %d bytes, have %d)",
+				c, offset, plen, len(buf)-offset)
+		}
+		if idx == i {
+			return c, buf[offset : offset+plen]
+		}
+		offset += plen
+		idx++
+	}
+	t.Fatalf("only %d packets in buffer (index %d requested); buf=% x", idx, i, buf)
+	return 0, nil
+}
+
+// TestDispatchHandler_CZPCAckSelectDealType_Sell_SendsSellList
+// covers the sell-list emission path: handleCZAckSelectDealType(type=Sell)
+// must fetch inventory via identity.GetInventory, price each item at
+// half the catalog buy price, and emit ZC_PC_SELL_ITEMLIST with the
+// correct (index, price, overcharge) triple per row. slot 2's
+// non-catalog item must also be listed with a 0 sell price so the
+// client UI does not silently drop it.
+func TestDispatchHandler_CZPCAckSelectDealType_Sell_SendsSellList(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		getInventoryFn: func(_ context.Context, req *identityv1.GetInventoryRequest) (*identityv1.GetInventoryResponse, error) {
+			if req.GetAccountId() != 4242 || req.GetCharId() != 9001 {
+				t.Errorf("GetInventory = (%d, %d), want (4242, 9001)",
+					req.GetAccountId(), req.GetCharId())
+			}
+			return &identityv1.GetInventoryResponse{Items: []*identityv1.InventoryItem{
+				// Slot 0: Red Potion (501, catalog price 50 → sellPrice 25).
+				{Id: 100, Nameid: 501, Amount: 5},
+				// Slot 1: Knife (1201, catalog price 500 → sellPrice 250).
+				{Id: 101, Nameid: 1201, Amount: 1},
+				// Slot 2: catalog miss → sellPrice 0 (still listed).
+				{Id: 102, Nameid: 9999, Amount: 1},
+			}}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+
+	req := packet.CZAckSelectDealTypeRequest{NpcID: shopWeaponNpcGID, Type: 0x01}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZAckSelectDealType: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACKSELECTDEALTYPE, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) == 0 {
+		t.Fatal("responder wrote nothing")
+	}
+	cmd, payload := packetAt(t, out, 0)
+	if cmd != packet.HeaderZCPCSELLITEMLIST {
+		t.Fatalf("packet[0] = 0x%04x, want 0x%04x (ZC_PC_SELL_ITEMLIST)", cmd, packet.HeaderZCPCSELLITEMLIST)
+	}
+	if plen := int(binary.LittleEndian.Uint16(payload[2:4])); plen != len(payload) {
+		t.Fatalf("packetLength slot = %d, want %d (full frame length)", plen, len(payload))
+	}
+	// Slot 0: Red Potion.
+	if idx := binary.LittleEndian.Uint16(payload[4:6]); idx != 0 {
+		t.Errorf("items[0] index = %d, want 0", idx)
+	}
+	if p := binary.LittleEndian.Uint32(payload[6:10]); p != 25 {
+		t.Errorf("items[0] price = %d, want 25 (50/2)", p)
+	}
+	if oc := binary.LittleEndian.Uint32(payload[10:14]); oc != 25 {
+		t.Errorf("items[0] overcharge = %d, want 25", oc)
+	}
+	// Slot 1: Knife.
+	off := 4 + sizeZCPCSellItemListItem
+	if idx := binary.LittleEndian.Uint16(payload[off : off+2]); idx != 1 {
+		t.Errorf("items[1] index = %d, want 1", idx)
+	}
+	if p := binary.LittleEndian.Uint32(payload[off+2 : off+6]); p != 250 {
+		t.Errorf("items[1] price = %d, want 250 (500/2)", p)
+	}
+	// Slot 2: non-catalog item.
+	off2 := 4 + 2*sizeZCPCSellItemListItem
+	if p := binary.LittleEndian.Uint32(payload[off2+2 : off2+6]); p != 0 {
+		t.Errorf("items[2] price = %d, want 0 (catalog miss)", p)
+	}
+	// shopNPCID must be set so the following sell request can
+	// re-anchor to this NPC.
+	if got := conn.ShopNPC(); got != shopWeaponNpcGID {
+		t.Errorf("after Sell ACK, conn.ShopNPC() = %d, want %d", got, shopWeaponNpcGID)
+	}
+}
+
+// TestDispatchHandler_CZPCAckSelectDealType_Cancel_ClearsShopNPC
+// verifies the Cancel branch resets shopNPCID so a stale shop
+// context can't leak into a subsequent sell request.
+func TestDispatchHandler_CZPCAckSelectDealType_Cancel_ClearsShopNPC(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	conn.SetShopNPC(shopWeaponNpcGID)
+
+	req := packet.CZAckSelectDealTypeRequest{NpcID: shopWeaponNpcGID, Type: 0x02}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACKSELECTDEALTYPE, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v", err)
+	}
+	if got := conn.ShopNPC(); got != 0 {
+		t.Errorf("after Cancel, conn.ShopNPC() = %d, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZPCPurchaseItemList_HappyPath covers the
+// full buy path: parse the (itemId, amount) request, look up the
+// unit price from the active NPC's catalog, call
+// identity.BuyFromShop, and emit ZC_PC_PURCHASE_RESULT (0) +
+// ZC_LONGPAR_CHANGE for the post-transaction zeny.
+func TestDispatchHandler_CZPCPurchaseItemList_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	const wantNewZeny uint32 = 5000
+	identity := &fakeIdentityClient{
+		buyFromShopFn: func(_ context.Context, req *identityv1.BuyFromShopRequest) (*identityv1.BuyFromShopResponse, error) {
+			if req.GetAccountId() != 4242 || req.GetCharId() != 9001 {
+				t.Errorf("BuyFromShop = (aid=%d, cid=%d), want (4242, 9001)",
+					req.GetAccountId(), req.GetCharId())
+			}
+			if len(req.GetOrders()) != 1 {
+				t.Fatalf("len(Orders) = %d, want 1", len(req.GetOrders()))
+			}
+			ord := req.GetOrders()[0]
+			if ord.GetItemId() != 501 || ord.GetAmount() != 3 || ord.GetUnitPrice() != 50 {
+				t.Errorf("Orders[0] = (item=%d, amount=%d, price=%d), want (501, 3, 50)",
+					ord.GetItemId(), ord.GetAmount(), ord.GetUnitPrice())
+			}
+			return &identityv1.BuyFromShopResponse{
+				Result:  identityv1.BuyResult_BUY_RESULT_OK,
+				NewZeny: wantNewZeny,
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	conn.SetShopNPC(shopWeaponNpcGID)
+
+	req := packet.CZPCPurchaseItemListRequest{Entries: []packet.CZPCPurchaseItemListEntry{
+		{ItemID: 501, Amount: 3},
+	}}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_PC_PURCHASE_ITEMLIST: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZPCPURCHASEITEMLIST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v", err)
+	}
+
+	out := resp.buf.Bytes()
+
+	// Packet 0: ZC_PC_PURCHASE_RESULT result=0.
+	cmd0, p0 := packetAt(t, out, 0)
+	if cmd0 != packet.HeaderZCPCPURCHASERESULT {
+		t.Fatalf("packet[0] = 0x%04x, want 0x%04x (ZC_PC_PURCHASE_RESULT)",
+			cmd0, packet.HeaderZCPCPURCHASERESULT)
+	}
+	if p0[2] != 0 {
+		t.Errorf("ZC_PC_PURCHASE_RESULT result byte = %d, want 0", p0[2])
+	}
+
+	// Packet 1: ZC_LONGPAR_CHANGE SP_ZENY=5000.
+	cmd1, p1 := packetAt(t, out, 1)
+	if cmd1 != packet.HeaderZCLONGPARCHANGE {
+		t.Fatalf("packet[1] = 0x%04x, want 0x%04x (ZC_LONGPAR_CHANGE)",
+			cmd1, packet.HeaderZCLONGPARCHANGE)
+	}
+	if vid := binary.LittleEndian.Uint16(p1[2:4]); vid != packet.SPZeny {
+		t.Errorf("LongParChange varID = %d, want %d (SP_ZENY)", vid, packet.SPZeny)
+	}
+	if amt := int32(binary.LittleEndian.Uint32(p1[4:8])); amt != int32(wantNewZeny) {
+		t.Errorf("LongParChange amount = %d, want %d", amt, wantNewZeny)
+	}
+
+	// shopNPCID cleared after the transaction.
+	if got := conn.ShopNPC(); got != 0 {
+		t.Errorf("after successful purchase, conn.ShopNPC() = %d, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZPCPurchaseItemList_InsufficientZeny covers
+// the non-OK identity-result path: the response must carry
+// result=1 and no zeny update.
+func TestDispatchHandler_CZPCPurchaseItemList_InsufficientZeny(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		buyFromShopFn: func(_ context.Context, _ *identityv1.BuyFromShopRequest) (*identityv1.BuyFromShopResponse, error) {
+			return &identityv1.BuyFromShopResponse{
+				Result:  identityv1.BuyResult_BUY_RESULT_INSUFFICIENT_ZENY,
+				NewZeny: 0,
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	conn.SetShopNPC(shopWeaponNpcGID)
+
+	req := packet.CZPCPurchaseItemListRequest{Entries: []packet.CZPCPurchaseItemListEntry{
+		// 1101 is Short Sword in catalog (1500 zeny), but the player is broke.
+		{ItemID: 1101, Amount: 1000},
+	}}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZPCPURCHASEITEMLIST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 3 {
+		t.Fatalf("responder wrote %d bytes, want exactly 3 (ZC_PC_PURCHASE_RESULT(fail))",
+			len(out))
+	}
+	if out[0] != 0xca || out[1] != 0x00 {
+		t.Errorf("opcode = %02x %02x, want ca 00 (ZC_PC_PURCHASE_RESULT)",
+			out[0], out[1])
+	}
+	if out[2] != 1 {
+		t.Errorf("result = %d, want 1 (fail)", out[2])
+	}
+}
+
+// TestDispatchHandler_CZPCPurchaseItemList_ItemNotInCatalog covers
+// D-204 price authority: an order referencing an itemId the active
+// NPC does not sell must fail without calling identity.
+func TestDispatchHandler_CZPCPurchaseItemList_ItemNotInCatalog(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		buyFromShopFn: func(_ context.Context, _ *identityv1.BuyFromShopRequest) (*identityv1.BuyFromShopResponse, error) {
+			t.Fatal("BuyFromShop must NOT be called when the ordered item is not in the NPC catalog")
+			return nil, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	conn.SetShopNPC(shopWeaponNpcGID)
+
+	req := packet.CZPCPurchaseItemListRequest{Entries: []packet.CZPCPurchaseItemListEntry{
+		{ItemID: 9999, Amount: 1}, // not in catalog
+	}}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZPCPURCHASEITEMLIST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 3 || out[2] != 1 {
+		t.Fatalf("responder out = %v, want 3 bytes with result=1", out)
+	}
+	if len(identity.buyReqs) != 0 {
+		t.Fatalf("BuyFromShop called %d times, want 0", len(identity.buyReqs))
+	}
+}
+
+// TestDispatchHandler_CZPCPurchaseItemList_NoShopNPC verifies the
+// no-prior-ACK guard: without a CZ_ACK_SELECT_DEALTYPE, the
+// handler must fail the purchase without calling identity.
+func TestDispatchHandler_CZPCPurchaseItemList_NoShopNPC(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		buyFromShopFn: func(_ context.Context, _ *identityv1.BuyFromShopRequest) (*identityv1.BuyFromShopResponse, error) {
+			t.Fatal("BuyFromShop must NOT be called without a prior shop dialog")
+			return nil, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+
+	req := packet.CZPCPurchaseItemListRequest{Entries: []packet.CZPCPurchaseItemListEntry{
+		{ItemID: 501, Amount: 1},
+	}}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZPCPURCHASEITEMLIST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v", err)
+	}
+
+	if len(identity.buyReqs) != 0 {
+		t.Fatalf("BuyFromShop called %d times, want 0 (no prior shop dialog)",
+			len(identity.buyReqs))
+	}
+	out := resp.buf.Bytes()
+	if len(out) != 3 || out[2] != 1 {
+		t.Fatalf("responder out = %v, want 3 bytes result=1", out)
+	}
+}
+
+// TestDispatchHandler_CZPCSellItemList_HappyPath covers the
+// complete sell path: parse (index, amount), look up unit price
+// from the catalog, call identity.SellToShop, emit
+// ZC_PC_SELL_RESULT (0) + ZC_LONGPAR_CHANGE for the new zeny.
+func TestDispatchHandler_CZPCSellItemList_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	const wantNewZeny uint32 = 75
+	identity := &fakeIdentityClient{
+		getInventoryFn: func(_ context.Context, _ *identityv1.GetInventoryRequest) (*identityv1.GetInventoryResponse, error) {
+			return &identityv1.GetInventoryResponse{Items: []*identityv1.InventoryItem{
+				{Id: 100, Nameid: 501, Amount: 5}, // slot 0, Red Potion
+			}}, nil
+		},
+		sellToShopFn: func(_ context.Context, req *identityv1.SellToShopRequest) (*identityv1.SellToShopResponse, error) {
+			if len(req.GetSales()) != 1 {
+				t.Fatalf("len(Sales) = %d, want 1", len(req.GetSales()))
+			}
+			line := req.GetSales()[0]
+			if line.GetInvId() != 100 || line.GetAmount() != 3 || line.GetUnitPrice() != 25 {
+				t.Errorf("Sales[0] = (inv=%d, amount=%d, price=%d), want (100, 3, 25)",
+					line.GetInvId(), line.GetAmount(), line.GetUnitPrice())
+			}
+			return &identityv1.SellToShopResponse{
+				Result:  identityv1.SellResult_SELL_RESULT_OK,
+				NewZeny: wantNewZeny,
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	conn.SetInventoryIndex(map[uint16]uint32{0: 100})
+	conn.SetShopNPC(shopWeaponNpcGID)
+
+	req := packet.CZPCSellItemListRequest{Entries: []packet.CZPCSellItemListEntry{
+		{Index: 0, Amount: 3},
+	}}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_PC_SELL_ITEMLIST: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZPCSELLITEMLIST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v", err)
+	}
+
+	out := resp.buf.Bytes()
+	// Packet 0: ZC_PC_SELL_RESULT result=0.
+	cmd0, p0 := packetAt(t, out, 0)
+	if cmd0 != packet.HeaderZCPCSELLRESULT {
+		t.Fatalf("packet[0] = 0x%04x, want 0x%04x (ZC_PC_SELL_RESULT)",
+			cmd0, packet.HeaderZCPCSELLRESULT)
+	}
+	if p0[2] != 0 {
+		t.Errorf("ZC_PC_SELL_RESULT result byte = %d, want 0", p0[2])
+	}
+	// Packet 1: ZC_LONGPAR_CHANGE SP_ZENY=75.
+	cmd1, p1 := packetAt(t, out, 1)
+	if cmd1 != packet.HeaderZCLONGPARCHANGE {
+		t.Fatalf("packet[1] = 0x%04x, want 0x%04x (ZC_LONGPAR_CHANGE)",
+			cmd1, packet.HeaderZCLONGPARCHANGE)
+	}
+	if amt := int32(binary.LittleEndian.Uint32(p1[4:8])); amt != int32(wantNewZeny) {
+		t.Errorf("LongParChange amount = %d, want %d", amt, wantNewZeny)
+	}
+	// shopNPCID cleared after the transaction.
+	if got := conn.ShopNPC(); got != 0 {
+		t.Errorf("after successful sell, conn.ShopNPC() = %d, want 0", got)
+	}
+}
+
+// TestDispatchHandler_CZPCSellItemList_NoShopNPC verifies the
+// no-prior-ACK guard on the sell path.
+func TestDispatchHandler_CZPCSellItemList_NoShopNPC(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		sellToShopFn: func(_ context.Context, _ *identityv1.SellToShopRequest) (*identityv1.SellToShopResponse, error) {
+			t.Fatal("SellToShop must NOT be called without a prior shop dialog")
+			return nil, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+
+	req := packet.CZPCSellItemListRequest{Entries: []packet.CZPCSellItemListEntry{
+		{Index: 0, Amount: 1},
+	}}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZPCSELLITEMLIST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v", err)
+	}
+
+	if len(identity.sellReqs) != 0 {
+		t.Fatalf("SellToShop called %d times, want 0", len(identity.sellReqs))
+	}
+	out := resp.buf.Bytes()
+	if len(out) != 3 || out[2] != 1 {
+		t.Fatalf("responder out = %v, want 3 bytes result=1", out)
 	}
 }

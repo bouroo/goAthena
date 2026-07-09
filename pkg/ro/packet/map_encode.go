@@ -1466,12 +1466,107 @@ func (r NotifyVanishResponse) Size() int { return sizeZCNotifyVanish }
 
 // Encode writes the ZC_NOTIFY_VANISH packet to w.
 func (r NotifyVanishResponse) Encode(w io.Writer) error {
-	var buf [sizeZCNotifyVanish]byte
+	buf := make([]byte, sizeZCNotifyVanish)
 	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYVANISH)
 	binary.LittleEndian.PutUint32(buf[2:], r.GID)
 	buf[6] = r.Type
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_NOTIFY_VANISH: %w", err)
+	}
+	return nil
+}
+
+// ShopSellItem is the per-entry shape of ZC_PC_SELL_ITEMLIST
+// (rathena/src/map/packets_struct.hpp: PACKET_ZC_PC_SELL_ITEMLIST).
+// The on-wire size is 10 bytes:
+//
+//	uint16 Index       // client-side inventory slot position
+//	uint32 Price       // base sell price (overcharge w/o override)
+//	uint32 Overcharge  // overcharge sell price (price * 2 / 2 == price when no discount)
+type ShopSellItem struct {
+	// Index is the client-side inventory slot position (0..MAX_INVENTORY).
+	Index uint16
+	// Price is the base sell price in zeny.
+	Price uint32
+	// Overcharge is the overcharge sell price in zeny (rAthena's
+	// pc.shopdiscount/overcharge logic returns this value when the
+	// shop is configured to mark up sell prices).
+	Overcharge uint32
+}
+
+// SellItemListResponse encodes ZC_PC_SELL_ITEMLIST (command 0x00c7,
+// variable length). The server sends this in response to a
+// CZ_ACK_SELECT_DEALTYPE (type=Sell) request so the client can pop up
+// the sell window with the player's sellable inventory and the NPC's
+// sell prices.
+//
+// Wire layout (rathena/src/map/packets_struct.hpp:
+// PACKET_ZC_PC_SELL_ITEMLIST):
+//
+//	int16  packetType   (0x00c7)
+//	int16  packetLength (4 + 10 * len(Items))
+//	[per item, 10 bytes:] ShopSellItem
+type SellItemListResponse struct {
+	// Items is the priced list of every sellable inventory row the
+	// server returned for the requesting character.
+	Items []ShopSellItem
+}
+
+// Encode writes the ZC_PC_SELL_ITEMLIST packet to w. The wire length is
+// 4 + 10 * len(Items); the encoder computes packetLength from the
+// entry count so the caller cannot accidentally emit a frame whose
+// length slot disagrees with the trailing bytes.
+func (r SellItemListResponse) Encode(w io.Writer) error {
+	total := 4 + len(r.Items)*sizeZCPCSellItemListItem
+	if total > 0xffff {
+		return fmt.Errorf("packet: write ZC_PC_SELL_ITEMLIST: too many items (%d)", len(r.Items))
+	}
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCSELLITEMLIST)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	for i, it := range r.Items {
+		off := 4 + i*sizeZCPCSellItemListItem
+		binary.LittleEndian.PutUint16(buf[off:off+2], it.Index)
+		binary.LittleEndian.PutUint32(buf[off+2:off+6], it.Price)
+		binary.LittleEndian.PutUint32(buf[off+6:off+10], it.Overcharge)
+	}
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_PC_SELL_ITEMLIST: %w", err)
+	}
+	return nil
+}
+
+// Size returns the on-wire byte length that Encode will write
+// (4 + 10 * len(Items)).
+func (r SellItemListResponse) Size() int {
+	return 4 + len(r.Items)*sizeZCPCSellItemListItem
+}
+
+// SellResultResponse encodes ZC_PC_SELL_RESULT (command 0x00cb, 3 bytes
+// fixed). The server sends this to acknowledge a CZ_PC_SELL_ITEMLIST
+// request.
+//
+// Wire layout (rathena/src/map/packets.hpp: ZC_PC_SELL_RESULT):
+//
+//	int16 packetType (0x00cb)
+//	uint8 result     (0=success, 1=failed)
+type SellResultResponse struct {
+	// Result is the sell outcome byte (0=success, 1=failed).
+	Result uint8
+}
+
+// Size returns the on-wire byte length that Encode will write (always 3).
+func (r SellResultResponse) Size() int {
+	return sizeZCPCSellResult
+}
+
+// Encode writes the ZC_PC_SELL_RESULT packet to w.
+func (r SellResultResponse) Encode(w io.Writer) error {
+	var buf [sizeZCPCSellResult]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCSELLRESULT)
+	buf[2] = r.Result
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_PC_SELL_RESULT: %w", err)
 	}
 	return nil
 }

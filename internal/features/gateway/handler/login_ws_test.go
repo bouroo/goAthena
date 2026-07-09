@@ -91,6 +91,16 @@ func (f *loginFakeIdentityClient) UseItem(ctx context.Context, _ *identityv1.Use
 	return nil, status.Error(codes.Unimplemented, "UseItem not installed")
 }
 
+func (f *loginFakeIdentityClient) BuyFromShop(ctx context.Context, _ *identityv1.BuyFromShopRequest, _ ...grpc.CallOption) (*identityv1.BuyFromShopResponse, error) {
+	_, _ = ctx, f
+	return nil, status.Error(codes.Unimplemented, "BuyFromShop not installed")
+}
+
+func (f *loginFakeIdentityClient) SellToShop(ctx context.Context, _ *identityv1.SellToShopRequest, _ ...grpc.CallOption) (*identityv1.SellToShopResponse, error) {
+	_, _ = ctx, f
+	return nil, status.Error(codes.Unimplemented, "SellToShop not installed")
+}
+
 // wsDispatchAdapter mirrors service.DispatchHandler for the WS path so
 // this test exercises the full real WSHandler → processBytes →
 // domain.PacketHandler → identity client → AC_ACCEPT_LOGIN → WS write

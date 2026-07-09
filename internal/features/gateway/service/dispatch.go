@@ -22,8 +22,9 @@
 //                                  or ZC_SELECT_DEALTYPE (shop NPC)
 //   - CZ_REQNEXTSCRIPT (0x00b9)      → ZC_SAY_DIALOG2 + ZC_CLOSE_DIALOG (dialog continuation)
 //   - CZ_CLOSE_DIALOG (0x0146)       → logged (client closes dialog locally)
-//   - CZ_ACK_SELECT_DEALTYPE (0x00c5) → ZC_PC_PURCHASE_ITEMLIST (Buy) / logged (Sell / Cancel)
-//   - CZ_PC_PURCHASE_ITEMLIST (0x00c8) → ZC_PC_PURCHASE_RESULT (always success; zeny / inventory deferred)
+//   - CZ_ACK_SELECT_DEALTYPE (0x00c5) → ZC_PC_PURCHASE_ITEMLIST (Buy) / ZC_PC_SELL_ITEMLIST (Sell) / logged (Cancel)
+//   - CZ_PC_PURCHASE_ITEMLIST (0x00c8) → ZC_PC_PURCHASE_RESULT (success/insufficient) + zeny LongParChange on OK
+//   - CZ_PC_SELL_ITEMLIST (0x00c9)    → ZC_PC_SELL_RESULT (success/fail) + zeny LongParChange on OK
 //   - everything else              → debug-logged, connection kept alive.
 
 package service
@@ -35,9 +36,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/netip"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -225,6 +228,8 @@ func (h *DispatchHandler) handleMapPacketNPC(ctx context.Context, conn *domain.C
 		return h.handleCZAckSelectDealType(ctx, conn, resp, frame)
 	case packet.HeaderCZPCPURCHASEITEMLIST:
 		return h.handleCZPCPurchaseItemList(ctx, conn, resp, frame)
+	case packet.HeaderCZPCSELLITEMLIST:
+		return h.handleCZPCSellItemList(ctx, conn, resp, frame)
 	default:
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
@@ -2583,7 +2588,7 @@ func (h *DispatchHandler) handleCZContactNPC(_ context.Context, conn *domain.Con
 // client sending a malformed selector does not break the connection.
 // NPCs that are not in npcSpawns (e.g. the client typed a bogus
 // NpcID) are also dropped without response.
-func (h *DispatchHandler) handleCZAckSelectDealType(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+func (h *DispatchHandler) handleCZAckSelectDealType(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZAckSelectDealType(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -2619,7 +2624,9 @@ func (h *DispatchHandler) handleCZAckSelectDealType(_ context.Context, conn *dom
 
 	switch req.Type {
 	case 0x00:
-		// Buy — send the NPC's stock list.
+		// Buy — send the NPC's stock list and remember the NPC for
+		// the follow-up CZ_PC_PURCHASE_ITEMLIST price-authority
+		// check.
 		items := make([]packet.ShopBuyItem, len(npc.ShopItems))
 		for i, it := range npc.ShopItems {
 			items[i] = packet.ShopBuyItem(it)
@@ -2636,6 +2643,7 @@ func (h *DispatchHandler) handleCZAckSelectDealType(_ context.Context, conn *dom
 				Msg("encode ZC_PC_PURCHASE_ITEMLIST failed; dropping packet")
 			return nil
 		}
+		conn.SetShopNPC(npc.GID)
 		h.logger.Info().
 			Uint64("conn", conn.ID).
 			Uint32("npc_id", req.NpcID).
@@ -2647,14 +2655,17 @@ func (h *DispatchHandler) handleCZAckSelectDealType(_ context.Context, conn *dom
 		}
 		return nil
 	case 0x01:
-		// Sell — deferred until the inventory system lands.
-		h.logger.Debug().
-			Uint64("conn", conn.ID).
-			Uint32("npc_id", req.NpcID).
-			Str("npc_name", npc.Name).
-			Msg("NPC shop sell requested (deferred)")
+		// Sell — fetch the player's inventory, build the priced
+		// sell list (D-213), and send ZC_PC_SELL_ITEMLIST. The
+		// GetInventory call is the price-authority reference: each
+		// inventory item's nameid is resolved to the NPC's catalog
+		// buy price, then halved for the sell price. Items not in
+		// any shop catalog sell for 0.
+		conn.SetShopNPC(npc.GID)
+		h.handleCZAckSelectDealTypeSell(ctx, conn, resp, npc)
 		return nil
 	case 0x02:
+		conn.SetShopNPC(0)
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
 			Uint32("npc_id", req.NpcID).
@@ -2671,14 +2682,151 @@ func (h *DispatchHandler) handleCZAckSelectDealType(_ context.Context, conn *dom
 	}
 }
 
+// sellCatalog holds the (itemid → buyPrice) catalog rAthena uses to
+// compute the sell-price floor for the sell window. The gateway uses
+// the union of every NPC's ShopItems (D-213) so an item that's not
+// stocked by the active shop NPC still gets a sensible sell price
+// based on a different shop's offer. Computed once via sellCatalogOnce
+// because npcSpawns is static (loaded at startup); rebuilding the map
+// on every sell request would iterate every NPC's ShopItems needlessly.
+//
+// The map is SHARED READ-ONLY across goroutines and across every
+// sellPriceCatalog() call. Callers MUST NOT mutate it — mutation would
+// race with concurrent reads and would persist into every subsequent
+// sell response.
+var (
+	sellCatalog     map[uint32]uint32
+	sellCatalogOnce sync.Once
+)
+
+// sellPriceCatalog returns the cached (itemid → buyPrice) catalog.
+// The catalog is built lazily on the first call via sync.Once and
+// then shared read-only with every subsequent caller; because
+// npcSpawns is static (loaded at startup), rebuilding it would be
+// wasteful. First-write-wins preserves the catalog order: a later
+// NPC selling the same item at a different price does not override
+// the first entry, matching rAthena's "shop loads vendor prices at
+// startup" monotonicity.
+//
+// The returned map is SHARED READ-ONLY — callers MUST NOT mutate it.
+func sellPriceCatalog() map[uint32]uint32 {
+	sellCatalogOnce.Do(func() {
+		cat := make(map[uint32]uint32)
+		for _, npc := range npcSpawns {
+			for _, it := range npc.ShopItems {
+				if _, ok := cat[it.ItemID]; !ok {
+					cat[it.ItemID] = it.Price
+				}
+			}
+		}
+		sellCatalog = cat
+	})
+	return sellCatalog
+}
+
+// handleCZAckSelectDealTypeSell handles the Sell branch of
+// handleCZAckSelectDealType. The player just clicked "Sell" against a
+// known shop NPC; the handler fetches the player's inventory from
+// identity, prices every sellable item at half its catalog buy price,
+// and sends ZC_PC_SELL_ITEMLIST. No gRPC errors are returned to the
+// client — rAthena's clif_purchaseitems_for_sell path simply emits
+// nothing if the inventory fetch fails, and we mirror that so a
+// transient identity failure keeps the connection alive for retry.
+func (h *DispatchHandler) handleCZAckSelectDealTypeSell(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, npc *npcSpawn) {
+	if conn.AccountID == 0 || conn.CharID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", npc.GID).
+			Msg("CZ_ACK_SELECT_DEALTYPE Sell without prior CZ_ENTER; dropping")
+		return
+	}
+
+	invReq := &identityv1.GetInventoryRequest{
+		AccountId: conn.AccountID,
+		CharId:    conn.CharID,
+	}
+	invResp, err := h.identity.GetInventory(ctx, invReq)
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Uint64("conn", conn.ID).
+				Uint32("npc_id", npc.GID).
+				Msg("identity GetInventory cancelled (client gone)")
+			return
+		}
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", npc.GID).
+			Str("npc_name", npc.Name).
+			Msg("identity GetInventory failed for shop sell list; dropping")
+		return
+	}
+	if invResp == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", npc.GID).
+			Msg("identity returned nil GetInventory response for shop sell list; dropping")
+		return
+	}
+
+	catalog := sellPriceCatalog()
+	items := invResp.GetItems()
+	lines := make([]packet.ShopSellItem, 0, len(items))
+	for idx, it := range items {
+		if it == nil {
+			continue
+		}
+		nameid := it.GetNameid()
+		// Sell price = buyPrice / 2 (rAthena's
+		// pc_shopprice / itemdb value / 2). Items not in any
+		// shop catalog list at 0.
+		var sellPrice uint32
+		if buy, ok := catalog[nameid]; ok {
+			sellPrice = buy / 2
+		}
+		lines = append(lines, packet.ShopSellItem{
+			Index:      uint16(idx), //nolint:gosec // client slot position is 16-bit on the wire
+			Price:      sellPrice,
+			Overcharge: sellPrice,
+		})
+	}
+
+	list := packet.SellItemListResponse{Items: lines}
+	var buf bytes.Buffer
+	if err := list.Encode(&buf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", npc.GID).
+			Str("npc_name", npc.Name).
+			Int("sell_items", len(lines)).
+			Msg("encode ZC_PC_SELL_ITEMLIST failed; dropping packet")
+		return
+	}
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("npc_id", npc.GID).
+		Str("npc_name", npc.Name).
+		Int("sell_items", len(lines)).
+		Msg("NPC shop sell list sent")
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", npc.GID).
+			Msg("send ZC_PC_SELL_ITEMLIST failed; dropping packet")
+	}
+}
+
 // handleCZPCPurchaseItemList responds to CZ_PC_PURCHASE_ITEMLIST
-// (0x00c8) — the player's purchase request. The handler logs the
-// entries and replies with ZC_PC_PURCHASE_RESULT carrying result=0
-// (success) so the client closes the buy window cleanly. Actual zeny
-// deduction and inventory mutation are deferred until the inventory
-// system lands; the current path is a no-op-on-success acknowledgement
-// used to keep the M16 happy-path exercisable end-to-end.
-func (h *DispatchHandler) handleCZPCPurchaseItemList(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+// (0x00c8) — the player's purchase request. The handler validates
+// the order against the active NPC's price catalog (D-204) so a
+// client cannot dictate unit prices, then commits the order via
+// identity.BuyFromShop. On OK it sends ZC_PC_PURCHASE_RESULT (0) +
+// a ZC_LONGPAR_CHANGE for the post-transaction zeny balance; on
+// non-OK it sends ZC_PC_PURCHASE_RESULT (1) with no zeny update.
+func (h *DispatchHandler) handleCZPCPurchaseItemList(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZPCPurchaseItemList(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -2688,35 +2836,393 @@ func (h *DispatchHandler) handleCZPCPurchaseItemList(_ context.Context, conn *do
 			Msg("malformed CZ_PC_PURCHASE_ITEMLIST; dropping packet")
 		return nil
 	}
-
-	if conn.AccountID == 0 {
-		h.logger.Warn().
-			Uint64("conn", conn.ID).
-			Int("entries", len(req.Entries)).
-			Msg("CZ_PC_PURCHASE_ITEMLIST without prior CZ_ENTER; dropping")
+	if conn.AccountID == 0 || conn.CharID == 0 {
+		h.shopDropNoAuth(conn, "CZ_PC_PURCHASE_ITEMLIST", len(req.Entries))
 		return nil
 	}
-
+	npc, npcGID := h.resolveActiveShopNPC(conn)
+	if npc == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Msg("CZ_PC_PURCHASE_ITEMLIST without prior CZ_ACK_SELECT_DEALTYPE; failing")
+		return h.sendPurchaseResultFail(resp)
+	}
+	orders, ok := h.buildPurchaseOrders(conn, npc, npcGID, req.Entries)
+	if !ok {
+		return h.sendPurchaseResultFail(resp)
+	}
 	h.logger.Info().
 		Uint64("conn", conn.ID).
 		Uint32("aid", conn.AccountID).
-		Int("entries", len(req.Entries)).
-		Msg("NPC shop purchase requested (zeny/inventory deferred; result=success)")
+		Uint32("cid", conn.CharID).
+		Uint32("npc_id", npcGID).
+		Int("entries", len(orders)).
+		Msg("NPC shop purchase requested")
+	return h.commitBuyAndReply(ctx, conn, resp, orders)
+}
 
-	result := packet.PurchaseResultResponse{Result: 0}
+// commitBuyAndReply calls identity.BuyFromShop, writes
+// ZC_PC_PURCHASE_RESULT, and on OK emits a zeny LongParChange.
+// Extracted from handleCZPCPurchaseItemList to keep the main handler
+// under the gocyclo limit.
+func (h *DispatchHandler) commitBuyAndReply(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, orders []*identityv1.ShopOrder) error {
+	buyResp, err := h.identity.BuyFromShop(ctx, &identityv1.BuyFromShopRequest{
+		AccountId: conn.AccountID,
+		CharId:    conn.CharID,
+		Orders:    orders,
+	})
+	if err != nil {
+		return h.handleShopRPCErr(ctx, conn, err, "BuyFromShop", "purchase", h.sendPurchaseResultFail(resp))
+	}
+	if buyResp == nil || buyResp.GetResult() != identityv1.BuyResult_BUY_RESULT_OK {
+		return h.sendPurchaseResultFail(resp)
+	}
+	return h.replyShopOK(resp, conn, buyResp.GetNewZeny(),
+		func(w io.Writer) error { return packet.PurchaseResultResponse{Result: 0}.Encode(w) },
+		"ZC_PC_PURCHASE_RESULT",
+	)
+}
+
+// handleCZPCSellItemList responds to CZ_PC_SELL_ITEMLIST (0x00c9) —
+// the player's sell request. The handler resolves each entry's
+// client-side slot index to an inventory row id, looks up the sell
+// price (catalog buyPrice / 2), commits the sale via
+// identity.SellToShop, and on OK sends ZC_PC_SELL_RESULT (0) + a
+// zeny LongParChange for the post-transaction balance.
+func (h *DispatchHandler) handleCZPCSellItemList(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZPCSellItemList(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_PC_SELL_ITEMLIST; dropping packet")
+		return nil
+	}
+	if conn.AccountID == 0 || conn.CharID == 0 {
+		h.shopDropNoAuth(conn, "CZ_PC_SELL_ITEMLIST", len(req.Entries))
+		return nil
+	}
+	npcGID := conn.ShopNPC()
+	if npcGID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Msg("CZ_PC_SELL_ITEMLIST without prior CZ_ACK_SELECT_DEALTYPE; failing")
+		return h.sendSellResultFail(resp)
+	}
+	sales, ok := h.buildSellLines(ctx, conn, req.Entries)
+	if !ok {
+		return h.sendSellResultFail(resp)
+	}
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("aid", conn.AccountID).
+		Uint32("cid", conn.CharID).
+		Uint32("npc_id", npcGID).
+		Int("entries", len(sales)).
+		Msg("NPC shop sell requested")
+	return h.commitSellAndReply(ctx, conn, resp, sales)
+}
+
+// shopDropNoAuth logs the standard "missing AID/CharID" precondition
+// drop for the shop packet family. Extracted from handleCZPC*
+// to keep the per-handler cyclomatic complexity under the gocyclo
+// limit.
+func (h *DispatchHandler) shopDropNoAuth(conn *domain.ConnectionInfo, opName string, entryCount int) {
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Int("entries", entryCount).
+			Str("op", opName).
+			Msg("shop request without prior CZ_ENTER; dropping")
+		return
+	}
+	h.logger.Warn().
+		Uint64("conn", conn.ID).
+		Int("entries", entryCount).
+		Str("op", opName).
+		Msg("shop request without prior CharID; dropping")
+}
+
+// resolveActiveShopNPC returns the npcSpawn whose GID the connection
+// has anchored via SetShopNPC, or nil if no NPC is active. Extracted
+// from handleCZPCPurchaseItemList for clarity.
+func (h *DispatchHandler) resolveActiveShopNPC(conn *domain.ConnectionInfo) (*npcSpawn, uint32) {
+	npcGID := conn.ShopNPC()
+	if npcGID == 0 {
+		return nil, 0
+	}
+	for i := range npcSpawns {
+		if npcSpawns[i].GID == npcGID {
+			return &npcSpawns[i], npcGID
+		}
+	}
+	h.logger.Warn().
+		Uint64("conn", conn.ID).
+		Uint32("npc_id", npcGID).
+		Msg("active shop NPC no longer in catalog")
+	return nil, 0
+}
+
+// buildPurchaseOrders translates the (itemId, amount) entries into
+// *identityv1.ShopOrder rows using the NPC's catalog as the price
+// authority (D-204). Returns false if any itemId is unknown — the
+// caller must fail the whole transaction in that case.
+func (h *DispatchHandler) buildPurchaseOrders(
+	conn *domain.ConnectionInfo,
+	npc *npcSpawn,
+	npcGID uint32,
+	entries []packet.CZPCPurchaseItemListEntry,
+) ([]*identityv1.ShopOrder, bool) {
+	priceByItemID := make(map[uint32]uint32, len(npc.ShopItems))
+	for _, it := range npc.ShopItems {
+		priceByItemID[it.ItemID] = it.Price
+	}
+	orders := make([]*identityv1.ShopOrder, 0, len(entries))
+	for _, e := range entries {
+		price, ok := priceByItemID[e.ItemID]
+		if !ok {
+			h.logger.Warn().
+				Uint64("conn", conn.ID).
+				Uint32("npc_id", npcGID).
+				Uint32("item_id", e.ItemID).
+				Uint16("amount", e.Amount).
+				Msg("CZ_PC_PURCHASE_ITEMLIST item not in shop catalog; failing")
+			return nil, false
+		}
+		orders = append(orders, &identityv1.ShopOrder{
+			ItemId:    e.ItemID,
+			Amount:    uint32(e.Amount), //nolint:gosec // wire amount is 16-bit
+			UnitPrice: price,
+		})
+	}
+	return orders, true
+}
+
+// buildSellLines resolves each (slot, amount) entry to an inventory
+// DB id, looks up the sell price (catalog buyPrice / 2), and returns
+// the *identityv1.SellLine rows ready for identity.SellToShop.
+// Returns false on any slot-resolution failure so the caller can
+// fail the whole transaction.
+func (h *DispatchHandler) buildSellLines(
+	ctx context.Context,
+	conn *domain.ConnectionInfo,
+	entries []packet.CZPCSellItemListEntry,
+) ([]*identityv1.SellLine, bool) {
+	invResp, err := h.identity.GetInventory(ctx, &identityv1.GetInventoryRequest{
+		AccountId: conn.AccountID,
+		CharId:    conn.CharID,
+	})
+	if err != nil {
+		h.shopClientGoneOrWarn(ctx, conn, err, "GetInventory", "sell")
+		return nil, false
+	}
+	if invResp == nil {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Msg("identity returned nil GetInventory for sell request; failing")
+		return nil, false
+	}
+	items := invResp.GetItems()
+	nameidBySlot := make(map[uint16]uint32, len(items))
+	for idx, it := range items {
+		if it == nil {
+			continue
+		}
+		nameidBySlot[uint16(idx)] = it.GetNameid() //nolint:gosec // slot position is 16-bit on the wire
+	}
+	catalog := sellPriceCatalog()
+	sales := make([]*identityv1.SellLine, 0, len(entries))
+	for _, e := range entries {
+		nameid, ok := nameidBySlot[e.Index]
+		if !ok {
+			h.logger.Warn().
+				Uint64("conn", conn.ID).
+				Uint16("slot", e.Index).
+				Msg("CZ_PC_SELL_ITEMLIST slot not in inventory snapshot; failing")
+			return nil, false
+		}
+		invID, ok := conn.ResolveInventoryID(e.Index)
+		if !ok {
+			h.logger.Warn().
+				Uint64("conn", conn.ID).
+				Uint16("slot", e.Index).
+				Msg("CZ_PC_SELL_ITEMLIST slot missing from invIndex; failing")
+			return nil, false
+		}
+		sales = append(sales, &identityv1.SellLine{
+			InvId:     invID,
+			Amount:    uint32(e.Amount), //nolint:gosec // wire amount is 16-bit
+			UnitPrice: catalog[nameid] / 2,
+		})
+	}
+	return sales, true
+}
+
+// shopClientGoneOrWarn logs context.Canceled as Debug and any other
+// transport error as Warn. Returns true if the caller should drop
+// silently (client gone / ctx cancelled); false if it should fail
+// the transaction.
+func (h *DispatchHandler) shopClientGoneOrWarn(ctx context.Context, conn *domain.ConnectionInfo, err error, rpcName, op string) bool {
+	if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Str("rpc", rpcName).
+			Msg("identity RPC cancelled (client gone)")
+		return true
+	}
+	h.logger.Warn().
+		Err(err).
+		Uint64("conn", conn.ID).
+		Uint32("aid", conn.AccountID).
+		Str("rpc", rpcName).
+		Str("op", op).
+		Msg("identity RPC failed")
+	return false
+}
+
+// handleShopRPCErr is the shop-equivalent wrapper around
+// shopClientGoneOrWarn: if the client is gone the connection is
+// preserved (return nil); otherwise the caller invokes its fail
+// callback and forwards the error.
+func (h *DispatchHandler) handleShopRPCErr(
+	ctx context.Context, conn *domain.ConnectionInfo,
+	err error, rpcName, op string, failOnError error,
+) error {
+	if h.shopClientGoneOrWarn(ctx, conn, err, rpcName, op) {
+		return nil
+	}
+	return failOnError
+}
+
+// replyShopOK emits the success result packet and the post-tx zeny
+// LongParChange. Used by both commitBuyAndReply and
+// commitSellAndReply to avoid duplicating the encode + send + log
+// + zeny-cleanup sequence (D-205).
+func (h *DispatchHandler) replyShopOK(
+	resp domain.Responder, conn *domain.ConnectionInfo,
+	newZeny uint32,
+	encodeResult func(io.Writer) error,
+	resultName string,
+) error {
 	var buf bytes.Buffer
-	if err := result.Encode(&buf); err != nil {
-		// PurchaseResultResponse.Encode cannot fail in practice (no
-		// variable-width fields), but wrapcheck requires every
-		// external error be wrapped — log and drop.
+	if err := encodeResult(&buf); err != nil {
 		h.logger.Error().
 			Err(err).
 			Uint64("conn", conn.ID).
-			Msg("encode ZC_PC_PURCHASE_RESULT failed; dropping packet")
+			Str("result", resultName).
+			Msg("encode success result failed; dropping packet")
 		return nil
 	}
 	if err := resp.SendPacket(buf.Bytes()); err != nil {
-		return fmt.Errorf("send ZC_PC_PURCHASE_RESULT: %w", err)
+		return fmt.Errorf("send %s: %w", resultName, err)
+	}
+	if err := h.sendZenyParChange(resp, newZeny); err != nil {
+		return err
+	}
+	conn.SetShopNPC(0)
+	return nil
+}
+
+// commitSellAndReply calls identity.SellToShop and on OK writes
+// ZC_PC_SELL_RESULT + zeny update. Extracted from
+// handleCZPCSellItemList to keep the main handler under the gocyclo
+// limit.
+func (h *DispatchHandler) commitSellAndReply(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, sales []*identityv1.SellLine) error {
+	sellResp, err := h.identity.SellToShop(ctx, &identityv1.SellToShopRequest{
+		AccountId: conn.AccountID,
+		CharId:    conn.CharID,
+		Sales:     sales,
+	})
+	if err != nil {
+		return h.handleShopRPCErr(ctx, conn, err, "SellToShop", "sell", h.sendSellResultFail(resp))
+	}
+	if sellResp == nil || sellResp.GetResult() != identityv1.SellResult_SELL_RESULT_OK {
+		return h.sendSellResultFail(resp)
+	}
+	return h.replyShopOK(resp, conn, sellResp.GetNewZeny(),
+		func(w io.Writer) error { return packet.SellResultResponse{Result: 0}.Encode(w) },
+		"ZC_PC_SELL_RESULT",
+	)
+}
+
+// sendPurchaseResultFail writes ZC_PC_PURCHASE_RESULT(result=1)
+// on the wire. Returns the wrapped SendPacket error so callers can
+// surface transport failures to the dispatch loop just like the
+// success path.
+func (h *DispatchHandler) sendPurchaseResultFail(resp domain.Responder) error {
+	var buf bytes.Buffer
+	pr := packet.PurchaseResultResponse{Result: 1}
+	if err := pr.Encode(&buf); err != nil {
+		// Fixed-layout encoders cannot fail; log and drop so the
+		// dispatch loop does not surface a phantom error.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", 0).
+			Msg("encode ZC_PC_PURCHASE_RESULT(fail) failed; dropping")
+		return nil
+	}
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_PC_PURCHASE_RESULT(fail): %w", err)
+	}
+	return nil
+}
+
+// sendSellResultFail writes ZC_PC_SELL_RESULT(result=1) on the wire
+// with the same wrapcheck + transport semantics as
+// sendPurchaseResultFail.
+func (h *DispatchHandler) sendSellResultFail(resp domain.Responder) error {
+	var buf bytes.Buffer
+	sr := packet.SellResultResponse{Result: 1}
+	if err := sr.Encode(&buf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", 0).
+			Msg("encode ZC_PC_SELL_RESULT(fail) failed; dropping")
+		return nil
+	}
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_PC_SELL_RESULT(fail): %w", err)
+	}
+	return nil
+}
+
+// sendZenyParChange encodes and writes a ZC_LONGPAR_CHANGE with
+// varID=SP_ZENY (20). Used by both buy and sell handlers to keep
+// the client's zeny counter in sync with the identity-side balance
+// after a successful transaction (D-205).
+func (h *DispatchHandler) sendZenyParChange(resp domain.Responder, newZeny uint32) error {
+	// Defensive clamp: the wire slot is int32 but zeny is uint32, so a
+	// future MaxZeny above MaxInt32 would otherwise produce a negative
+	// Amount. Clamp to MaxInt32 (the wire can't represent more anyway)
+	// and log once so the cap can be re-evaluated.
+	amount := newZeny
+	if amount > math.MaxInt32 {
+		h.logger.Warn().
+			Uint64("conn", 0).
+			Uint32("new_zeny", newZeny).
+			Uint32("clamped_to", math.MaxInt32).
+			Msg("zeny exceeds MaxInt32 wire slot; clamping ZC_LONGPAR_CHANGE")
+		amount = math.MaxInt32
+	}
+	var buf bytes.Buffer
+	pp := packet.LongParChangeResponse{
+		VarID:  packet.SPZeny,
+		Amount: int32(amount), //nolint:gosec // clamp above guarantees value fits in int32
+	}
+	if err := pp.Encode(&buf); err != nil {
+		// Fixed-layout encoder cannot fail; log + drop.
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", 0).
+			Uint32("new_zeny", newZeny).
+			Msg("encode ZC_LONGPAR_CHANGE(zeny) failed; dropping")
+		return nil
+	}
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_LONGPAR_CHANGE(zeny): %w", err)
 	}
 	return nil
 }

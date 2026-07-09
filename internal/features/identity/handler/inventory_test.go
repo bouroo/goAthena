@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
+	economydomainmock "github.com/bouroo/goAthena/internal/features/economy/domain/mock"
 	domainmock "github.com/bouroo/goAthena/internal/features/identity/domain/mock"
 	"github.com/bouroo/goAthena/internal/features/identity/handler"
 	inventorydomain "github.com/bouroo/goAthena/internal/features/inventory/domain"
@@ -23,7 +24,8 @@ func TestGetInventory_HappyPath(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().
 		GetInventory(gomock.Any(), uint32(7), uint32(42)).
 		Return([]inventorydomain.InventoryItem{
@@ -46,7 +48,8 @@ func TestGetInventory_NilRequest(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	_, err := h.GetInventory(context.Background(), nil)
 	require.Error(t, err)
 	st, ok := status.FromError(err)
@@ -58,7 +61,8 @@ func TestGetInventory_ZeroKeys(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	_, err := h.GetInventory(context.Background(), &identityv1.GetInventoryRequest{AccountId: 0, CharId: 42})
 	require.Error(t, err)
 	st, _ := status.FromError(err)
@@ -69,7 +73,8 @@ func TestGetInventory_InternalError(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().GetInventory(gomock.Any(), uint32(7), uint32(42)).
 		Return(nil, errors.New("db down"))
 
@@ -85,7 +90,8 @@ func TestEquipItem_HappyPath(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().EquipItem(gomock.Any(), uint32(7), uint32(42), uint32(100), uint32(0x0002)).Return(nil)
 
 	resp, err := h.EquipItem(context.Background(), &identityv1.EquipItemRequest{
@@ -102,7 +108,8 @@ func TestEquipItem_NotFound_EncodesAsSoftFailure(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().EquipItem(gomock.Any(), uint32(7), uint32(42), uint32(100), uint32(0x0002)).
 		Return(notFoundWrapper{})
 
@@ -126,7 +133,8 @@ func TestEquipItem_InternalError(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().EquipItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(errors.New("db write failed"))
 
@@ -142,7 +150,8 @@ func TestEquipItem_ZeroKey(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	_, err := h.EquipItem(context.Background(), &identityv1.EquipItemRequest{
 		AccountId: 0, CharId: 42, ItemId: 100, EquipPosition: 0x0002,
 	})
@@ -155,7 +164,8 @@ func TestUnequipItem_HappyPath(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().UnequipItem(gomock.Any(), uint32(7), uint32(42), uint32(100)).Return(uint32(0x0002), nil)
 
 	resp, err := h.UnequipItem(context.Background(), &identityv1.UnequipItemRequest{
@@ -170,7 +180,8 @@ func TestUnequipItem_NotFound_EncodesAsSoftFailure(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().UnequipItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(uint32(0), notFoundWrapper{})
 
@@ -186,7 +197,8 @@ func TestUnequipItem_InternalError(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().UnequipItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(uint32(0), errors.New("db down"))
 
@@ -202,7 +214,8 @@ func TestUseItem_HappyPath(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().UseItem(gomock.Any(), uint32(7), uint32(42), uint32(100)).Return(uint32(2), nil)
 
 	resp, err := h.UseItem(context.Background(), &identityv1.UseItemRequest{
@@ -218,7 +231,8 @@ func TestUseItem_StackEmptied(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().UseItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint32(0), nil)
 
 	resp, err := h.UseItem(context.Background(), &identityv1.UseItemRequest{
@@ -233,7 +247,8 @@ func TestUseItem_NotFound_EncodesAsSoftFailure(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().UseItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(uint32(0), notFoundWrapper{})
 
@@ -249,7 +264,8 @@ func TestUseItem_InternalError(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 	svc.EXPECT().UseItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(uint32(0), errors.New("db down"))
 
