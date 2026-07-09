@@ -1305,11 +1305,13 @@ func (h *DispatchHandler) handleCZNotifyActorInit(ctx context.Context, conn *dom
 // always writes weight=0 / max-weight=0 because the InventoryItem
 // proto does not yet carry the per-item weight.
 func (h *DispatchHandler) encodeInventoryLists(ctx context.Context, conn *domain.ConnectionInfo) []byte {
+	if h.identity == nil {
+		h.logger.Error().
+			Uint64("conn", conn.ID).
+			Msg("identity client not configured; emitting empty inventory lists")
+		return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
+	}
 	if conn.AccountID == 0 || conn.CharID == 0 {
-		// No authenticated character — emit empty lists. This is
-		// defensive: handleCZNotifyActorInit is only expected to
-		// fire post-CZ_ENTER, but a transport that sends actor-init
-		// out of order must not crash the dispatch.
 		return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
 	}
 
@@ -1318,8 +1320,6 @@ func (h *DispatchHandler) encodeInventoryLists(ctx context.Context, conn *domain
 		CharId:    conn.CharID,
 	})
 	if err != nil {
-		// Cancellation is expected under load — the conn is gone and
-		// SendPacket would either fail or panic on a closed writer.
 		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
 			h.logger.Debug().
 				Err(err).
@@ -1349,44 +1349,41 @@ func (h *DispatchHandler) encodeInventoryLists(ctx context.Context, conn *domain
 	items := resp.GetItems()
 	normal := make([]packet.InventoryNormalItem, 0, len(items))
 	equip := make([]packet.InventoryEquipItem, 0, len(items))
+	invIndexMap := make(map[uint16]uint32, len(items))
+	var pos uint16
 	for _, it := range items {
 		if it == nil {
 			continue
 		}
-		// Saturate uint32 → uint16 for the wire ITID slot; values
-		// above 65535 are sentinel-only and don't need a real
-		// truncation path — clamp to 0 so a malformed row visibly
-		// fails rather than silently wraps.
+		invIndexMap[pos] = it.GetId()
+
 		nameid := it.GetNameid()
 		var nameidWire uint16
 		if nameid <= 0xffff {
-			nameidWire = uint16(nameid) //nolint:gosec // guarded by the > 0xffff check above
+			nameidWire = uint16(nameid)
 		}
-		// TODO(P2A-WEIGHT): replace zero total weight with the sum
-		// of per-item weights once the inventory table carries them.
-		// TODO(P2A-WEIGHT): replace the hardcoded `weight=0` with the
-		// character's current inventory weight, and surface a separate
-		// max-weight computation (base 2000 + STR*30 in rAthena).
 		if it.GetEquip() == 0 {
 			normal = append(normal, packet.InventoryNormalItem{
-				Index: uint16(it.GetId()), //nolint:gosec // inventory index fits in uint16 (MAX_INVENTORY=100)
+				Index: pos,
 				ITID:  nameidWire,
-				Type:  uint8(it.GetAttribute() & 0xff), //nolint:gosec // IT_* type byte is 8-bit; values >255 saturate to 0
-				Count: uint16(it.GetAmount()),          //nolint:gosec // stack count is 16-bit on the wire
+				Type:  uint8(it.GetAttribute() & 0xff),
+				Count: uint16(it.GetAmount() & 0xffff), //nolint:gosec // amount slot is 16-bit on the wire
 				Flag:  boolToIdentifiedBit(it.GetIdentify()),
 			})
 		} else {
 			equip = append(equip, packet.InventoryEquipItem{
-				Index:            uint16(it.GetId()), //nolint:gosec // ditto
+				Index:            pos,
 				ITID:             nameidWire,
-				Type:             uint8(it.GetAttribute() & 0xff), //nolint:gosec // ditto
+				Type:             uint8(it.GetAttribute() & 0xff),
 				Location:         it.GetEquip(),
-				RefiningLevel:    uint8(it.GetRefine() & 0xff), //nolint:gosec // refine is 8-bit on the wire
-				ItemSpriteNumber: 0,                            // TODO(P2A): item_db.view; surface via InventoryItem once available
+				RefiningLevel:    uint8(it.GetRefine() & 0xff),
+				ItemSpriteNumber: 0,
 				Flag:             boolToEquipIdentifiedBit(it.GetIdentify()),
 			})
 		}
+		pos++
 	}
+	conn.SetInventoryIndex(invIndexMap)
 
 	var buf bytes.Buffer
 	normalResp := packet.InventoryListNormalResponse{Items: normal}
@@ -1495,6 +1492,17 @@ func (h *DispatchHandler) handleCZUseItem(ctx context.Context, conn *domain.Conn
 		return nil
 	}
 
+	if req.Index < 2 {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("invalid inventory index")
+		return h.sendUseItemAck(resp, conn.AccountID, req.Index, 0, 0, false)
+	}
+	pos := req.Index - 2
+	itemID, ok := conn.ResolveInventoryID(pos)
+	if !ok {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("unknown inventory position")
+		return h.sendUseItemAck(resp, conn.AccountID, req.Index, 0, 0, false)
+	}
+
 	if h.identity == nil {
 		// DI misconfiguration — surface a failure ack so the client
 		// exits the "using item" state rather than hangs.
@@ -1509,7 +1517,7 @@ func (h *DispatchHandler) handleCZUseItem(ctx context.Context, conn *domain.Conn
 	gResp, err := h.identity.UseItem(rpcCtx, &identityv1.UseItemRequest{
 		AccountId: conn.AccountID,
 		CharId:    conn.CharID,
-		ItemId:    uint32(req.Index), //nolint:gosec // wire index is 16-bit; proto field is uint32
+		ItemId:    itemID,
 	})
 	if err != nil {
 		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
@@ -1541,10 +1549,10 @@ func (h *DispatchHandler) handleCZUseItem(ctx context.Context, conn *domain.Conn
 
 	// Surface success=false as a failure ack (result=0); the
 	// identity service populates `error` with the reason.
-	ok := gResp.GetSuccess()
-	var itemID uint16
+	ok = gResp.GetSuccess()
+	var itemIDWire uint16
 	if nameid := gResp.GetItemId(); nameid <= 0xffff {
-		itemID = uint16(nameid) //nolint:gosec // ITID slot is 16-bit on the wire for PACKETVER 20250604
+		itemIDWire = uint16(nameid) //nolint:gosec // ITID slot is 16-bit on the wire for PACKETVER 20250604
 	}
 	remaining := uint16(gResp.GetRemainingAmount()) //nolint:gosec // amount slot is 16-bit on the wire
 	if !ok {
@@ -1555,7 +1563,7 @@ func (h *DispatchHandler) handleCZUseItem(ctx context.Context, conn *domain.Conn
 			Str("error", gResp.GetError()).
 			Msg("identity rejected UseItem")
 	}
-	return h.sendUseItemAck(resp, conn.AccountID, req.Index, itemID, remaining, ok)
+	return h.sendUseItemAck(resp, conn.AccountID, req.Index, itemIDWire, remaining, ok)
 }
 
 // sendUseItemAck encodes ZC_USE_ITEM_ACK2 and writes it. Always
@@ -1617,6 +1625,17 @@ func (h *DispatchHandler) handleCZReqWearEquip(ctx context.Context, conn *domain
 		return nil
 	}
 
+	if req.Index < 2 {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("invalid inventory index")
+		return h.sendWearEquipAck(resp, req.Index, req.Position, 0, 0)
+	}
+	pos := req.Index - 2
+	itemID, ok := conn.ResolveInventoryID(pos)
+	if !ok {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("unknown inventory position")
+		return h.sendWearEquipAck(resp, req.Index, req.Position, 0, 0)
+	}
+
 	if h.identity == nil {
 		h.logger.Error().
 			Uint64("conn", conn.ID).
@@ -1629,7 +1648,7 @@ func (h *DispatchHandler) handleCZReqWearEquip(ctx context.Context, conn *domain
 	gResp, err := h.identity.EquipItem(rpcCtx, &identityv1.EquipItemRequest{
 		AccountId:     conn.AccountID,
 		CharId:        conn.CharID,
-		ItemId:        uint32(req.Index), //nolint:gosec // wire index is 16-bit; proto field is uint32
+		ItemId:        itemID,
 		EquipPosition: req.Position,
 	})
 	if err != nil {
@@ -1729,6 +1748,17 @@ func (h *DispatchHandler) handleCZReqTakeoffEquip(ctx context.Context, conn *dom
 		return nil
 	}
 
+	if req.Index < 2 {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("invalid inventory index")
+		return h.sendTakeoffEquipAck(resp, req.Index, 0, 1)
+	}
+	pos := req.Index - 2
+	itemID, ok := conn.ResolveInventoryID(pos)
+	if !ok {
+		h.logger.Warn().Uint64("conn", conn.ID).Uint16("inv_index", req.Index).Msg("unknown inventory position")
+		return h.sendTakeoffEquipAck(resp, req.Index, 0, 1)
+	}
+
 	if h.identity == nil {
 		h.logger.Error().
 			Uint64("conn", conn.ID).
@@ -1741,7 +1771,7 @@ func (h *DispatchHandler) handleCZReqTakeoffEquip(ctx context.Context, conn *dom
 	gResp, err := h.identity.UnequipItem(rpcCtx, &identityv1.UnequipItemRequest{
 		AccountId: conn.AccountID,
 		CharId:    conn.CharID,
-		ItemId:    uint32(req.Index), //nolint:gosec // wire index is 16-bit; proto field is uint32
+		ItemId:    itemID,
 	})
 	if err != nil {
 		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
@@ -1789,7 +1819,7 @@ func (h *DispatchHandler) handleCZReqTakeoffEquip(ctx context.Context, conn *dom
 	// return the prior location. Pass 0 — the client's UI does not
 	// require a specific value on the success path (it just clears
 	// the equip slot on its own).
-	return h.sendTakeoffEquipAck(resp, req.Index, 0, flag)
+	return h.sendTakeoffEquipAck(resp, req.Index, gResp.GetEquipPosition(), flag)
 }
 
 // sendTakeoffEquipAck encodes ZC_REQ_TAKEOFF_EQUIP_ACK and writes it.

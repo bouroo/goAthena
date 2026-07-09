@@ -3694,6 +3694,7 @@ func TestDispatchHandler_CZUseItem_Success_EncodesAck(t *testing.T) {
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	conn.SetInventoryIndex(map[uint16]uint32{0: 2})
 	req := packet.CZUseItemRequest{Index: 2, AID: 4242}
 	var reqBuf bytes.Buffer
 	if err := req.Encode(&reqBuf); err != nil {
@@ -3849,6 +3850,7 @@ func TestDispatchHandler_CZReqWearEquip_Success_EncodesAck(t *testing.T) {
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
 	req := packet.CZReqWearEquipRequest{Index: 9, Position: 0x0002}
+	conn.SetInventoryIndex(map[uint16]uint32{7: 9})
 	var reqBuf bytes.Buffer
 	if err := req.Encode(&reqBuf); err != nil {
 		t.Fatalf("Encode CZ_REQ_WEAR_EQUIP_V5: %v", err)
@@ -3985,6 +3987,7 @@ func TestDispatchHandler_CZReqTakeoffEquip_Success_EncodesAck(t *testing.T) {
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
 	req := packet.CZReqTakeoffEquipRequest{Index: 9}
+	conn.SetInventoryIndex(map[uint16]uint32{7: 9})
 	var reqBuf bytes.Buffer
 	if err := req.Encode(&reqBuf); err != nil {
 		t.Fatalf("Encode CZ_REQ_TAKEOFF_EQUIP: %v", err)
