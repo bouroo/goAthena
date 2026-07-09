@@ -2656,6 +2656,145 @@ func TestPurchaseResultResponse_Encode(t *testing.T) {
 	}
 }
 
+// P2B: shop sell flow — SellItemListResponse (variable), SellResultResponse (fixed).
+
+func TestSellItemListResponse_Size(t *testing.T) {
+	t.Parallel()
+	var r SellItemListResponse
+	if got, want := r.Size(), 4; got != want {
+		t.Errorf("Size() = %d, want %d (empty list = 4 bytes)", got, want)
+	}
+	resp := SellItemListResponse{Items: make([]ShopSellItem, 3)}
+	if got, want := resp.Size(), 4+3*sizeZCPCSellItemListItem; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestSellItemListResponse_Encode_SingleItem(t *testing.T) {
+	t.Parallel()
+	resp := SellItemListResponse{
+		Items: []ShopSellItem{
+			{Index: 5, Price: 25, Overcharge: 25},
+		},
+	}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got := buf.Bytes()
+	wantLen := 4 + sizeZCPCSellItemListItem
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+	if got[0] != 0xc7 || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want c7 00 (LE 0x00c7)", got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); int(plen) != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	off := 4
+	if idx := binary.LittleEndian.Uint16(got[off : off+2]); idx != 5 {
+		t.Errorf("item[0] index = %d, want 5", idx)
+	}
+	if p := binary.LittleEndian.Uint32(got[off+2 : off+6]); p != 25 {
+		t.Errorf("item[0] price = %d, want 25", p)
+	}
+	if oc := binary.LittleEndian.Uint32(got[off+6 : off+10]); oc != 25 {
+		t.Errorf("item[0] overcharge = %d, want 25", oc)
+	}
+}
+
+func TestSellItemListResponse_Encode_MultipleItems(t *testing.T) {
+	t.Parallel()
+	resp := SellItemListResponse{
+		Items: []ShopSellItem{
+			{Index: 1, Price: 25, Overcharge: 25},
+			{Index: 2, Price: 100, Overcharge: 100},
+			{Index: 3, Price: 250, Overcharge: 250},
+		},
+	}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got := buf.Bytes()
+	wantLen := 4 + 3*sizeZCPCSellItemListItem
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); int(plen) != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	// Spot-check the second item at offset 4 + 10 = 14.
+	off := 4 + sizeZCPCSellItemListItem
+	if idx := binary.LittleEndian.Uint16(got[off : off+2]); idx != 2 {
+		t.Errorf("item[1] index = %d, want 2", idx)
+	}
+	if p := binary.LittleEndian.Uint32(got[off+2 : off+6]); p != 100 {
+		t.Errorf("item[1] price = %d, want 100", p)
+	}
+	if oc := binary.LittleEndian.Uint32(got[off+6 : off+10]); oc != 100 {
+		t.Errorf("item[1] overcharge = %d, want 100", oc)
+	}
+}
+
+func TestSellItemListResponse_Encode_EmptyList(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	if err := (SellItemListResponse{}).Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got := buf.Bytes()
+	if len(got) != 4 {
+		t.Fatalf("len(got) = %d, want 4", len(got))
+	}
+	if got[0] != 0xc7 || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want c7 00", got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != 4 {
+		t.Errorf("packetLength = %d, want 4", plen)
+	}
+}
+
+func TestSellResultResponse_Size(t *testing.T) {
+	t.Parallel()
+	var r SellResultResponse
+	if got, want := r.Size(), sizeZCPCSellResult; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestSellResultResponse_Encode(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		result uint8
+	}{
+		{name: "result=success", result: 0x00},
+		{name: "result=fail", result: 0x01},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := SellResultResponse{Result: tc.result}
+			var buf bytes.Buffer
+			if err := resp.Encode(&buf); err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			got := buf.Bytes()
+			if len(got) != sizeZCPCSellResult {
+				t.Fatalf("len(got) = %d, want %d", len(got), sizeZCPCSellResult)
+			}
+			if got[0] != 0xcb || got[1] != 0x00 {
+				t.Errorf("header bytes = %02x %02x, want cb 00 (LE 0x00cb)", got[0], got[1])
+			}
+			if got[2] != tc.result {
+				t.Errorf("result = %d, want %d", got[2], tc.result)
+			}
+		})
+	}
+}
+
 func TestNotifyActResponse_Size(t *testing.T) {
 	t.Parallel()
 	var r NotifyActResponse

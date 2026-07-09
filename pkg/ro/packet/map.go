@@ -141,11 +141,22 @@ const (
 	// outcome (success / not enough zeny / not enough slots / overweight).
 	// Sources cited per constant; the modern pre-Renewal / Renewal shop
 	// opcodes are in rathena/src/map/clif_packetdb.hpp.
-	HeaderCZACKSELECTDEALTYPE       uint16 = 0x00c5 // CZ_ACK_SELECT_DEALTYPE
-	HeaderCZPCPURCHASEITEMLIST      uint16 = 0x00c8 // CZ_PC_PURCHASE_ITEMLIST
-	HeaderZCSELECTDEALTYPE          uint16 = 0x00c4 // ZC_SELECT_DEALTYPE
-	HeaderZCPCPURCHASEITEMLIST      uint16 = 0x0b77 // ZC_PC_PURCHASE_ITEMLIST (PACKETVER >= 20210203)
-	HeaderZCPCPURCHASERESULT        uint16 = 0x00ca // ZC_PC_PURCHASE_RESULT
+	HeaderCZACKSELECTDEALTYPE  uint16 = 0x00c5 // CZ_ACK_SELECT_DEALTYPE
+	HeaderCZPCPURCHASEITEMLIST uint16 = 0x00c8 // CZ_PC_PURCHASE_ITEMLIST
+	HeaderZCSELECTDEALTYPE     uint16 = 0x00c4 // ZC_SELECT_DEALTYPE
+	HeaderZCPCPURCHASEITEMLIST uint16 = 0x0b77 // ZC_PC_PURCHASE_ITEMLIST (PACKETVER >= 20210203)
+	HeaderZCPCPURCHASERESULT   uint16 = 0x00ca // ZC_PC_PURCHASE_RESULT
+	// P2B: shop sell flow. CZ_PC_SELL_ITEMLIST (0x00c9, C→S) carries
+	// the player's sell list (per-entry inventory index + amount);
+	// ZC_PC_SELL_ITEMLIST (0x00c7, S→C) is the server's priced list
+	// of every item the player currently owns at sell-list time
+	// (per-entry index + sell price + overcharge price), and
+	// ZC_PC_SELL_RESULT (0x00cb, S→C) is the per-transaction ack.
+	// rathena/src/map/clif_packetdb.hpp + clif.cpp:buy_sell_selection /
+	// clif_parse_PurchaseItem / clif_purchaseitemlist for shape.
+	HeaderCZPCSELLITEMLIST          uint16 = 0x00c9 // CZ_PC_SELL_ITEMLIST
+	HeaderZCPCSELLITEMLIST          uint16 = 0x00c7 // ZC_PC_SELL_ITEMLIST
+	HeaderZCPCSELLRESULT            uint16 = 0x00cb // ZC_PC_SELL_RESULT
 	HeaderZCSTATUS                  uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
 	HeaderZCPARCHANGE               uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
 	HeaderZCLONGPARCHANGE           uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
@@ -383,6 +394,19 @@ const (
 	// sizeZCPCPurchaseResult = int16 packetType + uint8 result = 2+1 = 3
 	// (rathena/src/map/packets.hpp: ZC_PC_PURCHASE_RESULT).
 	sizeZCPCPurchaseResult = 3
+	// sizeZCPCSellResult = int16 packetType + uint8 result = 2+1 = 3
+	// (rathena/src/map/packets.hpp: ZC_PC_SELL_RESULT).
+	sizeZCPCSellResult = 3
+	// sizeCZPCSellItemListEntry is the per-entry size in
+	// CZ_PC_SELL_ITEMLIST: uint16 index + uint16 amount = 2+2 = 4
+	// (rathena/src/map/clif_packetdb.hpp — CZ_PC_SELL_ITEMLIST).
+	sizeCZPCSellItemListEntry = 4
+	// sizeZCPCSellItemListItem is the per-item size in
+	// ZC_PC_SELL_ITEMLIST: uint16 index + uint32 price +
+	// uint32 overcharge = 2+4+4 = 10
+	// (rathena/src/map/packets_struct.hpp: ZC_PC_SELL_ITEMLIST
+	// PACKET_ZC_PC_SELL_ITEMLIST entry).
+	sizeZCPCSellItemListItem = 10
 	// sizeZCNotifyAct = int16 packetType + int32 srcID + int32 targetID +
 	// int32 serverTick + int32 srcSpeed + int32 dmgSpeed + int32 damage +
 	// int8 isSPDamage + uint16 div + uint8 type + int32 damage2
@@ -752,6 +776,27 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCPCPURCHASERESULT,
 		Name:      "ZC_PC_PURCHASE_RESULT",
 		Length:    sizeZCPCPurchaseResult,
+		Direction: DirectionServerToClient,
+	})
+	// P2B: shop sell flow. CZ_PC_SELL_ITEMLIST (variable, the per-
+	// entry size is 4), ZC_PC_SELL_ITEMLIST (variable, per-item 10),
+	// ZC_PC_SELL_RESULT (fixed 3). See rathena/src/map/clif_packetdb.hpp.
+	db.Register(Definition{
+		ID:        HeaderCZPCSELLITEMLIST,
+		Name:      "CZ_PC_SELL_ITEMLIST",
+		Length:    VariableLength,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCPCSELLITEMLIST,
+		Name:      "ZC_PC_SELL_ITEMLIST",
+		Length:    VariableLength,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCPCSELLRESULT,
+		Name:      "ZC_PC_SELL_RESULT",
+		Length:    sizeZCPCSellResult,
 		Direction: DirectionServerToClient,
 	})
 	// M18: ZC_NOTIFY_ACT (fixed 34 bytes) — damage / sit / stand notification.

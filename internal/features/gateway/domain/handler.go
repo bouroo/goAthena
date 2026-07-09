@@ -45,6 +45,13 @@ type ConnectionInfo struct {
 	JobExp int32
 	// invIndex maps 0-based inventory position to DB item ID.
 	invIndex map[uint16]uint32
+	// shopNPCID tracks the NPC GID the player is currently in a shop
+	// dialog with. It is set on handleCZAckSelectDealType (Buy or Sell)
+	// after the NPC resolves to a known shop entry, and cleared on
+	// successful completion (or cancel) of a buy/sell transaction so
+	// the next CZ_PC_PURCHASE_ITEMLIST / CZ_PC_SELL_ITEMLIST request
+	// must re-anchor to a fresh deal-type selection.
+	shopNPCID uint32
 }
 
 // SetInventoryIndex replaces the inventory index map.
@@ -60,6 +67,25 @@ func (c *ConnectionInfo) ResolveInventoryID(pos uint16) (uint32, bool) {
 	defer c.mu.Unlock()
 	id, ok := c.invIndex[pos]
 	return id, ok
+}
+
+// SetShopNPC records the NPC GID the player has just opened a shop
+// dialog with. Called on handleCZAckSelectDealType after the NPC is
+// resolved to a known shop entry; cleared on transaction completion
+// or when the deal-type window is cancelled.
+func (c *ConnectionInfo) SetShopNPC(npcID uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.shopNPCID = npcID
+}
+
+// ShopNPC returns the NPC GID of the active shop dialog (0 if none).
+// Used by the buy/sell request handlers to re-anchor the request to
+// the NPC whose price catalog governs the transaction.
+func (c *ConnectionInfo) ShopNPC() uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.shopNPCID
 }
 
 // InitMonsterHP initializes the ConnectionInfo's MonsterHP map from a slice of MonsterSpawns.

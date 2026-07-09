@@ -801,3 +801,102 @@ func (r CZPCPurchaseItemListRequest) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// CZPCSellItemListEntry is one (index, amount) tuple in a
+// CZ_PC_SELL_ITEMLIST request. The on-wire size is 4 bytes:
+//
+//	uint16 index   // client-side inventory slot position
+//	uint16 amount  // quantity the player wants to sell
+type CZPCSellItemListEntry struct {
+	// Index is the client-side inventory slot position.
+	Index uint16
+	// Amount is the quantity the player wants to sell from that slot.
+	Amount uint16
+}
+
+// CZPCSellItemListRequest is the decoded form of a client → map-server
+// CZ_PC_SELL_ITEMLIST packet (header 0x00c9, variable length).
+// Source: rathena/src/map/clif_packetdb.hpp (CZ_PC_SELL_ITEMLIST) +
+// rathena/src/map/clif.cpp clif_parse_PurchaseItem.
+//
+// The on-wire shape is:
+//
+//	int16  packetType   (0x00c9)
+//	int16  packetLength (header + 4 * len(Entries))
+//	[per entry, 4 bytes:]
+//	  uint16 index
+//	  uint16 amount
+//
+// rAthena's clif_parse_PurchaseItem validates inventory ownership
+// server-side before returning ZC_PC_SELL_RESULT. The gateway defers
+// inventory mutation to the inventory system; today the entry index
+// is mapped to an inventory row id via the connection-scoped
+// invIndex map populated in handleCZNotifyActorInit's identity
+// inventory fetch.
+type CZPCSellItemListRequest struct {
+	// Entries is the list of (index, amount) tuples the player wants
+	// to sell.
+	Entries []CZPCSellItemListEntry
+}
+
+// ParseCZPCSellItemList decodes a CZ_PC_SELL_ITEMLIST frame. The frame
+// must carry cmd 0x00c9 and contain at least the 4-byte header. The
+// body is a sequence of 4-byte entries; the parser validates that
+// (len(frame) - 4) % 4 == 0 so a misaligned wire frame is rejected
+// with a clear error.
+//
+// Returns a wrapped error naming the byte count if the frame is
+// shorter than 4 bytes, naming the unexpected cmd id if the header
+// is not 0x00c9, or naming the misalignment if the trailing body is
+// not a whole multiple of the 4-byte per-entry size.
+func ParseCZPCSellItemList(frame []byte) (CZPCSellItemListRequest, error) {
+	const minFrame = 4
+	if len(frame) < minFrame {
+		return CZPCSellItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_SELL_ITEMLIST: want at least %d bytes, got %d", minFrame, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZPCSELLITEMLIST {
+		return CZPCSellItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_SELL_ITEMLIST: unexpected cmd 0x%04x", cmd)
+	}
+	bodyLen := len(frame) - minFrame
+	if bodyLen%sizeCZPCSellItemListEntry != 0 {
+		return CZPCSellItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_SELL_ITEMLIST: body length %d not aligned to %d-byte entries", bodyLen, sizeCZPCSellItemListEntry)
+	}
+	n := bodyLen / sizeCZPCSellItemListEntry
+	if n == 0 {
+		return CZPCSellItemListRequest{}, nil
+	}
+	entries := make([]CZPCSellItemListEntry, n)
+	for i := range n {
+		off := minFrame + i*sizeCZPCSellItemListEntry
+		entries[i] = CZPCSellItemListEntry{
+			Index:  binary.LittleEndian.Uint16(frame[off : off+2]),
+			Amount: binary.LittleEndian.Uint16(frame[off+2 : off+4]),
+		}
+	}
+	return CZPCSellItemListRequest{Entries: entries}, nil
+}
+
+// Encode writes the CZ_PC_SELL_ITEMLIST packet to w, appending no
+// trailing bytes. Mirrors the on-wire layout:
+// [2:cmd=0x00c9][2:packetLength][n * (2:index + 2:amount)].
+// The encoder computes packetLength from the entry count so the caller
+// cannot accidentally emit a frame whose length slot disagrees with
+// the trailing bytes.
+func (r CZPCSellItemListRequest) Encode(w io.Writer) error {
+	total := 4 + len(r.Entries)*sizeCZPCSellItemListEntry
+	if total > 0xffff {
+		return fmt.Errorf("packet: write CZ_PC_SELL_ITEMLIST: too many entries (%d)", len(r.Entries))
+	}
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZPCSELLITEMLIST)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	for i, e := range r.Entries {
+		off := 4 + i*sizeCZPCSellItemListEntry
+		binary.LittleEndian.PutUint16(buf[off:off+2], e.Index)
+		binary.LittleEndian.PutUint16(buf[off+2:off+4], e.Amount)
+	}
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_PC_SELL_ITEMLIST: %w", err)
+	}
+	return nil
+}
