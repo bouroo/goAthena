@@ -214,7 +214,7 @@ The Identity Service must be read-compatible with the legacy rAthena schema at `
 
 ## Reference: rAthena
 
-goAthena's source of truth for legacy RO behavior — packet formats, the script dialect, map file formats, the DB schema, and game-data YAMLs — is the upstream [rAthena](https://github.com/rathena/rathena/tree/7f080871c8b3bbe7a79027194633201c63422ee1) C/C++ codebase. It's checked out locally as `../rathena/` (outside this repo) and is read for reference only; nothing from it is vendored into goAthena.
+goAthena's source of truth for legacy RO behavior — packet formats, the script dialect, map file formats, the DB schema, and game-data YAMLs — is the upstream [rAthena](https://github.com/rathena/rathena/tree/7f080871c8b3bbe7a79027194633201c63422ee1) C/C++ codebase. It's checked out locally as `third_party/rathena` (outside this repo) and is read for reference only; nothing from it is vendored into goAthena.
 
 Quick map (where to look in rAthena for a given concern):
 

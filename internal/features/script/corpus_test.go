@@ -25,8 +25,8 @@ import (
 // rathenaNPCCorpusDir returns the path to the rAthena npc/ directory
 // relative to this test file. The test lives at
 // internal/features/script/corpus_test.go; the rAthena checkout sits at
-// ../rathena/ (sibling of the goAthena repo root), so the relative path
-// is ../../../../rathena/npc.
+// third_party/rathena/ (sibling of the goAthena repo root), so the relative path
+// is third_party/rathena/npc.
 func rathenaNPCCorpusDir(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
