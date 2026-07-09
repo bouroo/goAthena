@@ -7,11 +7,12 @@
 //
 // Key triplets are generated from rAthena's clif_obfuscation.hpp at build
 // time (see cmd/genpacket). PACKETVER > 20180307 does not obfuscate. The
-// header is vendored under rathena-headers/ so go generate is hermetic (no
-// network fetch).
+// header is sourced from the third_party/rathena git submodule (uninitialized
+// by default; the committed obfuscation_keys.go is authoritative and go
+// generate is a no-op when the submodule is absent).
 //
 // Reference: rathena/src/map/clif.cpp (clif_parse, ~line 25700-25780),
 // rathena/src/map/clif_obfuscation.hpp.
 //
-//go:generate go run ../../../cmd/genpacket -rathena ../../../rathena-headers -ref master -o obfuscation_keys.go
+//go:generate sh ../../../scripts/gen-obfuscation-keys.sh
 package crypto
