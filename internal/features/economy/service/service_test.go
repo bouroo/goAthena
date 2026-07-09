@@ -216,6 +216,40 @@ func TestSellToShop_RepoError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestBuyFromShop_TotalCostOverflow_ReturnsInsufficientZeny is the
+// regression for the uint32-truncation dupe: totalCost=5e9 would silently
+// wrap to 705M on the uint32 cast and undercharge the player. The guard
+// must reject pre-repo as BuyFailInsufficientZeny; ExecuteBuyTx must
+// never be called (gomock's strict mode fails on an unexpected call).
+func TestBuyFromShop_TotalCostOverflow_ReturnsInsufficientZeny(t *testing.T) {
+	svc, _, locks := newSvc(t)
+	const charID uint32 = 7
+	stubLock(t, locks, charID)
+
+	zeny, res, err := svc.BuyFromShop(context.Background(), charID,
+		[]domain.ShopOrder{{ItemID: 11, Amount: 100000, UnitPrice: 50000}})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0), zeny)
+	assert.Equal(t, domain.BuyFailInsufficientZeny, res)
+}
+
+// TestSellToShop_TotalCreditOverflow_ReturnsZenyFull is the regression
+// for the uint32-truncation credit wrap. totalCredit=5e9 would silently
+// wrap to 705M on the uint32 cast and over-credit the player. The guard
+// must reject pre-repo as SellFailZenyFull; ExecuteSellTx must never be
+// called (gomock's strict mode fails on an unexpected call).
+func TestSellToShop_TotalCreditOverflow_ReturnsZenyFull(t *testing.T) {
+	svc, _, locks := newSvc(t)
+	const charID uint32 = 9
+	stubLock(t, locks, charID)
+
+	zeny, res, err := svc.SellToShop(context.Background(), charID,
+		[]domain.SellLine{{InvID: 31, Amount: 100000, UnitPrice: 50000}})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0), zeny)
+	assert.Equal(t, domain.SellFailZenyFull, res)
+}
+
 // TestBuyFromShop_ConcurrentDupeLock proves the per-character economy lock
 // serializes concurrent ops: of two simultaneous buys for the same char,
 // exactly one proceeds (BuyOK, ExecuteBuyTx once) and the other is rejected

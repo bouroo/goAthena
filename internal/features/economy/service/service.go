@@ -65,6 +65,14 @@ func (s *shopService) BuyFromShop(ctx context.Context, charID uint32, orders []d
 		}
 		return zeny, domain.BuyOK, nil
 	}
+	// Guard against uint32 truncation: totalCost is uint64 but the repo
+	// narrows to uint32, so any value > MaxZeny would silently wrap and
+	// undercharge. A buy costing more than the entire zeny cap is
+	// unaffordable by definition (no character can hold that much), so
+	// reject it as insufficient zeny before the repo call.
+	if totalCost > uint64(domain.MaxZeny) {
+		return 0, domain.BuyFailInsufficientZeny, nil
+	}
 
 	newZeny, err := s.repo.ExecuteBuyTx(ctx, charID, uint32(totalCost), acquired)
 	switch {
@@ -105,6 +113,14 @@ func (s *shopService) SellToShop(ctx context.Context, charID uint32, sales []dom
 			return 0, 0, fmt.Errorf("economy sell get zeny (char %d): %w", charID, err)
 		}
 		return zeny, domain.SellOK, nil
+	}
+	// Guard against uint32 truncation: totalCredit is uint64 but the repo
+	// narrows to uint32, so any value > MaxZeny would silently wrap and
+	// over-credit. A sale crediting more than the zeny cap cannot be
+	// represented in the column, so reject it as zeny-full before the
+	// repo call.
+	if totalCredit > uint64(domain.MaxZeny) {
+		return 0, domain.SellFailZenyFull, nil
 	}
 
 	newZeny, err := s.repo.ExecuteSellTx(ctx, charID, uint32(totalCredit), validated)

@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/netip"
 	"strconv"
@@ -3175,10 +3176,23 @@ func (h *DispatchHandler) sendSellResultFail(resp domain.Responder) error {
 // the client's zeny counter in sync with the identity-side balance
 // after a successful transaction (D-205).
 func (h *DispatchHandler) sendZenyParChange(resp domain.Responder, newZeny uint32) error {
+	// Defensive clamp: the wire slot is int32 but zeny is uint32, so a
+	// future MaxZeny above MaxInt32 would otherwise produce a negative
+	// Amount. Clamp to MaxInt32 (the wire can't represent more anyway)
+	// and log once so the cap can be re-evaluated.
+	amount := newZeny
+	if amount > math.MaxInt32 {
+		h.logger.Warn().
+			Uint64("conn", 0).
+			Uint32("new_zeny", newZeny).
+			Uint32("clamped_to", math.MaxInt32).
+			Msg("zeny exceeds MaxInt32 wire slot; clamping ZC_LONGPAR_CHANGE")
+		amount = math.MaxInt32
+	}
 	var buf bytes.Buffer
 	pp := packet.LongParChangeResponse{
 		VarID:  packet.SPZeny,
-		Amount: int32(newZeny), //nolint:gosec // wire slot is int32; zeny fits comfortably
+		Amount: int32(amount), //nolint:gosec // clamp above guarantees value fits in int32
 	}
 	if err := pp.Encode(&buf); err != nil {
 		// Fixed-layout encoder cannot fail; log + drop.
