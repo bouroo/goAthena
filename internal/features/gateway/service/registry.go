@@ -73,6 +73,12 @@ type SessionRegistry interface {
 	// a map-scoped broadcast even when the caller asks for the ""
 	// map.
 	//
+	// The lookup is O(sessions-on-map) via a secondary mapName ->
+	// accountIDs inverted index maintained by every mutation. The
+	// previous O(N)-over-all-sessions full scan would have been a
+	// bottleneck under MMO load, where the broadcast hot path
+	// invokes ForEachOnMap once per move/spawn/vanish.
+	//
 	// fn MUST NOT block on slow I/O (resolvers, remote RPCs,
 	// channel sends without buffering). It is invoked with the
 	// registry's read lock held; long-blocking fn implementations
@@ -94,9 +100,24 @@ type SessionRegistry interface {
 // read the snapshot without holding any registry lock. The mutex
 // guards the map structure only; the snapshot copy hands out copies
 // of the per-account state under the read lock.
+//
+// byMap is a secondary inverted index that maps mapName -> set of
+// accountIDs currently on that map. It exists so ForEachOnMap can
+// iterate only the sessions on the target map instead of walking
+// every session in the registry — the broadcast hot path runs
+// ForEachOnMap once per move/spawn/vanish, so on a gateway serving
+// N total sessions across M maps the unindexed walk was O(N) per
+// broadcast instead of the O(sessions-on-map) the indexed lookup
+// delivers.
+//
+// Invariant: accountID is in byMap[m] IFF rooms[accountID].MapName == m
+// and m != "". Every mutation that changes a session's MapName or
+// existence MUST update both rooms and byMap under the same write
+// lock; readers rely on the two structures being in lock-step.
 type sessionRegistry struct {
 	mu    sync.RWMutex
 	rooms map[uint32]domain.Session
+	byMap map[string]map[uint32]struct{}
 }
 
 // NewSessionRegistry returns a fresh, empty SessionRegistry backed
@@ -112,6 +133,7 @@ type sessionRegistry struct {
 func NewSessionRegistry() SessionRegistry {
 	return &sessionRegistry{
 		rooms: make(map[uint32]domain.Session),
+		byMap: make(map[string]map[uint32]struct{}),
 	}
 }
 
@@ -120,10 +142,46 @@ func NewSessionRegistry() SessionRegistry {
 // because the only legitimate source of overwrites today is a
 // reconnect after gnet dropped the previous conn and the cleanup
 // path did not see the drop in time.
+//
+// The byMap index is reconciled in the same critical section: the
+// overwritten session's prior MapName (if any) loses the accountID,
+// and the new session's MapName (if non-empty) gains it.
 func (r *sessionRegistry) Register(accountID uint32, s domain.Session) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if prev, ok := r.rooms[accountID]; ok && prev.MapName != "" {
+		r.removeFromByMap(prev.MapName, accountID)
+	}
 	r.rooms[accountID] = s
+	if s.MapName != "" {
+		r.addToByMap(s.MapName, accountID)
+	}
+}
+
+// removeFromByMap drops accountID from the inner set for mapName and
+// deletes the inner set when it becomes empty so memory does not
+// accumulate empty per-map buckets over the lifetime of the gateway.
+// Caller MUST hold r.mu for writing.
+func (r *sessionRegistry) removeFromByMap(mapName string, accountID uint32) {
+	set, ok := r.byMap[mapName]
+	if !ok {
+		return
+	}
+	delete(set, accountID)
+	if len(set) == 0 {
+		delete(r.byMap, mapName)
+	}
+}
+
+// addToByMap inserts accountID into the inner set for mapName,
+// allocating the inner set lazily. Caller MUST hold r.mu for writing.
+func (r *sessionRegistry) addToByMap(mapName string, accountID uint32) {
+	set, ok := r.byMap[mapName]
+	if !ok {
+		set = make(map[uint32]struct{})
+		r.byMap[mapName] = set
+	}
+	set[accountID] = struct{}{}
 }
 
 // Unregister removes the session for accountID. No-op if the key is
@@ -131,12 +189,21 @@ func (r *sessionRegistry) Register(accountID uint32, s domain.Session) {
 func (r *sessionRegistry) Unregister(accountID uint32) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if prev, ok := r.rooms[accountID]; ok && prev.MapName != "" {
+		r.removeFromByMap(prev.MapName, accountID)
+	}
 	delete(r.rooms, accountID)
 }
 
 // SetMap updates the MapName field on the session for accountID.
 // Returns false when no session is registered for accountID — callers
 // treat a false return as "the session vanished mid-call".
+//
+// The byMap index is reconciled alongside the rooms update: the
+// session leaves its old map (if the old MapName was non-empty) and
+// joins the new map (if non-empty). Both transitions happen under
+// the same write lock so the index never observes a half-applied
+// move.
 func (r *sessionRegistry) SetMap(accountID uint32, mapName string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -144,8 +211,14 @@ func (r *sessionRegistry) SetMap(accountID uint32, mapName string) bool {
 	if !ok {
 		return false
 	}
+	if s.MapName != "" {
+		r.removeFromByMap(s.MapName, accountID)
+	}
 	s.MapName = mapName
 	r.rooms[accountID] = s
+	if mapName != "" {
+		r.addToByMap(mapName, accountID)
+	}
 	return true
 }
 
@@ -180,18 +253,22 @@ func (r *sessionRegistry) Get(accountID uint32) (domain.Session, bool) {
 // mapName, holding the read lock for the full iteration. See the
 // SessionRegistry.ForEachOnMap contract for the non-blocking
 // discipline fn must follow.
+//
+// Implementation note: this method walks the byMap inverted index,
+// so the work is proportional to the number of sessions on the
+// target map rather than the total number of sessions in the
+// registry. A request for an unknown mapName is an O(1) miss — no
+// callback is invoked — because byMap carries no entry for it.
 func (r *sessionRegistry) ForEachOnMap(mapName string, fn func(accountID uint32, s domain.Session)) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for accountID, s := range r.rooms {
-		// Empty-MapName sessions are skipped unconditionally — a
-		// half-registered session (post-CZ_ENTER, pre-actor-init) must
-		// never leak into a map-scoped broadcast even if the caller
-		// asks for the "" map.
-		if s.MapName == "" {
-			continue
-		}
-		if s.MapName != mapName {
+	set, ok := r.byMap[mapName]
+	if !ok {
+		return
+	}
+	for accountID := range set {
+		s, ok := r.rooms[accountID]
+		if !ok {
 			continue
 		}
 		fn(accountID, s)

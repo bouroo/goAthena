@@ -104,6 +104,10 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      nats:
+        image: docker.io/library/nats:2
+        ports:
+          - 4222:4222
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6

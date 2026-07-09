@@ -50,6 +50,14 @@ type TickLoop struct {
 	onEmpty func()
 
 	publisher domain.Publisher
+
+	// startWallMillis and startMono anchor the monotonic timestamp
+	// stream emitted in MoveStartTime. Wall time is frozen at
+	// construction; the elapsed offset is measured on the monotonic
+	// clock so NTP adjustments cannot make MoveStartTime jump
+	// backwards and break client-side path interpolation.
+	startWallMillis uint64
+	startMono       time.Time
 }
 
 // NewTickLoop builds a TickLoop for the given map. The grid manager and
@@ -78,6 +86,7 @@ func NewTickLoop(
 	grid := aoi.NewGridManager(mapData.Width, mapData.Height)
 	pf := pathfinding.New(pathfinding.FromMapData(mapData))
 
+	now := time.Now()
 	tl := &TickLoop{
 		entities:  make(map[domain.EntityID]*domain.Entity),
 		grid:      grid,
@@ -87,6 +96,9 @@ func NewTickLoop(
 		logger:    logger,
 		done:      make(chan struct{}),
 		publisher: publisher,
+
+		startWallMillis: uint64(now.UnixMilli()),
+		startMono:       now,
 	}
 
 	return tl
@@ -107,6 +119,16 @@ func (tl *TickLoop) Grid() *aoi.GridManager { return tl.grid }
 
 // TickRate returns the configured tick period.
 func (tl *TickLoop) TickRate() time.Duration { return tl.tickRate }
+
+// nowMillis returns a wall-clock-epoch millisecond timestamp that
+// increases strictly monotonically across the lifetime of the loop.
+// time.Since uses Go's monotonic clock, which is immune to NTP jumps
+// that can move wall time backwards; the frozen startWallMillis keeps
+// the emitted values in the epoch-millis space the client expects.
+func (tl *TickLoop) nowMillis() uint64 {
+	//nolint:gosec // elapsed is bounded above by process uptime; startWallMillis anchors an always-positive offset.
+	return tl.startWallMillis + uint64(time.Since(tl.startMono).Milliseconds())
+}
 
 // Start runs the tick loop until ctx is cancelled. Returns nil on clean
 // shutdown, ctx.Err() if context cancelled mid-loop. Safe to call once;
@@ -238,7 +260,7 @@ func (tl *TickLoop) tick(ctx context.Context) error {
 					DestY:         uint32(m.y),
 					SrcX:          uint32(m.srcX),
 					SrcY:          uint32(m.srcY),
-					MoveStartTime: uint64(time.Now().UnixMilli()),
+					MoveStartTime: tl.nowMillis(),
 				},
 			},
 		}, "move")

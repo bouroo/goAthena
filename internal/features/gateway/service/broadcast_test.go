@@ -137,7 +137,7 @@ func TestBroadcastSubscriber_handleMsg_Moved_FansOutToObservers(t *testing.T) {
 	assert.Equal(t, 0, countPacketsOfOpcode(moverResp, opcodeUnitWalking),
 		"mover must be excluded from its own broadcast")
 
-	pos, ok := b.posOf(1)
+	pos, ok := b.posOf(1, "prontera")
 	require.True(t, ok, "mover's cell must be cached after onMoved")
 	assert.Equal(t, int16(10), pos.X, "cache X reflects DestX")
 	assert.Equal(t, int16(10), pos.Y, "cache Y reflects DestY")
@@ -172,7 +172,7 @@ func TestBroadcastSubscriber_handleMsg_Spawned_FansOutToObservers(t *testing.T) 
 	assert.Equal(t, 0, countPacketsOfOpcode(spawnedResp, opcodeSpawnUnit),
 		"spawning entity must be excluded from its own spawn broadcast")
 
-	pos, ok := b.posOf(1)
+	pos, ok := b.posOf(1, "prontera")
 	require.True(t, ok, "spawned entity's cell must be cached after onSpawned")
 	assert.Equal(t, int16(42), pos.X, "cache X reflects spawn X")
 	assert.Equal(t, int16(84), pos.Y, "cache Y reflects spawn Y")
@@ -203,7 +203,7 @@ func TestBroadcastSubscriber_handleMsg_Vanished_FansOutToObservers(t *testing.T)
 
 	// LOGOUT (type 1) must clear the cache so a future player entering
 	// the same map does not re-spawn the gone character.
-	_, ok := b.posOf(1)
+	_, ok := b.posOf(1, "prontera")
 	assert.False(t, ok, "LOGOUT must untrack the entity from the position cache")
 }
 
@@ -262,7 +262,7 @@ func TestBroadcastSubscriber_handleMsg_Moved_EntityNotRegistered_NoFanout(t *tes
 	// updated. This is intentional: a future SetView on aid=999
 	// (or a re-attribution by the dispatch handler) should see
 	// up-to-date coordinates.
-	pos, ok := b.posOf(999)
+	pos, ok := b.posOf(999, "prontera")
 	require.True(t, ok, "cache must be updated even for unregistered entities")
 	assert.Equal(t, int16(7), pos.X)
 	assert.Equal(t, int16(7), pos.Y)

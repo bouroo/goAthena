@@ -84,7 +84,18 @@ type BroadcastSubscriber struct {
 // position cache. It is keyed by AID — the same key the registry uses
 // — so an entity's spawn / move / vanish events all land on the same
 // cache row.
-type posCell struct{ X, Y int16 }
+//
+// MapName tags the cell with the map it was last observed on. After a
+// cross-map teleport the entity's last cached cell from the old map
+// would otherwise be served to clients entering the new map
+// (a stale spawn at the wrong coordinates). Tagging with MapName
+// lets posOf reject cells that belong to a different map, so the
+// on-enter helper falls into its "no cached position for this map;
+// skip the entity" branch instead of emitting a wrong-map spawn.
+type posCell struct {
+	X, Y    int16
+	MapName string
+}
 
 // NewBroadcastSubscriber constructs a BroadcastSubscriber that will
 // read zone events from nc, fan them out to the sessions in registry,
@@ -214,7 +225,7 @@ func (b *BroadcastSubscriber) onMoved(mapName string, m *zonev1.EntityMoved) {
 		return
 	}
 	moverAID := m.GetEntityId()
-	b.trackPos(moverAID, int16(m.GetDestX()), int16(m.GetDestY())) //nolint:gosec // map coords fit int16 wire slot
+	b.trackPos(moverAID, int16(m.GetDestX()), int16(m.GetDestY()), mapName) //nolint:gosec // map coords fit int16 wire slot
 	if view, ok := b.lookupView(moverAID); ok {
 		b.fanout(mapName, moverAID, unitWalkingFromEvent(view, m))
 		return
@@ -235,7 +246,7 @@ func (b *BroadcastSubscriber) onSpawned(mapName string, s *zonev1.EntitySpawned)
 		return
 	}
 	aid := s.GetEntityId()
-	b.trackPos(aid, int16(s.GetX()), int16(s.GetY())) //nolint:gosec // map coords fit int16 wire slot
+	b.trackPos(aid, int16(s.GetX()), int16(s.GetY()), mapName) //nolint:gosec // map coords fit int16 wire slot
 	if view, ok := b.lookupView(aid); ok {
 		b.fanout(mapName, aid, spawnFromView(view, int16(s.GetX()), int16(s.GetY()))) //nolint:gosec // map coords fit int16 wire slot
 		return
@@ -254,6 +265,11 @@ func (b *BroadcastSubscriber) onSpawned(mapName string, s *zonev1.EntitySpawned)
 // intact: a re-appearing PC must re-spawn, but a momentary
 // out-of-sight or a cross-map teleport does not invalidate the
 // cell we have for them should they re-enter the map.
+//
+// After a TELEPORT the retained cache row is tagged with the OLD
+// map name, so a subsequent SendAreaEntities for the NEW map will
+// see a MapName mismatch in posOf and correctly skip the entity
+// rather than serving a stale wrong-map spawn.
 func (b *BroadcastSubscriber) onVanished(mapName string, v *zonev1.EntityVanished) {
 	if v == nil {
 		return
@@ -278,17 +294,19 @@ func (b *BroadcastSubscriber) lookupView(aid uint32) (domain.ViewData, bool) {
 	return s.View, true
 }
 
-// trackPos stores the most recent cell for aid, allocating the map
-// lazily. It is safe for concurrent use; the cache is only ever
+// trackPos stores the most recent cell for aid, tagged with the map
+// the cell was observed on. The map tag is what prevents a stale
+// cross-map teleport cell from being served by SendAreaEntities on
+// the new map. It is safe for concurrent use; the cache is only ever
 // written from the NATS callback goroutine, but the lazy allocation
 // keeps the zero value of BroadcastSubscriber usable.
-func (b *BroadcastSubscriber) trackPos(aid uint32, x, y int16) {
+func (b *BroadcastSubscriber) trackPos(aid uint32, x, y int16, mapName string) {
 	b.posMu.Lock()
 	defer b.posMu.Unlock()
 	if b.pos == nil {
 		b.pos = make(map[uint32]posCell)
 	}
-	b.pos[aid] = posCell{X: x, Y: y}
+	b.pos[aid] = posCell{X: x, Y: y, MapName: mapName}
 }
 
 // untrackPos removes aid from the position cache. Called only on
@@ -299,17 +317,22 @@ func (b *BroadcastSubscriber) untrackPos(aid uint32) {
 	delete(b.pos, aid)
 }
 
-// posOf returns the most recent cell for aid, or false if the cache
-// has not seen a Spawned / Moved event for that AID. Callers (the
-// on-enter helper) treat a false return as "no spawn cell known;
-// skip the entity" rather than a fatal error — the entity may be a
-// PC that entered the map before the gateway received any events
-// for them.
-func (b *BroadcastSubscriber) posOf(aid uint32) (posCell, bool) {
+// posOf returns the most recent cell for aid, but only if the cell's
+// MapName matches the requested map. A MapName mismatch (caused by
+// a teleport that left the cache row tagged with the old map, see
+// onVanished) is treated as a cache miss; the caller (the on-enter
+// helper) falls into its "no cached position for this map; skip the
+// entity" branch. Without this filter a player teleporting from
+// prontera to izlude would see their old prontera cell served to
+// every subsequent client entering izlude.
+func (b *BroadcastSubscriber) posOf(aid uint32, mapName string) (posCell, bool) {
 	b.posMu.RLock()
 	defer b.posMu.RUnlock()
 	p, ok := b.pos[aid]
-	return p, ok
+	if !ok || p.MapName != mapName {
+		return posCell{}, false
+	}
+	return p, true
 }
 
 // fanout encodes pkt once and pushes the resulting bytes to every
@@ -388,7 +411,7 @@ func (b *BroadcastSubscriber) SendAreaEntities(mapName string, excludeAID uint32
 		if aid == excludeAID {
 			return
 		}
-		pos, ok := b.posOf(aid)
+		pos, ok := b.posOf(aid, mapName)
 		if !ok {
 			b.logger.Debug().
 				Uint32("aid", aid).
