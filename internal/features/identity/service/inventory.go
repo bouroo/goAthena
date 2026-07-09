@@ -66,22 +66,36 @@ func (s *identityService) EquipItem(
 }
 
 // UnequipItem clears the EQP_* bitmask, moving the item back into the
-// inventory grid. The ownership check mirrors EquipItem's.
+// inventory grid. The ownership check mirrors EquipItem's. Returns the
+// prior EQP_* bitmask (before clearing to 0).
 func (s *identityService) UnequipItem(
 	ctx context.Context,
 	accountID, charID, itemID uint32,
-) error {
+) (uint32, error) {
 	if accountID == 0 || charID == 0 || itemID == 0 {
-		return fmt.Errorf("unequip item (account=%d, char=%d, item=%d): %w",
+		return 0, fmt.Errorf("unequip item (account=%d, char=%d, item=%d): %w",
 			accountID, charID, itemID, inventorydomain.ErrItemNotFound)
 	}
-	if err := s.assertItemOwnedByChar(ctx, charID, itemID); err != nil {
-		return err
+	items, err := s.inventory.ListByChar(ctx, charID)
+	if err != nil {
+		return 0, fmt.Errorf("list inventory for unequip (char=%d): %w", charID, err)
 	}
+	var current *inventorydomain.InventoryItem
+	for i := range items {
+		if items[i].ID == itemID {
+			current = &items[i]
+			break
+		}
+	}
+	if current == nil {
+		return 0, fmt.Errorf("unequip item (item=%d not found on char %d): %w",
+			itemID, charID, inventorydomain.ErrItemNotFound)
+	}
+
 	if err := s.inventory.SetEquip(ctx, itemID, 0); err != nil {
-		return fmt.Errorf("clear equip (item=%d): %w", itemID, err)
+		return 0, fmt.Errorf("clear equip (item=%d): %w", itemID, err)
 	}
-	return nil
+	return uint32(current.Equip), nil
 }
 
 // UseItem decrements the stack count of a consumable item by one. If
@@ -120,15 +134,9 @@ func (s *identityService) UseItem(
 			charID, itemID, inventorydomain.ErrItemNotFound)
 	}
 
-	remaining := current.Amount - 1
-	if remaining == 0 {
-		if err := s.inventory.Remove(ctx, itemID); err != nil {
-			return 0, fmt.Errorf("remove used item (item=%d): %w", itemID, err)
-		}
-		return 0, nil
-	}
-	if err := s.inventory.UpdateAmount(ctx, itemID, remaining); err != nil {
-		return 0, fmt.Errorf("update amount (item=%d, amount=%d): %w", itemID, remaining, err)
+	remaining, err := s.inventory.ConsumeOne(ctx, itemID)
+	if err != nil {
+		return 0, fmt.Errorf("use item (char=%d, item=%d): %w", charID, itemID, err)
 	}
 	return remaining, nil
 }
@@ -180,6 +188,10 @@ func (s *identityService) CheckWeight(
 	if err != nil {
 		return fmt.Errorf("check weight, load char (account=%d, char=%d): %w",
 			accountID, charID, err)
+	}
+	if char == nil {
+		return fmt.Errorf("check weight, char not found (account=%d, char=%d): %w",
+			accountID, charID, inventorydomain.ErrItemNotFound)
 	}
 
 	items, err := s.inventory.ListByChar(ctx, charID)

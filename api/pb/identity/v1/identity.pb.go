@@ -1407,7 +1407,8 @@ type UnequipItemResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	ItemId        uint32                 `protobuf:"varint,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
-	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	EquipPosition uint32                 `protobuf:"varint,3,opt,name=equip_position,json=equipPosition,proto3" json:"equip_position,omitempty"` // the EQP_* bitmask before the row was cleared
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1452,6 +1453,13 @@ func (x *UnequipItemResponse) GetSuccess() bool {
 func (x *UnequipItemResponse) GetItemId() uint32 {
 	if x != nil {
 		return x.ItemId
+	}
+	return 0
+}
+
+func (x *UnequipItemResponse) GetEquipPosition() uint32 {
+	if x != nil {
+		return x.EquipPosition
 	}
 	return 0
 }
@@ -1721,11 +1729,12 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\n" +
 	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
 	"\achar_id\x18\x02 \x01(\rR\x06charId\x12\x17\n" +
-	"\aitem_id\x18\x03 \x01(\rR\x06itemId\"^\n" +
+	"\aitem_id\x18\x03 \x01(\rR\x06itemId\"\x85\x01\n" +
 	"\x13UnequipItemResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x17\n" +
-	"\aitem_id\x18\x02 \x01(\rR\x06itemId\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"a\n" +
+	"\aitem_id\x18\x02 \x01(\rR\x06itemId\x12%\n" +
+	"\x0eequip_position\x18\x03 \x01(\rR\requipPosition\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"a\n" +
 	"\x0eUseItemRequest\x12\x1d\n" +
 	"\n" +
 	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +

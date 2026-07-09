@@ -213,7 +213,8 @@ message UnequipItemRequest {
 message UnequipItemResponse {
   bool success = 1;
   uint32 item_id = 2;
-  string error = 3;
+  uint32 equip_position = 3; // the EQP_* bitmask before the row was cleared
+  string error = 4;
 }
 
 message UseItemRequest {

@@ -271,7 +271,7 @@ func (h *grpcHandler) UnequipItem(
 		return nil, status.Error(codes.InvalidArgument, "account_id, char_id and item_id must be non-zero")
 	}
 
-	err := h.svc.UnequipItem(ctx, req.GetAccountId(), req.GetCharId(), req.GetItemId())
+	priorEquip, err := h.svc.UnequipItem(ctx, req.GetAccountId(), req.GetCharId(), req.GetItemId())
 	if err != nil {
 		if errors.Is(err, inventorydomain.ErrItemNotFound) {
 			return &identityv1.UnequipItemResponse{
@@ -283,8 +283,9 @@ func (h *grpcHandler) UnequipItem(
 		return nil, status.Errorf(codes.Internal, "unequip item: %v", err)
 	}
 	return &identityv1.UnequipItemResponse{
-		Success: true,
-		ItemId:  req.GetItemId(),
+		Success:       true,
+		ItemId:        req.GetItemId(),
+		EquipPosition: priorEquip,
 	}, nil
 }
 

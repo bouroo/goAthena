@@ -131,11 +131,12 @@ func (mr *MockIdentityServiceMockRecorder) Login(ctx, req any) *gomock.Call {
 }
 
 // UnequipItem mocks base method.
-func (m *MockIdentityService) UnequipItem(ctx context.Context, accountID, charID, itemID uint32) error {
+func (m *MockIdentityService) UnequipItem(ctx context.Context, accountID, charID, itemID uint32) (uint32, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UnequipItem", ctx, accountID, charID, itemID)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(uint32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // UnequipItem indicates an expected call of UnequipItem.

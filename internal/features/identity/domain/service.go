@@ -91,8 +91,9 @@ type IdentityService interface {
 	EquipItem(ctx context.Context, accountID, charID, itemID, equipPos uint32) error
 
 	// UnequipItem clears the EQP_* bitmask back to 0 (in-grid). Same
-	// ownership check as EquipItem.
-	UnequipItem(ctx context.Context, accountID, charID, itemID uint32) error
+	// ownership check as EquipItem. Returns the equip-position bitmask
+	// that was cleared (i.e. the one before setting to 0).
+	UnequipItem(ctx context.Context, accountID, charID, itemID uint32) (priorEquipPos uint32, err error)
 
 	// UseItem decrements the stack count by one; the row is deleted
 	// when the resulting amount is zero. Returns the post-decrement

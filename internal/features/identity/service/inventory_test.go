@@ -145,12 +145,15 @@ func TestUnequipItem_HappyPath(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	inv := inventorymocks.NewMockInventoryRepository(ctrl)
 	const charID, itemID uint32 = 42, 100
+	const priorPos inventorydomain.EquipSlot = 0x0002
 	inv.EXPECT().ListByChar(gomock.Any(), charID).
-		Return([]inventorydomain.InventoryItem{{ID: itemID, CharID: charID}}, nil)
+		Return([]inventorydomain.InventoryItem{{ID: itemID, CharID: charID, Equip: priorPos}}, nil)
 	inv.EXPECT().SetEquip(gomock.Any(), itemID, uint32(0)).Return(nil)
 
 	svc := newSvcForInventory(t, inv)
-	require.NoError(t, svc.UnequipItem(context.Background(), 7, charID, itemID))
+	prior, err := svc.UnequipItem(context.Background(), 7, charID, itemID)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(priorPos), prior)
 }
 
 func TestUnequipItem_NotOwned(t *testing.T) {
@@ -160,7 +163,7 @@ func TestUnequipItem_NotOwned(t *testing.T) {
 	inv.EXPECT().ListByChar(gomock.Any(), uint32(42)).Return([]inventorydomain.InventoryItem{}, nil)
 
 	svc := newSvcForInventory(t, inv)
-	err := svc.UnequipItem(context.Background(), 7, 42, 100)
+	_, err := svc.UnequipItem(context.Background(), 7, 42, 100)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, inventorydomain.ErrItemNotFound))
 }
@@ -174,7 +177,7 @@ func TestUseItem_DecrementsAmount(t *testing.T) {
 		Return([]inventorydomain.InventoryItem{
 			{ID: itemID, CharID: charID, NameID: 501, Amount: 3},
 		}, nil)
-	inv.EXPECT().UpdateAmount(gomock.Any(), itemID, uint32(2)).Return(nil)
+	inv.EXPECT().ConsumeOne(gomock.Any(), itemID).Return(uint32(2), nil)
 
 	svc := newSvcForInventory(t, inv)
 	remaining, err := svc.UseItem(context.Background(), 7, charID, itemID)
@@ -191,7 +194,7 @@ func TestUseItem_RemovesWhenZero(t *testing.T) {
 		Return([]inventorydomain.InventoryItem{
 			{ID: itemID, CharID: charID, NameID: 501, Amount: 1},
 		}, nil)
-	inv.EXPECT().Remove(gomock.Any(), itemID).Return(nil)
+	inv.EXPECT().ConsumeOne(gomock.Any(), itemID).Return(uint32(0), nil)
 
 	svc := newSvcForInventory(t, inv)
 	remaining, err := svc.UseItem(context.Background(), 7, charID, itemID)
@@ -221,7 +224,7 @@ func TestUseItem_UpdateError_Wrapped(t *testing.T) {
 			{ID: itemID, CharID: charID, Amount: 5},
 		}, nil)
 	boom := errors.New("update failed")
-	inv.EXPECT().UpdateAmount(gomock.Any(), itemID, uint32(4)).Return(boom)
+	inv.EXPECT().ConsumeOne(gomock.Any(), itemID).Return(uint32(0), boom)
 
 	svc := newSvcForInventory(t, inv)
 	_, err := svc.UseItem(context.Background(), 7, charID, itemID)

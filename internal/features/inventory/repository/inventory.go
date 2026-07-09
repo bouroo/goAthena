@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/bouroo/goAthena/internal/features/inventory/domain"
 )
@@ -42,10 +43,6 @@ func NewInventoryRepository(db *gorm.DB) domain.InventoryRepository {
 // the steady state for a fresh character.
 func (r *inventoryRepo) ListByChar(ctx context.Context, charID uint32) ([]domain.InventoryItem, error) {
 	if charID == 0 {
-		// Defensive: a zero char_id can never match a real rAthena row
-		// (auto-increment starts at 150000+), so the query is doomed to
-		// return nothing. Fail fast with a wrapped error so the
-		// service layer never issues an unbounded query.
 		return nil, fmt.Errorf("list inventory for char %d: charID must be > 0", charID)
 	}
 	var models []InventoryModel
@@ -123,6 +120,45 @@ func (r *inventoryRepo) Remove(ctx context.Context, id uint32) error {
 		return fmt.Errorf("%w: id=%d", domain.ErrItemNotFound, id)
 	}
 	return nil
+}
+
+// ConsumeOne atomically decrements the stack of the row with the
+// given id. It takes a row lock via a transaction containing
+// SELECT ... FOR UPDATE so concurrent concurrent use-item calls are
+// serialized at the DB level. When the resulting amount is 0 the row
+// is deleted rather than persisted with Amount=0, and 0 is returned
+// as remaining. The row's char_id is not re-checked here — the
+// repository layer owns every row it must lock.
+func (r *inventoryRepo) ConsumeOne(ctx context.Context, id uint32) (uint32, error) {
+	if id == 0 {
+		return 0, fmt.Errorf("%w: id=0", domain.ErrItemNotFound)
+	}
+	var remaining uint32
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var model InventoryModel
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", id).
+			First(&model).Error; err != nil {
+			return fmt.Errorf("consume row (id=%d): %w", id, err)
+		}
+		if model.Amount <= 1 {
+			// Row is drained after this use — delete it thin.
+			if deleteErr := tx.Where("id = ?", id).Delete(&InventoryModel{}).Error; deleteErr != nil {
+				return fmt.Errorf("remove emptied row (id=%d): %w", id, deleteErr)
+			}
+			remaining = 0
+			return nil
+		}
+		remaining = model.Amount - 1
+		if updateErr := tx.Model(&InventoryModel{}).Where("id = ?", id).Update("amount", remaining).Error; updateErr != nil {
+			return fmt.Errorf("update row amount (id=%d): %w", id, updateErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("consume one (id=%d): %w", id, err)
+	}
+	return remaining, nil
 }
 
 // SetEquip overwrites the equip-position bitfield for the given

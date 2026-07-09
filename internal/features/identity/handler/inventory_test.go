@@ -156,7 +156,7 @@ func TestUnequipItem_HappyPath(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
 	h := handler.NewGRPCHandler(svc)
-	svc.EXPECT().UnequipItem(gomock.Any(), uint32(7), uint32(42), uint32(100)).Return(nil)
+	svc.EXPECT().UnequipItem(gomock.Any(), uint32(7), uint32(42), uint32(100)).Return(uint32(0x0002), nil)
 
 	resp, err := h.UnequipItem(context.Background(), &identityv1.UnequipItemRequest{
 		AccountId: 7, CharId: 42, ItemId: 100,
@@ -172,7 +172,7 @@ func TestUnequipItem_NotFound_EncodesAsSoftFailure(t *testing.T) {
 	svc := domainmock.NewMockIdentityService(ctrl)
 	h := handler.NewGRPCHandler(svc)
 	svc.EXPECT().UnequipItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(notFoundWrapper{})
+		Return(uint32(0), notFoundWrapper{})
 
 	resp, err := h.UnequipItem(context.Background(), &identityv1.UnequipItemRequest{
 		AccountId: 7, CharId: 42, ItemId: 100,
@@ -188,7 +188,7 @@ func TestUnequipItem_InternalError(t *testing.T) {
 	svc := domainmock.NewMockIdentityService(ctrl)
 	h := handler.NewGRPCHandler(svc)
 	svc.EXPECT().UnequipItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(errors.New("db down"))
+		Return(uint32(0), errors.New("db down"))
 
 	_, err := h.UnequipItem(context.Background(), &identityv1.UnequipItemRequest{
 		AccountId: 7, CharId: 42, ItemId: 100,

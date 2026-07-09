@@ -63,4 +63,12 @@ type InventoryRepository interface {
 	// SetEquip overwrites the equip-position bitfield for the given
 	// item id. Returns ErrItemNotFound when no row matches.
 	SetEquip(ctx context.Context, id uint32, equipMask uint32) error
+
+	// ConsumeOne atomically decrements the stack of the row with the
+	// given id. It holds the row with SELECT ... FOR UPDATE inside a
+	// transaction, so concurrent UseItem calls on the same row are
+	// serialized at the DB level. If the resulting amount is 0, the
+	// row is deleted and 0 is returned. Errors include ErrItemNotFound
+	// when the row is missing or already at 0.
+	ConsumeOne(ctx context.Context, id uint32) (remaining uint32, err error)
 }
