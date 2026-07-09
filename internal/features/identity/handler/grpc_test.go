@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
+	economydomainmock "github.com/bouroo/goAthena/internal/features/economy/domain/mock"
 	"github.com/bouroo/goAthena/internal/features/identity/domain"
 	domainmock "github.com/bouroo/goAthena/internal/features/identity/domain/mock"
 	"github.com/bouroo/goAthena/internal/features/identity/handler"
@@ -26,7 +27,8 @@ func TestAuthenticate_HappyPath(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
 	svc.EXPECT().
@@ -83,7 +85,8 @@ func TestAuthenticate_MD5Method_Mapped(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		Login(gomock.Any(), gomock.Any()).
@@ -109,7 +112,8 @@ func TestAuthenticate_LoginError_UnknownID(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		Login(gomock.Any(), gomock.Any()).
@@ -127,7 +131,8 @@ func TestAuthenticate_LoginError_InvalidPassword(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		Login(gomock.Any(), gomock.Any()).
@@ -147,7 +152,8 @@ func TestAuthenticate_LoginError_Banned(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		Login(gomock.Any(), gomock.Any()).
@@ -165,7 +171,8 @@ func TestAuthenticate_LoginError_AlreadyLoggedIn(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		Login(gomock.Any(), gomock.Any()).
@@ -183,7 +190,8 @@ func TestAuthenticate_UnknownError_CollapsesToServerClosed(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		Login(gomock.Any(), gomock.Any()).
@@ -201,7 +209,8 @@ func TestAuthenticate_InvalidIP_FallsBackToZero(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		Login(gomock.Any(), gomock.Any()).
@@ -228,7 +237,8 @@ func TestGetCharacterList_HappyPath(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	want := []domain.CharacterSummary{
 		{CharID: 101, AccountID: 9, Slot: 0, Name: "alpha", Class: 0, BaseLevel: 50, JobLevel: 25},
@@ -261,7 +271,8 @@ func TestGetCharacterList_Empty(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		ListCharacters(gomock.Any(), uint32(9)).
@@ -280,7 +291,8 @@ func TestGetCharacterList_Error(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		ListCharacters(gomock.Any(), uint32(9)).
@@ -301,7 +313,8 @@ func TestAuthenticate_NilRequest_ReturnsInvalidArgument(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	resp, err := h.Authenticate(context.Background(), nil)
 	require.Error(t, err)
@@ -315,7 +328,8 @@ func TestGetCharacterList_NilRequest_ReturnsInvalidArgument(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	resp, err := h.GetCharacterList(context.Background(), nil)
 	require.Error(t, err)
@@ -329,7 +343,8 @@ func TestGetCharacter_HappyPath(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		GetCharacter(gomock.Any(), uint32(9), uint32(101)).
@@ -392,7 +407,8 @@ func TestGetCharacter_NotFound_ReturnsSuccessFalse(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		GetCharacter(gomock.Any(), uint32(9), uint32(101)).
@@ -413,7 +429,8 @@ func TestGetCharacter_InternalError_ReturnsInternalStatus(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	svc.EXPECT().
 		GetCharacter(gomock.Any(), uint32(9), uint32(101)).
@@ -435,7 +452,8 @@ func TestGetCharacter_NilRequest_ReturnsInvalidArgument(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	resp, err := h.GetCharacter(context.Background(), nil)
 	require.Error(t, err)
@@ -449,7 +467,8 @@ func TestGetCharacter_ZeroKeys_ReturnsInvalidArgument(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockIdentityService(ctrl)
-	h := handler.NewGRPCHandler(svc)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
 
 	// Service must not be called for zero keys.
 	cases := []struct {

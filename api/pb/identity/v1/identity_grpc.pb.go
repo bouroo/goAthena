@@ -27,6 +27,8 @@ const (
 	IdentityService_EquipItem_FullMethodName        = "/identity.v1.IdentityService/EquipItem"
 	IdentityService_UnequipItem_FullMethodName      = "/identity.v1.IdentityService/UnequipItem"
 	IdentityService_UseItem_FullMethodName          = "/identity.v1.IdentityService/UseItem"
+	IdentityService_BuyFromShop_FullMethodName      = "/identity.v1.IdentityService/BuyFromShop"
+	IdentityService_SellToShop_FullMethodName       = "/identity.v1.IdentityService/SellToShop"
 )
 
 // IdentityServiceClient is the client API for IdentityService service.
@@ -68,6 +70,17 @@ type IdentityServiceClient interface {
 	// remaining amount reaches zero the row is deleted. Consumables only;
 	// equipment items are not stackable on rAthena's wire.
 	UseItem(ctx context.Context, in *UseItemRequest, opts ...grpc.CallOption) (*UseItemResponse, error)
+	// BuyFromShop commits one or more buy orders from an NPC shop for the
+	// given character. The gateway computes the unit prices from its own
+	// shop catalog (D-204); the server never trusts a client-supplied
+	// price. Returns a BuyResult outcome + the post-transaction zeny
+	// balance (0 on non-OK).
+	BuyFromShop(ctx context.Context, in *BuyFromShopRequest, opts ...grpc.CallOption) (*BuyFromShopResponse, error)
+	// SellToShop credits the character for one or more inventory items
+	// sold to an NPC shop. The inv_id is the inventory row id (not a
+	// wire slot). Returns a SellResult outcome + the post-transaction
+	// zeny balance (0 on non-OK).
+	SellToShop(ctx context.Context, in *SellToShopRequest, opts ...grpc.CallOption) (*SellToShopResponse, error)
 }
 
 type identityServiceClient struct {
@@ -148,6 +161,26 @@ func (c *identityServiceClient) UseItem(ctx context.Context, in *UseItemRequest,
 	return out, nil
 }
 
+func (c *identityServiceClient) BuyFromShop(ctx context.Context, in *BuyFromShopRequest, opts ...grpc.CallOption) (*BuyFromShopResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BuyFromShopResponse)
+	err := c.cc.Invoke(ctx, IdentityService_BuyFromShop_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *identityServiceClient) SellToShop(ctx context.Context, in *SellToShopRequest, opts ...grpc.CallOption) (*SellToShopResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SellToShopResponse)
+	err := c.cc.Invoke(ctx, IdentityService_SellToShop_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IdentityServiceServer is the server API for IdentityService service.
 // All implementations must embed UnimplementedIdentityServiceServer
 // for forward compatibility.
@@ -187,6 +220,17 @@ type IdentityServiceServer interface {
 	// remaining amount reaches zero the row is deleted. Consumables only;
 	// equipment items are not stackable on rAthena's wire.
 	UseItem(context.Context, *UseItemRequest) (*UseItemResponse, error)
+	// BuyFromShop commits one or more buy orders from an NPC shop for the
+	// given character. The gateway computes the unit prices from its own
+	// shop catalog (D-204); the server never trusts a client-supplied
+	// price. Returns a BuyResult outcome + the post-transaction zeny
+	// balance (0 on non-OK).
+	BuyFromShop(context.Context, *BuyFromShopRequest) (*BuyFromShopResponse, error)
+	// SellToShop credits the character for one or more inventory items
+	// sold to an NPC shop. The inv_id is the inventory row id (not a
+	// wire slot). Returns a SellResult outcome + the post-transaction
+	// zeny balance (0 on non-OK).
+	SellToShop(context.Context, *SellToShopRequest) (*SellToShopResponse, error)
 	mustEmbedUnimplementedIdentityServiceServer()
 }
 
@@ -217,6 +261,12 @@ func (UnimplementedIdentityServiceServer) UnequipItem(context.Context, *UnequipI
 }
 func (UnimplementedIdentityServiceServer) UseItem(context.Context, *UseItemRequest) (*UseItemResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UseItem not implemented")
+}
+func (UnimplementedIdentityServiceServer) BuyFromShop(context.Context, *BuyFromShopRequest) (*BuyFromShopResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BuyFromShop not implemented")
+}
+func (UnimplementedIdentityServiceServer) SellToShop(context.Context, *SellToShopRequest) (*SellToShopResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SellToShop not implemented")
 }
 func (UnimplementedIdentityServiceServer) mustEmbedUnimplementedIdentityServiceServer() {}
 func (UnimplementedIdentityServiceServer) testEmbeddedByValue()                         {}
@@ -365,6 +415,42 @@ func _IdentityService_UseItem_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IdentityService_BuyFromShop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BuyFromShopRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).BuyFromShop(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_BuyFromShop_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).BuyFromShop(ctx, req.(*BuyFromShopRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IdentityService_SellToShop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SellToShopRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).SellToShop(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_SellToShop_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).SellToShop(ctx, req.(*SellToShopRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IdentityService_ServiceDesc is the grpc.ServiceDesc for IdentityService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -399,6 +485,14 @@ var IdentityService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UseItem",
 			Handler:    _IdentityService_UseItem_Handler,
+		},
+		{
+			MethodName: "BuyFromShop",
+			Handler:    _IdentityService_BuyFromShop_Handler,
+		},
+		{
+			MethodName: "SellToShop",
+			Handler:    _IdentityService_SellToShop_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

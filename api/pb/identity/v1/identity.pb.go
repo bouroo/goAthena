@@ -142,6 +142,116 @@ func (AuthResult) EnumDescriptor() ([]byte, []int) {
 	return file_identity_v1_identity_proto_rawDescGZIP(), []int{1}
 }
 
+// BuyResult mirrors economy domain.BuyResult. UNSPECIFIED is reserved
+// for "we forgot to set the result" and should never reach the wire.
+type BuyResult int32
+
+const (
+	BuyResult_BUY_RESULT_UNSPECIFIED       BuyResult = 0
+	BuyResult_BUY_RESULT_OK                BuyResult = 1
+	BuyResult_BUY_RESULT_INSUFFICIENT_ZENY BuyResult = 2
+	BuyResult_BUY_RESULT_LOCK_BUSY         BuyResult = 3
+)
+
+// Enum value maps for BuyResult.
+var (
+	BuyResult_name = map[int32]string{
+		0: "BUY_RESULT_UNSPECIFIED",
+		1: "BUY_RESULT_OK",
+		2: "BUY_RESULT_INSUFFICIENT_ZENY",
+		3: "BUY_RESULT_LOCK_BUSY",
+	}
+	BuyResult_value = map[string]int32{
+		"BUY_RESULT_UNSPECIFIED":       0,
+		"BUY_RESULT_OK":                1,
+		"BUY_RESULT_INSUFFICIENT_ZENY": 2,
+		"BUY_RESULT_LOCK_BUSY":         3,
+	}
+)
+
+func (x BuyResult) Enum() *BuyResult {
+	p := new(BuyResult)
+	*p = x
+	return p
+}
+
+func (x BuyResult) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BuyResult) Descriptor() protoreflect.EnumDescriptor {
+	return file_identity_v1_identity_proto_enumTypes[2].Descriptor()
+}
+
+func (BuyResult) Type() protoreflect.EnumType {
+	return &file_identity_v1_identity_proto_enumTypes[2]
+}
+
+func (x BuyResult) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BuyResult.Descriptor instead.
+func (BuyResult) EnumDescriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{2}
+}
+
+// SellResult mirrors economy domain.SellResult.
+type SellResult int32
+
+const (
+	SellResult_SELL_RESULT_UNSPECIFIED  SellResult = 0
+	SellResult_SELL_RESULT_OK           SellResult = 1
+	SellResult_SELL_RESULT_ZENY_FULL    SellResult = 2
+	SellResult_SELL_RESULT_INVALID_ITEM SellResult = 3
+	SellResult_SELL_RESULT_LOCK_BUSY    SellResult = 4
+)
+
+// Enum value maps for SellResult.
+var (
+	SellResult_name = map[int32]string{
+		0: "SELL_RESULT_UNSPECIFIED",
+		1: "SELL_RESULT_OK",
+		2: "SELL_RESULT_ZENY_FULL",
+		3: "SELL_RESULT_INVALID_ITEM",
+		4: "SELL_RESULT_LOCK_BUSY",
+	}
+	SellResult_value = map[string]int32{
+		"SELL_RESULT_UNSPECIFIED":  0,
+		"SELL_RESULT_OK":           1,
+		"SELL_RESULT_ZENY_FULL":    2,
+		"SELL_RESULT_INVALID_ITEM": 3,
+		"SELL_RESULT_LOCK_BUSY":    4,
+	}
+)
+
+func (x SellResult) Enum() *SellResult {
+	p := new(SellResult)
+	*p = x
+	return p
+}
+
+func (x SellResult) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SellResult) Descriptor() protoreflect.EnumDescriptor {
+	return file_identity_v1_identity_proto_enumTypes[3].Descriptor()
+}
+
+func (SellResult) Type() protoreflect.EnumType {
+	return &file_identity_v1_identity_proto_enumTypes[3]
+}
+
+func (x SellResult) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SellResult.Descriptor instead.
+func (SellResult) EnumDescriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{3}
+}
+
 type AuthenticateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
@@ -1599,6 +1709,373 @@ func (x *UseItemResponse) GetError() string {
 	return ""
 }
 
+// ShopOrder is a single line item in a buy transaction. UnitPrice is
+// carried over the wire so the server has a stable receipt even if the
+// gateway recomputes it; the server still validates against its own
+// catalog (D-204) before committing.
+type ShopOrder struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ItemId        uint32                 `protobuf:"varint,1,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	Amount        uint32                 `protobuf:"varint,2,opt,name=amount,proto3" json:"amount,omitempty"`
+	UnitPrice     uint32                 `protobuf:"varint,3,opt,name=unit_price,json=unitPrice,proto3" json:"unit_price,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShopOrder) Reset() {
+	*x = ShopOrder{}
+	mi := &file_identity_v1_identity_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShopOrder) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShopOrder) ProtoMessage() {}
+
+func (x *ShopOrder) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShopOrder.ProtoReflect.Descriptor instead.
+func (*ShopOrder) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ShopOrder) GetItemId() uint32 {
+	if x != nil {
+		return x.ItemId
+	}
+	return 0
+}
+
+func (x *ShopOrder) GetAmount() uint32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+func (x *ShopOrder) GetUnitPrice() uint32 {
+	if x != nil {
+		return x.UnitPrice
+	}
+	return 0
+}
+
+// SellLine is a single line item in a sell transaction. inv_id is the
+// inventory row id (the `id` column of the `inventory` table), not a
+// wire slot index.
+type SellLine struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InvId         uint32                 `protobuf:"varint,1,opt,name=inv_id,json=invId,proto3" json:"inv_id,omitempty"`
+	Amount        uint32                 `protobuf:"varint,2,opt,name=amount,proto3" json:"amount,omitempty"`
+	UnitPrice     uint32                 `protobuf:"varint,3,opt,name=unit_price,json=unitPrice,proto3" json:"unit_price,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SellLine) Reset() {
+	*x = SellLine{}
+	mi := &file_identity_v1_identity_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SellLine) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SellLine) ProtoMessage() {}
+
+func (x *SellLine) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SellLine.ProtoReflect.Descriptor instead.
+func (*SellLine) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *SellLine) GetInvId() uint32 {
+	if x != nil {
+		return x.InvId
+	}
+	return 0
+}
+
+func (x *SellLine) GetAmount() uint32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+func (x *SellLine) GetUnitPrice() uint32 {
+	if x != nil {
+		return x.UnitPrice
+	}
+	return 0
+}
+
+type BuyFromShopRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"` // defensive cross-check (mirror GetInventoryRequest)
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	Orders        []*ShopOrder           `protobuf:"bytes,3,rep,name=orders,proto3" json:"orders,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuyFromShopRequest) Reset() {
+	*x = BuyFromShopRequest{}
+	mi := &file_identity_v1_identity_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuyFromShopRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuyFromShopRequest) ProtoMessage() {}
+
+func (x *BuyFromShopRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuyFromShopRequest.ProtoReflect.Descriptor instead.
+func (*BuyFromShopRequest) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *BuyFromShopRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *BuyFromShopRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *BuyFromShopRequest) GetOrders() []*ShopOrder {
+	if x != nil {
+		return x.Orders
+	}
+	return nil
+}
+
+type BuyFromShopResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Result        BuyResult              `protobuf:"varint,1,opt,name=result,proto3,enum=identity.v1.BuyResult" json:"result,omitempty"`
+	NewZeny       uint32                 `protobuf:"varint,2,opt,name=new_zeny,json=newZeny,proto3" json:"new_zeny,omitempty"` // post-tx balance (0 on non-OK); gateway emits ZC_*PAR_CHANGE
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`                     // populated only on transport/internal failure paths
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuyFromShopResponse) Reset() {
+	*x = BuyFromShopResponse{}
+	mi := &file_identity_v1_identity_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuyFromShopResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuyFromShopResponse) ProtoMessage() {}
+
+func (x *BuyFromShopResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuyFromShopResponse.ProtoReflect.Descriptor instead.
+func (*BuyFromShopResponse) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *BuyFromShopResponse) GetResult() BuyResult {
+	if x != nil {
+		return x.Result
+	}
+	return BuyResult_BUY_RESULT_UNSPECIFIED
+}
+
+func (x *BuyFromShopResponse) GetNewZeny() uint32 {
+	if x != nil {
+		return x.NewZeny
+	}
+	return 0
+}
+
+func (x *BuyFromShopResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type SellToShopRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	Sales         []*SellLine            `protobuf:"bytes,3,rep,name=sales,proto3" json:"sales,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SellToShopRequest) Reset() {
+	*x = SellToShopRequest{}
+	mi := &file_identity_v1_identity_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SellToShopRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SellToShopRequest) ProtoMessage() {}
+
+func (x *SellToShopRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SellToShopRequest.ProtoReflect.Descriptor instead.
+func (*SellToShopRequest) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *SellToShopRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *SellToShopRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *SellToShopRequest) GetSales() []*SellLine {
+	if x != nil {
+		return x.Sales
+	}
+	return nil
+}
+
+type SellToShopResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Result        SellResult             `protobuf:"varint,1,opt,name=result,proto3,enum=identity.v1.SellResult" json:"result,omitempty"`
+	NewZeny       uint32                 `protobuf:"varint,2,opt,name=new_zeny,json=newZeny,proto3" json:"new_zeny,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SellToShopResponse) Reset() {
+	*x = SellToShopResponse{}
+	mi := &file_identity_v1_identity_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SellToShopResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SellToShopResponse) ProtoMessage() {}
+
+func (x *SellToShopResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SellToShopResponse.ProtoReflect.Descriptor instead.
+func (*SellToShopResponse) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *SellToShopResponse) GetResult() SellResult {
+	if x != nil {
+		return x.Result
+	}
+	return SellResult_SELL_RESULT_UNSPECIFIED
+}
+
+func (x *SellToShopResponse) GetNewZeny() uint32 {
+	if x != nil {
+		return x.NewZeny
+	}
+	return 0
+}
+
+func (x *SellToShopResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_identity_v1_identity_proto protoreflect.FileDescriptor
 
 const file_identity_v1_identity_proto_rawDesc = "" +
@@ -1744,7 +2221,35 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x17\n" +
 	"\aitem_id\x18\x02 \x01(\rR\x06itemId\x12)\n" +
 	"\x10remaining_amount\x18\x03 \x01(\rR\x0fremainingAmount\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error*\xba\x01\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"[\n" +
+	"\tShopOrder\x12\x17\n" +
+	"\aitem_id\x18\x01 \x01(\rR\x06itemId\x12\x16\n" +
+	"\x06amount\x18\x02 \x01(\rR\x06amount\x12\x1d\n" +
+	"\n" +
+	"unit_price\x18\x03 \x01(\rR\tunitPrice\"X\n" +
+	"\bSellLine\x12\x15\n" +
+	"\x06inv_id\x18\x01 \x01(\rR\x05invId\x12\x16\n" +
+	"\x06amount\x18\x02 \x01(\rR\x06amount\x12\x1d\n" +
+	"\n" +
+	"unit_price\x18\x03 \x01(\rR\tunitPrice\"|\n" +
+	"\x12BuyFromShopRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\x12.\n" +
+	"\x06orders\x18\x03 \x03(\v2\x16.identity.v1.ShopOrderR\x06orders\"v\n" +
+	"\x13BuyFromShopResponse\x12.\n" +
+	"\x06result\x18\x01 \x01(\x0e2\x16.identity.v1.BuyResultR\x06result\x12\x19\n" +
+	"\bnew_zeny\x18\x02 \x01(\rR\anewZeny\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"x\n" +
+	"\x11SellToShopRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\x12+\n" +
+	"\x05sales\x18\x03 \x03(\v2\x15.identity.v1.SellLineR\x05sales\"v\n" +
+	"\x12SellToShopResponse\x12/\n" +
+	"\x06result\x18\x01 \x01(\x0e2\x17.identity.v1.SellResultR\x06result\x12\x19\n" +
+	"\bnew_zeny\x18\x02 \x01(\rR\anewZeny\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error*\xba\x01\n" +
 	"\n" +
 	"AuthMethod\x12\x1b\n" +
 	"\x17AUTH_METHOD_UNSPECIFIED\x10\x00\x12\x18\n" +
@@ -1761,7 +2266,19 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\x14AUTH_RESULT_REJECTED\x10\x02\x12\x16\n" +
 	"\x12AUTH_RESULT_BANNED\x10\x03\x12!\n" +
 	"\x1dAUTH_RESULT_ALREADY_LOGGED_IN\x10\x04\x12\x1d\n" +
-	"\x19AUTH_RESULT_SERVER_CLOSED\x10\x052\xd5\x04\n" +
+	"\x19AUTH_RESULT_SERVER_CLOSED\x10\x05*v\n" +
+	"\tBuyResult\x12\x1a\n" +
+	"\x16BUY_RESULT_UNSPECIFIED\x10\x00\x12\x11\n" +
+	"\rBUY_RESULT_OK\x10\x01\x12 \n" +
+	"\x1cBUY_RESULT_INSUFFICIENT_ZENY\x10\x02\x12\x18\n" +
+	"\x14BUY_RESULT_LOCK_BUSY\x10\x03*\x91\x01\n" +
+	"\n" +
+	"SellResult\x12\x1b\n" +
+	"\x17SELL_RESULT_UNSPECIFIED\x10\x00\x12\x12\n" +
+	"\x0eSELL_RESULT_OK\x10\x01\x12\x19\n" +
+	"\x15SELL_RESULT_ZENY_FULL\x10\x02\x12\x1c\n" +
+	"\x18SELL_RESULT_INVALID_ITEM\x10\x03\x12\x19\n" +
+	"\x15SELL_RESULT_LOCK_BUSY\x10\x042\xf6\x05\n" +
 	"\x0fIdentityService\x12S\n" +
 	"\fAuthenticate\x12 .identity.v1.AuthenticateRequest\x1a!.identity.v1.AuthenticateResponse\x12_\n" +
 	"\x10GetCharacterList\x12$.identity.v1.GetCharacterListRequest\x1a%.identity.v1.GetCharacterListResponse\x12S\n" +
@@ -1769,7 +2286,10 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\fGetInventory\x12 .identity.v1.GetInventoryRequest\x1a!.identity.v1.GetInventoryResponse\x12J\n" +
 	"\tEquipItem\x12\x1d.identity.v1.EquipItemRequest\x1a\x1e.identity.v1.EquipItemResponse\x12P\n" +
 	"\vUnequipItem\x12\x1f.identity.v1.UnequipItemRequest\x1a .identity.v1.UnequipItemResponse\x12D\n" +
-	"\aUseItem\x12\x1b.identity.v1.UseItemRequest\x1a\x1c.identity.v1.UseItemResponseB:Z8github.com/bouroo/goAthena/api/pb/identity/v1;identityv1b\x06proto3"
+	"\aUseItem\x12\x1b.identity.v1.UseItemRequest\x1a\x1c.identity.v1.UseItemResponse\x12P\n" +
+	"\vBuyFromShop\x12\x1f.identity.v1.BuyFromShopRequest\x1a .identity.v1.BuyFromShopResponse\x12M\n" +
+	"\n" +
+	"SellToShop\x12\x1e.identity.v1.SellToShopRequest\x1a\x1f.identity.v1.SellToShopResponseB:Z8github.com/bouroo/goAthena/api/pb/identity/v1;identityv1b\x06proto3"
 
 var (
 	file_identity_v1_identity_proto_rawDescOnce sync.Once
@@ -1783,56 +2303,72 @@ func file_identity_v1_identity_proto_rawDescGZIP() []byte {
 	return file_identity_v1_identity_proto_rawDescData
 }
 
-var file_identity_v1_identity_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_identity_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_identity_v1_identity_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_identity_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_identity_v1_identity_proto_goTypes = []any{
 	(AuthMethod)(0),                  // 0: identity.v1.AuthMethod
 	(AuthResult)(0),                  // 1: identity.v1.AuthResult
-	(*AuthenticateRequest)(nil),      // 2: identity.v1.AuthenticateRequest
-	(*AuthenticateResponse)(nil),     // 3: identity.v1.AuthenticateResponse
-	(*CharServerInfo)(nil),           // 4: identity.v1.CharServerInfo
-	(*GetCharacterListRequest)(nil),  // 5: identity.v1.GetCharacterListRequest
-	(*CharacterInfo)(nil),            // 6: identity.v1.CharacterInfo
-	(*GetCharacterListResponse)(nil), // 7: identity.v1.GetCharacterListResponse
-	(*GetCharacterRequest)(nil),      // 8: identity.v1.GetCharacterRequest
-	(*CharacterDetail)(nil),          // 9: identity.v1.CharacterDetail
-	(*GetCharacterResponse)(nil),     // 10: identity.v1.GetCharacterResponse
-	(*GetInventoryRequest)(nil),      // 11: identity.v1.GetInventoryRequest
-	(*InventoryItem)(nil),            // 12: identity.v1.InventoryItem
-	(*GetInventoryResponse)(nil),     // 13: identity.v1.GetInventoryResponse
-	(*EquipItemRequest)(nil),         // 14: identity.v1.EquipItemRequest
-	(*EquipItemResponse)(nil),        // 15: identity.v1.EquipItemResponse
-	(*UnequipItemRequest)(nil),       // 16: identity.v1.UnequipItemRequest
-	(*UnequipItemResponse)(nil),      // 17: identity.v1.UnequipItemResponse
-	(*UseItemRequest)(nil),           // 18: identity.v1.UseItemRequest
-	(*UseItemResponse)(nil),          // 19: identity.v1.UseItemResponse
+	(BuyResult)(0),                   // 2: identity.v1.BuyResult
+	(SellResult)(0),                  // 3: identity.v1.SellResult
+	(*AuthenticateRequest)(nil),      // 4: identity.v1.AuthenticateRequest
+	(*AuthenticateResponse)(nil),     // 5: identity.v1.AuthenticateResponse
+	(*CharServerInfo)(nil),           // 6: identity.v1.CharServerInfo
+	(*GetCharacterListRequest)(nil),  // 7: identity.v1.GetCharacterListRequest
+	(*CharacterInfo)(nil),            // 8: identity.v1.CharacterInfo
+	(*GetCharacterListResponse)(nil), // 9: identity.v1.GetCharacterListResponse
+	(*GetCharacterRequest)(nil),      // 10: identity.v1.GetCharacterRequest
+	(*CharacterDetail)(nil),          // 11: identity.v1.CharacterDetail
+	(*GetCharacterResponse)(nil),     // 12: identity.v1.GetCharacterResponse
+	(*GetInventoryRequest)(nil),      // 13: identity.v1.GetInventoryRequest
+	(*InventoryItem)(nil),            // 14: identity.v1.InventoryItem
+	(*GetInventoryResponse)(nil),     // 15: identity.v1.GetInventoryResponse
+	(*EquipItemRequest)(nil),         // 16: identity.v1.EquipItemRequest
+	(*EquipItemResponse)(nil),        // 17: identity.v1.EquipItemResponse
+	(*UnequipItemRequest)(nil),       // 18: identity.v1.UnequipItemRequest
+	(*UnequipItemResponse)(nil),      // 19: identity.v1.UnequipItemResponse
+	(*UseItemRequest)(nil),           // 20: identity.v1.UseItemRequest
+	(*UseItemResponse)(nil),          // 21: identity.v1.UseItemResponse
+	(*ShopOrder)(nil),                // 22: identity.v1.ShopOrder
+	(*SellLine)(nil),                 // 23: identity.v1.SellLine
+	(*BuyFromShopRequest)(nil),       // 24: identity.v1.BuyFromShopRequest
+	(*BuyFromShopResponse)(nil),      // 25: identity.v1.BuyFromShopResponse
+	(*SellToShopRequest)(nil),        // 26: identity.v1.SellToShopRequest
+	(*SellToShopResponse)(nil),       // 27: identity.v1.SellToShopResponse
 }
 var file_identity_v1_identity_proto_depIdxs = []int32{
 	0,  // 0: identity.v1.AuthenticateRequest.method:type_name -> identity.v1.AuthMethod
 	1,  // 1: identity.v1.AuthenticateResponse.result:type_name -> identity.v1.AuthResult
-	4,  // 2: identity.v1.AuthenticateResponse.char_servers:type_name -> identity.v1.CharServerInfo
-	6,  // 3: identity.v1.GetCharacterListResponse.characters:type_name -> identity.v1.CharacterInfo
-	9,  // 4: identity.v1.GetCharacterResponse.character:type_name -> identity.v1.CharacterDetail
-	12, // 5: identity.v1.GetInventoryResponse.items:type_name -> identity.v1.InventoryItem
-	2,  // 6: identity.v1.IdentityService.Authenticate:input_type -> identity.v1.AuthenticateRequest
-	5,  // 7: identity.v1.IdentityService.GetCharacterList:input_type -> identity.v1.GetCharacterListRequest
-	8,  // 8: identity.v1.IdentityService.GetCharacter:input_type -> identity.v1.GetCharacterRequest
-	11, // 9: identity.v1.IdentityService.GetInventory:input_type -> identity.v1.GetInventoryRequest
-	14, // 10: identity.v1.IdentityService.EquipItem:input_type -> identity.v1.EquipItemRequest
-	16, // 11: identity.v1.IdentityService.UnequipItem:input_type -> identity.v1.UnequipItemRequest
-	18, // 12: identity.v1.IdentityService.UseItem:input_type -> identity.v1.UseItemRequest
-	3,  // 13: identity.v1.IdentityService.Authenticate:output_type -> identity.v1.AuthenticateResponse
-	7,  // 14: identity.v1.IdentityService.GetCharacterList:output_type -> identity.v1.GetCharacterListResponse
-	10, // 15: identity.v1.IdentityService.GetCharacter:output_type -> identity.v1.GetCharacterResponse
-	13, // 16: identity.v1.IdentityService.GetInventory:output_type -> identity.v1.GetInventoryResponse
-	15, // 17: identity.v1.IdentityService.EquipItem:output_type -> identity.v1.EquipItemResponse
-	17, // 18: identity.v1.IdentityService.UnequipItem:output_type -> identity.v1.UnequipItemResponse
-	19, // 19: identity.v1.IdentityService.UseItem:output_type -> identity.v1.UseItemResponse
-	13, // [13:20] is the sub-list for method output_type
-	6,  // [6:13] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	6,  // 2: identity.v1.AuthenticateResponse.char_servers:type_name -> identity.v1.CharServerInfo
+	8,  // 3: identity.v1.GetCharacterListResponse.characters:type_name -> identity.v1.CharacterInfo
+	11, // 4: identity.v1.GetCharacterResponse.character:type_name -> identity.v1.CharacterDetail
+	14, // 5: identity.v1.GetInventoryResponse.items:type_name -> identity.v1.InventoryItem
+	22, // 6: identity.v1.BuyFromShopRequest.orders:type_name -> identity.v1.ShopOrder
+	2,  // 7: identity.v1.BuyFromShopResponse.result:type_name -> identity.v1.BuyResult
+	23, // 8: identity.v1.SellToShopRequest.sales:type_name -> identity.v1.SellLine
+	3,  // 9: identity.v1.SellToShopResponse.result:type_name -> identity.v1.SellResult
+	4,  // 10: identity.v1.IdentityService.Authenticate:input_type -> identity.v1.AuthenticateRequest
+	7,  // 11: identity.v1.IdentityService.GetCharacterList:input_type -> identity.v1.GetCharacterListRequest
+	10, // 12: identity.v1.IdentityService.GetCharacter:input_type -> identity.v1.GetCharacterRequest
+	13, // 13: identity.v1.IdentityService.GetInventory:input_type -> identity.v1.GetInventoryRequest
+	16, // 14: identity.v1.IdentityService.EquipItem:input_type -> identity.v1.EquipItemRequest
+	18, // 15: identity.v1.IdentityService.UnequipItem:input_type -> identity.v1.UnequipItemRequest
+	20, // 16: identity.v1.IdentityService.UseItem:input_type -> identity.v1.UseItemRequest
+	24, // 17: identity.v1.IdentityService.BuyFromShop:input_type -> identity.v1.BuyFromShopRequest
+	26, // 18: identity.v1.IdentityService.SellToShop:input_type -> identity.v1.SellToShopRequest
+	5,  // 19: identity.v1.IdentityService.Authenticate:output_type -> identity.v1.AuthenticateResponse
+	9,  // 20: identity.v1.IdentityService.GetCharacterList:output_type -> identity.v1.GetCharacterListResponse
+	12, // 21: identity.v1.IdentityService.GetCharacter:output_type -> identity.v1.GetCharacterResponse
+	15, // 22: identity.v1.IdentityService.GetInventory:output_type -> identity.v1.GetInventoryResponse
+	17, // 23: identity.v1.IdentityService.EquipItem:output_type -> identity.v1.EquipItemResponse
+	19, // 24: identity.v1.IdentityService.UnequipItem:output_type -> identity.v1.UnequipItemResponse
+	21, // 25: identity.v1.IdentityService.UseItem:output_type -> identity.v1.UseItemResponse
+	25, // 26: identity.v1.IdentityService.BuyFromShop:output_type -> identity.v1.BuyFromShopResponse
+	27, // 27: identity.v1.IdentityService.SellToShop:output_type -> identity.v1.SellToShopResponse
+	19, // [19:28] is the sub-list for method output_type
+	10, // [10:19] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_identity_v1_identity_proto_init() }
@@ -1845,8 +2381,8 @@ func file_identity_v1_identity_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_identity_v1_identity_proto_rawDesc), len(file_identity_v1_identity_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   18,
+			NumEnums:      4,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

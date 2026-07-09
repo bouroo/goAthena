@@ -20,6 +20,7 @@ import (
 
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
 	"github.com/bouroo/goAthena/internal/config"
+	economydi "github.com/bouroo/goAthena/internal/features/economy/di"
 	"github.com/bouroo/goAthena/internal/features/identity/domain"
 	"github.com/bouroo/goAthena/internal/features/identity/handler"
 	"github.com/bouroo/goAthena/internal/features/identity/repository"
@@ -31,7 +32,9 @@ import (
 // Register wires the identity feature (login, char roster, warehouse
 // lock) into the DI container. It depends on *config.Config, *gorm.DB,
 // valkeygo.Client, *grpc.Server and *zerolog.Logger being already
-// registered.
+// registered. It also resolves the economy ShopService from the
+// container, so economydi.Register must run first (the identity
+// composition root in internal/app/identity enforces this order).
 func Register(c do.Injector) error {
 	cfg := do.MustInvoke[*config.Config](c)
 	db := do.MustInvoke[*gorm.DB](c)
@@ -56,7 +59,12 @@ func Register(c do.Injector) error {
 		inventorydomain.ZeroItemWeight{},
 	)
 
-	identityv1.RegisterIdentityServiceServer(grpcServer, handler.NewGRPCHandler(identitySvc))
+	shopSvc, err := economydi.ProvideShopService(c)
+	if err != nil {
+		return fmt.Errorf("resolve economy shop service: %w", err)
+	}
+
+	identityv1.RegisterIdentityServiceServer(grpcServer, handler.NewGRPCHandler(identitySvc, shopSvc))
 
 	do.ProvideValue(c, warehouseLock)
 	do.ProvideValue(c, identitySvc)
