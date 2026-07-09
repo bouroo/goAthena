@@ -118,6 +118,16 @@ func (r *zenyRepo) ExecuteSellTx(ctx context.Context, charID uint32, totalCredit
 				}
 				return fmt.Errorf("lock inv row %d: %w", sale.InvID, err)
 			}
+			if inv.Amount < sale.Amount {
+				// Player tried to sell more than they own. Without this
+				// guard the `else` branch below would silently delete the
+				// row AND the caller has already credited totalCredit for
+				// the inflated quantity — an infinite-zeny exploit.
+				// Map to ErrItemNotFound so the service layer surfaces
+				// SellFailInvalidItem (a clean business outcome) instead
+				// of committing an over-credit.
+				return fmt.Errorf("%w: invID=%d has=%d want=%d", inventorydomain.ErrItemNotFound, sale.InvID, inv.Amount, sale.Amount)
+			}
 			if inv.Amount > sale.Amount {
 				if err := tx.Model(&inv).Update(amountColumn, inv.Amount-sale.Amount).Error; err != nil {
 					return fmt.Errorf("decrement inv row %d: %w", sale.InvID, err)

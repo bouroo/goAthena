@@ -161,9 +161,21 @@ func (s *shopService) acquire(ctx context.Context, charID uint32) (string, acqui
 	}
 }
 
+// releaseTimeout bounds the detached Release call so a hung lock server
+// can't wedge the deferred cleanup path indefinitely.
+const releaseTimeout = 2 * time.Second
+
 // release best-effort releases the lock. A release failure is logged via
 // the error return but must not override the transaction outcome, so
 // callers invoke it via defer and discard the value.
+//
+// The call uses context.WithoutCancel on the request ctx: if the request
+// was cancelled (client disconnect, deadline exceeded) before the deferred
+// release ran, passing the raw ctx would cause Release to fail immediately
+// and the lock would leak until its TTL expired. We detach from parent
+// cancellation and apply a short timeout so the cleanup still completes.
 func (s *shopService) release(ctx context.Context, charID uint32, token string) {
-	_ = s.locks.Release(ctx, domain.CharLockKey(charID), token)
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
+	_ = s.locks.Release(releaseCtx, domain.CharLockKey(charID), token)
 }

@@ -40,6 +40,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -2681,29 +2682,46 @@ func (h *DispatchHandler) handleCZAckSelectDealType(ctx context.Context, conn *d
 	}
 }
 
-// sellPriceCatalog returns the (itemid → buyPrice) catalog rAthena
-// uses to compute the sell-price floor for the sell window. The
-// gateway uses the union of every NPC's ShopItems (D-213) so an item
-// that's not stocked by the active shop NPC still gets a sensible
-// sell price based on a different shop's offer.
+// sellCatalog holds the (itemid → buyPrice) catalog rAthena uses to
+// compute the sell-price floor for the sell window. The gateway uses
+// the union of every NPC's ShopItems (D-213) so an item that's not
+// stocked by the active shop NPC still gets a sensible sell price
+// based on a different shop's offer. Computed once via sellCatalogOnce
+// because npcSpawns is static (loaded at startup); rebuilding the map
+// on every sell request would iterate every NPC's ShopItems needlessly.
 //
-// The returned map is safe to mutate; callers do not share the
-// slice header.
+// The map is SHARED READ-ONLY across goroutines and across every
+// sellPriceCatalog() call. Callers MUST NOT mutate it — mutation would
+// race with concurrent reads and would persist into every subsequent
+// sell response.
+var (
+	sellCatalog     map[uint32]uint32
+	sellCatalogOnce sync.Once
+)
+
+// sellPriceCatalog returns the cached (itemid → buyPrice) catalog.
+// The catalog is built lazily on the first call via sync.Once and
+// then shared read-only with every subsequent caller; because
+// npcSpawns is static (loaded at startup), rebuilding it would be
+// wasteful. First-write-wins preserves the catalog order: a later
+// NPC selling the same item at a different price does not override
+// the first entry, matching rAthena's "shop loads vendor prices at
+// startup" monotonicity.
+//
+// The returned map is SHARED READ-ONLY — callers MUST NOT mutate it.
 func sellPriceCatalog() map[uint32]uint32 {
-	cat := make(map[uint32]uint32)
-	for _, npc := range npcSpawns {
-		for _, it := range npc.ShopItems {
-			// First-write-wins preserves the catalog order; a
-			// later NPC selling the same item at a different
-			// price does not override the first entry, matching
-			// rAthena's "shop loads vendor prices at startup"
-			// monotonicity.
-			if _, ok := cat[it.ItemID]; !ok {
-				cat[it.ItemID] = it.Price
+	sellCatalogOnce.Do(func() {
+		cat := make(map[uint32]uint32)
+		for _, npc := range npcSpawns {
+			for _, it := range npc.ShopItems {
+				if _, ok := cat[it.ItemID]; !ok {
+					cat[it.ItemID] = it.Price
+				}
 			}
 		}
-	}
-	return cat
+		sellCatalog = cat
+	})
+	return sellCatalog
 }
 
 // handleCZAckSelectDealTypeSell handles the Sell branch of

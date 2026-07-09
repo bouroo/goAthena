@@ -219,4 +219,39 @@ func TestExecuteSellTx(t *testing.T) {
 		_, err := repo.ExecuteSellTx(context.Background(), 1, 500, []domain.SellLine{{InvID: 99, Amount: 5}})
 		assert.ErrorIs(t, err, inventorydomain.ErrItemNotFound)
 	})
+
+	// TestExecuteSellTx_OverSell_RejectsWithoutMutation is the regression
+	// for the infinite-zeny exploit: the locked inventory row has fewer
+	// items than sale.Amount. The repo MUST surface this as
+	// ErrItemNotFound (mapped by the service to SellFailInvalidItem) and
+	// MUST NOT delete the row, decrement it, or commit the zeny UPDATE —
+	// the transaction must roll back. The pre-fix code fell through to
+	// the `else` branch (inv.Amount <= sale.Amount) and silently deleted
+	// the row after the caller had already credited totalCredit.
+	//
+	// sqlmock is in strict mode: any unexpected SQL — in particular a
+	// DELETE FROM `inventory` or UPDATE `inventory` SET amount — fails
+	// the test.
+	t.Run("over-sell rejects without mutation", func(t *testing.T) {
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT \\* FROM `char` WHERE char_id = \\? ORDER BY `char`.`char_id` LIMIT \\? FOR UPDATE").
+			WithArgs(1, 1).
+			WillReturnRows(sqlmock.NewRows([]string{"char_id", "zeny"}).AddRow(1, 100))
+		mock.ExpectExec("UPDATE `char` SET `zeny`=\\? WHERE `char_id` = \\?").
+			WithArgs(600, 1).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		// Lock succeeds but the row only has 1 item — player tried to sell 5.
+		mock.ExpectQuery("SELECT \\* FROM `inventory` WHERE id = \\? ORDER BY `inventory`.`id` LIMIT \\? FOR UPDATE").
+			WithArgs(99, 1).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "amount"}).AddRow(99, 1))
+		// Guard trips; transaction rolls back. No DELETE, no UPDATE on inventory.
+		mock.ExpectRollback()
+
+		newZeny, err := repo.ExecuteSellTx(context.Background(), 1, 500, []domain.SellLine{{InvID: 99, Amount: 5}})
+		assert.ErrorIs(t, err, inventorydomain.ErrItemNotFound)
+		assert.Equal(t, uint32(0), newZeny)
+		// Belt-and-suspenders: sqlmock must have seen exactly the SQL we
+		// queued — no stray DELETE / UPDATE on inventory.
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
 }
