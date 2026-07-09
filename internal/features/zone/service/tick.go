@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/zone/domain"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
 	"github.com/bouroo/goAthena/pkg/ro/pathfinding"
@@ -47,6 +48,16 @@ type TickLoop struct {
 	// onEmpty is invoked once when the entity map transitions to empty
 	// AND no players remain. Wired by NewZoneService.
 	onEmpty func()
+
+	publisher domain.Publisher
+
+	// startWallMillis and startMono anchor the monotonic timestamp
+	// stream emitted in MoveStartTime. Wall time is frozen at
+	// construction; the elapsed offset is measured on the monotonic
+	// clock so NTP adjustments cannot make MoveStartTime jump
+	// backwards and break client-side path interpolation.
+	startWallMillis uint64
+	startMono       time.Time
 }
 
 // NewTickLoop builds a TickLoop for the given map. The grid manager and
@@ -57,6 +68,7 @@ func NewTickLoop(
 	mapData *romap.MapData,
 	tickRate time.Duration,
 	logger *zerolog.Logger,
+	publisher domain.Publisher,
 ) *TickLoop {
 	if mapData == nil {
 		panic(errors.New("zone: tick loop requires non-nil map data"))
@@ -67,18 +79,26 @@ func NewTickLoop(
 	if logger == nil {
 		panic(errors.New("zone: tick loop requires a logger"))
 	}
+	if publisher == nil {
+		panic(errors.New("zone: tick loop requires a publisher"))
+	}
 
 	grid := aoi.NewGridManager(mapData.Width, mapData.Height)
 	pf := pathfinding.New(pathfinding.FromMapData(mapData))
 
+	now := time.Now()
 	tl := &TickLoop{
-		entities: make(map[domain.EntityID]*domain.Entity),
-		grid:     grid,
-		pf:       pf,
-		mapData:  mapData,
-		tickRate: tickRate,
-		logger:   logger,
-		done:     make(chan struct{}),
+		entities:  make(map[domain.EntityID]*domain.Entity),
+		grid:      grid,
+		pf:        pf,
+		mapData:   mapData,
+		tickRate:  tickRate,
+		logger:    logger,
+		done:      make(chan struct{}),
+		publisher: publisher,
+
+		startWallMillis: uint64(now.UnixMilli()),
+		startMono:       now,
 	}
 
 	return tl
@@ -99,6 +119,16 @@ func (tl *TickLoop) Grid() *aoi.GridManager { return tl.grid }
 
 // TickRate returns the configured tick period.
 func (tl *TickLoop) TickRate() time.Duration { return tl.tickRate }
+
+// nowMillis returns a wall-clock-epoch millisecond timestamp that
+// increases strictly monotonically across the lifetime of the loop.
+// time.Since uses Go's monotonic clock, which is immune to NTP jumps
+// that can move wall time backwards; the frozen startWallMillis keeps
+// the emitted values in the epoch-millis space the client expects.
+func (tl *TickLoop) nowMillis() uint64 {
+	//nolint:gosec // elapsed is bounded above by process uptime; startWallMillis anchors an always-positive offset.
+	return tl.startWallMillis + uint64(time.Since(tl.startMono).Milliseconds())
+}
 
 // Start runs the tick loop until ctx is cancelled. Returns nil on clean
 // shutdown, ctx.Err() if context cancelled mid-loop. Safe to call once;
@@ -175,10 +205,11 @@ func (tl *TickLoop) tick(ctx context.Context) error {
 	tickRateMs := max(int(tl.tickRate/time.Millisecond), 1)
 
 	type pending struct {
-		id  domain.EntityID
-		x   int
-		y   int
-		typ domain.EntityType
+		id   domain.EntityID
+		x, y int
+		srcX int
+		srcY int
+		typ  domain.EntityType
 	}
 	var moves []pending
 
@@ -192,6 +223,7 @@ func (tl *TickLoop) tick(ctx context.Context) error {
 
 		next := e.Path[0]
 		e.Path = e.Path[1:]
+		srcX, srcY := e.X, e.Y
 		e.X = next.X
 		e.Y = next.Y
 		e.NextMoveTick = currentTick + moveInterval(e.MoveSpeed, tickRateMs)
@@ -200,7 +232,14 @@ func (tl *TickLoop) tick(ctx context.Context) error {
 			e.TargetY = 0
 		}
 
-		moves = append(moves, pending{id: id, x: e.X, y: e.Y, typ: e.Type})
+		moves = append(moves, pending{
+			id:   id,
+			x:    e.X,
+			y:    e.Y,
+			srcX: srcX,
+			srcY: srcY,
+			typ:  e.Type,
+		})
 	}
 	tl.mu.Unlock()
 
@@ -210,7 +249,21 @@ func (tl *TickLoop) tick(ctx context.Context) error {
 				Uint32("entity_id", uint32(m.id)).
 				Int("x", m.x).Int("y", m.y).
 				Msg("zone: AOI move failed")
+			continue
 		}
+		//nolint:gosec // uint32↔int map-coord casts are bounded by map dimensions; overflow impossible in practice.
+		tl.publish(ctx, &zonev1.ZoneEvent{
+			Event: &zonev1.ZoneEvent_Moved{
+				Moved: &zonev1.EntityMoved{
+					EntityId:      uint32(m.id),
+					DestX:         uint32(m.x),
+					DestY:         uint32(m.y),
+					SrcX:          uint32(m.srcX),
+					SrcY:          uint32(m.srcY),
+					MoveStartTime: tl.nowMillis(),
+				},
+			},
+		}, "move")
 	}
 
 	return nil
@@ -218,7 +271,11 @@ func (tl *TickLoop) tick(ctx context.Context) error {
 
 // addEntity registers a new entity. Returns (isFirst, err) where
 // isFirst indicates the entity map transitioned from empty (used to
-// trigger Agones.Allocate on the first player).
+// trigger Agones.Allocate on the first player). The ZoneEvent_Spawned
+// notification is published AFTER the lock is released and AFTER the
+// entity is fully registered, so subscribers always observe a state the
+// tick loop has already accepted. A publish failure is logged but never
+// propagates — the entity is still part of the zone.
 func (tl *TickLoop) addEntity(ctx context.Context, e *domain.Entity) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, fmt.Errorf("zone: add entity: %w", err)
@@ -228,8 +285,8 @@ func (tl *TickLoop) addEntity(ctx context.Context, e *domain.Entity) (bool, erro
 	}
 
 	tl.mu.Lock()
-	defer tl.mu.Unlock()
 	if _, exists := tl.entities[e.ID]; exists {
+		tl.mu.Unlock()
 		return false, fmt.Errorf("%w: id=%d", ErrEntityExists, e.ID)
 	}
 	wasEmpty := len(tl.entities) == 0
@@ -240,14 +297,37 @@ func (tl *TickLoop) addEntity(ctx context.Context, e *domain.Entity) (bool, erro
 		Y:    e.Y,
 	}
 	if err := tl.grid.AddEntity(aoiEnt); err != nil {
+		tl.mu.Unlock()
 		return false, fmt.Errorf("zone: AOI add: %w", err)
 	}
 	tl.entities[e.ID] = e
+	tl.mu.Unlock()
+
+	//nolint:gosec // uint32↔int map-coord casts are bounded by map dimensions; overflow impossible in practice.
+	tl.publish(ctx, &zonev1.ZoneEvent{
+		Event: &zonev1.ZoneEvent_Spawned{
+			Spawned: &zonev1.EntitySpawned{
+				EntityId:   uint32(e.ID),
+				EntityType: uint32(e.Type),
+				X:          uint32(e.X),
+				Y:          uint32(e.Y),
+				// Name is left empty: the domain.Entity model does not
+				// carry the player/mob display name. Step 2 (gateway)
+				// is expected to resolve names from a separate source
+				// when it consumes these events.
+				Name: "",
+			},
+		},
+	}, "spawn")
+
 	return wasEmpty, nil
 }
 
 // removeEntity removes an entity from both the tick loop and AOI grid.
-// Triggers onEmpty when the last player leaves.
+// Triggers onEmpty when the last player leaves. The ZoneEvent_Vanished
+// notification is published AFTER the entity is fully unregistered, and
+// outside the lock, to keep NATS traffic off the hot path. Publish
+// failures are logged but do not change the removal outcome.
 func (tl *TickLoop) removeEntity(ctx context.Context, id domain.EntityID) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("zone: remove entity: %w", err)
@@ -269,10 +349,36 @@ func (tl *TickLoop) removeEntity(ctx context.Context, id domain.EntityID) error 
 	}
 	tl.mu.Unlock()
 
+	tl.publish(ctx, &zonev1.ZoneEvent{
+		Event: &zonev1.ZoneEvent_Vanished{
+			Vanished: &zonev1.EntityVanished{
+				EntityId: uint32(id),
+				// 1 = logged out; future codes (teleport, out-of-sight)
+				// will be added by Step 2 / 3 when those vanish reasons
+				// are introduced.
+				Type: 1,
+			},
+		},
+	}, "vanish")
+
 	if isEmpty && hadPlayers && onEmpty != nil {
 		onEmpty()
 	}
 	return nil
+}
+
+// publish hands event to the zone Publisher, tagging the failure mode
+// for log filtering. It must be called with a context that is still
+// valid (typically the same ctx passed to addEntity/removeEntity/tick).
+// Publish failures are logged and deliberately swallowed: a dropped
+// NATS message must not fail a state mutation.
+func (tl *TickLoop) publish(ctx context.Context, event *zonev1.ZoneEvent, kind string) {
+	if err := tl.publisher.PublishEvent(ctx, tl.mapData.Name, event); err != nil {
+		tl.logger.Warn().
+			Err(err).
+			Str("kind", kind).
+			Msg("zone: publish event failed")
+	}
 }
 
 // hasPlayersLocked reports whether the zone currently contains any

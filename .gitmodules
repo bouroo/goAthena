@@ -1,0 +1,4 @@
+[submodule "third_party/rathena"]
+	path = third_party/rathena
+	url = https://github.com/rathena/rathena.git
+	branch = master

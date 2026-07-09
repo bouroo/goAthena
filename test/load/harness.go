@@ -14,10 +14,13 @@
 package load
 
 import (
+	"context"
 	"math/rand/v2"
 	"slices"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/bouroo/goAthena/internal/features/zone/domain"
 	"github.com/bouroo/goAthena/internal/features/zone/service"
@@ -107,6 +110,17 @@ func silentLogger() *zerolog.Logger {
 	return &l
 }
 
+// nopPublisher is a no-op domain.Publisher. The load harness measures
+// pure tick-compute latency and does not exercise the broadcast path,
+// so the publisher is wired up only to satisfy NewTickLoop's signature.
+type nopPublisher struct{}
+
+func (nopPublisher) PublishEvent(_ context.Context, _ string, _ proto.Message) error {
+	return nil
+}
+
+var _ domain.Publisher = nopPublisher{}
+
 // newLoadRand returns a reproducible PCG-backed *rand.Rand.
 func newLoadRand() *rand.Rand {
 	//nolint:gosec // deterministic PRNG on purpose: reproducible load runs, not security.
@@ -118,7 +132,7 @@ func newLoadRand() *rand.Rand {
 func SetupLoadTest(tb testing.TB, cfg LoadTestConfig) *service.TickLoop {
 	tb.Helper()
 	md := woeMap(cfg.MapWidth, cfg.MapHeight)
-	tl := service.NewTickLoop(md, loadTestTickRate, silentLogger())
+	tl := service.NewTickLoop(md, loadTestTickRate, silentLogger(), nopPublisher{})
 	PopulateEntities(tl, cfg)
 	return tl
 }

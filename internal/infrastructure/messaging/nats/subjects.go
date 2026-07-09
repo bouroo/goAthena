@@ -26,6 +26,11 @@ const (
 	// SubjectAnnounce is the global broadcast subject for system messages.
 	// No wildcard suffix: every subscriber sees every message.
 	SubjectAnnounce = "global.announce"
+
+	// SubjectZoneEventPrefix is the prefix for zone events (e.g., EntityMoved,
+	// EntitySpawned). Events are partitioned by map name so subscribers (Gateway)
+	// only listen to the maps they care about.
+	SubjectZoneEventPrefix = "zone.event"
 )
 
 // Subject fragments appended to a prefix for request/reply shapes.
@@ -85,6 +90,13 @@ func PartySubject(partyID uint32) string {
 //	GuildSubject(7) -> "social.guild.7"
 func GuildSubject(guildID uint32) string {
 	return SubjectGuildPrefix + "." + strconv.FormatUint(uint64(guildID), 10)
+}
+
+// ZoneEventSubject returns the subject for events occurring on a specific map.
+//
+//	ZoneEventSubject("prontera") -> "zone.event.prontera"
+func ZoneEventSubject(mapName string) string {
+	return SubjectZoneEventPrefix + "." + sanitizeToken(mapName)
 }
 
 // sanitizeToken replaces NATS wildcard and delimiter characters (".", ">", "*")

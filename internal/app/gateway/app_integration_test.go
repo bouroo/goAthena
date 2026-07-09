@@ -1,5 +1,14 @@
-//go:build unit
+//go:build integration
 
+// Package gateway integration tests — these require a live NATS broker
+// (and the upstream identity/zone services, exercised indirectly via
+// the gateway composition root). The unit build tag is used for the
+// rest of the gateway tests; these integration cases only run under
+// `task test-integration`.
+//
+// TestRun_ShutdownOnContextCancel boots the full gateway composition
+// root (telemetry, NATS subscriber, TCP/WS handlers) and asserts that
+// Run returns cleanly when its context is cancelled mid-startup.
 package gateway
 
 import (
@@ -7,22 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bouroo/goAthena/internal/config"
 )
 
-func TestRun_NilConfig(t *testing.T) {
-	t.Parallel()
-
-	err := Run(context.Background(), nil)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "config is nil")
-}
-
-func TestRun_NATSConnectionFailure(t *testing.T) {
+func TestRun_ShutdownOnContextCancel(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{
@@ -58,7 +57,7 @@ func TestRun_NATSConnectionFailure(t *testing.T) {
 			ConnectTimeout: 5 * time.Second,
 		},
 		Valkey: config.ValkeyConfig{Host: "127.0.0.1", Port: 6379, DB: 0},
-		NATS:   config.NATSConfig{URL: "nats://127.0.0.1:63999", ConnectTimeout: 500 * time.Millisecond},
+		NATS:   config.NATSConfig{URL: "nats://127.0.0.1:4222", ConnectTimeout: 5 * time.Second},
 		OTel:   config.OTelConfig{Exporter: "none", ServiceName: "test", Sampling: 1.0},
 		Log:    config.LogConfig{Level: "info", Format: "json"},
 		Gateway: config.GatewayConfig{
@@ -76,11 +75,21 @@ func TestRun_NATSConnectionFailure(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 
-	err := Run(ctx, cfg)
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg) }()
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nats")
+	// Allow boot to complete (telemetry + NATS subscriber + TCP/WS).
+	time.Sleep(200 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return within 10s after context cancel")
+	}
 }

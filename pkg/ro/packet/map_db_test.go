@@ -43,6 +43,7 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCNOTIFYCHAT, "ZC_NOTIFY_CHAT", VariableLength, DirectionServerToClient},
 		{HeaderZCACTIONRESPONSE, "ZC_ACTION_RESPONSE", sizeZCActionResponse, DirectionServerToClient},
 		{HeaderZCSETUNITIDLE, "ZC_SET_UNIT_IDLE", sizeZCSetUnitIdle, DirectionServerToClient},
+		{HeaderZCUNITWALKING, "ZC_UNIT_WALKING", sizeZCUnitWalking, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -67,8 +68,8 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewMapServerDB()
-	// 15 C→S + 27 S→C = 42 (M18 adds ZC_NOTIFY_ACT and ZC_NOTIFY_VANISH).
-	const want = 42
+	// 15 C→S + 28 S→C = 43 (M-phase1 adds ZC_UNIT_WALKING).
+	const want = 43
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -112,6 +113,7 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCEMOTION, sizeZCEmotion},
 		{HeaderZCACKREQNAME, sizeZCAckReqName},
 		{HeaderZCSETUNITIDLE, sizeZCSetUnitIdle},
+		{HeaderZCUNITWALKING, sizeZCUnitWalking},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

@@ -25,6 +25,7 @@ import (
 
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
+	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -234,7 +235,7 @@ func TestWSHandler_LoginRoundTrip_ReturnsACAcceptLogin(t *testing.T) {
 	}
 
 	db := packet.NewLoginServerDB()
-	h := NewWSHandler(db, adapter, "unused", "/ws/",
+	h := NewWSHandler(db, adapter, service.NewSessionRegistry(), "unused", "/ws/",
 		zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.Disabled), nil)
 
 	mux := http.NewServeMux()

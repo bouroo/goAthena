@@ -134,6 +134,7 @@ tasks:
         -I api/proto
         api/proto/identity/v1/identity.proto
         api/proto/zone/v1/zone.proto
+        api/proto/zone/v1/event.proto
         api/proto/gateway/v1/gateway.proto
 
   migrate-up:

@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/bouroo/goAthena/internal/features/zone/domain"
 	"github.com/bouroo/goAthena/internal/features/zone/service"
@@ -22,6 +23,18 @@ func silentLogger() *zerolog.Logger {
 	l := zerolog.Nop()
 	return &l
 }
+
+// nopPublisher is a no-op domain.Publisher used by external tests in
+// this file. It mirrors the helper in publisher_testhelper_test.go but
+// lives here because the external test package cannot reference an
+// unexported type from the internal test package.
+type nopPublisher struct{}
+
+func (nopPublisher) PublishEvent(_ context.Context, _ string, _ proto.Message) error {
+	return nil
+}
+
+var _ domain.Publisher = nopPublisher{}
 
 func newSyntheticMap(name string, w, h int) *romap.MapData {
 	md := &romap.MapData{
@@ -40,7 +53,7 @@ func newSyntheticMap(name string, w, h int) *romap.MapData {
 func newZoneService(t *testing.T, tickRate time.Duration) (*service.ZoneService, *service.TickLoop) {
 	t.Helper()
 	md := newSyntheticMap("test", 100, 100)
-	tl := service.NewTickLoop(md, tickRate, silentLogger())
+	tl := service.NewTickLoop(md, tickRate, silentLogger(), nopPublisher{})
 	require.NotNil(t, tl)
 	ag := newCountingLifecycle()
 	zs := service.NewZoneService(tl, ag, 150, 0, silentLogger())
@@ -153,7 +166,7 @@ func TestZoneService_MoveEntityDestinationBlocked(t *testing.T) {
 	t.Parallel()
 	md := newSyntheticMap("test", 50, 50)
 	md.Walkable[25*50+25] = false // (25,25) is a wall
-	tl := service.NewTickLoop(md, 50*time.Millisecond, silentLogger())
+	tl := service.NewTickLoop(md, 50*time.Millisecond, silentLogger(), nopPublisher{})
 	zs := service.NewZoneService(tl, newCountingLifecycle(), 150, 0, silentLogger())
 	ctx := context.Background()
 
@@ -203,7 +216,7 @@ func TestZoneService_GetEntityUnknownErrors(t *testing.T) {
 func TestZoneService_AgonesAllocateOnFirstPlayer(t *testing.T) {
 	t.Parallel()
 	md := newSyntheticMap("test", 50, 50)
-	tl := service.NewTickLoop(md, 50*time.Millisecond, silentLogger())
+	tl := service.NewTickLoop(md, 50*time.Millisecond, silentLogger(), nopPublisher{})
 	ag := newCountingLifecycle()
 	zs := service.NewZoneService(tl, ag, 150, 0, silentLogger())
 	ctx := context.Background()
@@ -220,7 +233,7 @@ func TestZoneService_AgonesAllocateOnFirstPlayer(t *testing.T) {
 func TestZoneService_AgonesShutdownOnLastPlayerRemoved(t *testing.T) {
 	t.Parallel()
 	md := newSyntheticMap("test", 50, 50)
-	tl := service.NewTickLoop(md, 50*time.Millisecond, silentLogger())
+	tl := service.NewTickLoop(md, 50*time.Millisecond, silentLogger(), nopPublisher{})
 	ag := newCountingLifecycle()
 	zs := service.NewZoneService(tl, ag, 150, 0, silentLogger()) // grace=0 → immediate
 	ctx := context.Background()
@@ -244,7 +257,7 @@ func TestZoneService_AgonesShutdownOnLastPlayerRemoved(t *testing.T) {
 func TestZoneService_AgonesShutdownSkippedWhenMobOnly(t *testing.T) {
 	t.Parallel()
 	md := newSyntheticMap("test", 50, 50)
-	tl := service.NewTickLoop(md, 50*time.Millisecond, silentLogger())
+	tl := service.NewTickLoop(md, 50*time.Millisecond, silentLogger(), nopPublisher{})
 	ag := newCountingLifecycle()
 	zs := service.NewZoneService(tl, ag, 150, 0, silentLogger())
 	ctx := context.Background()

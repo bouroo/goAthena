@@ -22,7 +22,7 @@ func TestRun_NilConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "config is nil")
 }
 
-func TestRun_ShutdownOnContextCancel(t *testing.T) {
+func TestRun_NATSConnectionFailure(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{
@@ -58,7 +58,7 @@ func TestRun_ShutdownOnContextCancel(t *testing.T) {
 			ConnectTimeout: 5 * time.Second,
 		},
 		Valkey: config.ValkeyConfig{Host: "127.0.0.1", Port: 6379, DB: 0},
-		NATS:   config.NATSConfig{URL: "nats://127.0.0.1:4222", ConnectTimeout: 5 * time.Second},
+		NATS:   config.NATSConfig{URL: "nats://127.0.0.1:63999", ConnectTimeout: 500 * time.Millisecond},
 		Zone: config.ZoneConfig{
 			TickRate:      50 * time.Millisecond,
 			MapDir:        "./data/maps",
@@ -70,21 +70,11 @@ func TestRun_ShutdownOnContextCancel(t *testing.T) {
 		Log:  config.LogConfig{Level: "info", Format: "json"},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	done := make(chan error, 1)
-	go func() { done <- Run(ctx, cfg) }()
+	err := Run(ctx, cfg)
 
-	// Allow boot to complete (telemetry + tick loop + Agones Ready).
-	time.Sleep(200 * time.Millisecond)
-
-	cancel()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(3 * time.Second):
-		t.Fatal("Run did not return within 3s after context cancel")
-	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nats")
 }

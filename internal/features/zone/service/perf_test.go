@@ -113,7 +113,7 @@ func findWalkableCell(tb testing.TB, md *romap.MapData, rng *rand.Rand) (int, in
 func newPerfTickLoop(b testing.TB, w, h int) *TickLoop {
 	b.Helper()
 	md := benchmarkMap(w, h)
-	return NewTickLoop(md, benchRate, silentLogger())
+	return NewTickLoop(md, benchRate, silentLogger(), nopPublisher{})
 }
 
 // --- Benchmarks -----------------------------------------------------------
@@ -160,7 +160,7 @@ func BenchmarkTick_1000Entities(b *testing.B) {
 
 func BenchmarkTick_2000EntitiesClustered(b *testing.B) {
 	md := benchmarkMap(benchMapW, benchMapH)
-	tl := NewTickLoop(md, benchRate, silentLogger())
+	tl := NewTickLoop(md, benchRate, silentLogger(), nopPublisher{})
 	ctx := context.Background()
 	rng := seededRandom(42)
 

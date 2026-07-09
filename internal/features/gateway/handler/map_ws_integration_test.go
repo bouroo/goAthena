@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
+	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	"github.com/bouroo/goAthena/internal/features/zone/domain"
 	domainmock "github.com/bouroo/goAthena/internal/features/zone/domain/mock"
 	zonehandler "github.com/bouroo/goAthena/internal/features/zone/handler"
@@ -114,7 +115,7 @@ func TestWSHandler_CZEnter_RealZoneGRPC_Bufconn(t *testing.T) {
 	db := packet.NewLoginServerDB()
 	db.Merge(packet.NewCharServerDB())
 	db.Merge(packet.NewMapServerDB())
-	h := NewWSHandler(db, adapter, "unused", "/ws/",
+	h := NewWSHandler(db, adapter, service.NewSessionRegistry(), "unused", "/ws/",
 		zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.Disabled), nil)
 
 	mux := http.NewServeMux()

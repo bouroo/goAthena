@@ -15,6 +15,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
 	"github.com/bouroo/goAthena/internal/features/gateway/handler"
 	"github.com/bouroo/goAthena/internal/features/gateway/service"
+	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -79,32 +80,27 @@ func Register(c do.Injector) error {
 	// memory delta is negligible.
 	do.Provide(c, buildZoneClient)
 
-	do.Provide(c, func(i do.Injector) (domain.PacketHandler, error) {
-		identityClient, err := do.Invoke[identityv1.IdentityServiceClient](i)
-		if err != nil {
-			return nil, err
-		}
-		zoneClient, err := do.Invoke[zonev1.ZoneServiceClient](i)
-		if err != nil {
-			return nil, err
-		}
-		cfg, err := do.Invoke[*config.Config](i)
-		if err != nil {
-			return nil, err
-		}
-		logger, err := do.Invoke[*zerolog.Logger](i)
-		if err != nil {
-			return nil, err
-		}
-		return buildDispatchHandler(identityClient, zoneClient, cfg, *logger)
+	// Single in-process session registry shared by the dispatch
+	// handler (Register / SetView) and the TCP/WS handlers
+	// (Unregister on close). The future NATS broadcast subscriber
+	// (a later workstream) will resolve the same SessionRegistry
+	// instance via do.Invoke[service.SessionRegistry].
+	do.Provide(c, func(_ do.Injector) (service.SessionRegistry, error) {
+		return service.NewSessionRegistry(), nil
 	})
 
-	do.Provide(c, func(i do.Injector) (*handler.TCPHandler, error) {
-		db, err := do.Invoke[*packet.DB](i)
+	// Broadcast subscriber: subscribes to zone.event.> over NATS and fans
+	// movement/spawn/vanish events out to observer sessions. The same
+	// instance backs the dispatch handler's on-enter area-spawn path via
+	// SetAreaSender. Requires *natsinfra.Client (registered by the app
+	// composition root via nats.Register) — lazy, so Register itself does
+	// not connect.
+	do.Provide(c, func(i do.Injector) (*service.BroadcastSubscriber, error) {
+		nc, err := do.Invoke[*natsinfra.Client](i)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("resolve nats client for broadcast: %w", err)
 		}
-		pktHandler, err := do.Invoke[domain.PacketHandler](i)
+		registry, err := do.Invoke[service.SessionRegistry](i)
 		if err != nil {
 			return nil, err
 		}
@@ -112,28 +108,12 @@ func Register(c do.Injector) error {
 		if err != nil {
 			return nil, err
 		}
-		return handler.NewTCPHandler(db, pktHandler, *logger), nil
+		return service.NewBroadcastSubscriber(nc, registry, *logger), nil
 	})
 
-	do.Provide(c, func(i do.Injector) (*handler.WSHandler, error) {
-		db, err := do.Invoke[*packet.DB](i)
-		if err != nil {
-			return nil, err
-		}
-		pktHandler, err := do.Invoke[domain.PacketHandler](i)
-		if err != nil {
-			return nil, err
-		}
-		logger, err := do.Invoke[*zerolog.Logger](i)
-		if err != nil {
-			return nil, err
-		}
-		cfg, err := do.Invoke[*config.Config](i)
-		if err != nil {
-			return nil, err
-		}
-		return handler.NewWSHandler(db, pktHandler, cfg.Gateway.WS.Addr, cfg.Gateway.WS.Path, *logger, cfg.Gateway.WS.AllowedOrigins), nil
-	})
+	do.Provide(c, provideDispatchHandler)
+	do.Provide(c, provideTCPHandler)
+	do.Provide(c, provideWSHandler)
 
 	return nil
 }
@@ -153,6 +133,97 @@ func buildZoneClient(i do.Injector) (zonev1.ZoneServiceClient, error) {
 	return zonev1.NewZoneServiceClient(conn), nil
 }
 
+// provideDispatchHandler wires the M3b dispatch handler from the DI
+// container. Extracted from Register to keep the gocyclo budget
+// under 15 after the registry dependency was added in Step 2c.
+func provideDispatchHandler(i do.Injector) (domain.PacketHandler, error) {
+	identityClient, err := do.Invoke[identityv1.IdentityServiceClient](i)
+	if err != nil {
+		return nil, err
+	}
+	zoneClient, err := do.Invoke[zonev1.ZoneServiceClient](i)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := do.Invoke[*config.Config](i)
+	if err != nil {
+		return nil, err
+	}
+	logger, err := do.Invoke[*zerolog.Logger](i)
+	if err != nil {
+		return nil, err
+	}
+	registry, err := do.Invoke[service.SessionRegistry](i)
+	if err != nil {
+		return nil, err
+	}
+	h, err := buildDispatchHandler(identityClient, zoneClient, cfg, *logger, registry)
+	if err != nil {
+		return nil, err
+	}
+	// Wire the broadcast area-spawner onto the dispatch handler.
+	// Best-effort: a unit-test DI container that omits nats leaves the
+	// handler with a nil area sender (the call-site guards nil). Production
+	// always has the broadcaster — app.go registers nats before invoking
+	// the TCP/WS handlers.
+	if bs, bsErr := do.Invoke[*service.BroadcastSubscriber](i); bsErr == nil {
+		h.SetAreaSender(bs)
+	} else {
+		logger.Warn().Err(bsErr).Msg("gateway di: broadcast subscriber not resolved; on-enter area spawn disabled")
+	}
+	return h, nil
+}
+
+// provideTCPHandler wires the gnet TCP handler from the DI
+// container. Extracted from Register to keep the gocyclo budget
+// under 15 after the registry dependency was added in Step 2c.
+func provideTCPHandler(i do.Injector) (*handler.TCPHandler, error) {
+	db, err := do.Invoke[*packet.DB](i)
+	if err != nil {
+		return nil, err
+	}
+	pktHandler, err := do.Invoke[domain.PacketHandler](i)
+	if err != nil {
+		return nil, err
+	}
+	logger, err := do.Invoke[*zerolog.Logger](i)
+	if err != nil {
+		return nil, err
+	}
+	registry, err := do.Invoke[service.SessionRegistry](i)
+	if err != nil {
+		return nil, err
+	}
+	return handler.NewTCPHandler(db, pktHandler, registry, *logger), nil
+}
+
+// provideWSHandler wires the WebSocket handler from the DI
+// container. Extracted from Register to keep the gocyclo budget
+// under 15 after the registry dependency was added in Step 2c.
+func provideWSHandler(i do.Injector) (*handler.WSHandler, error) {
+	db, err := do.Invoke[*packet.DB](i)
+	if err != nil {
+		return nil, err
+	}
+	pktHandler, err := do.Invoke[domain.PacketHandler](i)
+	if err != nil {
+		return nil, err
+	}
+	logger, err := do.Invoke[*zerolog.Logger](i)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := do.Invoke[*config.Config](i)
+	if err != nil {
+		return nil, err
+	}
+	registry, err := do.Invoke[service.SessionRegistry](i)
+	if err != nil {
+		return nil, err
+	}
+	return handler.NewWSHandler(db, pktHandler, registry, cfg.Gateway.WS.Addr, cfg.Gateway.WS.Path, *logger, cfg.Gateway.WS.AllowedOrigins), nil
+}
+
 // buildDispatchHandler wires the M3b dispatch handler from resolved
 // config + identity client + zone client + logger. Extracted from
 // Register to keep the gocyclo budget under 15; the host→IPv4
@@ -164,6 +235,7 @@ func buildDispatchHandler(
 	zoneClient zonev1.ZoneServiceClient,
 	cfg *config.Config,
 	logger zerolog.Logger,
+	registry service.SessionRegistry,
 ) (*service.DispatchHandler, error) {
 	zoneHost, zonePort, err := service.SplitMapAddr(cfg.Gateway.MapAddr)
 	if err != nil {
@@ -181,5 +253,6 @@ func buildDispatchHandler(
 		cfg.Zone.DefaultMap,
 		zoneIP,
 		zonePort,
+		registry,
 	), nil
 }

@@ -6,7 +6,7 @@
 // Run() boot order:
 //
 //  1. Validate config and build the DI injector.
-//  2. Wire infrastructure (Agones lifecycle, telemetry).
+//  2. Wire infrastructure (Agones lifecycle, telemetry, NATS pub/sub).
 //  3. Wire the zone feature (TickLoop + ZoneService + gRPC handler +
 //     *grpc.Server).
 //  4. Start the gRPC listener in a background goroutine.
@@ -16,6 +16,9 @@
 //  7. Block until ctx is cancelled.
 //  8. On shutdown, GracefulStop the gRPC server (so no new EnterZone
 //     calls arrive), drain the tick loop, and signal Agones Shutdown.
+//     NATS connection draining is owned by the DI container's
+//     natsinfra.Shutdowner (registered in step 2) and fires from the
+//     deferred injector.Shutdown().
 package zone
 
 import (
@@ -33,6 +36,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/zone/di"
 	"github.com/bouroo/goAthena/internal/features/zone/service"
 	"github.com/bouroo/goAthena/internal/infrastructure/agones"
+	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
 	"github.com/bouroo/goAthena/internal/shared/telemetry"
 )
 
@@ -62,6 +66,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		Str("grpc_addr", cfg.GRPCAddr()).
 		Dur("tick_rate", cfg.Zone.TickRate).
 		Msg("starting zone service")
+
+	// Register NATS before the zone feature: the zone DI wires a
+	// domain.Publisher that depends on *nats.Client. natsinfra.Register
+	// also installs a *Shutdowner so injector.Shutdown drains the
+	// connection on app exit (mirror of identity/app.go's
+	// valkey.Register invocation).
+	if err := natsinfra.Register(ctx, injector); err != nil {
+		return fmt.Errorf("register nats: %w", err)
+	}
 
 	agonesLifecycle := agones.New(ctx, logger)
 	do.ProvideValue(injector, agonesLifecycle)

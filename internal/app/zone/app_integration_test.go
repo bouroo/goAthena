@@ -1,28 +1,18 @@
-//go:build unit
+//go:build integration
 
-package gateway
+package zone
 
 import (
 	"context"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bouroo/goAthena/internal/config"
 )
 
-func TestRun_NilConfig(t *testing.T) {
-	t.Parallel()
-
-	err := Run(context.Background(), nil)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "config is nil")
-}
-
-func TestRun_NATSConnectionFailure(t *testing.T) {
+func TestRun_ShutdownOnContextCancel(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{
@@ -58,29 +48,33 @@ func TestRun_NATSConnectionFailure(t *testing.T) {
 			ConnectTimeout: 5 * time.Second,
 		},
 		Valkey: config.ValkeyConfig{Host: "127.0.0.1", Port: 6379, DB: 0},
-		NATS:   config.NATSConfig{URL: "nats://127.0.0.1:63999", ConnectTimeout: 500 * time.Millisecond},
-		OTel:   config.OTelConfig{Exporter: "none", ServiceName: "test", Sampling: 1.0},
-		Log:    config.LogConfig{Level: "info", Format: "json"},
-		Gateway: config.GatewayConfig{
-			TCP:          config.TCPConfig{Addr: "127.0.0.1:16910"},
-			WS:           config.WSConfig{Addr: "127.0.0.1:16911", Path: "/ws/"},
-			Packetver:    20250604,
-			IdentityAddr: "127.0.0.1:50051",
-			ZoneAddr:     "127.0.0.1:50052",
-			MapAddr:      "127.0.0.1:5121",
+		NATS:   config.NATSConfig{URL: "nats://127.0.0.1:4222", ConnectTimeout: 5 * time.Second},
+		Zone: config.ZoneConfig{
+			TickRate:      50 * time.Millisecond,
+			MapDir:        "./data/maps",
+			DefaultMap:    "prontera",
+			MoveSpeed:     150,
+			ShutdownGrace: 30 * time.Second,
 		},
-		Assets: config.AssetsConfig{
-			Enabled:    false,
-			GRFDir:     "./data/grf",
-			MaxCacheMB: 256,
-		},
+		OTel: config.OTelConfig{Exporter: "none", ServiceName: "test", Sampling: 1.0},
+		Log:  config.LogConfig{Level: "info", Format: "json"},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 
-	err := Run(ctx, cfg)
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg) }()
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nats")
+	// Allow boot to complete (telemetry + tick loop + Agones Ready).
+	time.Sleep(200 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return within 3s after context cancel")
+	}
 }

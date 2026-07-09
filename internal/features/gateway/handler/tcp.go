@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
+	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	netcodec "github.com/bouroo/goAthena/internal/infrastructure/net"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
@@ -27,21 +28,25 @@ import (
 type TCPHandler struct {
 	gnet.BuiltinEventEngine
 
-	db      *packet.DB
-	handler domain.PacketHandler
-	logger  zerolog.Logger
-	nextID  atomic.Uint64 // monotonic connection id; safe under gnet's concurrent event loops
-	engine  gnet.Engine
+	db       *packet.DB
+	handler  domain.PacketHandler
+	registry service.SessionRegistry
+	logger   zerolog.Logger
+	nextID   atomic.Uint64 // monotonic connection id; safe under gnet's concurrent event loops
+	engine   gnet.Engine
 }
 
 // NewTCPHandler constructs a gnet TCP event handler. The packet DB and
 // PacketHandler must already be configured; TCPHandler does not own their
-// lifecycle.
-func NewTCPHandler(db *packet.DB, handler domain.PacketHandler, logger zerolog.Logger) *TCPHandler {
+// lifecycle. registry is consulted in OnClose to remove any session
+// previously installed by the dispatch handler's handleCZEnter; pass
+// the same instance the dispatch handler was constructed with.
+func NewTCPHandler(db *packet.DB, handler domain.PacketHandler, registry service.SessionRegistry, logger zerolog.Logger) *TCPHandler {
 	return &TCPHandler{
-		db:      db,
-		handler: handler,
-		logger:  logger.With().Str("component", "gateway.tcp").Logger(),
+		db:       db,
+		handler:  handler,
+		registry: registry,
+		logger:   logger.With().Str("component", "gateway.tcp").Logger(),
 	}
 }
 
@@ -90,11 +95,17 @@ func (h *TCPHandler) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 	return nil, gnet.None
 }
 
-// OnClose logs the disconnect and lets gnet drop the context.
+// OnClose logs the disconnect, removes any session the dispatch
+// handler installed for this connection from the session registry, and
+// lets gnet drop the context. Unregister is a no-op when the session
+// was never registered (no successful CZ_ENTER) or already removed.
 func (h *TCPHandler) OnClose(c gnet.Conn, err error) gnet.Action {
 	state, ok := c.Context().(*connState)
 	if !ok || state == nil {
 		return gnet.None
+	}
+	if h.registry != nil && state.info.AccountID != 0 {
+		h.registry.Unregister(state.info.AccountID)
 	}
 	evt := h.logger.Debug().
 		Uint64("conn", state.info.ID).

@@ -25,6 +25,7 @@ import (
 
 	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
+	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -181,7 +182,7 @@ func TestWSHandler_CZEnter_RoundTrip_ZCAcceptEnter(t *testing.T) {
 	db := packet.NewLoginServerDB()
 	db.Merge(packet.NewCharServerDB())
 	db.Merge(packet.NewMapServerDB())
-	h := NewWSHandler(db, adapter, "unused", "/ws/",
+	h := NewWSHandler(db, adapter, service.NewSessionRegistry(), "unused", "/ws/",
 		zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.Disabled), nil)
 
 	mux := http.NewServeMux()
