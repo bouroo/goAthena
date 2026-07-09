@@ -34,6 +34,10 @@ type fakeIdentityClient struct {
 	authenticateFn  func(context.Context, *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error)
 	characterListFn func(context.Context, *identityv1.GetCharacterListRequest) (*identityv1.GetCharacterListResponse, error)
 	getCharacterFn  func(context.Context, *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error)
+	getInventoryFn  func(context.Context, *identityv1.GetInventoryRequest) (*identityv1.GetInventoryResponse, error)
+	equipItemFn     func(context.Context, *identityv1.EquipItemRequest) (*identityv1.EquipItemResponse, error)
+	unequipItemFn   func(context.Context, *identityv1.UnequipItemRequest) (*identityv1.UnequipItemResponse, error)
+	useItemFn       func(context.Context, *identityv1.UseItemRequest) (*identityv1.UseItemResponse, error)
 }
 
 func (f *fakeIdentityClient) Authenticate(ctx context.Context, req *identityv1.AuthenticateRequest, _ ...grpc.CallOption) (*identityv1.AuthenticateResponse, error) {
@@ -69,6 +73,54 @@ func (f *fakeIdentityClient) GetCharacter(ctx context.Context, req *identityv1.G
 			Success: false,
 			Error:   "no getCharacter fn installed",
 		}, nil
+	}
+	return fn(ctx, req)
+}
+
+// Inventory RPC stubs — dispatch tests that need a real response
+// install getInventoryFn / equipItemFn / unequipItemFn / useItemFn;
+// tests that don't install one get a `success=false` or empty
+// response so the dispatcher falls back to the empty-list / fail
+// ack paths without aborting the handshake.
+func (f *fakeIdentityClient) GetInventory(ctx context.Context, req *identityv1.GetInventoryRequest, _ ...grpc.CallOption) (*identityv1.GetInventoryResponse, error) {
+	f.mu.Lock()
+	fn := f.getInventoryFn
+	f.mu.Unlock()
+	if fn == nil {
+		// Empty list — the dispatcher falls back to two 4-byte empty
+		// frames, which is the pre-P2A behaviour every other
+		// TestDispatchHandler_CZNotifyActorInit_* test relies on.
+		return &identityv1.GetInventoryResponse{Items: nil}, nil
+	}
+	return fn(ctx, req)
+}
+
+func (f *fakeIdentityClient) EquipItem(ctx context.Context, req *identityv1.EquipItemRequest, _ ...grpc.CallOption) (*identityv1.EquipItemResponse, error) {
+	f.mu.Lock()
+	fn := f.equipItemFn
+	f.mu.Unlock()
+	if fn == nil {
+		return &identityv1.EquipItemResponse{Success: false, Error: "no equipItem fn installed"}, nil
+	}
+	return fn(ctx, req)
+}
+
+func (f *fakeIdentityClient) UnequipItem(ctx context.Context, req *identityv1.UnequipItemRequest, _ ...grpc.CallOption) (*identityv1.UnequipItemResponse, error) {
+	f.mu.Lock()
+	fn := f.unequipItemFn
+	f.mu.Unlock()
+	if fn == nil {
+		return &identityv1.UnequipItemResponse{Success: false, Error: "no unequipItem fn installed"}, nil
+	}
+	return fn(ctx, req)
+}
+
+func (f *fakeIdentityClient) UseItem(ctx context.Context, req *identityv1.UseItemRequest, _ ...grpc.CallOption) (*identityv1.UseItemResponse, error) {
+	f.mu.Lock()
+	fn := f.useItemFn
+	f.mu.Unlock()
+	if fn == nil {
+		return &identityv1.UseItemResponse{Success: false, Error: "no useItem fn installed"}, nil
 	}
 	return fn(ctx, req)
 }
@@ -3443,5 +3495,600 @@ func TestDispatchHandler_Attack_Concurrency(t *testing.T) {
 	expectedHP := int32(10000 - workers*iterations*10)
 	if hp != expectedHP {
 		t.Errorf("monster HP = %d, want %d", hp, expectedHP)
+	}
+}
+
+// P2A: inventory list emission on CZ_NOTIFY_ACTORINIT. The handler
+// must call identity.GetInventory and emit ZC_INVENTORY_ITEMLIST_NORMAL
+// (0x00a3) followed by ZC_INVENTORY_ITEMLIST_EQUIP (0x00a4) in the
+// documented rAthena LoadEndAck order
+// (rathena/src/map/clif.cpp:10791-10915). Items with
+// inventory.equip==0 go to the normal list, items with non-zero
+// equip go to the equip list.
+func TestDispatchHandler_CZNotifyActorInit_EmitsInventoryLists(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		getCharacterFn: func(_ context.Context, _ *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+			return &identityv1.GetCharacterResponse{
+				Success: true,
+				Character: &identityv1.CharacterDetail{
+					CharId: 9001, Name: "alpha", ClassId: 7, BaseLevel: 50, JobLevel: 25,
+					Hp: 1234, MaxHp: 2000, Sp: 100, MaxSp: 200,
+					Str: 30, Agi: 20, Vit: 25, Int: 15, Dex: 40, Luk: 10,
+					StatusPoint: 5, SkillPoint: 3,
+				},
+			}, nil
+		},
+		getInventoryFn: func(_ context.Context, req *identityv1.GetInventoryRequest) (*identityv1.GetInventoryResponse, error) {
+			if req.GetAccountId() != 4242 || req.GetCharId() != 9001 {
+				t.Errorf("GetInventory req = (aid=%d, cid=%d), want (4242, 9001)",
+					req.GetAccountId(), req.GetCharId())
+			}
+			return &identityv1.GetInventoryResponse{
+				Items: []*identityv1.InventoryItem{
+					{Id: 2, Nameid: 0xAB, Amount: 10, Identify: 1},                           // Red Potion (in grid)
+					{Id: 3, Nameid: 0xC8, Amount: 5, Identify: 1},                            // Blue Potion (in grid)
+					{Id: 9, Nameid: 0x538, Amount: 1, Identify: 1, Refine: 2, Equip: 0x0002}, // Knife (equipped, EQP_HAND_R)
+				},
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZNOTIFYACTORINIT, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+
+	// Walk the burst sequentially, recording the ZC_INVENTORY_ITEMLIST_NORMAL
+	// and ZC_INVENTORY_ITEMLIST_EQUIP frames by their variable-length packetLength.
+	const wantNormalItems = 2
+	const wantEquipItems = 1
+	const normalItemSize = 26 // sizeNormalItem
+	const equipItemSize = 57  // sizeEquipItem
+	var normalLen, equipLen int
+
+	offset := 8 // skip leading 8-byte ZC_MAPPROPERTY_R2
+	for offset+2 <= len(out) {
+		cmd := binary.LittleEndian.Uint16(out[offset:])
+		switch cmd {
+		case 0x00b0, 0x00b1:
+			offset += 8
+		case 0x00bd:
+			offset += 44
+		case 0x00a3:
+			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
+			normalLen = plen
+			offset += plen
+		case 0x00a4:
+			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
+			equipLen = plen
+			offset += plen
+		case 0x010f:
+			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
+			offset += plen
+		case 0x02b9:
+			offset += 191
+		case 0x09ff:
+			offset += 107
+		default:
+			t.Fatalf("unexpected packet 0x%04x at offset %d (buf=% x)", cmd, offset, out)
+		}
+	}
+
+	wantNormalLen := 4 + wantNormalItems*normalItemSize
+	if normalLen != wantNormalLen {
+		t.Errorf("ZC_INVENTORY_ITEMLIST_NORMAL length = %d, want %d (2 normal items × 26 + 4 header)",
+			normalLen, wantNormalLen)
+	}
+	wantEquipLen := 4 + wantEquipItems*equipItemSize
+	if equipLen != wantEquipLen {
+		t.Errorf("ZC_INVENTORY_ITEMLIST_EQUIP length = %d, want %d (1 equip item × 57 + 4 header)",
+			equipLen, wantEquipLen)
+	}
+}
+
+// P2A: when identity.GetInventory returns a gRPC error during the
+// LoadEndAck burst, the dispatcher must fall back to the empty
+// inventory list — the burst must still complete end-to-end so the
+// client initialises its inventory grid.
+func TestDispatchHandler_CZNotifyActorInit_InventoryRPCError_FallsBackToEmpty(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		getCharacterFn: func(_ context.Context, _ *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+			return &identityv1.GetCharacterResponse{
+				Success: true,
+				Character: &identityv1.CharacterDetail{
+					CharId: 9001, Name: "alpha", ClassId: 7, BaseLevel: 50, JobLevel: 25,
+					Hp: 1234, MaxHp: 2000, Sp: 100, MaxSp: 200,
+				},
+			}, nil
+		},
+		getInventoryFn: func(_ context.Context, _ *identityv1.GetInventoryRequest) (*identityv1.GetInventoryResponse, error) {
+			return nil, status.Error(codes.Unavailable, "identity down")
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZNOTIFYACTORINIT, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v", err)
+	}
+	// Walk the burst and assert the two inventory list frames are
+	// the 4-byte empty stubs.
+	normalEmpty := false
+	equipEmpty := false
+	offset := 8
+	for offset+2 <= len(resp.buf.Bytes()) {
+		cmd := binary.LittleEndian.Uint16(resp.buf.Bytes()[offset:])
+		switch cmd {
+		case 0x00b0, 0x00b1:
+			offset += 8
+		case 0x00bd:
+			offset += 44
+		case 0x00a3:
+			plen := int(binary.LittleEndian.Uint16(resp.buf.Bytes()[offset+2 : offset+4]))
+			if plen == 4 {
+				normalEmpty = true
+			}
+			offset += plen
+		case 0x00a4:
+			plen := int(binary.LittleEndian.Uint16(resp.buf.Bytes()[offset+2 : offset+4]))
+			if plen == 4 {
+				equipEmpty = true
+			}
+			offset += plen
+		case 0x010f:
+			plen := int(binary.LittleEndian.Uint16(resp.buf.Bytes()[offset+2 : offset+4]))
+			offset += plen
+		case 0x02b9:
+			offset += 191
+		case 0x09ff:
+			offset += 107
+		}
+	}
+	if !normalEmpty {
+		t.Errorf("ZC_INVENTORY_ITEMLIST_NORMAL not emitted as empty (4-byte) frame")
+	}
+	if !equipEmpty {
+		t.Errorf("ZC_INVENTORY_ITEMLIST_EQUIP not emitted as empty (4-byte) frame")
+	}
+}
+
+// P2A: CZ_USE_ITEM2 happy path — the dispatcher must call
+// identity.UseItem and emit ZC_USE_ITEM_ACK2 (0x01c8) with the
+// remaining stack count and result=1.
+func TestDispatchHandler_CZUseItem_Success_EncodesAck(t *testing.T) {
+	t.Parallel()
+
+	var captured *identityv1.UseItemRequest
+	identity := &fakeIdentityClient{
+		useItemFn: func(_ context.Context, req *identityv1.UseItemRequest) (*identityv1.UseItemResponse, error) {
+			captured = req
+			if req.GetAccountId() != 4242 || req.GetCharId() != 9001 {
+				t.Errorf("UseItem req = (aid=%d, cid=%d), want (4242, 9001)",
+					req.GetAccountId(), req.GetCharId())
+			}
+			if req.GetItemId() != 2 {
+				t.Errorf("UseItem req item_id = %d, want 2 (inventory index)", req.GetItemId())
+			}
+			return &identityv1.UseItemResponse{
+				Success:         true,
+				ItemId:          0xAB,
+				RemainingAmount: 9,
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	req := packet.CZUseItemRequest{Index: 2, AID: 4242}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_USE_ITEM2: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZUSEITEM2, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if captured == nil {
+		t.Fatal("UseItem RPC not called")
+	}
+
+	out := resp.buf.Bytes()
+	const wantLen = 13
+	if len(out) != wantLen {
+		t.Fatalf("ZC_USE_ITEM_ACK2 length = %d, want %d", len(out), wantLen)
+	}
+	if out[0] != 0xc8 || out[1] != 0x01 {
+		t.Errorf("opcode = %02x %02x, want c8 01 (LE 0x01c8)", out[0], out[1])
+	}
+	// index at [2:4] = 4 (server index 2 + 2, clif.cpp:4482)
+	if v := binary.LittleEndian.Uint16(out[2:]); v != 4 {
+		t.Errorf("index = %d, want 4 (server index 2 + 2)", v)
+	}
+	// itemId at [4:6] = 0xAB
+	if v := binary.LittleEndian.Uint16(out[4:]); v != 0xAB {
+		t.Errorf("itemId = 0x%x, want 0xAB", v)
+	}
+	// AID at [6:10] = 4242
+	if v := binary.LittleEndian.Uint32(out[6:]); v != 4242 {
+		t.Errorf("AID = %d, want 4242", v)
+	}
+	// amount at [10:12] = 9
+	if v := binary.LittleEndian.Uint16(out[10:]); v != 9 {
+		t.Errorf("amount = %d, want 9", v)
+	}
+	// result at [12] = 1 (success)
+	if v := out[12]; v != 1 {
+		t.Errorf("result = %d, want 1 (success)", v)
+	}
+}
+
+// P2A: identity returns success=false — dispatcher must emit a
+// failure ack (result=0) so the client exits the "using item" state.
+func TestDispatchHandler_CZUseItem_IdentityRejects_EncodesFailAck(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		useItemFn: func(_ context.Context, _ *identityv1.UseItemRequest) (*identityv1.UseItemResponse, error) {
+			return &identityv1.UseItemResponse{Success: false, Error: "item not found"}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	req := packet.CZUseItemRequest{Index: 2, AID: 4242}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_USE_ITEM2: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZUSEITEM2, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 13 {
+		t.Fatalf("ZC_USE_ITEM_ACK2 length = %d, want 13", len(out))
+	}
+	if out[12] != 0 {
+		t.Errorf("result = %d, want 0 (failure)", out[12])
+	}
+}
+
+// P2A: malformed frame and pre-auth guard for CZ_USE_ITEM2.
+func TestDispatchHandler_CZUseItem_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		useItemFn: func(_ context.Context, _ *identityv1.UseItemRequest) (*identityv1.UseItemResponse, error) {
+			t.Fatal("UseItem must not be called without prior CZ_ENTER")
+			return nil, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1} // AccountID=0 — pre-auth
+	req := packet.CZUseItemRequest{Index: 2, AID: 0}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_USE_ITEM2: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZUSEITEM2, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth use item, want 0 (drop)", got)
+	}
+}
+
+func TestDispatchHandler_CZUseItem_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	// 2-byte frame is shorter than the 8-byte CZ_USE_ITEM2.
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZUSEITEM2, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// P2A: CZ_REQ_WEAR_EQUIP_V5 happy path.
+func TestDispatchHandler_CZReqWearEquip_Success_EncodesAck(t *testing.T) {
+	t.Parallel()
+
+	var captured *identityv1.EquipItemRequest
+	identity := &fakeIdentityClient{
+		equipItemFn: func(_ context.Context, req *identityv1.EquipItemRequest) (*identityv1.EquipItemResponse, error) {
+			captured = req
+			if req.GetAccountId() != 4242 || req.GetCharId() != 9001 {
+				t.Errorf("EquipItem req = (aid=%d, cid=%d), want (4242, 9001)",
+					req.GetAccountId(), req.GetCharId())
+			}
+			if req.GetItemId() != 9 {
+				t.Errorf("EquipItem req item_id = %d, want 9 (inventory index)", req.GetItemId())
+			}
+			if req.GetEquipPosition() != 0x0002 {
+				t.Errorf("EquipItem req equip_position = 0x%x, want 0x2", req.GetEquipPosition())
+			}
+			return &identityv1.EquipItemResponse{
+				Success:       true,
+				ItemId:        9,
+				EquipPosition: 0x0002,
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	req := packet.CZReqWearEquipRequest{Index: 9, Position: 0x0002}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQ_WEAR_EQUIP_V5: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQWEAREQUIPV5, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if captured == nil {
+		t.Fatal("EquipItem RPC not called")
+	}
+
+	out := resp.buf.Bytes()
+	const wantLen = 11
+	if len(out) != wantLen {
+		t.Fatalf("ZC_REQ_WEAR_EQUIP_ACK_V5 length = %d, want %d", len(out), wantLen)
+	}
+	if out[0] != 0x99 || out[1] != 0x09 {
+		t.Errorf("opcode = %02x %02x, want 99 09 (LE 0x0999)", out[0], out[1])
+	}
+	// index at [2:4] = 11 (server index 9 + 2)
+	if v := binary.LittleEndian.Uint16(out[2:]); v != 11 {
+		t.Errorf("index = %d, want 11 (server index 9 + 2)", v)
+	}
+	// wearLocation at [4:8] = 0x0002
+	if v := binary.LittleEndian.Uint32(out[4:]); v != 0x0002 {
+		t.Errorf("wearLocation = 0x%x, want 0x2", v)
+	}
+	// result at [10] = 1 (success)
+	if v := out[10]; v != 1 {
+		t.Errorf("result = %d, want 1 (success)", v)
+	}
+}
+
+func TestDispatchHandler_CZReqWearEquip_IdentityRejects_EncodesFailAck(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		equipItemFn: func(_ context.Context, _ *identityv1.EquipItemRequest) (*identityv1.EquipItemResponse, error) {
+			return &identityv1.EquipItemResponse{Success: false, Error: "class mismatch"}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	req := packet.CZReqWearEquipRequest{Index: 9, Position: 0x0002}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQ_WEAR_EQUIP_V5: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQWEAREQUIPV5, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 11 {
+		t.Fatalf("ZC_REQ_WEAR_EQUIP_ACK_V5 length = %d, want 11", len(out))
+	}
+	if out[10] != 0 {
+		t.Errorf("result = %d, want 0 (failure)", out[10])
+	}
+}
+
+func TestDispatchHandler_CZReqWearEquip_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		equipItemFn: func(_ context.Context, _ *identityv1.EquipItemRequest) (*identityv1.EquipItemResponse, error) {
+			t.Fatal("EquipItem must not be called without prior CZ_ENTER")
+			return nil, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1} // AccountID=0
+	req := packet.CZReqWearEquipRequest{Index: 9, Position: 0x0002}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQ_WEAR_EQUIP_V5: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQWEAREQUIPV5, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth equip, want 0 (drop)", got)
+	}
+}
+
+func TestDispatchHandler_CZReqWearEquip_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQWEAREQUIPV5, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
+	}
+}
+
+// P2A: CZ_REQ_TAKEOFF_EQUIP happy path. flag is wire-inverted for
+// PACKETVER >= 20110824: 0 = success.
+func TestDispatchHandler_CZReqTakeoffEquip_Success_EncodesAck(t *testing.T) {
+	t.Parallel()
+
+	var captured *identityv1.UnequipItemRequest
+	identity := &fakeIdentityClient{
+		unequipItemFn: func(_ context.Context, req *identityv1.UnequipItemRequest) (*identityv1.UnequipItemResponse, error) {
+			captured = req
+			if req.GetAccountId() != 4242 || req.GetCharId() != 9001 {
+				t.Errorf("UnequipItem req = (aid=%d, cid=%d), want (4242, 9001)",
+					req.GetAccountId(), req.GetCharId())
+			}
+			if req.GetItemId() != 9 {
+				t.Errorf("UnequipItem req item_id = %d, want 9", req.GetItemId())
+			}
+			return &identityv1.UnequipItemResponse{Success: true, ItemId: 9}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	req := packet.CZReqTakeoffEquipRequest{Index: 9}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQ_TAKEOFF_EQUIP: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQTAKEOFFEQUIP, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if captured == nil {
+		t.Fatal("UnequipItem RPC not called")
+	}
+
+	out := resp.buf.Bytes()
+	const wantLen = 9
+	if len(out) != wantLen {
+		t.Fatalf("ZC_REQ_TAKEOFF_EQUIP_ACK length = %d, want %d", len(out), wantLen)
+	}
+	if out[0] != 0x9a || out[1] != 0x09 {
+		t.Errorf("opcode = %02x %02x, want 9a 09 (LE 0x099a)", out[0], out[1])
+	}
+	// index at [2:4] = 11 (server index 9 + 2)
+	if v := binary.LittleEndian.Uint16(out[2:]); v != 11 {
+		t.Errorf("index = %d, want 11 (server index 9 + 2)", v)
+	}
+	// flag at [8] = 0 (success on the wire — inverted for PACKETVER >= 20110824)
+	if v := out[8]; v != 0 {
+		t.Errorf("flag = %d, want 0 (success on the wire)", v)
+	}
+}
+
+func TestDispatchHandler_CZReqTakeoffEquip_IdentityRejects_EncodesFailAck(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		unequipItemFn: func(_ context.Context, _ *identityv1.UnequipItemRequest) (*identityv1.UnequipItemResponse, error) {
+			return &identityv1.UnequipItemResponse{Success: false, Error: "not equipped"}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	req := packet.CZReqTakeoffEquipRequest{Index: 9}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQ_TAKEOFF_EQUIP: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQTAKEOFFEQUIP, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 9 {
+		t.Fatalf("ZC_REQ_TAKEOFF_EQUIP_ACK length = %d, want 9", len(out))
+	}
+	// flag at [8] = 1 (failure on the wire)
+	if v := out[8]; v != 1 {
+		t.Errorf("flag = %d, want 1 (failure on the wire)", v)
+	}
+}
+
+func TestDispatchHandler_CZReqTakeoffEquip_PreAuthGuard_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	identity := &fakeIdentityClient{
+		unequipItemFn: func(_ context.Context, _ *identityv1.UnequipItemRequest) (*identityv1.UnequipItemResponse, error) {
+			t.Fatal("UnequipItem must not be called without prior CZ_ENTER")
+			return nil, nil
+		},
+	}
+	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1} // AccountID=0
+	req := packet.CZReqTakeoffEquipRequest{Index: 9}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_REQ_TAKEOFF_EQUIP: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQTAKEOFFEQUIP, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes for pre-auth unequip, want 0 (drop)", got)
+	}
+}
+
+func TestDispatchHandler_CZReqTakeoffEquip_MalformedFrame_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZREQTAKEOFFEQUIP, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+	if got := resp.buf.Len(); got != 0 {
+		t.Fatalf("responder wrote %d bytes on malformed frame, want 0", got)
 	}
 }

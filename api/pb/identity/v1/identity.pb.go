@@ -1010,6 +1010,587 @@ func (x *GetCharacterResponse) GetError() string {
 	return ""
 }
 
+// GetInventoryRequest asks for every inventory item belonging to (account_id, char_id).
+// The account_id is a defensive cross-check; today the inventory is keyed
+// only by char_id, but carrying account_id lets the service refuse a
+// cross-account fetch before any DB round-trip.
+type GetInventoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetInventoryRequest) Reset() {
+	*x = GetInventoryRequest{}
+	mi := &file_identity_v1_identity_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetInventoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetInventoryRequest) ProtoMessage() {}
+
+func (x *GetInventoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetInventoryRequest.ProtoReflect.Descriptor instead.
+func (*GetInventoryRequest) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *GetInventoryRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *GetInventoryRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+// InventoryItem is the wire-relevant subset of `inventory` (rathena
+// main.sql). Cards, refine bless/curse, options, expire_time, favorite,
+// bound, unique_id, equip_switch and enchantgrade are omitted for now
+// — they can be added as separate proto fields without breaking the
+// wire layout (they live at higher field numbers).
+type InventoryItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            uint32                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`               // `id` — primary key
+	Nameid        uint32                 `protobuf:"varint,2,opt,name=nameid,proto3" json:"nameid,omitempty"`       // `nameid` — item_db.yml id
+	Amount        uint32                 `protobuf:"varint,3,opt,name=amount,proto3" json:"amount,omitempty"`       // `amount` — stack count
+	Equip         uint32                 `protobuf:"varint,4,opt,name=equip,proto3" json:"equip,omitempty"`         // `equip` — EQP_* bitmask; 0 = in grid
+	Identify      uint32                 `protobuf:"varint,5,opt,name=identify,proto3" json:"identify,omitempty"`   // `identify` — 1 = identified
+	Refine        uint32                 `protobuf:"varint,6,opt,name=refine,proto3" json:"refine,omitempty"`       // `refine` — +0..+10
+	Attribute     uint32                 `protobuf:"varint,7,opt,name=attribute,proto3" json:"attribute,omitempty"` // `attribute` — broken / elemental flag
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InventoryItem) Reset() {
+	*x = InventoryItem{}
+	mi := &file_identity_v1_identity_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InventoryItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InventoryItem) ProtoMessage() {}
+
+func (x *InventoryItem) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InventoryItem.ProtoReflect.Descriptor instead.
+func (*InventoryItem) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *InventoryItem) GetId() uint32 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *InventoryItem) GetNameid() uint32 {
+	if x != nil {
+		return x.Nameid
+	}
+	return 0
+}
+
+func (x *InventoryItem) GetAmount() uint32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+func (x *InventoryItem) GetEquip() uint32 {
+	if x != nil {
+		return x.Equip
+	}
+	return 0
+}
+
+func (x *InventoryItem) GetIdentify() uint32 {
+	if x != nil {
+		return x.Identify
+	}
+	return 0
+}
+
+func (x *InventoryItem) GetRefine() uint32 {
+	if x != nil {
+		return x.Refine
+	}
+	return 0
+}
+
+func (x *InventoryItem) GetAttribute() uint32 {
+	if x != nil {
+		return x.Attribute
+	}
+	return 0
+}
+
+type GetInventoryResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Items         []*InventoryItem       `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetInventoryResponse) Reset() {
+	*x = GetInventoryResponse{}
+	mi := &file_identity_v1_identity_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetInventoryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetInventoryResponse) ProtoMessage() {}
+
+func (x *GetInventoryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetInventoryResponse.ProtoReflect.Descriptor instead.
+func (*GetInventoryResponse) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *GetInventoryResponse) GetItems() []*InventoryItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+type EquipItemRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	ItemId        uint32                 `protobuf:"varint,3,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	EquipPosition uint32                 `protobuf:"varint,4,opt,name=equip_position,json=equipPosition,proto3" json:"equip_position,omitempty"` // EQP_* bitmask (pc.h)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EquipItemRequest) Reset() {
+	*x = EquipItemRequest{}
+	mi := &file_identity_v1_identity_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EquipItemRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EquipItemRequest) ProtoMessage() {}
+
+func (x *EquipItemRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EquipItemRequest.ProtoReflect.Descriptor instead.
+func (*EquipItemRequest) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *EquipItemRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *EquipItemRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *EquipItemRequest) GetItemId() uint32 {
+	if x != nil {
+		return x.ItemId
+	}
+	return 0
+}
+
+func (x *EquipItemRequest) GetEquipPosition() uint32 {
+	if x != nil {
+		return x.EquipPosition
+	}
+	return 0
+}
+
+type EquipItemResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ItemId        uint32                 `protobuf:"varint,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	EquipPosition uint32                 `protobuf:"varint,3,opt,name=equip_position,json=equipPosition,proto3" json:"equip_position,omitempty"`
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"` // populated when success=false
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EquipItemResponse) Reset() {
+	*x = EquipItemResponse{}
+	mi := &file_identity_v1_identity_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EquipItemResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EquipItemResponse) ProtoMessage() {}
+
+func (x *EquipItemResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EquipItemResponse.ProtoReflect.Descriptor instead.
+func (*EquipItemResponse) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *EquipItemResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *EquipItemResponse) GetItemId() uint32 {
+	if x != nil {
+		return x.ItemId
+	}
+	return 0
+}
+
+func (x *EquipItemResponse) GetEquipPosition() uint32 {
+	if x != nil {
+		return x.EquipPosition
+	}
+	return 0
+}
+
+func (x *EquipItemResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type UnequipItemRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	ItemId        uint32                 `protobuf:"varint,3,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnequipItemRequest) Reset() {
+	*x = UnequipItemRequest{}
+	mi := &file_identity_v1_identity_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnequipItemRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnequipItemRequest) ProtoMessage() {}
+
+func (x *UnequipItemRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnequipItemRequest.ProtoReflect.Descriptor instead.
+func (*UnequipItemRequest) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *UnequipItemRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *UnequipItemRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *UnequipItemRequest) GetItemId() uint32 {
+	if x != nil {
+		return x.ItemId
+	}
+	return 0
+}
+
+type UnequipItemResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ItemId        uint32                 `protobuf:"varint,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnequipItemResponse) Reset() {
+	*x = UnequipItemResponse{}
+	mi := &file_identity_v1_identity_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnequipItemResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnequipItemResponse) ProtoMessage() {}
+
+func (x *UnequipItemResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnequipItemResponse.ProtoReflect.Descriptor instead.
+func (*UnequipItemResponse) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *UnequipItemResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *UnequipItemResponse) GetItemId() uint32 {
+	if x != nil {
+		return x.ItemId
+	}
+	return 0
+}
+
+func (x *UnequipItemResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type UseItemRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	ItemId        uint32                 `protobuf:"varint,3,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UseItemRequest) Reset() {
+	*x = UseItemRequest{}
+	mi := &file_identity_v1_identity_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UseItemRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UseItemRequest) ProtoMessage() {}
+
+func (x *UseItemRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UseItemRequest.ProtoReflect.Descriptor instead.
+func (*UseItemRequest) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *UseItemRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *UseItemRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *UseItemRequest) GetItemId() uint32 {
+	if x != nil {
+		return x.ItemId
+	}
+	return 0
+}
+
+type UseItemResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Success         bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ItemId          uint32                 `protobuf:"varint,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	RemainingAmount uint32                 `protobuf:"varint,3,opt,name=remaining_amount,json=remainingAmount,proto3" json:"remaining_amount,omitempty"` // stack size after the use, 0 if row was deleted
+	Error           string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *UseItemResponse) Reset() {
+	*x = UseItemResponse{}
+	mi := &file_identity_v1_identity_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UseItemResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UseItemResponse) ProtoMessage() {}
+
+func (x *UseItemResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UseItemResponse.ProtoReflect.Descriptor instead.
+func (*UseItemResponse) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *UseItemResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *UseItemResponse) GetItemId() uint32 {
+	if x != nil {
+		return x.ItemId
+	}
+	return 0
+}
+
+func (x *UseItemResponse) GetRemainingAmount() uint32 {
+	if x != nil {
+		return x.RemainingAmount
+	}
+	return 0
+}
+
+func (x *UseItemResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_identity_v1_identity_proto protoreflect.FileDescriptor
 
 const file_identity_v1_identity_proto_rawDesc = "" +
@@ -1110,7 +1691,51 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\x14GetCharacterResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12:\n" +
 	"\tcharacter\x18\x02 \x01(\v2\x1c.identity.v1.CharacterDetailR\tcharacter\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error*\xba\x01\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"M\n" +
+	"\x13GetInventoryRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\"\xb7\x01\n" +
+	"\rInventoryItem\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\rR\x02id\x12\x16\n" +
+	"\x06nameid\x18\x02 \x01(\rR\x06nameid\x12\x16\n" +
+	"\x06amount\x18\x03 \x01(\rR\x06amount\x12\x14\n" +
+	"\x05equip\x18\x04 \x01(\rR\x05equip\x12\x1a\n" +
+	"\bidentify\x18\x05 \x01(\rR\bidentify\x12\x16\n" +
+	"\x06refine\x18\x06 \x01(\rR\x06refine\x12\x1c\n" +
+	"\tattribute\x18\a \x01(\rR\tattribute\"H\n" +
+	"\x14GetInventoryResponse\x120\n" +
+	"\x05items\x18\x01 \x03(\v2\x1a.identity.v1.InventoryItemR\x05items\"\x8a\x01\n" +
+	"\x10EquipItemRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\x12\x17\n" +
+	"\aitem_id\x18\x03 \x01(\rR\x06itemId\x12%\n" +
+	"\x0eequip_position\x18\x04 \x01(\rR\requipPosition\"\x83\x01\n" +
+	"\x11EquipItemResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x17\n" +
+	"\aitem_id\x18\x02 \x01(\rR\x06itemId\x12%\n" +
+	"\x0eequip_position\x18\x03 \x01(\rR\requipPosition\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"e\n" +
+	"\x12UnequipItemRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\x12\x17\n" +
+	"\aitem_id\x18\x03 \x01(\rR\x06itemId\"^\n" +
+	"\x13UnequipItemResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x17\n" +
+	"\aitem_id\x18\x02 \x01(\rR\x06itemId\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"a\n" +
+	"\x0eUseItemRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\x12\x17\n" +
+	"\aitem_id\x18\x03 \x01(\rR\x06itemId\"\x85\x01\n" +
+	"\x0fUseItemResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x17\n" +
+	"\aitem_id\x18\x02 \x01(\rR\x06itemId\x12)\n" +
+	"\x10remaining_amount\x18\x03 \x01(\rR\x0fremainingAmount\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error*\xba\x01\n" +
 	"\n" +
 	"AuthMethod\x12\x1b\n" +
 	"\x17AUTH_METHOD_UNSPECIFIED\x10\x00\x12\x18\n" +
@@ -1127,11 +1752,15 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\x14AUTH_RESULT_REJECTED\x10\x02\x12\x16\n" +
 	"\x12AUTH_RESULT_BANNED\x10\x03\x12!\n" +
 	"\x1dAUTH_RESULT_ALREADY_LOGGED_IN\x10\x04\x12\x1d\n" +
-	"\x19AUTH_RESULT_SERVER_CLOSED\x10\x052\x9c\x02\n" +
+	"\x19AUTH_RESULT_SERVER_CLOSED\x10\x052\xd5\x04\n" +
 	"\x0fIdentityService\x12S\n" +
 	"\fAuthenticate\x12 .identity.v1.AuthenticateRequest\x1a!.identity.v1.AuthenticateResponse\x12_\n" +
 	"\x10GetCharacterList\x12$.identity.v1.GetCharacterListRequest\x1a%.identity.v1.GetCharacterListResponse\x12S\n" +
-	"\fGetCharacter\x12 .identity.v1.GetCharacterRequest\x1a!.identity.v1.GetCharacterResponseB:Z8github.com/bouroo/goAthena/api/pb/identity/v1;identityv1b\x06proto3"
+	"\fGetCharacter\x12 .identity.v1.GetCharacterRequest\x1a!.identity.v1.GetCharacterResponse\x12S\n" +
+	"\fGetInventory\x12 .identity.v1.GetInventoryRequest\x1a!.identity.v1.GetInventoryResponse\x12J\n" +
+	"\tEquipItem\x12\x1d.identity.v1.EquipItemRequest\x1a\x1e.identity.v1.EquipItemResponse\x12P\n" +
+	"\vUnequipItem\x12\x1f.identity.v1.UnequipItemRequest\x1a .identity.v1.UnequipItemResponse\x12D\n" +
+	"\aUseItem\x12\x1b.identity.v1.UseItemRequest\x1a\x1c.identity.v1.UseItemResponseB:Z8github.com/bouroo/goAthena/api/pb/identity/v1;identityv1b\x06proto3"
 
 var (
 	file_identity_v1_identity_proto_rawDescOnce sync.Once
@@ -1146,7 +1775,7 @@ func file_identity_v1_identity_proto_rawDescGZIP() []byte {
 }
 
 var file_identity_v1_identity_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_identity_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_identity_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_identity_v1_identity_proto_goTypes = []any{
 	(AuthMethod)(0),                  // 0: identity.v1.AuthMethod
 	(AuthResult)(0),                  // 1: identity.v1.AuthResult
@@ -1159,6 +1788,15 @@ var file_identity_v1_identity_proto_goTypes = []any{
 	(*GetCharacterRequest)(nil),      // 8: identity.v1.GetCharacterRequest
 	(*CharacterDetail)(nil),          // 9: identity.v1.CharacterDetail
 	(*GetCharacterResponse)(nil),     // 10: identity.v1.GetCharacterResponse
+	(*GetInventoryRequest)(nil),      // 11: identity.v1.GetInventoryRequest
+	(*InventoryItem)(nil),            // 12: identity.v1.InventoryItem
+	(*GetInventoryResponse)(nil),     // 13: identity.v1.GetInventoryResponse
+	(*EquipItemRequest)(nil),         // 14: identity.v1.EquipItemRequest
+	(*EquipItemResponse)(nil),        // 15: identity.v1.EquipItemResponse
+	(*UnequipItemRequest)(nil),       // 16: identity.v1.UnequipItemRequest
+	(*UnequipItemResponse)(nil),      // 17: identity.v1.UnequipItemResponse
+	(*UseItemRequest)(nil),           // 18: identity.v1.UseItemRequest
+	(*UseItemResponse)(nil),          // 19: identity.v1.UseItemResponse
 }
 var file_identity_v1_identity_proto_depIdxs = []int32{
 	0,  // 0: identity.v1.AuthenticateRequest.method:type_name -> identity.v1.AuthMethod
@@ -1166,17 +1804,26 @@ var file_identity_v1_identity_proto_depIdxs = []int32{
 	4,  // 2: identity.v1.AuthenticateResponse.char_servers:type_name -> identity.v1.CharServerInfo
 	6,  // 3: identity.v1.GetCharacterListResponse.characters:type_name -> identity.v1.CharacterInfo
 	9,  // 4: identity.v1.GetCharacterResponse.character:type_name -> identity.v1.CharacterDetail
-	2,  // 5: identity.v1.IdentityService.Authenticate:input_type -> identity.v1.AuthenticateRequest
-	5,  // 6: identity.v1.IdentityService.GetCharacterList:input_type -> identity.v1.GetCharacterListRequest
-	8,  // 7: identity.v1.IdentityService.GetCharacter:input_type -> identity.v1.GetCharacterRequest
-	3,  // 8: identity.v1.IdentityService.Authenticate:output_type -> identity.v1.AuthenticateResponse
-	7,  // 9: identity.v1.IdentityService.GetCharacterList:output_type -> identity.v1.GetCharacterListResponse
-	10, // 10: identity.v1.IdentityService.GetCharacter:output_type -> identity.v1.GetCharacterResponse
-	8,  // [8:11] is the sub-list for method output_type
-	5,  // [5:8] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	12, // 5: identity.v1.GetInventoryResponse.items:type_name -> identity.v1.InventoryItem
+	2,  // 6: identity.v1.IdentityService.Authenticate:input_type -> identity.v1.AuthenticateRequest
+	5,  // 7: identity.v1.IdentityService.GetCharacterList:input_type -> identity.v1.GetCharacterListRequest
+	8,  // 8: identity.v1.IdentityService.GetCharacter:input_type -> identity.v1.GetCharacterRequest
+	11, // 9: identity.v1.IdentityService.GetInventory:input_type -> identity.v1.GetInventoryRequest
+	14, // 10: identity.v1.IdentityService.EquipItem:input_type -> identity.v1.EquipItemRequest
+	16, // 11: identity.v1.IdentityService.UnequipItem:input_type -> identity.v1.UnequipItemRequest
+	18, // 12: identity.v1.IdentityService.UseItem:input_type -> identity.v1.UseItemRequest
+	3,  // 13: identity.v1.IdentityService.Authenticate:output_type -> identity.v1.AuthenticateResponse
+	7,  // 14: identity.v1.IdentityService.GetCharacterList:output_type -> identity.v1.GetCharacterListResponse
+	10, // 15: identity.v1.IdentityService.GetCharacter:output_type -> identity.v1.GetCharacterResponse
+	13, // 16: identity.v1.IdentityService.GetInventory:output_type -> identity.v1.GetInventoryResponse
+	15, // 17: identity.v1.IdentityService.EquipItem:output_type -> identity.v1.EquipItemResponse
+	17, // 18: identity.v1.IdentityService.UnequipItem:output_type -> identity.v1.UnequipItemResponse
+	19, // 19: identity.v1.IdentityService.UseItem:output_type -> identity.v1.UseItemResponse
+	13, // [13:20] is the sub-list for method output_type
+	6,  // [6:13] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_identity_v1_identity_proto_init() }
@@ -1190,7 +1837,7 @@ func file_identity_v1_identity_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_identity_v1_identity_proto_rawDesc), len(file_identity_v1_identity_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   9,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

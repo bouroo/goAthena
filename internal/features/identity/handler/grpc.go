@@ -14,7 +14,13 @@ import (
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
 	"github.com/bouroo/goAthena/internal/features/identity/domain"
 	"github.com/bouroo/goAthena/internal/features/identity/service"
+	inventorydomain "github.com/bouroo/goAthena/internal/features/inventory/domain"
 )
+
+// errItemNotOwnedByChar is the soft-failure error string shared by the
+// three inventory mutations. Lifted out of the handler bodies so
+// goconst (and the next reader) sees it as a single concept.
+const errItemNotOwnedByChar = "item not found or not owned by this character"
 
 // grpcHandler implements identityv1.IdentityServiceServer. It is a thin
 // adapter: proto <-> domain mapping, error code translation, and the
@@ -189,6 +195,156 @@ func (h *grpcHandler) GetCharacter(
 			SkillPoint:   char.SkillPoint,
 		},
 	}, nil
+}
+
+// GetInventory returns every item owned by the requested character.
+// An empty inventory is a normal outcome and is returned as an empty
+// (non-nil) repeated field; repository failures surface as gRPC
+// Internal so the gateway can distinguish "empty backpack" from
+// "backend is down".
+func (h *grpcHandler) GetInventory(
+	ctx context.Context,
+	req *identityv1.GetInventoryRequest,
+) (*identityv1.GetInventoryResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 || req.GetCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id and char_id must be non-zero")
+	}
+
+	items, err := h.svc.GetInventory(ctx, req.GetAccountId(), req.GetCharId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get inventory: %v", err)
+	}
+
+	protoItems := make([]*identityv1.InventoryItem, 0, len(items))
+	for i := range items {
+		protoItems = append(protoItems, inventoryItemToProto(&items[i]))
+	}
+	return &identityv1.GetInventoryResponse{Items: protoItems}, nil
+}
+
+// EquipItem handles the CZ_REQ_EQUIP flow. Mirrors GetCharacter's
+// success=false encoding for the "item does not belong to this
+// character" sentinel — the gateway treats that as a soft failure and
+// skips the equip rather than disconnecting.
+func (h *grpcHandler) EquipItem(
+	ctx context.Context,
+	req *identityv1.EquipItemRequest,
+) (*identityv1.EquipItemResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 || req.GetCharId() == 0 || req.GetItemId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id, char_id and item_id must be non-zero")
+	}
+
+	err := h.svc.EquipItem(ctx, req.GetAccountId(), req.GetCharId(), req.GetItemId(), req.GetEquipPosition())
+	if err != nil {
+		if errors.Is(err, inventorydomain.ErrItemNotFound) {
+			return &identityv1.EquipItemResponse{
+				Success: false,
+				ItemId:  req.GetItemId(),
+				Error:   errItemNotOwnedByChar,
+			}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "equip item: %v", err)
+	}
+	return &identityv1.EquipItemResponse{
+		Success:       true,
+		ItemId:        req.GetItemId(),
+		EquipPosition: req.GetEquipPosition(),
+	}, nil
+}
+
+// UnequipItem clears the EQP_* bitmask on the requested item. Same
+// not-found mapping as EquipItem.
+func (h *grpcHandler) UnequipItem(
+	ctx context.Context,
+	req *identityv1.UnequipItemRequest,
+) (*identityv1.UnequipItemResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 || req.GetCharId() == 0 || req.GetItemId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id, char_id and item_id must be non-zero")
+	}
+
+	err := h.svc.UnequipItem(ctx, req.GetAccountId(), req.GetCharId(), req.GetItemId())
+	if err != nil {
+		if errors.Is(err, inventorydomain.ErrItemNotFound) {
+			return &identityv1.UnequipItemResponse{
+				Success: false,
+				ItemId:  req.GetItemId(),
+				Error:   errItemNotOwnedByChar,
+			}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "unequip item: %v", err)
+	}
+	return &identityv1.UnequipItemResponse{
+		Success: true,
+		ItemId:  req.GetItemId(),
+	}, nil
+}
+
+// UseItem decrements the stack count and returns the new amount.
+// On the sentinel not-found we return success=false with a short
+// error; on any other failure (db outage, etc.) we surface gRPC Internal.
+func (h *grpcHandler) UseItem(
+	ctx context.Context,
+	req *identityv1.UseItemRequest,
+) (*identityv1.UseItemResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 || req.GetCharId() == 0 || req.GetItemId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id, char_id and item_id must be non-zero")
+	}
+
+	remaining, err := h.svc.UseItem(ctx, req.GetAccountId(), req.GetCharId(), req.GetItemId())
+	if err != nil {
+		if errors.Is(err, inventorydomain.ErrItemNotFound) {
+			return &identityv1.UseItemResponse{
+				Success: false,
+				ItemId:  req.GetItemId(),
+				Error:   errItemNotOwnedByChar,
+			}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "use item: %v", err)
+	}
+	return &identityv1.UseItemResponse{
+		Success:         true,
+		ItemId:          req.GetItemId(),
+		RemainingAmount: remaining,
+	}, nil
+}
+
+// inventoryItemToProto projects a domain InventoryItem onto the
+// wire-relevant subset declared in identity.proto. Cards, options,
+// expire_time, favorite, bound, unique_id, equip_switch and
+// enchantgrade are intentionally omitted — they belong to a future
+// proto revision, not this one.
+//
+// Identify is signed smallint on the schema; the rAthena convention
+// only uses 0/1, so we clamp negatives to 0 before widening to
+// uint32. Clamping explicitly keeps gosec G115 happy without losing
+// the (impossible-but-recorded) -1 sentinel that rAthena historically
+// used for "identify failed".
+func inventoryItemToProto(item *inventorydomain.InventoryItem) *identityv1.InventoryItem {
+	if item == nil {
+		return nil
+	}
+	identify := max(0, item.Identify)
+	return &identityv1.InventoryItem{
+		Id:        item.ID,
+		Nameid:    item.NameID,
+		Amount:    item.Amount,
+		Equip:     uint32(item.Equip),
+		Identify:  uint32(identify), //nolint:gosec // G115: clamped to >=0 above; rAthena only uses 0/1.
+		Refine:    uint32(item.Refine),
+		Attribute: uint32(item.Attribute),
+	}
 }
 
 // sexToProtoByte maps the domain Sex string onto the uint32 the proto

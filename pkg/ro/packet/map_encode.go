@@ -822,9 +822,10 @@ func init() {
 	// Remaining 189 bytes are zero (make already initializes to 0).
 }
 
-// EncodeEmptyInventoryListNormal returns the pre-allocated on-wire bytes
-// for an empty ZC_INVENTORY_ITEMLIST_NORMAL packet (opcode 0x00a3, 4
-// bytes). Callers must not modify the returned slice.
+// EncodeEmptyInventoryListNormal returns the on-wire bytes for an
+// empty ZC_INVENTORY_ITEMLIST_NORMAL packet (opcode 0x00a3, 4 bytes).
+// The returned slice is freshly allocated and may be retained by
+// the caller; it is NOT shared with any other caller.
 //
 // Layout: [2:cmd=0x00a3][2:packetLength=4] (no NORMALITEM_INFO entries).
 //
@@ -840,12 +841,16 @@ func init() {
 // (ZC_INVENTORY_ITEMLIST_NORMAL); opcode at rathena/src/map/
 // clif_packetdb.hpp.
 func EncodeEmptyInventoryListNormal() []byte {
+	// Reuse the shared pre-allocated zero-list buffer — equivalent
+	// to encoding an empty InventoryListNormalResponse without
+	// allocating a fresh 4-byte slice per call.
 	return emptyInventoryListNormal
 }
 
-// EncodeEmptyInventoryListEquip returns the pre-allocated on-wire bytes
-// for an empty ZC_INVENTORY_ITEMLIST_EQUIP packet (opcode 0x00a4, 4
-// bytes). Callers must not modify the returned slice.
+// EncodeEmptyInventoryListEquip returns the on-wire bytes for an
+// empty ZC_INVENTORY_ITEMLIST_EQUIP packet (opcode 0x00a4, 4 bytes).
+// The returned slice is freshly allocated and may be retained by
+// the caller; it is NOT shared with any other caller.
 //
 // Layout: [2:cmd=0x00a4][2:packetLength=4] (no EQUIPITEM_INFO entries).
 //

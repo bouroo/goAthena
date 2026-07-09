@@ -92,6 +92,31 @@ const (
 	// rathena/src/map/clif_packetdb.hpp:60 (`parseable_packet(0x00b9,6,clif_parse_ScriptContinue,2)`).
 	// Fixed 6 bytes: [2:cmd][4:NpcID uint32].
 	HeaderCZREQNEXTSCRIPT uint16 = 0x00b9
+	// P2A: CZ_USE_ITEM2 (0x0439) — client requests to use a consumable
+	// item. rathena/src/map/clif_packetdb.hpp:1151
+	// (`parseable_packet(0x0439,8,clif_parse_UseItem,2,4)`).
+	// Fixed 8 bytes: [2:cmd=0x0439][2:inventory index uint16]
+	// [4:AID uint32]. The 2-byte "item id" rAthena reads at
+	// packet_db[..].pos[0] is the inventory index, not the item DB
+	// nameid — clif_parse_UseItem uses it to look up the row in
+	// `inventory` and then resolves nameid from there.
+	HeaderCZUSEITEM2 uint16 = 0x0439
+	// P2A: CZ_REQ_WEAR_EQUIP_V5 (0x0998) — client requests to equip
+	// an item. rathena/src/map/packets.hpp:1504-1509
+	// (PACKET_CZ_REQ_WEAR_EQUIP, PACKETVER >= 20120925 branch).
+	// Fixed 10 bytes: [2:cmd=0x0998][2:inventory index uint16]
+	// [4:equip position uint32 — EQP_* bitmask]. The 32-bit position
+	// field is what makes this the "V5" shape; pre-20120925 uses
+	// uint16 position with opcode 0x00a9.
+	HeaderCZREQWEAREQUIPV5 uint16 = 0x0998
+	// P2A: CZ_REQ_TAKEOFF_EQUIP (0x00ab) — client requests to
+	// unequip an item. rathena/src/map/clif_packetdb.hpp:59
+	// (`parseable_packet(0x00ab,4,clif_parse_UnequipItem,2)`).
+	// Fixed 4 bytes: [2:cmd=0x00ab][2:inventory index uint16]. The
+	// unequip handler ignores the equip-position field the client
+	// sends; the server derives the position from the row's
+	// `inventory.equip` column.
+	HeaderCZREQTAKEOFFEQUIP uint16 = 0x00ab
 	// CZ_CLOSE_DIALOG (0x0146) — client clicks "Close" in a dialog.
 	// rathena/src/map/clif_packetdb.hpp:72 (`parseable_packet(0x0146,6,clif_parse_CloseDialog,2)`).
 	// Fixed 6 bytes: [2:cmd][4:GID uint32].
@@ -126,8 +151,32 @@ const (
 	HeaderZCLONGPARCHANGE           uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
 	HeaderZCINVENTORYITEMLISTNORMAL uint16 = 0x00a3 // rathena/src/map/clif_packetdb.hpp (ZC_INVENTORY_ITEMLIST_NORMAL)
 	HeaderZCINVENTORYITEMLISTEQUIP  uint16 = 0x00a4 // rathena/src/map/clif_packetdb.hpp (ZC_INVENTORY_ITEMLIST_EQUIP)
-	HeaderZCSKILLINFOLIST           uint16 = 0x010f // rathena/src/map/packets_struct.hpp:4279 (ZC_SKILLINFO_LIST)
-	HeaderZCSHORTCUTKEYLIST         uint16 = 0x02b9 // rathena/src/map/packets_struct.hpp:1619 (ZC_SHORTCUT_KEY_LIST, PACKETVER < 20090603)
+	// P2A: ZC_REQ_WEAR_EQUIP_ACK_V5 (0x0999) — server ack for
+	// CZ_REQ_WEAR_EQUIP_V5. rathena/src/map/packets_struct.hpp:1269-1276
+	// (PACKETVER_MAIN_NUM >= 20121205 branch). Fixed 11 bytes:
+	// [2:cmd=0x0999][2:inventory index uint16][4:wearLocation uint32]
+	// [2:wItemSpriteNumber uint16][1:result uint8] (result 0=fail,
+	// 1=ok, 2=low-level fail per clif.cpp:4306-4309).
+	HeaderZCREQWEAREQUIPACKV5 uint16 = 0x0999
+	// P2A: ZC_REQ_TAKEOFF_EQUIP_ACK (0x99a) — server ack for
+	// CZ_REQ_TAKEOFF_EQUIP. rathena/src/map/packets.hpp:1007-1013
+	// (PACKETVER >= 20130000 branch, which covers 20250604). Fixed 8
+	// bytes: [2:cmd=0x99a][2:inventory index uint16]
+	// [4:wearLocation uint32][1:flag uint8] (inverted for
+	// PACKETVER >= 20110824 per clif.cpp:4338 — success becomes
+	// 0 on the wire).
+	HeaderZCREQTAKEOFFEQUIPACK uint16 = 0x099a
+	// P2A: ZC_USE_ITEM_ACK2 (0x01c8) — server ack for
+	// CZ_USE_ITEM2. rathena/src/map/packets_struct.hpp:312
+	// (useItemAckType = 0x1c8, PACKETVER >= 3). Fixed 13 bytes:
+	// [2:cmd=0x01c8][2:index int16][2:itemId uint16][4:AID uint32]
+	// [2:amount int16][1:result uint8] (PACKETVER 20250604 uses
+	// uint16 itemId; uint32 is reserved for PACKETVER >=
+	// 20181121). For PACKETVER 20250604, index is +2 from the
+	// server-side row index (clif.cpp:4482).
+	HeaderZCUSEITEMACK2     uint16 = 0x01c8
+	HeaderZCSKILLINFOLIST   uint16 = 0x010f // rathena/src/map/packets_struct.hpp:4279 (ZC_SKILLINFO_LIST)
+	HeaderZCSHORTCUTKEYLIST uint16 = 0x02b9 // rathena/src/map/packets_struct.hpp:1619 (ZC_SHORTCUT_KEY_LIST, PACKETVER < 20090603)
 	// ZC_NOTIFY_ACT (0x08c8) — damage / action notification. rathena/src/map/
 	// packets.hpp:1426 (PACKETVER >= 20131223). Fixed 34 bytes.
 	HeaderZCNOTIFYACT uint16 = 0x08c8
@@ -343,6 +392,41 @@ const (
 	// sizeZCNotifyVanish = int16 packetType + uint32 gid + uint8 type = 2+4+1 = 7
 	// (rathena/src/map/packets.hpp:604-608).
 	sizeZCNotifyVanish = 7
+	// sizeCZUseItem2 = int16 packetType + uint16 index + uint32 AID = 2+2+4 = 8
+	// (rathena/src/map/clif_packetdb.hpp:1151).
+	sizeCZUseItem2 = 8
+	// sizeCZReqWearEquipV5 = int16 packetType + uint16 index + uint32 position = 2+2+4 = 8
+	// (rathena/src/map/packets.hpp:1504-1509).
+	sizeCZReqWearEquipV5 = 8
+	// sizeCZReqTakeoffEquip = int16 packetType + uint16 index = 2+2 = 4
+	// (rathena/src/map/clif_packetdb.hpp:59).
+	sizeCZReqTakeoffEquip = 4
+	// sizeZCReqWearEquipAckV5 = int16 packetType + uint16 index + uint32 wearLocation +
+	// uint16 wItemSpriteNumber + uint8 result = 2+2+4+2+1 = 11
+	// (rathena/src/map/packets_struct.hpp:1269-1276).
+	sizeZCReqWearEquipAckV5 = 11
+	// sizeZCReqTakeoffEquipAck = int16 packetType + uint16 index + uint32 wearLocation +
+	// uint8 flag = 2+2+4+1 = 9
+	// (rathena/src/map/packets.hpp:1007-1013).
+	sizeZCReqTakeoffEquipAck = 9
+	// sizeZCUseItemAck2 = int16 packetType + int16 index + uint16 itemId +
+	// uint32 AID + int16 amount + uint8 result = 2+2+2+4+2+1 = 13
+	// (rathena/src/map/packets_struct.hpp:2577-2589, PACKETVER 20250604 branch).
+	sizeZCUseItemAck2 = 13
+	// sizeNormalItem is the per-item size of NORMALITEM_INFO for
+	// PACKETVER 20250604 (rathena/src/map/packets_struct.hpp:418-448):
+	// int16 index + uint16 ITID + uint8 type + int16 count +
+	// uint32 WearState + EQUIPSLOTINFO(8) + int32 HireExpireDate +
+	// uint16 bindOnEquipType + Flag(1) = 2+2+1+2+4+8+4+2+1 = 26.
+	sizeNormalItem = 26
+	// sizeEquipItem is the per-item size of EQUIPITEM_INFO for
+	// PACKETVER 20250604 (rathena/src/map/packets_struct.hpp:457-507):
+	// int16 index + uint16 ITID + uint8 type + uint32 location +
+	// uint32 WearState + uint8 RefiningLevel + EQUIPSLOTINFO(8) +
+	// int32 HireExpireDate + uint16 bindOnEquipType +
+	// uint16 wItemSpriteNumber + uint8 option_count +
+	// 5*ItemOptions(25) + Flag(1) = 2+2+1+4+4+1+8+4+2+2+1+25+1 = 57.
+	sizeEquipItem = 57
 )
 
 // Damage / action type constants from rathena/src/map/clif.hpp:691-707.
@@ -682,6 +766,46 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCNOTIFYVANISH,
 		Name:      "ZC_NOTIFY_VANISH",
 		Length:    sizeZCNotifyVanish,
+		Direction: DirectionServerToClient,
+	})
+	// P2A: inventory equip / use packet family — three C→S requests
+	// and three S→C acks. See the per-constant source citations above
+	// for the rAthena packetdb / packets.hpp / packets_struct.hpp
+	// lines that pin each opcode and on-wire size to PACKETVER 20250604.
+	db.Register(Definition{
+		ID:        HeaderCZUSEITEM2,
+		Name:      "CZ_USE_ITEM2",
+		Length:    sizeCZUseItem2,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQWEAREQUIPV5,
+		Name:      "CZ_REQ_WEAR_EQUIP_V5",
+		Length:    sizeCZReqWearEquipV5,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQTAKEOFFEQUIP,
+		Name:      "CZ_REQ_TAKEOFF_EQUIP",
+		Length:    sizeCZReqTakeoffEquip,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCREQWEAREQUIPACKV5,
+		Name:      "ZC_REQ_WEAR_EQUIP_ACK_V5",
+		Length:    sizeZCReqWearEquipAckV5,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCREQTAKEOFFEQUIPACK,
+		Name:      "ZC_REQ_TAKEOFF_EQUIP_ACK",
+		Length:    sizeZCReqTakeoffEquipAck,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCUSEITEMACK2,
+		Name:      "ZC_USE_ITEM_ACK2",
+		Length:    sizeZCUseItemAck2,
 		Direction: DirectionServerToClient,
 	})
 

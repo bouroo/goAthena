@@ -19,6 +19,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/bouroo/goAthena/internal/features/identity/domain"
+	inventorydomain "github.com/bouroo/goAthena/internal/features/inventory/domain"
 )
 
 // LoginError carries the AC_REFUSE_LOGIN wire code produced by the auth
@@ -34,16 +35,19 @@ func (e *LoginError) Error() string {
 }
 
 // identityService implements domain.IdentityService. It composes the
-// account, character and session repositories into the rAthena login
-// state machine (login.cpp:296-434).
+// account, character, session and inventory repositories into the
+// rAthena login + inventory state machines (login.cpp:296-434,
+// inventory mutations in clif.cpp / inventory.cpp).
 type identityService struct {
-	accounts   domain.AccountRepository
-	characters domain.CharacterRepository
-	sessions   domain.SessionRepository
-	logger     *zerolog.Logger
-	useMD5     bool
-	maxChars   int
-	now        func() time.Time
+	accounts        domain.AccountRepository
+	characters      domain.CharacterRepository
+	sessions        domain.SessionRepository
+	inventory       inventorydomain.InventoryRepository
+	inventoryWeight inventorydomain.ItemWeightLookup
+	logger          *zerolog.Logger
+	useMD5          bool
+	maxChars        int
+	now             func() time.Time
 }
 
 // Option mutates an identityService during construction. Used to inject
@@ -62,6 +66,13 @@ func WithClock(now func() time.Time) Option {
 // AuthRejected per login.cpp:233. maxChars caps the character roster
 // (effective = max(account.character_slots, MIN_CHARS)); the default of 15
 // matches PACKETVER >= 20100413.
+//
+// The inventory ports are appended last (Phase 2A) to keep existing
+// call sites on the same parameter layout — the inventory repo is
+// nil-safe in the auth path because the inventory use cases check it
+// lazily. itemWeight backs the carry-weight gate on item acquisition;
+// pass inventorydomain.ZeroItemWeight{} until the item_db.yml loader
+// lands.
 func NewIdentityService(
 	accounts domain.AccountRepository,
 	characters domain.CharacterRepository,
@@ -69,6 +80,8 @@ func NewIdentityService(
 	logger *zerolog.Logger,
 	useMD5 bool,
 	maxChars int,
+	inventory inventorydomain.InventoryRepository,
+	itemWeight inventorydomain.ItemWeightLookup,
 	opts ...Option,
 ) domain.IdentityService {
 	if maxChars <= 0 {
@@ -78,14 +91,19 @@ func NewIdentityService(
 		nop := zerolog.Nop()
 		logger = &nop
 	}
+	if itemWeight == nil {
+		itemWeight = inventorydomain.ZeroItemWeight{}
+	}
 	s := &identityService{
-		accounts:   accounts,
-		characters: characters,
-		sessions:   sessions,
-		logger:     logger,
-		useMD5:     useMD5,
-		maxChars:   maxChars,
-		now:        time.Now,
+		accounts:        accounts,
+		characters:      characters,
+		sessions:        sessions,
+		inventory:       inventory,
+		inventoryWeight: itemWeight,
+		logger:          logger,
+		useMD5:          useMD5,
+		maxChars:        maxChars,
+		now:             time.Now,
 	}
 	for _, opt := range opts {
 		opt(s)

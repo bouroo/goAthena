@@ -17,6 +17,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/identity/domain"
 	mocks "github.com/bouroo/goAthena/internal/features/identity/repository/mock"
 	"github.com/bouroo/goAthena/internal/features/identity/service"
+	inventorydomain "github.com/bouroo/goAthena/internal/features/inventory/domain"
 )
 
 // nopLogger discards all log output so test runs stay quiet.
@@ -36,8 +37,8 @@ func TestNewIdentityService_DefaultMaxChars(t *testing.T) {
 	acc := mocks.NewMockAccountRepository(ctrl)
 	chr := mocks.NewMockCharacterRepository(ctrl)
 	sess := mocks.NewMockSessionRepository(ctrl)
-	_ = service.NewIdentityService(acc, chr, sess, nopLogger(), false, 0)
-	_ = service.NewIdentityService(acc, chr, sess, nopLogger(), false, -3)
+	_ = service.NewIdentityService(acc, chr, sess, nopLogger(), false, 0, nil, inventorydomain.ZeroItemWeight{})
+	_ = service.NewIdentityService(acc, chr, sess, nopLogger(), false, -3, nil, inventorydomain.ZeroItemWeight{})
 }
 
 func TestLogin_HappyPath_Plain(t *testing.T) {
@@ -58,7 +59,7 @@ func TestLogin_HappyPath_Plain(t *testing.T) {
 	}
 	ip := netip.MustParseAddr("203.0.113.10")
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15,
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{},
 		service.WithClock(fixedClock(fixedNow)))
 
 	accRepo.EXPECT().LoadByUserID(gomock.Any(), "alice").Return(acc, nil)
@@ -103,7 +104,7 @@ func TestLogin_HappyPath_MD5(t *testing.T) {
 	stored := "2ab96390c7dbe3439de74d0c9b0b1767"
 	acc := &domain.Account{AccountID: 7, UserID: "bob", UserPass: stored, Sex: domain.SexMale}
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), true, 15,
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), true, 15, nil, inventorydomain.ZeroItemWeight{},
 		service.WithClock(fixedClock(time.Now())))
 
 	accRepo.EXPECT().LoadByUserID(gomock.Any(), "bob").Return(acc, nil)
@@ -131,7 +132,7 @@ func TestLogin_AccountNotFound(t *testing.T) {
 		LoadByUserID(gomock.Any(), "ghost").
 		Return(nil, domain.ErrAccountNotFound)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	_, err := svc.Login(context.Background(), domain.LoginRequest{
 		UserID: "ghost", Password: "x", Method: domain.PassEncodingPlain,
 	})
@@ -152,7 +153,7 @@ func TestLogin_WrongPassword_Plain(t *testing.T) {
 		AccountID: 1, UserID: "alice", UserPass: "secret123",
 	}, nil)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	_, err := svc.Login(context.Background(), domain.LoginRequest{
 		UserID: "alice", Password: "wrong", Method: domain.PassEncodingPlain,
 	})
@@ -173,7 +174,7 @@ func TestLogin_WrongPassword_MD5(t *testing.T) {
 		AccountID: 1, UserID: "bob", UserPass: "2ab96390c7dbe3439de74d0c9b0b1767",
 	}, nil)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), true, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), true, 15, nil, inventorydomain.ZeroItemWeight{})
 	_, err := svc.Login(context.Background(), domain.LoginRequest{
 		UserID: "bob", Password: "not-hunter2", Method: domain.PassEncodingMD5,
 	})
@@ -198,7 +199,7 @@ func TestLogin_Expired(t *testing.T) {
 		ExpirationTime: now.Add(-1 * time.Hour),
 	}, nil)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15,
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{},
 		service.WithClock(fixedClock(now)))
 
 	_, err := svc.Login(context.Background(), domain.LoginRequest{
@@ -225,7 +226,7 @@ func TestLogin_Banned(t *testing.T) {
 		UnbanTime: now.Add(24 * time.Hour),
 	}, nil)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15,
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{},
 		service.WithClock(fixedClock(now)))
 
 	_, err := svc.Login(context.Background(), domain.LoginRequest{
@@ -248,7 +249,7 @@ func TestLogin_BlockedState(t *testing.T) {
 		AccountID: 1, UserID: "alice", UserPass: "ok", State: 5,
 	}, nil)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	_, err := svc.Login(context.Background(), domain.LoginRequest{
 		UserID: "alice", Password: "ok", Method: domain.PassEncodingPlain,
 	})
@@ -269,7 +270,7 @@ func TestLogin_StateExceeds255Clamps(t *testing.T) {
 		AccountID: 1, UserID: "alice", UserPass: "ok", State: 1000,
 	}, nil)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	_, err := svc.Login(context.Background(), domain.LoginRequest{
 		UserID: "alice", Password: "ok", Method: domain.PassEncodingPlain,
 	})
@@ -286,7 +287,7 @@ func TestLogin_EncodingMismatch(t *testing.T) {
 	chrRepo := mocks.NewMockCharacterRepository(ctrl)
 	sessRepo := mocks.NewMockSessionRepository(ctrl)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	_, err := svc.Login(context.Background(), domain.LoginRequest{
 		UserID: "alice", Password: "ok", Method: domain.PassEncodingMD5,
 	})
@@ -309,7 +310,7 @@ func TestLogin_SessionPutError(t *testing.T) {
 	sessRepo.EXPECT().Put(gomock.Any(), gomock.Any(), domain.SessionTTL).
 		Return(errors.New("valkey down"))
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	_, err := svc.Login(context.Background(), domain.LoginRequest{
 		UserID: "alice", Password: "ok", Method: domain.PassEncodingPlain,
 	})
@@ -331,7 +332,7 @@ func TestLogin_UpdateLoginInfoFailureIsLoggedNotFatal(t *testing.T) {
 	accRepo.EXPECT().UpdateLoginInfo(gomock.Any(), uint32(1), gomock.Any()).
 		Return(errors.New("db hiccup"))
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	resp, err := svc.Login(context.Background(), domain.LoginRequest{
 		UserID: "alice", Password: "ok", Method: domain.PassEncodingPlain,
 		RemoteIP: netip.MustParseAddr("127.0.0.1"),
@@ -350,7 +351,7 @@ func TestLogin_LoadByUserID_OtherError(t *testing.T) {
 	accRepo.EXPECT().LoadByUserID(gomock.Any(), "alice").
 		Return(nil, errors.New("db exploded"))
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	_, err := svc.Login(context.Background(), domain.LoginRequest{
 		UserID: "alice", Password: "ok", Method: domain.PassEncodingPlain,
 	})
@@ -370,7 +371,7 @@ func TestLogin_PasswordEncodingPlainConstantTime(t *testing.T) {
 		AccountID: 1, UserID: "alice", UserPass: "short",
 	}, nil)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	_, err := svc.Login(context.Background(), domain.LoginRequest{
 		UserID: "alice", Password: "much-longer-password", Method: domain.PassEncodingPlain,
 	})
@@ -393,7 +394,7 @@ func TestListCharacters_HappyPath(t *testing.T) {
 	}
 	chrRepo.EXPECT().ListByAccount(gomock.Any(), uint32(9), 15).Return(want, nil)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	got, err := svc.ListCharacters(context.Background(), 9)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
@@ -408,7 +409,7 @@ func TestListCharacters_EmptyReturnsNonNilSlice(t *testing.T) {
 
 	chrRepo.EXPECT().ListByAccount(gomock.Any(), uint32(9), 15).Return(nil, nil)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	got, err := svc.ListCharacters(context.Background(), 9)
 	require.NoError(t, err)
 	require.NotNil(t, got, "handler must never see a nil roster")
@@ -425,7 +426,7 @@ func TestListCharacters_RepoError(t *testing.T) {
 	chrRepo.EXPECT().ListByAccount(gomock.Any(), uint32(9), 15).
 		Return(nil, errors.New("db down"))
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	_, err := svc.ListCharacters(context.Background(), 9)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "list characters")
@@ -465,7 +466,7 @@ func TestGetCharacter_HappyPath(t *testing.T) {
 		GetByID(gomock.Any(), uint32(2000000), uint32(150001)).
 		Return(want, nil)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	got, err := svc.GetCharacter(context.Background(), 2000000, 150001)
 	require.NoError(t, err)
 	require.NotNil(t, got)
@@ -483,7 +484,7 @@ func TestGetCharacter_NotFound_PropagatesSentinel(t *testing.T) {
 		GetByID(gomock.Any(), uint32(2000000), uint32(150001)).
 		Return(nil, domain.ErrCharacterNotFound)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	got, err := svc.GetCharacter(context.Background(), 2000000, 150001)
 	require.Error(t, err)
 	assert.Nil(t, got)
@@ -503,7 +504,7 @@ func TestGetCharacter_RepoError_PropagatesUnchanged(t *testing.T) {
 		GetByID(gomock.Any(), uint32(2000000), uint32(150001)).
 		Return(nil, repoErr)
 
-	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15)
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
 	got, err := svc.GetCharacter(context.Background(), 2000000, 150001)
 	require.Error(t, err)
 	assert.Nil(t, got)

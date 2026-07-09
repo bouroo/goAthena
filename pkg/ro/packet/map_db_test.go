@@ -44,6 +44,14 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCACTIONRESPONSE, "ZC_ACTION_RESPONSE", sizeZCActionResponse, DirectionServerToClient},
 		{HeaderZCSETUNITIDLE, "ZC_SET_UNIT_IDLE", sizeZCSetUnitIdle, DirectionServerToClient},
 		{HeaderZCUNITWALKING, "ZC_UNIT_WALKING", sizeZCUnitWalking, DirectionServerToClient},
+		// P2A: inventory equip/use family — see NewMapServerDB for the
+		// rAthena packetdb citations.
+		{HeaderCZUSEITEM2, "CZ_USE_ITEM2", sizeCZUseItem2, DirectionClientToServer},
+		{HeaderCZREQWEAREQUIPV5, "CZ_REQ_WEAR_EQUIP_V5", sizeCZReqWearEquipV5, DirectionClientToServer},
+		{HeaderCZREQTAKEOFFEQUIP, "CZ_REQ_TAKEOFF_EQUIP", sizeCZReqTakeoffEquip, DirectionClientToServer},
+		{HeaderZCREQWEAREQUIPACKV5, "ZC_REQ_WEAR_EQUIP_ACK_V5", sizeZCReqWearEquipAckV5, DirectionServerToClient},
+		{HeaderZCREQTAKEOFFEQUIPACK, "ZC_REQ_TAKEOFF_EQUIP_ACK", sizeZCReqTakeoffEquipAck, DirectionServerToClient},
+		{HeaderZCUSEITEMACK2, "ZC_USE_ITEM_ACK2", sizeZCUseItemAck2, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -68,8 +76,11 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewMapServerDB()
-	// 15 C→S + 28 S→C = 43 (M-phase1 adds ZC_UNIT_WALKING).
-	const want = 43
+	// 18 C→S + 31 S→C = 49 (P2A adds the inventory equip/use
+	// family: CZ_USE_ITEM2, CZ_REQ_WEAR_EQUIP_V5, CZ_REQ_TAKEOFF_EQUIP,
+	// ZC_REQ_WEAR_EQUIP_ACK_V5, ZC_REQ_TAKEOFF_EQUIP_ACK,
+	// ZC_USE_ITEM_ACK2).
+	const want = 49
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -114,6 +125,13 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCACKREQNAME, sizeZCAckReqName},
 		{HeaderZCSETUNITIDLE, sizeZCSetUnitIdle},
 		{HeaderZCUNITWALKING, sizeZCUnitWalking},
+		// P2A: inventory equip/use family.
+		{HeaderCZUSEITEM2, sizeCZUseItem2},
+		{HeaderCZREQWEAREQUIPV5, sizeCZReqWearEquipV5},
+		{HeaderCZREQTAKEOFFEQUIP, sizeCZReqTakeoffEquip},
+		{HeaderZCREQWEAREQUIPACKV5, sizeZCReqWearEquipAckV5},
+		{HeaderZCREQTAKEOFFEQUIPACK, sizeZCReqTakeoffEquipAck},
+		{HeaderZCUSEITEMACK2, sizeZCUseItemAck2},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)
