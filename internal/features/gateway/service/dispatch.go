@@ -2126,7 +2126,45 @@ func (h *DispatchHandler) handleAttack(ctx context.Context, conn *domain.Connect
 	return nil
 }
 
-// applyMonsterKillExp looks up the dead monster's EXP values, accumulates
+// applyBaseLevelUp detects whether the most recent EXP gain triggers a
+// base level-up, persists it via identity.ApplyLevelUp, and emits the
+// ZC_NOTIFY_EFFECT + ZC_PAR_CHANGE burst. Extracted from
+// applyMonsterKillExp to keep that function's nesting under the gocyclo
+// limit (D-213).
+func (h *DispatchHandler) applyBaseLevelUp(ctx context.Context, conn *domain.ConnectionInfo, burst *bytes.Buffer, m *monsterSpawn, baseExp int32) {
+	if m.BaseExp <= 0 || conn.BaseLevel == 0 {
+		return
+	}
+	gain := statsdomain.ApplyBaseExpGain(conn.BaseLevel, uint64(baseExp-m.BaseExp), uint64(m.BaseExp)) //nolint:gosec // G115: EXP values are non-negative int32
+	if !gain.LeveledUp {
+		return
+	}
+	levelUpResp, lerr := h.identity.ApplyLevelUp(ctx, &identityv1.ApplyLevelUpRequest{
+		AccountId:           conn.AccountID,
+		CharId:              conn.CharID,
+		FromBaseLevel:       conn.BaseLevel,
+		ToBaseLevel:         gain.NewLevel,
+		GrantedStatusPoints: gain.GrantedStatusPoints,
+	})
+	if lerr != nil {
+		h.logger.Error().Err(lerr).Uint64("conn", conn.ID).Msg("ApplyLevelUp RPC failed")
+		return
+	}
+	if !levelUpResp.GetSuccess() {
+		return
+	}
+	conn.BaseLevel = gain.NewLevel
+	if err := (packet.ZCNotifyEffect{EffectID: packet.EffectBaseLevelUp}).Encode(burst); err != nil {
+		h.logger.Error().Err(err).Msg("encode ZC_NOTIFY_EFFECT failed")
+	}
+	if err := (packet.ParChangeResponse{VarID: packet.SPBaseLevel, Count: int32(gain.NewLevel)}).Encode(burst); err != nil { //nolint:gosec // base_level <= 99
+		h.logger.Error().Err(err).Msg("encode SPBaseLevel failed")
+	}
+	if err := (packet.ParChangeResponse{VarID: packet.SPStatusPoint, Count: int32(levelUpResp.GetNewStatusPoint())}).Encode(burst); err != nil { //nolint:gosec // status_point <= 1273
+		h.logger.Error().Err(err).Msg("encode SPStatusPoint failed")
+	}
+}
+
 // them in the connection state, and appends ZC_LONGPAR_CHANGE updates
 // to the response burst.
 func (h *DispatchHandler) applyMonsterKillExp(ctx context.Context, conn *domain.ConnectionInfo, burst *bytes.Buffer, targetGID uint32) {
@@ -2151,36 +2189,7 @@ func (h *DispatchHandler) applyMonsterKillExp(ctx context.Context, conn *domain.
 				h.logger.Error().Err(err).Msg("encode SPJobExp failed")
 			}
 
-			// P2C: base-level-up detection (D-213). Apply the gain to
-			// the stats domain level-up calculator. On LeveledUp,
-			// persist via identity.ApplyLevelUp and emit
-			// ZC_NOTIFY_EFFECT + ZC_PAR_CHANGE bursts.
-			if m.BaseExp > 0 && conn.BaseLevel > 0 {
-				gain := statsdomain.ApplyBaseExpGain(conn.BaseLevel, uint64(baseExp-m.BaseExp), uint64(m.BaseExp))
-				if gain.LeveledUp {
-					levelUpResp, lerr := h.identity.ApplyLevelUp(ctx, &identityv1.ApplyLevelUpRequest{
-						AccountId:           conn.AccountID,
-						CharId:              conn.CharID,
-						FromBaseLevel:       conn.BaseLevel,
-						ToBaseLevel:         gain.NewLevel,
-						GrantedStatusPoints: gain.GrantedStatusPoints,
-					})
-					if lerr != nil {
-						h.logger.Error().Err(lerr).Uint64("conn", conn.ID).Msg("ApplyLevelUp RPC failed")
-					} else if levelUpResp.GetSuccess() {
-						conn.BaseLevel = gain.NewLevel
-						if err := (packet.ZCNotifyEffect{EffectID: packet.EffectBaseLevelUp}).Encode(burst); err != nil {
-							h.logger.Error().Err(err).Msg("encode ZC_NOTIFY_EFFECT failed")
-						}
-						if err := (packet.ParChangeResponse{VarID: packet.SPBaseLevel, Count: int32(gain.NewLevel)}).Encode(burst); err != nil { //nolint:gosec // base_level <= 99
-							h.logger.Error().Err(err).Msg("encode SPBaseLevel failed")
-						}
-						if err := (packet.ParChangeResponse{VarID: packet.SPStatusPoint, Count: int32(levelUpResp.GetNewStatusPoint())}).Encode(burst); err != nil { //nolint:gosec // status_point <= 1273
-							h.logger.Error().Err(err).Msg("encode SPStatusPoint failed")
-						}
-					}
-				}
-			}
+			h.applyBaseLevelUp(ctx, conn, burst, &m, baseExp)
 			break
 		}
 	}

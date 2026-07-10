@@ -160,7 +160,7 @@ func (r *characterRepo) ApplyLevelUp(
 		Model(&CharModel{}).
 		Where("account_id = ? AND char_id = ? AND base_level = ?",
 			accountID, charID, fromLevel).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			"base_level":   toLevel,
 			"status_point": gorm.Expr("status_point + ?", grantedStatusPoints),
 			"base_exp":     0,
@@ -213,7 +213,7 @@ func (r *characterRepo) AllocateStat(
 		Model(&CharModel{}).
 		Where("account_id = ? AND char_id = ? AND status_point >= ? AND "+statColumn+" + ? <= 99",
 			accountID, charID, cost, amount).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			statColumn:     newCol,
 			"status_point": gorm.Expr("status_point - ?", cost),
 		})

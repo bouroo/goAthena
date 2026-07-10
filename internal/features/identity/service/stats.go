@@ -20,7 +20,11 @@ func (s *identityService) ApplyLevelUp(
 	if accountID == 0 || charID == 0 {
 		return 0, 0, false, fmt.Errorf("apply level up (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound)
 	}
-	return s.characters.ApplyLevelUp(ctx, accountID, charID, fromLevel, toLevel, grantedStatusPoints)
+	newLevel, newStatusPoint, applied, err = s.characters.ApplyLevelUp(ctx, accountID, charID, fromLevel, toLevel, grantedStatusPoints)
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("apply level up (account=%d, char=%d): %w", accountID, charID, err)
+	}
+	return newLevel, newStatusPoint, applied, nil
 }
 
 // AllocateStat raises one base stat by amount, computing the cost from
@@ -36,7 +40,7 @@ func (s *identityService) AllocateStat(
 		return 0, 0, 0, fmt.Errorf("allocate stat (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound)
 	}
 
-	statType := statsdomain.StatType(statID)
+	statType := statsdomain.StatType(statID) //nolint:gosec // G115: statID is a wire SP_* id (13..18), bounded
 	if !statType.Valid() {
 		return 4, 0, 0, nil
 	}
@@ -53,7 +57,7 @@ func (s *identityService) AllocateStat(
 	cost := statsdomain.StatCost(currentVal, int(amount))
 	column := statTypeToColumn(statType)
 
-	newVal, newSp, repoResult, err := s.characters.AllocateStat(ctx, accountID, charID, column, uint8(amount), cost)
+	newVal, newSp, repoResult, err := s.characters.AllocateStat(ctx, accountID, charID, column, uint8(amount), cost) //nolint:gosec // G115: amount is a stat step count (1..99), bounded
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("allocate stat: %w", err)
 	}
@@ -96,17 +100,17 @@ func statTypeToColumn(t statsdomain.StatType) string {
 func statValueFromSummary(c *domain.CharacterSummary, t statsdomain.StatType) uint8 {
 	switch t {
 	case statsdomain.StatStr:
-		return uint8(c.Str)
+		return uint8(c.Str) //nolint:gosec // G115: stats cap at 99
 	case statsdomain.StatAgi:
-		return uint8(c.Agi)
+		return uint8(c.Agi) //nolint:gosec // G115: stats cap at 99
 	case statsdomain.StatVit:
-		return uint8(c.Vit)
+		return uint8(c.Vit) //nolint:gosec // G115: stats cap at 99
 	case statsdomain.StatInt:
-		return uint8(c.Int)
+		return uint8(c.Int) //nolint:gosec // G115: stats cap at 99
 	case statsdomain.StatDex:
-		return uint8(c.Dex)
+		return uint8(c.Dex) //nolint:gosec // G115: stats cap at 99
 	case statsdomain.StatLuk:
-		return uint8(c.Luk)
+		return uint8(c.Luk) //nolint:gosec // G115: stats cap at 99
 	}
-	return 0 //nolint:gosec // stats cap at 99
+	return 0
 }
