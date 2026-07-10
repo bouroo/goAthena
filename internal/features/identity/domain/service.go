@@ -109,4 +109,17 @@ type IdentityService interface {
 	// an already-owned item does NOT call this — weight is enforced on
 	// acquisition only.
 	CheckWeight(ctx context.Context, accountID, charID, addNameID, addAmount uint32) error
+
+	// ApplyLevelUp persists a base-level-up computed by the gateway (D-213).
+	// Delegates to CharacterRepository.ApplyLevelUp with the optimistic-level
+	// guard. Returns post-update (baseLevel, statusPoint) and applied=true on
+	// success; applied=false when the optimistic lock failed.
+	ApplyLevelUp(ctx context.Context, accountID, charID, fromLevel, toLevel, grantedStatusPoints uint32) (newLevel, newStatusPoint uint32, applied bool, err error)
+
+	// AllocateStat raises one base stat (statID = SP_STR..SP_LUK, 13..18)
+	// by amount, computing the pre-re cost via stats/domain.StatCost and
+	// delegating the atomic update to CharacterRepository. Returns a result
+	// code (1=OK, 2=INSUFFICIENT_POINTS, 3=MAX_STAT, 4=INVALID_STAT) plus the
+	// post-update stat value and status_point (both zero on non-OK).
+	AllocateStat(ctx context.Context, accountID, charID, statID, amount uint32) (result int, newValue, newStatusPoint uint32, err error)
 }

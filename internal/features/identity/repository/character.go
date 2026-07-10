@@ -137,3 +137,132 @@ func charModelToDomain(m *CharModel) domain.CharacterSummary {
 		SkillPoint:   m.SkillPoint,
 	}
 }
+
+// ApplyLevelUp atomically sets base_level=toLevel, adds grantedStatusPoints
+// to status_point, and resets base_exp=0. The WHERE clause pins
+// account_id, char_id, AND base_level=fromLevel (optimistic lock), so a
+// concurrent level-up that already bumped base_level will fail (rows==0).
+//
+// After a successful update we re-read base_level and status_point to give
+// the caller the authoritative values. When rows==0 we return
+// (baseLevel=0, statusPoint=0, applied=false) so the caller can re-read and
+// skip.
+func (r *characterRepo) ApplyLevelUp(
+	ctx context.Context,
+	accountID, charID, fromLevel, toLevel, grantedStatusPoints uint32,
+) (newLevel, newStatusPoint uint32, applied bool, err error) {
+	if accountID == 0 || charID == 0 {
+		return 0, 0, false, fmt.Errorf(
+			"apply level up (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound)
+	}
+
+	res := r.db.WithContext(ctx).
+		Model(&CharModel{}).
+		Where("account_id = ? AND char_id = ? AND base_level = ?",
+			accountID, charID, fromLevel).
+		Updates(map[string]interface{}{
+			"base_level":   toLevel,
+			"status_point": gorm.Expr("status_point + ?", grantedStatusPoints),
+			"base_exp":     0,
+		})
+	if err := res.Error; err != nil {
+		return 0, 0, false, fmt.Errorf(
+			"apply level up (account=%d, char=%d): %w", accountID, charID, err)
+	}
+
+	if res.RowsAffected == 0 {
+		return 0, 0, false, nil
+	}
+
+	var model CharModel
+	err = r.db.WithContext(ctx).
+		Model(&CharModel{}).
+		Where("account_id = ? AND char_id = ?", accountID, charID).
+		Select("base_level", "status_point").
+		Take(&model).Error
+	if err != nil {
+		return 0, 0, false, fmt.Errorf(
+			"apply level up (account=%d, char=%d): %w", accountID, charID, err)
+	}
+	return model.BaseLevel, model.StatusPoint, true, nil
+}
+
+// AllocateStat atomically raises the named stat column by amount and
+// deducts cost from status_point via a conditional UPDATE. The WHERE clause
+// checks ownership (account_id+char_id) AND status_point>=cost AND
+// stat+amount<=99 — if `rows == 0` the re-read distinguishes
+// insufficient points from an over-cap stat (rathena pc.cpp:8872).
+//
+// statColumn is one of "str"|"agi"|"vit"|"int"|"dex"|"luk" and must have
+// been validated by the caller (service layer). result: 0=applied,
+// 1=insufficient_points, 2=stat_would_exceed_max.
+func (r *characterRepo) AllocateStat(
+	ctx context.Context,
+	accountID, charID uint32,
+	statColumn string,
+	amount uint8,
+	cost uint32,
+) (newValue, newStatusPoint uint32, result int, err error) {
+	if accountID == 0 || charID == 0 {
+		return 0, 0, 0, fmt.Errorf(
+			"allocate stat (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound)
+	}
+
+	newCol := gorm.Expr(statColumn+" + ?", amount)
+	res := r.db.WithContext(ctx).
+		Model(&CharModel{}).
+		Where("account_id = ? AND char_id = ? AND status_point >= ? AND "+statColumn+" + ? <= 99",
+			accountID, charID, cost, amount).
+		Updates(map[string]interface{}{
+			statColumn:     newCol,
+			"status_point": gorm.Expr("status_point - ?", cost),
+		})
+
+	if err := res.Error; err != nil {
+		return 0, 0, 0, fmt.Errorf(
+			"allocate stat (account=%d, char=%d): %w", accountID, charID, err)
+	}
+
+	var model CharModel
+	err = r.db.WithContext(ctx).
+		Model(&CharModel{}).
+		Where("account_id = ? AND char_id = ?", accountID, charID).
+		Select(statColumn, "status_point").
+		Take(&model).Error
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf(
+			"allocate stat (account=%d, char=%d): %w", accountID, charID, err)
+	}
+
+	if res.RowsAffected > 0 {
+		return getStatVal(&model, statColumn), model.StatusPoint, 0, nil
+	}
+
+	// rows == 0 — re-read to distinguish the failure mode.
+	if model.StatusPoint < cost {
+		return getStatVal(&model, statColumn), model.StatusPoint, 1, nil
+	}
+	// stat + amount > 99 (race or stale cache) — the client already has a
+	// maxed stat so this is a no-op from its perspective.
+	return getStatVal(&model, statColumn), model.StatusPoint, 2, nil
+}
+
+// getStatVal reads the stat column name from a CharModel. The columns are
+// keyed by the exact table column in lowercase.
+func getStatVal(m *CharModel, col string) uint32 {
+	switch col {
+	case "str":
+		return uint32(m.Str)
+	case "agi":
+		return uint32(m.Agi)
+	case "vit":
+		return uint32(m.Vit)
+	case "int":
+		return uint32(m.Int)
+	case "dex":
+		return uint32(m.Dex)
+	case "luk":
+		return uint32(m.Luk)
+	}
+	return 0
+}

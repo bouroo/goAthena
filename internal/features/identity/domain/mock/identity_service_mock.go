@@ -42,6 +42,40 @@ func (m *MockIdentityService) EXPECT() *MockIdentityServiceMockRecorder {
 	return m.recorder
 }
 
+// AllocateStat mocks base method.
+func (m *MockIdentityService) AllocateStat(ctx context.Context, accountID, charID, statID, amount uint32) (int, uint32, uint32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AllocateStat", ctx, accountID, charID, statID, amount)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(uint32)
+	ret2, _ := ret[2].(uint32)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
+}
+
+// AllocateStat indicates an expected call of AllocateStat.
+func (mr *MockIdentityServiceMockRecorder) AllocateStat(ctx, accountID, charID, statID, amount any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateStat", reflect.TypeOf((*MockIdentityService)(nil).AllocateStat), ctx, accountID, charID, statID, amount)
+}
+
+// ApplyLevelUp mocks base method.
+func (m *MockIdentityService) ApplyLevelUp(ctx context.Context, accountID, charID, fromLevel, toLevel, grantedStatusPoints uint32) (uint32, uint32, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplyLevelUp", ctx, accountID, charID, fromLevel, toLevel, grantedStatusPoints)
+	ret0, _ := ret[0].(uint32)
+	ret1, _ := ret[1].(uint32)
+	ret2, _ := ret[2].(bool)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
+}
+
+// ApplyLevelUp indicates an expected call of ApplyLevelUp.
+func (mr *MockIdentityServiceMockRecorder) ApplyLevelUp(ctx, accountID, charID, fromLevel, toLevel, grantedStatusPoints any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyLevelUp", reflect.TypeOf((*MockIdentityService)(nil).ApplyLevelUp), ctx, accountID, charID, fromLevel, toLevel, grantedStatusPoints)
+}
+
 // CheckWeight mocks base method.
 func (m *MockIdentityService) CheckWeight(ctx context.Context, accountID, charID, addNameID, addAmount uint32) error {
 	m.ctrl.T.Helper()

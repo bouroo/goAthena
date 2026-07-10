@@ -402,6 +402,80 @@ func (h *grpcHandler) SellToShop(
 	return resp, nil
 }
 
+// ApplyLevelUp applies a base-level-up computed by the gateway (D-213) for
+// a specific character. The from-to validation and optimistic lock (WHERE
+// base_level=fromLevel) are enforced at the repository boundary; the handler
+// maps repository errors (which carry context like "apply level up
+// (account=…)") onto gRPC Internal.
+func (h *grpcHandler) ApplyLevelUp(
+	ctx context.Context,
+	req *identityv1.ApplyLevelUpRequest,
+) (*identityv1.ApplyLevelUpResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 || req.GetCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id and char_id must be non-zero")
+	}
+
+	newLevel, newStatusPoint, applied, err := h.svc.ApplyLevelUp(
+		ctx,
+		req.GetAccountId(),
+		req.GetCharId(),
+		req.GetFromBaseLevel(),
+		req.GetToBaseLevel(),
+		req.GetGrantedStatusPoints(),
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "apply level up: %v", err)
+	}
+
+	return &identityv1.ApplyLevelUpResponse{
+		Success:        applied,
+		NewBaseLevel:   newLevel,
+		NewStatusPoint: newStatusPoint,
+	}, nil
+}
+
+// AllocateStat handles the CZ_STATUS_CHANGE flow for a base stat: the client
+// sends a statID (SP_STR..SP_LUK), amount (typically 1), and the handler
+// delegates to the service which computes pre-re cost, runs the atomic
+// conditional UPDATE, and returns a StatResult code.
+//
+// The StatResult mapping mirrors the service layer where 1=OK, 2=
+// INSUFFICIENT, 3=MAX. Invalid stats (bad statID) carry result 4.
+func (h *grpcHandler) AllocateStat(
+	ctx context.Context,
+	req *identityv1.AllocateStatRequest,
+) (*identityv1.AllocateStatResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 || req.GetCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id and char_id must be non-zero")
+	}
+
+	result, newValue, newStatusPoint, err := h.svc.AllocateStat(
+		ctx,
+		req.GetAccountId(),
+		req.GetCharId(),
+		req.GetStatId(),
+		req.GetAmount(),
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "allocate stat: %v", err)
+	}
+
+	resultProto := mapStatResult(result)
+
+	return &identityv1.AllocateStatResponse{
+		Result:         resultProto,
+		StatId:         req.GetStatId(),
+		NewValue:       newValue,
+		NewStatusPoint: newStatusPoint,
+	}, nil
+}
+
 // inventoryItemToProto projects a domain InventoryItem onto the
 // wire-relevant subset declared in identity.proto. Cards, options,
 // expire_time, favorite, bound, unique_id, equip_switch and
@@ -531,6 +605,24 @@ func mapBuyResult(r economydomain.BuyResult) identityv1.BuyResult {
 		return identityv1.BuyResult_BUY_RESULT_LOCK_BUSY
 	}
 	return identityv1.BuyResult_BUY_RESULT_UNSPECIFIED
+}
+
+// mapStatResult projects the service-layer result code (int) onto the
+// proto StatResult. 1→OK (stat was raised), 2→INSUFFICIENT, 3→MAX,
+// 4→INVALID (mismatched statID). A zero code is treated as INVALID.
+func mapStatResult(r int) identityv1.StatResult {
+	switch r {
+	case 1:
+		return identityv1.StatResult_STAT_RESULT_OK
+	case 2:
+		return identityv1.StatResult_STAT_RESULT_INSUFFICIENT_POINTS
+	case 3:
+		return identityv1.StatResult_STAT_RESULT_MAX_STAT
+	case 4:
+		return identityv1.StatResult_STAT_RESULT_INVALID_STAT
+	default:
+		return identityv1.StatResult_STAT_RESULT_INVALID_STAT
+	}
 }
 
 // mapSellResult projects the economy domain.SellResult onto the proto
