@@ -34,6 +34,9 @@ func MeleeDamage(str, dex, luk uint8, mobDef, mobVit int) DamageBand {
 
 	// VIT soft-DEF band
 	vit := int32(mobVit) //nolint:gosec // VIT value is within safe range for int32
+	if vit < 0 {
+		vit = 0
+	}
 	vfloor := (3*vit)/10 + vit/2
 	spread := max(0, (vit*vit)/150-(3*vit)/10-1)
 

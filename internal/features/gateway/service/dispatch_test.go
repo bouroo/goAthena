@@ -1900,15 +1900,6 @@ func TestDispatchHandler_CZActionRequest_AttackMonster_EncodesNotifyAct(t *testi
 	if hp := conn.MonsterHP[110000005]; hp != 38 {
 		t.Errorf("monster HP after attack = %d, want 38", hp)
 	}
-
-	// type = DMG_NORMAL (0).
-	if out[29] != packet.DMGNormal {
-		t.Errorf("type = 0x%02x, want 0x%02x (DMG_NORMAL)", out[29], packet.DMGNormal)
-	}
-	// HP should be decremented.
-	if hp := conn.MonsterHP[110000005]; hp != 38 {
-		t.Errorf("monster HP after attack = %d, want 38", hp)
-	}
 }
 
 // TestDispatchHandler_Attack_StatDerivedDamage ensures that different
