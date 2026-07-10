@@ -900,3 +900,53 @@ func (r CZPCSellItemListRequest) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// CZStatusChangeRequest is the decoded form of a client → map-server
+// CZ_STATUS_CHANGE packet (header 0x00bb, 5 bytes on the wire). Source:
+// rathena/src/map/clif.cpp:12714 (clif_parse_StatusChange) reading
+// statusID via RFIFOW at offset 2 and amount via RFIFOB at offset 4.
+//
+// The on-wire shape is `<status id>.W <amount>.B`, where status id is the
+// rAthena SP_STR..SP_LUK parameter id (13..18) the player wants to raise
+// and amount is the number of steps (the kRO client sends 1 per click;
+// shift-click may request more). Validation (enough status points, stat
+// not at the 99 cap) is enforced server-side, not by the parser.
+type CZStatusChangeRequest struct {
+	// StatusID is the rAthena SP_* parameter id to raise (SP_STR=13 ..
+	// SP_LUK=18). Values outside that range are rejected downstream.
+	StatusID uint16
+	// Amount is the number of stat steps requested (usually 1).
+	Amount uint8
+}
+
+// ParseCZStatusChange decodes a CZ_STATUS_CHANGE frame. The frame must
+// carry cmd 0x00bb and contain 5 bytes.
+//
+// Returns a wrapped error naming the byte count if the frame is short,
+// or naming the unexpected cmd id if the header is not 0x00bb.
+func ParseCZStatusChange(frame []byte) (CZStatusChangeRequest, error) {
+	if len(frame) < sizeCZStatusChange {
+		return CZStatusChangeRequest{}, fmt.Errorf("packet: parse CZ_STATUS_CHANGE: want at least %d bytes, got %d", sizeCZStatusChange, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZSTATUSCHANGE {
+		return CZStatusChangeRequest{}, fmt.Errorf("packet: parse CZ_STATUS_CHANGE: unexpected cmd 0x%04x", cmd)
+	}
+	return CZStatusChangeRequest{
+		StatusID: binary.LittleEndian.Uint16(frame[2:4]),
+		Amount:   frame[4],
+	}, nil
+}
+
+// Encode writes the CZ_STATUS_CHANGE packet to w. Mirrors the on-wire
+// layout: [2:cmd=0x00bb][2:statusID uint16][1:amount uint8] = 5 bytes.
+// Used by the e2e test harness to drive stat allocation.
+func (r CZStatusChangeRequest) Encode(w io.Writer) error {
+	var buf [sizeCZStatusChange]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZSTATUSCHANGE)
+	binary.LittleEndian.PutUint16(buf[2:], r.StatusID)
+	buf[4] = r.Amount
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_STATUS_CHANGE: %w", err)
+	}
+	return nil
+}

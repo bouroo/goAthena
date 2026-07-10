@@ -29,6 +29,8 @@ const (
 	IdentityService_UseItem_FullMethodName          = "/identity.v1.IdentityService/UseItem"
 	IdentityService_BuyFromShop_FullMethodName      = "/identity.v1.IdentityService/BuyFromShop"
 	IdentityService_SellToShop_FullMethodName       = "/identity.v1.IdentityService/SellToShop"
+	IdentityService_ApplyLevelUp_FullMethodName     = "/identity.v1.IdentityService/ApplyLevelUp"
+	IdentityService_AllocateStat_FullMethodName     = "/identity.v1.IdentityService/AllocateStat"
 )
 
 // IdentityServiceClient is the client API for IdentityService service.
@@ -81,6 +83,18 @@ type IdentityServiceClient interface {
 	// wire slot). Returns a SellResult outcome + the post-transaction
 	// zeny balance (0 on non-OK).
 	SellToShop(ctx context.Context, in *SellToShopRequest, opts ...grpc.CallOption) (*SellToShopResponse, error)
+	// ApplyLevelUp persists a base-level-up computed by the gateway (D-213).
+	// The character's base_level is set to to_base_level and granted_status_point
+	// is added to the user's status_point balance. An optimistic lock guards
+	// against concurrent level-ups: the WHERE clause verifies that the current
+	// base_level still equals from_base_level (rathena/src/map/pc.cpp:8244
+	// pc_checkbaselevelup — grants via pc_gets_status_point).
+	ApplyLevelUp(ctx context.Context, in *ApplyLevelUpRequest, opts ...grpc.CallOption) (*ApplyLevelUpResponse, error)
+	// AllocateStat raises one base stat (SP_STR..SP_LUK) by amount, deducting
+	// status points at the pre-Renewal cost 1+(val+9)/10. Validation + atomic
+	// conditional update happen server-side (rathena/src/map/pc.cpp:8872
+	// pc_statusup). Returns the resulting stat value and remaining status points.
+	AllocateStat(ctx context.Context, in *AllocateStatRequest, opts ...grpc.CallOption) (*AllocateStatResponse, error)
 }
 
 type identityServiceClient struct {
@@ -181,6 +195,26 @@ func (c *identityServiceClient) SellToShop(ctx context.Context, in *SellToShopRe
 	return out, nil
 }
 
+func (c *identityServiceClient) ApplyLevelUp(ctx context.Context, in *ApplyLevelUpRequest, opts ...grpc.CallOption) (*ApplyLevelUpResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyLevelUpResponse)
+	err := c.cc.Invoke(ctx, IdentityService_ApplyLevelUp_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *identityServiceClient) AllocateStat(ctx context.Context, in *AllocateStatRequest, opts ...grpc.CallOption) (*AllocateStatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AllocateStatResponse)
+	err := c.cc.Invoke(ctx, IdentityService_AllocateStat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IdentityServiceServer is the server API for IdentityService service.
 // All implementations must embed UnimplementedIdentityServiceServer
 // for forward compatibility.
@@ -231,6 +265,18 @@ type IdentityServiceServer interface {
 	// wire slot). Returns a SellResult outcome + the post-transaction
 	// zeny balance (0 on non-OK).
 	SellToShop(context.Context, *SellToShopRequest) (*SellToShopResponse, error)
+	// ApplyLevelUp persists a base-level-up computed by the gateway (D-213).
+	// The character's base_level is set to to_base_level and granted_status_point
+	// is added to the user's status_point balance. An optimistic lock guards
+	// against concurrent level-ups: the WHERE clause verifies that the current
+	// base_level still equals from_base_level (rathena/src/map/pc.cpp:8244
+	// pc_checkbaselevelup — grants via pc_gets_status_point).
+	ApplyLevelUp(context.Context, *ApplyLevelUpRequest) (*ApplyLevelUpResponse, error)
+	// AllocateStat raises one base stat (SP_STR..SP_LUK) by amount, deducting
+	// status points at the pre-Renewal cost 1+(val+9)/10. Validation + atomic
+	// conditional update happen server-side (rathena/src/map/pc.cpp:8872
+	// pc_statusup). Returns the resulting stat value and remaining status points.
+	AllocateStat(context.Context, *AllocateStatRequest) (*AllocateStatResponse, error)
 	mustEmbedUnimplementedIdentityServiceServer()
 }
 
@@ -267,6 +313,12 @@ func (UnimplementedIdentityServiceServer) BuyFromShop(context.Context, *BuyFromS
 }
 func (UnimplementedIdentityServiceServer) SellToShop(context.Context, *SellToShopRequest) (*SellToShopResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SellToShop not implemented")
+}
+func (UnimplementedIdentityServiceServer) ApplyLevelUp(context.Context, *ApplyLevelUpRequest) (*ApplyLevelUpResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyLevelUp not implemented")
+}
+func (UnimplementedIdentityServiceServer) AllocateStat(context.Context, *AllocateStatRequest) (*AllocateStatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AllocateStat not implemented")
 }
 func (UnimplementedIdentityServiceServer) mustEmbedUnimplementedIdentityServiceServer() {}
 func (UnimplementedIdentityServiceServer) testEmbeddedByValue()                         {}
@@ -451,6 +503,42 @@ func _IdentityService_SellToShop_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IdentityService_ApplyLevelUp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyLevelUpRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).ApplyLevelUp(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_ApplyLevelUp_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).ApplyLevelUp(ctx, req.(*ApplyLevelUpRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IdentityService_AllocateStat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AllocateStatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).AllocateStat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_AllocateStat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).AllocateStat(ctx, req.(*AllocateStatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IdentityService_ServiceDesc is the grpc.ServiceDesc for IdentityService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -493,6 +581,14 @@ var IdentityService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SellToShop",
 			Handler:    _IdentityService_SellToShop_Handler,
+		},
+		{
+			MethodName: "ApplyLevelUp",
+			Handler:    _IdentityService_ApplyLevelUp_Handler,
+		},
+		{
+			MethodName: "AllocateStat",
+			Handler:    _IdentityService_AllocateStat_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
