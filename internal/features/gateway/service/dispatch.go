@@ -50,6 +50,7 @@ import (
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
 	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
+	skilldomain "github.com/bouroo/goAthena/internal/features/skill/domain"
 	statsdomain "github.com/bouroo/goAthena/internal/features/stats/domain"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
@@ -1224,7 +1225,7 @@ func (h *DispatchHandler) handleCZNotifyActorInit(ctx context.Context, conn *dom
 	// already in the map. bytes.Buffer.Write never returns an error
 	// so the results are discarded.
 	_, _ = burst.Write(h.encodeInventoryLists(ctx, conn))
-	_, _ = burst.Write(packet.EncodeEmptySkillList())
+	_, _ = burst.Write(h.encodeSkillList(conn))
 	_, _ = burst.Write(packet.EncodeEmptyHotkeyList())
 
 	// M14: append NPC spawn packets (ZC_SET_UNIT_IDLE, 0x09ff) after
@@ -1455,6 +1456,51 @@ func (h *DispatchHandler) encodeInventoryLists(ctx context.Context, conn *domain
 		Int("equip_items", len(equip)).
 		Msg("inventory lists sent")
 
+	return buf.Bytes()
+}
+
+// encodeSkillList builds the ZC_SKILLINFO_LIST (0x010f) frame sent
+// during the map-enter status burst (LoadEndAck). The character’s
+// learned skill set is sourced from a deterministic novice default
+// here — a persisted per-character `skill` table is deferred to
+// sub-PR 3b-2, so we cannot query identity for it yet. The default
+// (NV_BASIC L1) matches every fresh character in rAthena’s
+// pre-re skill_db.
+func (h *DispatchHandler) encodeSkillList(conn *domain.ConnectionInfo) []byte {
+	learned := []skilldomain.LearnedSkill{{ID: 1, Level: 1}}
+	entries := skilldomain.BuildSkillList(learned)
+	if len(entries) == 0 {
+		// NV_BASIC (id=1) is always registered; this is a
+		// defensive fallback for an unlikely registry regression.
+		h.logger.Error().
+			Uint64("conn", conn.ID).
+			Msg("skill list resolved empty; emitting empty ZC_SKILLINFO_LIST")
+		return packet.EncodeEmptySkillList()
+	}
+
+	data := make([]packet.SkillData, len(entries))
+	for i, e := range entries {
+		data[i] = packet.SkillData{
+			ID:     e.ID,
+			Inf:    uint32(e.Inf),
+			Level:  e.Level,
+			SP:     e.SP,
+			Range2: e.Range2,
+			Name:   e.Name,
+			UpFlag: e.UpFlag,
+		}
+	}
+
+	resp := packet.SkillInfoListResponse{Skills: data}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("skills", len(data)).
+			Msg("encode ZC_SKILLINFO_LIST failed; emitting empty list")
+		return packet.EncodeEmptySkillList()
+	}
 	return buf.Bytes()
 }
 
