@@ -42,9 +42,9 @@ func (m *MockCharacterRepository) EXPECT() *MockCharacterRepositoryMockRecorder 
 }
 
 // AllocateStat mocks base method.
-func (m *MockCharacterRepository) AllocateStat(ctx context.Context, accountID, charID uint32, statColumn string, amount uint8, cost uint32) (uint32, uint32, int, error) {
+func (m *MockCharacterRepository) AllocateStat(ctx context.Context, accountID, charID uint32, statColumn string, currentVal, amount uint8, cost uint32) (uint32, uint32, int, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AllocateStat", ctx, accountID, charID, statColumn, amount, cost)
+	ret := m.ctrl.Call(m, "AllocateStat", ctx, accountID, charID, statColumn, currentVal, amount, cost)
 	ret0, _ := ret[0].(uint32)
 	ret1, _ := ret[1].(uint32)
 	ret2, _ := ret[2].(int)
@@ -53,9 +53,9 @@ func (m *MockCharacterRepository) AllocateStat(ctx context.Context, accountID, c
 }
 
 // AllocateStat indicates an expected call of AllocateStat.
-func (mr *MockCharacterRepositoryMockRecorder) AllocateStat(ctx, accountID, charID, statColumn, amount, cost any) *gomock.Call {
+func (mr *MockCharacterRepositoryMockRecorder) AllocateStat(ctx, accountID, charID, statColumn, currentVal, amount, cost any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateStat", reflect.TypeOf((*MockCharacterRepository)(nil).AllocateStat), ctx, accountID, charID, statColumn, amount, cost)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateStat", reflect.TypeOf((*MockCharacterRepository)(nil).AllocateStat), ctx, accountID, charID, statColumn, currentVal, amount, cost)
 }
 
 // ApplyLevelUp mocks base method.

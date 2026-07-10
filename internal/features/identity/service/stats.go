@@ -47,6 +47,12 @@ func (s *identityService) AllocateStat(
 	if amount == 0 {
 		return 4, 0, 0, nil
 	}
+	// Guard against uint32 wraparound on the uint8 cast and against
+	// requests that would always exceed the stat cap. A client click
+	// raises by 1; amounts above MaxStat are impossible to satisfy.
+	if amount > uint32(statsdomain.MaxStat) {
+		return 4, 0, 0, nil
+	}
 
 	char, err := s.characters.GetByID(ctx, accountID, charID)
 	if err != nil {
@@ -57,7 +63,7 @@ func (s *identityService) AllocateStat(
 	cost := statsdomain.StatCost(currentVal, int(amount))
 	column := statTypeToColumn(statType)
 
-	newVal, newSp, repoResult, err := s.characters.AllocateStat(ctx, accountID, charID, column, uint8(amount), cost) //nolint:gosec // G115: amount is a stat step count (1..99), bounded
+	newVal, newSp, repoResult, err := s.characters.AllocateStat(ctx, accountID, charID, column, currentVal, uint8(amount), cost) //nolint:gosec // G115: amount is a stat step count (1..99), bounded
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("allocate stat: %w", err)
 	}

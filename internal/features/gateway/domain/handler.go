@@ -152,6 +152,16 @@ func (c *ConnectionInfo) ExpValues() (int32, int32) {
 	return c.BaseExp, c.JobExp
 }
 
+// SetBaseExp sets the accumulated base experience to v. Used after a
+// level-up to reset the in-band EXP to the carry-over (gain.NewExp),
+// preventing the already-consumed EXP from re-triggering a level-up
+// on the next kill.
+func (c *ConnectionInfo) SetBaseExp(v int32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.BaseExp = v
+}
+
 // Responder sends serialized packets back to the client. Each transport
 // (gnet TCP, coder/websocket) supplies its own implementation; the port
 // abstracts over async-write semantics so handlers stay transport-agnostic.

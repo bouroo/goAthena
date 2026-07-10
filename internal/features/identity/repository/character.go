@@ -171,6 +171,24 @@ func (r *characterRepo) ApplyLevelUp(
 	}
 
 	if res.RowsAffected == 0 {
+		// Distinguish a concurrent level-up (optimistic lock miss)
+		// from a non-existent character. A missing row surfaces as
+		// ErrCharacterNotFound so the caller can distinguish a
+		// legitimate no-op from a genuine error.
+		var exists CharModel
+		existsErr := r.db.WithContext(ctx).
+			Model(&CharModel{}).
+			Where("account_id = ? AND char_id = ?", accountID, charID).
+			Select("char_id").
+			Take(&exists).Error
+		if errors.Is(existsErr, gorm.ErrRecordNotFound) {
+			return 0, 0, false, fmt.Errorf(
+				"apply level up (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound)
+		}
+		if existsErr != nil {
+			return 0, 0, false, fmt.Errorf(
+				"apply level up (account=%d, char=%d): %w", accountID, charID, existsErr)
+		}
 		return 0, 0, false, nil
 	}
 
@@ -200,6 +218,7 @@ func (r *characterRepo) AllocateStat(
 	ctx context.Context,
 	accountID, charID uint32,
 	statColumn string,
+	currentVal uint8,
 	amount uint8,
 	cost uint32,
 ) (newValue, newStatusPoint uint32, result int, err error) {
@@ -211,8 +230,8 @@ func (r *characterRepo) AllocateStat(
 	newCol := gorm.Expr(statColumn+" + ?", amount)
 	res := r.db.WithContext(ctx).
 		Model(&CharModel{}).
-		Where("account_id = ? AND char_id = ? AND status_point >= ? AND "+statColumn+" + ? <= 99",
-			accountID, charID, cost, amount).
+		Where("account_id = ? AND char_id = ? AND "+statColumn+" = ? AND status_point >= ? AND "+statColumn+" + ? <= 99",
+			accountID, charID, currentVal, cost, amount).
 		Updates(map[string]any{
 			statColumn:     newCol,
 			"status_point": gorm.Expr("status_point - ?", cost),

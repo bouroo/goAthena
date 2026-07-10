@@ -2154,6 +2154,7 @@ func (h *DispatchHandler) applyBaseLevelUp(ctx context.Context, conn *domain.Con
 		return
 	}
 	conn.BaseLevel = gain.NewLevel
+	conn.SetBaseExp(int32(gain.NewExp)) //nolint:gosec // G115: NewExp is within [0, nextThreshold), fits int32
 	if err := (packet.ZCNotifyEffect{EffectID: packet.EffectBaseLevelUp}).Encode(burst); err != nil {
 		h.logger.Error().Err(err).Msg("encode ZC_NOTIFY_EFFECT failed")
 	}

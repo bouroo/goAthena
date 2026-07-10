@@ -82,7 +82,7 @@ func TestAllocateStat_HappyPath(t *testing.T) {
 	chars.EXPECT().GetByID(gomock.Any(), uint32(7), uint32(42)).
 		Return(&domain.CharacterSummary{Str: 10, StatusPoint: 100}, nil)
 	// cost to raise Str 10->11 = 1+(10+9)/10 = 2
-	chars.EXPECT().AllocateStat(gomock.Any(), uint32(7), uint32(42), "str", uint8(1), uint32(2)).
+	chars.EXPECT().AllocateStat(gomock.Any(), uint32(7), uint32(42), "str", uint8(10), uint8(1), uint32(2)).
 		Return(uint32(11), uint32(98), 0, nil)
 	svc := newSvcForStats(t, chars)
 
@@ -100,7 +100,7 @@ func TestAllocateStat_InsufficientPoints(t *testing.T) {
 	chars.EXPECT().GetByID(gomock.Any(), uint32(7), uint32(42)).
 		Return(&domain.CharacterSummary{Str: 10, StatusPoint: 1}, nil)
 	// cost to raise Str 10->11 = 2; status_point=1 < 2
-	chars.EXPECT().AllocateStat(gomock.Any(), uint32(7), uint32(42), "str", uint8(1), uint32(2)).
+	chars.EXPECT().AllocateStat(gomock.Any(), uint32(7), uint32(42), "str", uint8(10), uint8(1), uint32(2)).
 		Return(uint32(10), uint32(1), 1, nil)
 	svc := newSvcForStats(t, chars)
 
@@ -115,7 +115,7 @@ func TestAllocateStat_MaxStat(t *testing.T) {
 	chars := mocks.NewMockCharacterRepository(ctrl)
 	chars.EXPECT().GetByID(gomock.Any(), uint32(7), uint32(42)).
 		Return(&domain.CharacterSummary{Str: 99, StatusPoint: 100}, nil)
-	chars.EXPECT().AllocateStat(gomock.Any(), uint32(7), uint32(42), "str", uint8(1), uint32(11)).
+	chars.EXPECT().AllocateStat(gomock.Any(), uint32(7), uint32(42), "str", uint8(99), uint8(1), uint32(11)).
 		Return(uint32(99), uint32(100), 2, nil)
 	svc := newSvcForStats(t, chars)
 

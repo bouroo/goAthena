@@ -64,7 +64,7 @@ type CharacterRepository interface {
 	// statColumn is one of "str"|"agi"|"vit"|"int"|"dex"|"luk". Returns post-update
 	// (statValue, statusPoint) re-read. result: 0=applied, 1=insufficient points,
 	// 2=stat would exceed MaxStat (rows==0 → re-read to distinguish).
-	AllocateStat(ctx context.Context, accountID, charID uint32, statColumn string, amount uint8, cost uint32) (newValue, newStatusPoint uint32, result int, err error)
+	AllocateStat(ctx context.Context, accountID, charID uint32, statColumn string, currentVal uint8, amount uint8, cost uint32) (newValue, newStatusPoint uint32, result int, err error)
 }
 
 // SessionRepository is the outbound port for session persistence, backed
