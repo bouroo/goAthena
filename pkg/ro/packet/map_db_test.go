@@ -57,6 +57,11 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderCZPCSELLITEMLIST, "CZ_PC_SELL_ITEMLIST", VariableLength, DirectionClientToServer},
 		{HeaderZCPCSELLITEMLIST, "ZC_PC_SELL_ITEMLIST", VariableLength, DirectionServerToClient},
 		{HeaderZCPCSELLRESULT, "ZC_PC_SELL_RESULT", sizeZCPCSellResult, DirectionServerToClient},
+		// P2C: stat allocation + level-up effect — see NewMapServerDB
+		// for the rAthena packetdb citations.
+		{HeaderCZSTATUSCHANGE, "CZ_STATUS_CHANGE", sizeCZStatusChange, DirectionClientToServer},
+		{HeaderZCSTATUSCHANGEACK, "ZC_STATUS_CHANGE_ACK", sizeZCStatusChangeAck, DirectionServerToClient},
+		{HeaderZCNOTIFYEFFECT, "ZC_NOTIFY_EFFECT", sizeZCNotifyEffect, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -85,9 +90,10 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// family: CZ_USE_ITEM2, CZ_REQ_WEAR_EQUIP_V5, CZ_REQ_TAKEOFF_EQUIP,
 	// ZC_REQ_WEAR_EQUIP_ACK_V5, ZC_REQ_TAKEOFF_EQUIP_ACK,
 	// ZC_USE_ITEM_ACK2). P2B adds 3 sell-flow entries
-	// (CZ_PC_SELL_ITEMLIST, ZC_PC_SELL_ITEMLIST, ZC_PC_SELL_RESULT)
-	// for a grand total of 52.
-	const want = 52
+	// (CZ_PC_SELL_ITEMLIST, ZC_PC_SELL_ITEMLIST, ZC_PC_SELL_RESULT).
+	// P2C adds 3 stats entries (CZ_STATUS_CHANGE, ZC_STATUS_CHANGE_ACK,
+	// ZC_NOTIFY_EFFECT) for a grand total of 55.
+	const want = 55
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -143,6 +149,10 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderCZPCSELLITEMLIST, VariableLength},
 		{HeaderZCPCSELLITEMLIST, VariableLength},
 		{HeaderZCPCSELLRESULT, sizeZCPCSellResult},
+		// P2C: stat allocation + level-up effect.
+		{HeaderCZSTATUSCHANGE, sizeCZStatusChange},
+		{HeaderZCSTATUSCHANGEACK, sizeZCStatusChangeAck},
+		{HeaderZCNOTIFYEFFECT, sizeZCNotifyEffect},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

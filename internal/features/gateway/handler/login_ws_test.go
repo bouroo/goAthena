@@ -101,6 +101,14 @@ func (f *loginFakeIdentityClient) SellToShop(ctx context.Context, _ *identityv1.
 	return nil, status.Error(codes.Unimplemented, "SellToShop not installed")
 }
 
+func (f *loginFakeIdentityClient) ApplyLevelUp(_ context.Context, _ *identityv1.ApplyLevelUpRequest, _ ...grpc.CallOption) (*identityv1.ApplyLevelUpResponse, error) {
+	return &identityv1.ApplyLevelUpResponse{Success: false}, nil
+}
+
+func (f *loginFakeIdentityClient) AllocateStat(_ context.Context, _ *identityv1.AllocateStatRequest, _ ...grpc.CallOption) (*identityv1.AllocateStatResponse, error) {
+	return &identityv1.AllocateStatResponse{Result: identityv1.StatResult_STAT_RESULT_INVALID_STAT}, nil
+}
+
 // wsDispatchAdapter mirrors service.DispatchHandler for the WS path so
 // this test exercises the full real WSHandler → processBytes →
 // domain.PacketHandler → identity client → AC_ACCEPT_LOGIN → WS write

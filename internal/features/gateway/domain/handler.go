@@ -43,6 +43,10 @@ type ConnectionInfo struct {
 	BaseExp int32
 	// JobExp tracks the accumulated job experience (M19).
 	JobExp int32
+	// BaseLevel is the character's base level, cached from GetCharacter on
+	// map enter (handleCZNotifyActorInit). Used by applyMonsterKillExp to
+	// detect base-level-up via stats/domain.ApplyBaseExpGain (D-213).
+	BaseLevel uint32
 	// invIndex maps 0-based inventory position to DB item ID.
 	invIndex map[uint16]uint32
 	// shopNPCID tracks the NPC GID the player is currently in a shop
@@ -146,6 +150,16 @@ func (c *ConnectionInfo) ExpValues() (int32, int32) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.BaseExp, c.JobExp
+}
+
+// SetBaseExp sets the accumulated base experience to v. Used after a
+// level-up to reset the in-band EXP to the carry-over (gain.NewExp),
+// preventing the already-consumed EXP from re-triggering a level-up
+// on the next kill.
+func (c *ConnectionInfo) SetBaseExp(v int32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.BaseExp = v
 }
 
 // Responder sends serialized packets back to the client. Each transport

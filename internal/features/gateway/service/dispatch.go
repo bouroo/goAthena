@@ -49,6 +49,7 @@ import (
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
 	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
+	statsdomain "github.com/bouroo/goAthena/internal/features/stats/domain"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -207,6 +208,8 @@ func (h *DispatchHandler) handleMapPacket(ctx context.Context, conn *domain.Conn
 		return h.handleCZReqWearEquip(ctx, conn, resp, frame)
 	case packet.HeaderCZREQTAKEOFFEQUIP:
 		return h.handleCZReqTakeoffEquip(ctx, conn, resp, frame)
+	case packet.HeaderCZSTATUSCHANGE:
+		return h.handleCZStatusChange(ctx, conn, resp, frame)
 	default:
 		return h.handleMapPacketNPC(ctx, conn, resp, cmd, frame)
 	}
@@ -1118,6 +1121,7 @@ func (h *DispatchHandler) handleCZNotifyActorInit(ctx context.Context, conn *dom
 		intV = uint8(min(char.GetInt(), 255)) //nolint:gosec // ditto
 		dexV = uint8(min(char.GetDex(), 255)) //nolint:gosec // ditto
 		lukV = uint8(min(char.GetLuk(), 255)) //nolint:gosec // ditto
+		conn.BaseLevel = baseLevel
 	}
 
 	// rAthena clamps HP to a minimum of 1 on LoadEndAck so the client
@@ -1971,7 +1975,7 @@ func (h *DispatchHandler) handleCZGlobalMessage(_ context.Context, conn *domain.
 // ZC_NOTIFY_ACT (0x08c8) with type=DMG_SIT_DOWN / DMG_STAND_UP — NOT the
 // compact 0x008b stub. M18 corrects the M11 mapping (which wrongly used
 // 0/1 for sit/stand) and adds the attack path.
-func (h *DispatchHandler) handleCZActionRequest(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+func (h *DispatchHandler) handleCZActionRequest(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZActionRequest(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -1992,7 +1996,7 @@ func (h *DispatchHandler) handleCZActionRequest(_ context.Context, conn *domain.
 
 	switch req.Action {
 	case packet.DMGNormal, packet.DMGRepeat:
-		return h.handleAttack(conn, resp, req.TargetGID)
+		return h.handleAttack(ctx, conn, resp, req.TargetGID)
 	case packet.DMGSitDown, packet.DMGStandUp:
 		return h.handleSitStand(conn, resp, req.Action)
 	default:
@@ -2039,7 +2043,7 @@ func (h *DispatchHandler) handleSitStand(conn *domain.ConnectionInfo, resp domai
 // fixed damage value (10), sends ZC_NOTIFY_ACT with the damage, and
 // if the monster's HP drops to 0 or below, sends ZC_NOTIFY_VANISH
 // and removes the monster from the per-connection HP map.
-func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.Responder, targetGID uint32) error {
+func (h *DispatchHandler) handleAttack(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, targetGID uint32) error {
 	// Fixed damage — no stat-based formula yet (deferred to zone service).
 	const fixedDamage int32 = 10
 
@@ -2097,7 +2101,7 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 		}
 
 		// M19: apply EXP
-		h.applyMonsterKillExp(conn, &burst, targetGID)
+		h.applyMonsterKillExp(ctx, conn, &burst, targetGID)
 
 		// M20: schedule respawn
 		h.scheduleMonsterRespawn(conn, resp, targetGID)
@@ -2122,10 +2126,49 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 	return nil
 }
 
-// applyMonsterKillExp looks up the dead monster's EXP values, accumulates
+// applyBaseLevelUp detects whether the most recent EXP gain triggers a
+// base level-up, persists it via identity.ApplyLevelUp, and emits the
+// ZC_NOTIFY_EFFECT + ZC_PAR_CHANGE burst. Extracted from
+// applyMonsterKillExp to keep that function's nesting under the gocyclo
+// limit (D-213).
+func (h *DispatchHandler) applyBaseLevelUp(ctx context.Context, conn *domain.ConnectionInfo, burst *bytes.Buffer, m *monsterSpawn, baseExp int32) {
+	if m.BaseExp <= 0 || conn.BaseLevel == 0 {
+		return
+	}
+	gain := statsdomain.ApplyBaseExpGain(conn.BaseLevel, uint64(baseExp-m.BaseExp), uint64(m.BaseExp)) //nolint:gosec // G115: EXP values are non-negative int32
+	if !gain.LeveledUp {
+		return
+	}
+	levelUpResp, lerr := h.identity.ApplyLevelUp(ctx, &identityv1.ApplyLevelUpRequest{
+		AccountId:           conn.AccountID,
+		CharId:              conn.CharID,
+		FromBaseLevel:       conn.BaseLevel,
+		ToBaseLevel:         gain.NewLevel,
+		GrantedStatusPoints: gain.GrantedStatusPoints,
+	})
+	if lerr != nil {
+		h.logger.Error().Err(lerr).Uint64("conn", conn.ID).Msg("ApplyLevelUp RPC failed")
+		return
+	}
+	if !levelUpResp.GetSuccess() {
+		return
+	}
+	conn.BaseLevel = gain.NewLevel
+	conn.SetBaseExp(int32(gain.NewExp)) //nolint:gosec // G115: NewExp is within [0, nextThreshold), fits int32
+	if err := (packet.ZCNotifyEffect{EffectID: packet.EffectBaseLevelUp}).Encode(burst); err != nil {
+		h.logger.Error().Err(err).Msg("encode ZC_NOTIFY_EFFECT failed")
+	}
+	if err := (packet.ParChangeResponse{VarID: packet.SPBaseLevel, Count: int32(gain.NewLevel)}).Encode(burst); err != nil { //nolint:gosec // base_level <= 99
+		h.logger.Error().Err(err).Msg("encode SPBaseLevel failed")
+	}
+	if err := (packet.ParChangeResponse{VarID: packet.SPStatusPoint, Count: int32(levelUpResp.GetNewStatusPoint())}).Encode(burst); err != nil { //nolint:gosec // status_point <= 1273
+		h.logger.Error().Err(err).Msg("encode SPStatusPoint failed")
+	}
+}
+
 // them in the connection state, and appends ZC_LONGPAR_CHANGE updates
 // to the response burst.
-func (h *DispatchHandler) applyMonsterKillExp(conn *domain.ConnectionInfo, burst *bytes.Buffer, targetGID uint32) {
+func (h *DispatchHandler) applyMonsterKillExp(ctx context.Context, conn *domain.ConnectionInfo, burst *bytes.Buffer, targetGID uint32) {
 	for _, m := range monsterSpawns {
 		if m.GID == targetGID {
 			conn.AddExp(m.BaseExp, m.JobExp)
@@ -2146,8 +2189,79 @@ func (h *DispatchHandler) applyMonsterKillExp(conn *domain.ConnectionInfo, burst
 			if err := jobExpUpdate.Encode(burst); err != nil {
 				h.logger.Error().Err(err).Msg("encode SPJobExp failed")
 			}
+
+			h.applyBaseLevelUp(ctx, conn, burst, &m, baseExp)
 			break
 		}
+	}
+}
+
+// handleCZStatusChange processes a CZ_STATUS_CHANGE (0x00bb) request:
+// the client asks to raise one base stat (SP_STR..SP_LUK) by amount
+// (usually 1). The handler forwards to identity.AllocateStat which
+// computes the pre-re cost, validates, and runs the atomic conditional
+// UPDATE. The ack carries the result + new value; on success a
+// ZC_PAR_CHANGE burst updates the stat and status_point on the client
+// (rathena/src/map/clif.cpp:4283 clif_statusupack + clif_updatestatus).
+func (h *DispatchHandler) handleCZStatusChange(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZStatusChange(frame)
+	if err != nil {
+		h.logger.Warn().Err(err).Uint64("conn", conn.ID).Msg("parse CZ_STATUS_CHANGE failed")
+		return nil
+	}
+	if conn.AccountID == 0 || conn.CharID == 0 {
+		h.logger.Warn().Uint64("conn", conn.ID).Msg("CZ_STATUS_CHANGE without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	allocResp, err := h.identity.AllocateStat(ctx, &identityv1.AllocateStatRequest{
+		AccountId: conn.AccountID,
+		CharId:    conn.CharID,
+		StatId:    uint32(req.StatusID),
+		Amount:    uint32(req.Amount),
+	})
+	if err != nil {
+		h.logger.Error().Err(err).Uint64("conn", conn.ID).Msg("AllocateStat RPC failed")
+		return nil
+	}
+
+	var burst bytes.Buffer
+	ack := packet.ZCStatusChangeAck{
+		StatusID: req.StatusID,
+		Result:   statResultToAckByte(allocResp.GetResult()),
+		Value:    uint8(allocResp.GetNewValue()), //nolint:gosec // stats cap at 99
+	}
+	if err := ack.Encode(&burst); err != nil {
+		return fmt.Errorf("encode ZC_STATUS_CHANGE_ACK: %w", err)
+	}
+
+	if allocResp.GetResult() == identityv1.StatResult_STAT_RESULT_OK {
+		if err := (packet.ParChangeResponse{VarID: req.StatusID, Count: int32(allocResp.GetNewValue())}).Encode(&burst); err != nil { //nolint:gosec // stat <= 99
+			h.logger.Error().Err(err).Msg("encode ZC_PAR_CHANGE (stat) failed")
+		}
+		if err := (packet.ParChangeResponse{VarID: packet.SPStatusPoint, Count: int32(allocResp.GetNewStatusPoint())}).Encode(&burst); err != nil { //nolint:gosec // status_point <= 1273
+			h.logger.Error().Err(err).Msg("encode ZC_PAR_CHANGE (status_point) failed")
+		}
+	}
+
+	if err := resp.SendPacket(burst.Bytes()); err != nil {
+		return fmt.Errorf("send CZ_STATUS_CHANGE response: %w", err)
+	}
+	return nil
+}
+
+// statResultToAckByte maps the proto StatResult onto the rAthena
+// ZC_STATUS_CHANGE_ACK result byte (0=success, 1=insufficient, 2=max).
+func statResultToAckByte(r identityv1.StatResult) uint8 {
+	switch r {
+	case identityv1.StatResult_STAT_RESULT_OK:
+		return 0
+	case identityv1.StatResult_STAT_RESULT_INSUFFICIENT_POINTS:
+		return 1
+	case identityv1.StatResult_STAT_RESULT_MAX_STAT:
+		return 2
+	default:
+		return 3
 	}
 }
 

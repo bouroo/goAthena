@@ -955,6 +955,82 @@ func (r NotifyChatResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// ZCStatusChangeAck encodes ZC_STATUS_CHANGE_ACK (0x00bc) — the server's
+// response to a stat-point allocation request. Wire layout
+// (rathena/src/map/clif.cpp:4283):
+//
+//	int16 packetType (0x00bc)
+//	uint16 varID
+//	uint8 result     (0x00 success, others per rAthena's result codes)
+//	uint8 value
+type ZCStatusChangeAck struct {
+	// StatusID is the status parameter ID that was targeted.
+	StatusID uint16
+	// Result is the outcome byte: 0x00 success (resulting value reflects
+	// the stat change), 0x01 insufficient status point, 0x02 max level
+	// reached, etc. (rAthena's clif_status_change_ack carries these codes).
+	Result uint8
+	// Value is the resulting stat value after the operation (zero when
+	// result is non-success).
+	Value uint8
+}
+
+// Encode writes the ZC_STATUS_CHANGE_ACK packet to w.
+//
+// The wire layout is: [2:cmd=0x00bc][2:statusID][1:result][1:value] = 6 bytes.
+func (a ZCStatusChangeAck) Encode(w io.Writer) error {
+	var buf [sizeZCStatusChangeAck]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTATUSCHANGEACK)
+	binary.LittleEndian.PutUint16(buf[2:], a.StatusID)
+	buf[4] = a.Result
+	buf[5] = a.Value
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_STATUS_CHANGE_ACK: %w", err)
+	}
+	return nil
+}
+
+// ZCNotifyEffect encodes a ZC_NOTIFY_EFFECT packet (opcode 0x019b) —
+// server-side notification of an effect event (base level-up, job level-up,
+// etc. — the rAthena `NOTIFYEFFECT_*` enum at clif.hpp:805-812).
+//
+// Wire layout (rathena/src/map/packets_struct.hpp:1120):
+//
+//	int16  packetType (0x019b)
+//	uint32 GID (0/unused for base level-up, reserved per rAthena)
+//	uint32 effectID (NOTIFYEFFECT_BASE_LEVEL_UP = 0 for base level-up)
+type ZCNotifyEffect struct {
+	// AID is the account ID of the entity the effect targets. For
+	// base level-up the AID field is 0 on the wire (rAthena writes
+	// `pack->GID = 0`).
+	AID uint32
+	// EffectID is the notification effect identifier. For base
+	// level-up the value is NOTIFYEFFECT_BASE_LEVEL_UP (= equivalent
+	// to the elapse effectID, which maps to the `NOTIFYEFFECT_BASE_LEVEL_UP = 0`
+	// constant in clif.hpp).
+	EffectID uint32
+}
+
+// Encode writes the ZC_NOTIFY_EFFECT packet to w.
+//
+// The wire layout is: [2:cmd=0x019b][4:AID][4:effectID] = 10 bytes.
+func (n ZCNotifyEffect) Encode(w io.Writer) error {
+	var buf [sizeZCNotifyEffect]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYEFFECT)
+	binary.LittleEndian.PutUint32(buf[2:], n.AID)
+	binary.LittleEndian.PutUint32(buf[6:], n.EffectID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_NOTIFY_EFFECT: %w", err)
+	}
+	return nil
+}
+
+// EffectBaseLevelUp is the ZC_NOTIFY_EFFECT effectID for a base level-up
+// (rathena/src/map/clif.hpp:805 NOTIFYEFFECT_BASE_LEVEL_UP = 0). The
+// gateway emits ZC_NOTIFY_EFFECT with this id when a monster kill pushes
+// a character's base EXP past the next-level threshold.
+const EffectBaseLevelUp uint32 = 0
+
 // ActionResponse encodes a ZC_ACTION_RESPONSE packet (command 0x008b,
 // 11 bytes fixed). The server broadcasts this to echo a player's
 // sit/stand/attack action back to nearby clients; the gateway uses it

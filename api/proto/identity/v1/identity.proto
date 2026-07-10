@@ -58,6 +58,20 @@ service IdentityService {
   // wire slot). Returns a SellResult outcome + the post-transaction
   // zeny balance (0 on non-OK).
   rpc SellToShop(SellToShopRequest) returns (SellToShopResponse);
+
+  // ApplyLevelUp persists a base-level-up computed by the gateway (D-213).
+  // The character's base_level is set to to_base_level and granted_status_point
+  // is added to the user's status_point balance. An optimistic lock guards
+  // against concurrent level-ups: the WHERE clause verifies that the current
+  // base_level still equals from_base_level (rathena/src/map/pc.cpp:8244
+  // pc_checkbaselevelup — grants via pc_gets_status_point).
+  rpc ApplyLevelUp(ApplyLevelUpRequest) returns (ApplyLevelUpResponse);
+
+  // AllocateStat raises one base stat (SP_STR..SP_LUK) by amount, deducting
+  // status points at the pre-Renewal cost 1+(val+9)/10. Validation + atomic
+  // conditional update happen server-side (rathena/src/map/pc.cpp:8872
+  // pc_statusup). Returns the resulting stat value and remaining status points.
+  rpc AllocateStat(AllocateStatRequest) returns (AllocateStatResponse);
 }
 
 // AuthMethod identifies which CA_LOGIN variant the client sent.
@@ -302,4 +316,44 @@ message SellToShopResponse {
   SellResult result = 1;
   uint32 new_zeny = 2;
   string error = 3;
+}
+
+// StatResult mirrors the CZ_STATUS_CHANGE ack outcomes: how a stat allocation
+// call succeeded or failed (rathena/src/map/clif.cpp:4283 ZC_STATUS_CHANGE_ACK).
+enum StatResult {
+  STAT_RESULT_UNSPECIFIED = 0;
+  STAT_RESULT_OK = 1;
+  STAT_RESULT_INSUFFICIENT_POINTS = 2;
+  STAT_RESULT_MAX_STAT = 3;
+  STAT_RESULT_INVALID_STAT = 4;
+}
+
+message ApplyLevelUpRequest {
+  uint32 account_id = 1;
+  uint32 char_id = 2;
+  uint32 from_base_level = 3; // expected current level (optimistic lock guard)
+  uint32 to_base_level = 4;   // new level after the gain
+  uint32 granted_status_points = 5; // status points awarded by the level-up(s)
+}
+
+message ApplyLevelUpResponse {
+  bool success = 1;
+  uint32 new_base_level = 2;   // actual current level after apply (re-read)
+  uint32 new_status_point = 3; // actual status_point after apply (re-read)
+  string error = 4;            // populated on transport/internal failure
+}
+
+message AllocateStatRequest {
+  uint32 account_id = 1;
+  uint32 char_id = 2;
+  uint32 stat_id = 3;  // rAthena SP_STR..SP_LUK (13..18)
+  uint32 amount = 4;   // steps to raise (usually 1)
+}
+
+message AllocateStatResponse {
+  StatResult result = 1;
+  uint32 stat_id = 2;
+  uint32 new_value = 3;       // stat value after allocation (0 on non-OK)
+  uint32 new_status_point = 4; // remaining status_point after allocation
+  string error = 5;           // populated only on transport/internal failure
 }

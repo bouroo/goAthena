@@ -41,6 +41,40 @@ func (m *MockCharacterRepository) EXPECT() *MockCharacterRepositoryMockRecorder 
 	return m.recorder
 }
 
+// AllocateStat mocks base method.
+func (m *MockCharacterRepository) AllocateStat(ctx context.Context, accountID, charID uint32, statColumn string, currentVal, amount uint8, cost uint32) (uint32, uint32, int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AllocateStat", ctx, accountID, charID, statColumn, currentVal, amount, cost)
+	ret0, _ := ret[0].(uint32)
+	ret1, _ := ret[1].(uint32)
+	ret2, _ := ret[2].(int)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
+}
+
+// AllocateStat indicates an expected call of AllocateStat.
+func (mr *MockCharacterRepositoryMockRecorder) AllocateStat(ctx, accountID, charID, statColumn, currentVal, amount, cost any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateStat", reflect.TypeOf((*MockCharacterRepository)(nil).AllocateStat), ctx, accountID, charID, statColumn, currentVal, amount, cost)
+}
+
+// ApplyLevelUp mocks base method.
+func (m *MockCharacterRepository) ApplyLevelUp(ctx context.Context, accountID, charID, fromLevel, toLevel, grantedStatusPoints uint32) (uint32, uint32, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplyLevelUp", ctx, accountID, charID, fromLevel, toLevel, grantedStatusPoints)
+	ret0, _ := ret[0].(uint32)
+	ret1, _ := ret[1].(uint32)
+	ret2, _ := ret[2].(bool)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
+}
+
+// ApplyLevelUp indicates an expected call of ApplyLevelUp.
+func (mr *MockCharacterRepositoryMockRecorder) ApplyLevelUp(ctx, accountID, charID, fromLevel, toLevel, grantedStatusPoints any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyLevelUp", reflect.TypeOf((*MockCharacterRepository)(nil).ApplyLevelUp), ctx, accountID, charID, fromLevel, toLevel, grantedStatusPoints)
+}
+
 // GetByID mocks base method.
 func (m *MockCharacterRepository) GetByID(ctx context.Context, accountID, charID uint32) (*domain.CharacterSummary, error) {
 	m.ctrl.T.Helper()

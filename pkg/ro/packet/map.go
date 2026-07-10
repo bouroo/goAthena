@@ -185,8 +185,14 @@ const (
 	// uint16 itemId; uint32 is reserved for PACKETVER >=
 	// 20181121). For PACKETVER 20250604, index is +2 from the
 	// server-side row index (clif.cpp:4482).
-	HeaderZCUSEITEMACK2     uint16 = 0x01c8
-	HeaderZCSKILLINFOLIST   uint16 = 0x010f // rathena/src/map/packets_struct.hpp:4279 (ZC_SKILLINFO_LIST)
+	HeaderZCUSEITEMACK2   uint16 = 0x01c8
+	HeaderZCSKILLINFOLIST uint16 = 0x010f // rathena/src/map/packets_struct.hpp:4279 (ZC_SKILLINFO_LIST)
+	// P2C: stats & leveling — stat allocation + level-up effect.
+	// CZ_STATUS_CHANGE (0x00bb) is the client request to raise a base
+	// stat (rathena/src/map/clif.cpp:12714 clif_parse_StatusChange).
+	HeaderCZSTATUSCHANGE    uint16 = 0x00bb // rathena/src/map/clif.cpp:12714 (CZ_STATUS_CHANGE)
+	HeaderZCSTATUSCHANGEACK uint16 = 0x00bc // rathena/src/map/clif.cpp:4283 (ZC_STATUS_CHANGE_ACK)
+	HeaderZCNOTIFYEFFECT    uint16 = 0x019b // rathena/src/map/packets.hpp:1120 (ZC_NOTIFY_EFFECT)
 	HeaderZCSHORTCUTKEYLIST uint16 = 0x02b9 // rathena/src/map/packets_struct.hpp:1619 (ZC_SHORTCUT_KEY_LIST, PACKETVER < 20090603)
 	// ZC_NOTIFY_ACT (0x08c8) — damage / action notification. rathena/src/map/
 	// packets.hpp:1426 (PACKETVER >= 20131223). Fixed 34 bytes.
@@ -304,6 +310,16 @@ const (
 	// sizeZCLongParChange = int16 packetType + uint16 varID + int32 amount = 2+2+4 = 8
 	// (rathena/src/map/packets_struct.hpp:361-365).
 	sizeZCLongParChange = 8
+	// P2C: stat allocation + level-up effect sizes.
+	// sizeCZStatusChange = int16 packetType + uint16 statusID + uint8 amount = 2+2+1 = 5
+	// (rathena/src/map/clif.cpp:12714 clif_parse_StatusChange).
+	sizeCZStatusChange = 5
+	// sizeZCStatusChangeAck = int16 packetType + uint16 statusID + uint8 result
+	// + uint8 value = 2+2+1+1 = 6 (rathena/src/map/clif.cpp:4283).
+	sizeZCStatusChangeAck = 6
+	// sizeZCNotifyEffect = int16 packetType + uint32 AID + uint32 effectID = 2+4+4 = 10
+	// (rathena/src/map/packets.hpp:1120 ZC_NOTIFY_EFFECT).
+	sizeZCNotifyEffect = 10
 	// sizeEmptyInventoryList = int16 packetType + int16 packetLength = 2+2 = 4.
 	// Used for ZC_INVENTORY_ITEMLIST_NORMAL / ZC_INVENTORY_ITEMLIST_EQUIP /
 	// ZC_SKILLINFO_LIST when the list is empty (count=0). The trailing
@@ -851,6 +867,28 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCUSEITEMACK2,
 		Name:      "ZC_USE_ITEM_ACK2",
 		Length:    sizeZCUseItemAck2,
+		Direction: DirectionServerToClient,
+	})
+	// P2C: stats & leveling — CZ_STATUS_CHANGE (stat allocation request)
+	// plus the two server replies. See the per-constant source citations
+	// above (clif.cpp:12714 / clif.cpp:4283 / packets.hpp:1120) for the
+	// rAthena packetdb lines pinning each opcode to PACKETVER 20250604.
+	db.Register(Definition{
+		ID:        HeaderCZSTATUSCHANGE,
+		Name:      "CZ_STATUS_CHANGE",
+		Length:    sizeCZStatusChange,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCSTATUSCHANGEACK,
+		Name:      "ZC_STATUS_CHANGE_ACK",
+		Length:    sizeZCStatusChangeAck,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCNOTIFYEFFECT,
+		Name:      "ZC_NOTIFY_EFFECT",
+		Length:    sizeZCNotifyEffect,
 		Direction: DirectionServerToClient,
 	})
 

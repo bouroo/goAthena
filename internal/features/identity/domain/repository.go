@@ -50,6 +50,21 @@ type CharacterRepository interface {
 	// (inter.cpp::char_clif_top) — a charID alone is not unique to an
 	// account, so callers that omit accountID risk cross-account reads.
 	GetByID(ctx context.Context, accountID, charID uint32) (*CharacterSummary, error)
+
+	// ApplyLevelUp atomically sets base_level=toLevel, adds grantedStatusPoints to
+	// status_point, and sets base_exp=0, WHERE account_id=? AND char_id=? AND
+	// base_level=fromLevel (optimistic lock). Returns the post-update base_level
+	// and status_point (re-read), and applied=true. applied=false when rows==0
+	// (concurrent level-up — caller re-reads and skips).
+	ApplyLevelUp(ctx context.Context, accountID, charID, fromLevel, toLevel, grantedStatusPoints uint32) (newLevel, newStatusPoint uint32, applied bool, err error)
+
+	// AllocateStat atomically raises the named stat column by amount and deducts
+	// cost from status_point via a conditional UPDATE whose WHERE clause verifies
+	// ownership (account_id+char_id) AND status_point>=cost AND stat+amount<=99.
+	// statColumn is one of "str"|"agi"|"vit"|"int"|"dex"|"luk". Returns post-update
+	// (statValue, statusPoint) re-read. result: 0=applied, 1=insufficient points,
+	// 2=stat would exceed MaxStat (rows==0 → re-read to distinguish).
+	AllocateStat(ctx context.Context, accountID, charID uint32, statColumn string, currentVal uint8, amount uint8, cost uint32) (newValue, newStatusPoint uint32, result int, err error)
 }
 
 // SessionRepository is the outbound port for session persistence, backed
