@@ -47,6 +47,9 @@ type ConnectionInfo struct {
 	// map enter (handleCZNotifyActorInit). Used by applyMonsterKillExp to
 	// detect base-level-up via stats/domain.ApplyBaseExpGain (D-213).
 	BaseLevel uint32
+	// Str, Dex, Luk are the character's base combat stats, cached from
+	// GetCharacter on map enter.
+	Str, Dex, Luk uint8
 	// invIndex maps 0-based inventory position to DB item ID.
 	invIndex map[uint16]uint32
 	// shopNPCID tracks the NPC GID the player is currently in a shop
@@ -56,6 +59,22 @@ type ConnectionInfo struct {
 	// the next CZ_PC_PURCHASE_ITEMLIST / CZ_PC_SELL_ITEMLIST request
 	// must re-anchor to a fresh deal-type selection.
 	shopNPCID uint32
+}
+
+// SetCombatStats updates the character's base combat stats.
+func (c *ConnectionInfo) SetCombatStats(str, dex, luk uint8) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Str = str
+	c.Dex = dex
+	c.Luk = luk
+}
+
+// CombatStats returns the character's base combat stats.
+func (c *ConnectionInfo) CombatStats() (uint8, uint8, uint8) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Str, c.Dex, c.Luk
 }
 
 // SetInventoryIndex replaces the inventory index map.

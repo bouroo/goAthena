@@ -1856,6 +1856,8 @@ func TestDispatchHandler_CZActionRequest_AttackMonster_EncodesNotifyAct(t *testi
 		AccountID: wantAID,
 		MonsterHP: map[uint32]int32{110000005: 50}, // Poring with 50 HP
 	}
+	conn.SetCombatStats(10, 5, 0)
+	h.setDamageRoll(func(min, max int32) int32 { return min })
 
 	req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
 	var reqBuf bytes.Buffer
@@ -1886,17 +1888,72 @@ func TestDispatchHandler_CZActionRequest_AttackMonster_EncodesNotifyAct(t *testi
 	if tgt := binary.LittleEndian.Uint32(out[6:10]); tgt != 110000005 {
 		t.Errorf("targetID = %d, want 110000005", tgt)
 	}
-	// damage = 10.
-	if dmg := int32(binary.LittleEndian.Uint32(out[22:26])); dmg != 10 {
-		t.Errorf("damage = %d, want 10", dmg)
+	// damage = 12.
+	if dmg := int32(binary.LittleEndian.Uint32(out[22:26])); dmg != 12 {
+		t.Errorf("damage = %d, want 12", dmg)
 	}
 	// type = DMG_NORMAL (0).
 	if out[29] != packet.DMGNormal {
 		t.Errorf("type = 0x%02x, want 0x%02x (DMG_NORMAL)", out[29], packet.DMGNormal)
 	}
 	// HP should be decremented.
-	if hp := conn.MonsterHP[110000005]; hp != 40 {
-		t.Errorf("monster HP after attack = %d, want 40", hp)
+	if hp := conn.MonsterHP[110000005]; hp != 38 {
+		t.Errorf("monster HP after attack = %d, want 38", hp)
+	}
+
+	// type = DMG_NORMAL (0).
+	if out[29] != packet.DMGNormal {
+		t.Errorf("type = 0x%02x, want 0x%02x (DMG_NORMAL)", out[29], packet.DMGNormal)
+	}
+	// HP should be decremented.
+	if hp := conn.MonsterHP[110000005]; hp != 38 {
+		t.Errorf("monster HP after attack = %d, want 38", hp)
+	}
+}
+
+// TestDispatchHandler_Attack_StatDerivedDamage ensures that different
+// attacker stats produce different, formula-correct damage values.
+func TestDispatchHandler_Attack_StatDerivedDamage(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	type testCase struct {
+		name     string
+		str      uint8
+		expected int32
+	}
+	cases := []testCase{
+		{"low stats", 1, 1}, // Poring is Vit0
+		{"high stats", 50, 75},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &bufResponder{}
+			conn := domain.ConnectionInfo{
+				ID:        1,
+				AccountID: 200001,
+				MonsterHP: map[uint32]int32{110000005: 100},
+			}
+			conn.SetCombatStats(tc.str, 0, 0)
+
+			// Force min damage to get deterministic result
+			h.setDamageRoll(func(min, max int32) int32 { return min })
+
+			req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
+			var reqBuf bytes.Buffer
+			_ = req.Encode(&reqBuf)
+
+			_ = h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZACTIONREQUEST, reqBuf.Bytes())
+
+			out := resp.buf.Bytes()
+			dmg := int32(binary.LittleEndian.Uint32(out[22:26]))
+			if dmg != tc.expected {
+				t.Errorf("damage = %d, want %d", dmg, tc.expected)
+			}
+		})
 	}
 }
 
@@ -1918,6 +1975,8 @@ func TestDispatchHandler_CZActionRequest_KillMonster_EncodesNotifyActAndVanish(t
 		BaseExp:   10,                             // Started with 10 BaseExp
 		JobExp:    5,                              // Started with 5 JobExp
 	}
+	conn.SetCombatStats(10, 5, 0)
+	h.setDamageRoll(func(min, max int32) int32 { return min })
 
 	req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
 	var reqBuf bytes.Buffer
@@ -3462,6 +3521,8 @@ func TestDispatchHandler_Attack_MonsterRespawns(t *testing.T) {
 		ID:        1,
 		AccountID: 200001,
 	}
+	conn.SetCombatStats(10, 5, 0)
+	h.setDamageRoll(func(min, max int32) int32 { return min })
 	conn.InitMonsterHP([]domain.MonsterSpawn{{GID: 110000005, MaxHP: 5}}) // Poring with only 5 HP — kills it
 
 	req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
@@ -3542,6 +3603,8 @@ func TestDispatchHandler_Attack_Concurrency(t *testing.T) {
 		ID:        1,
 		AccountID: 200001,
 	}
+	conn.SetCombatStats(10, 5, 0)
+	h.setDamageRoll(func(min, max int32) int32 { return min })
 	conn.InitMonsterHP([]domain.MonsterSpawn{{GID: 110000005, MaxHP: 10000}}) // Poring with large HP to prevent death in this test
 
 	req := packet.CZActionRequestRequest{TargetGID: 110000005, Action: packet.DMGNormal}
@@ -3570,7 +3633,7 @@ func TestDispatchHandler_Attack_Concurrency(t *testing.T) {
 		t.Fatal("expected monster to exist")
 	}
 
-	expectedHP := int32(10000 - workers*iterations*10)
+	expectedHP := int32(10000 - workers*iterations*12)
 	if hp != expectedHP {
 		t.Errorf("monster HP = %d, want %d", hp, expectedHP)
 	}
