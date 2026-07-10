@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand/v2"
 	"net"
 	"net/netip"
 	"strconv"
@@ -113,6 +114,11 @@ type DispatchHandler struct {
 	// implementation — a future in-process test double or a different
 	// transport can satisfy the same contract.
 	areaSender AreaSender
+
+	// damageRoll is the damage calculation RNG. Defaulted to a
+	// uniform distribution in the range [low, high], overrideable by
+	// tests for determinism.
+	damageRoll func(low, high int32) int32
 }
 
 // NewDispatchHandler constructs a dispatch-backed PacketHandler.
@@ -148,7 +154,20 @@ func NewDispatchHandler(
 		zonePort:     zonePort,
 		registry:     registry,
 		respawnDelay: 5 * time.Second,
+		damageRoll: func(low, high int32) int32 {
+			if low >= high {
+				return low
+			}
+			return low + rand.Int32N(high-low+1) //nolint:gosec // math/rand/v2 is sufficient for damage RNG
+		},
 	}
+}
+
+// setDamageRoll installs a custom damage RNG for deterministic tests.
+//
+//nolint:unused // only used in tests
+func (h *DispatchHandler) setDamageRoll(f func(low, high int32) int32) {
+	h.damageRoll = f
 }
 
 // SetAreaSender installs the broadcast area-spawner used to show a
@@ -1122,6 +1141,7 @@ func (h *DispatchHandler) handleCZNotifyActorInit(ctx context.Context, conn *dom
 		dexV = uint8(min(char.GetDex(), 255)) //nolint:gosec // ditto
 		lukV = uint8(min(char.GetLuk(), 255)) //nolint:gosec // ditto
 		conn.BaseLevel = baseLevel
+		conn.SetCombatStats(strV, dexV, lukV)
 	}
 
 	// rAthena clamps HP to a minimum of 1 on LoadEndAck so the client
@@ -2044,10 +2064,16 @@ func (h *DispatchHandler) handleSitStand(conn *domain.ConnectionInfo, resp domai
 // if the monster's HP drops to 0 or below, sends ZC_NOTIFY_VANISH
 // and removes the monster from the per-connection HP map.
 func (h *DispatchHandler) handleAttack(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, targetGID uint32) error {
-	// Fixed damage — no stat-based formula yet (deferred to zone service).
-	const fixedDamage int32 = 10
+	def, vit, found := LookupMonsterStats(targetGID)
+	if !found {
+		def, vit = 0, 0
+	}
 
-	hp, ok := conn.ApplyDamage(targetGID, fixedDamage)
+	str, dex, luk := conn.CombatStats()
+	band := statsdomain.MeleeDamage(str, dex, luk, def, vit)
+	damage := h.damageRoll(band.Min, band.Max)
+
+	hp, ok := conn.ApplyDamage(targetGID, damage)
 	if !ok {
 		// Target is not a known monster (could be NPC, PC, or already
 		// dead). Drop silently — no error, no reply.
@@ -2064,7 +2090,6 @@ func (h *DispatchHandler) handleAttack(ctx context.Context, conn *domain.Connect
 	}
 
 	tick := uint32(time.Now().UnixMilli()) //nolint:gosec // low 32 bits per rAthena time convention
-
 	var burst bytes.Buffer
 
 	// ZC_NOTIFY_ACT — damage notification.
@@ -2074,7 +2099,7 @@ func (h *DispatchHandler) handleAttack(ctx context.Context, conn *domain.Connect
 		ServerTick: tick,
 		SrcSpeed:   0, // amotion — deferred
 		DmgSpeed:   0, // dmotion — deferred
-		Damage:     fixedDamage,
+		Damage:     damage,
 		Div:        1,
 		Type:       packet.DMGNormal,
 	}
@@ -2109,13 +2134,13 @@ func (h *DispatchHandler) handleAttack(ctx context.Context, conn *domain.Connect
 		h.logger.Info().
 			Uint64("conn", conn.ID).
 			Uint32("target_gid", targetGID).
-			Int32("damage", fixedDamage).
+			Int32("damage", damage).
 			Msg("monster killed")
 	} else {
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
 			Uint32("target_gid", targetGID).
-			Int32("damage", fixedDamage).
+			Int32("damage", damage).
 			Int32("remaining_hp", hp).
 			Msg("monster damaged")
 	}
