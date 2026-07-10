@@ -42,12 +42,12 @@ type fakeIdentityClient struct {
 	// handleCZPCPurchaseItemList + handleCZPCSellItemList happy and
 	// edge-case paths; buyReqs / sellReqs capture the (verifiable)
 	// inputs the dispatcher forwards.
-	buyFromShopFn func(context.Context, *identityv1.BuyFromShopRequest) (*identityv1.BuyFromShopResponse, error)
-	sellToShopFn  func(context.Context, *identityv1.SellToShopRequest) (*identityv1.SellToShopResponse, error)
-	buyReqs       []*identityv1.BuyFromShopRequest
-	sellReqs       []*identityv1.SellToShopRequest
-	applyLevelUpFn func(context.Context, *identityv1.ApplyLevelUpRequest) (*identityv1.ApplyLevelUpResponse, error)
-	allocateStatFn func(context.Context, *identityv1.AllocateStatRequest) (*identityv1.AllocateStatResponse, error)
+	buyFromShopFn    func(context.Context, *identityv1.BuyFromShopRequest) (*identityv1.BuyFromShopResponse, error)
+	sellToShopFn     func(context.Context, *identityv1.SellToShopRequest) (*identityv1.SellToShopResponse, error)
+	buyReqs          []*identityv1.BuyFromShopRequest
+	sellReqs         []*identityv1.SellToShopRequest
+	applyLevelUpFn   func(context.Context, *identityv1.ApplyLevelUpRequest) (*identityv1.ApplyLevelUpResponse, error)
+	allocateStatFn   func(context.Context, *identityv1.AllocateStatRequest) (*identityv1.AllocateStatResponse, error)
 	applyLevelUpReqs []*identityv1.ApplyLevelUpRequest
 	allocateStatReqs []*identityv1.AllocateStatRequest
 }
