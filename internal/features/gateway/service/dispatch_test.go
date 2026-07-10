@@ -326,13 +326,13 @@ func parseStatusBurst(t *testing.T, buf []byte) (
 			}
 			emptyListPackets = append(emptyListPackets, cmd)
 			offset += int(plen)
-		case 0x010f: // ZC_SKILLINFO_LIST (M10, empty = 4 bytes)
+		case 0x010f: // ZC_SKILLINFO_LIST (M10/P3B, variable: 4-byte empty header + 37 bytes per skill)
 			if offset+4 > len(buf) {
 				t.Fatalf("truncated ZC_SKILLINFO_LIST at offset %d (have %d bytes)", offset, len(buf)-offset)
 			}
 			plen := binary.LittleEndian.Uint16(buf[offset+2 : offset+4])
-			if plen != 4 {
-				t.Fatalf("ZC_SKILLINFO_LIST packetLength = %d, want 4 (empty)", plen)
+			if plen != 4 && plen != 41 {
+				t.Fatalf("ZC_SKILLINFO_LIST packetLength = %d, want 4 (empty) or 41 (NV_BASIC ×1)", plen)
 			}
 			emptyListPackets = append(emptyListPackets, cmd)
 			offset += int(plen)
@@ -4705,5 +4705,114 @@ func TestDispatchHandler_CZPCSellItemList_NoShopNPC(t *testing.T) {
 	out := resp.buf.Bytes()
 	if len(out) != 3 || out[2] != 1 {
 		t.Fatalf("responder out = %v, want 3 bytes result=1", out)
+	}
+}
+
+// P3B: the map-enter status burst must carry a real ZC_SKILLINFO_LIST
+// (0x010f) frame for the character's learned skills, not the M10 4-byte
+// empty stub. This drives the full LoadEndAck path through
+// handleCZNotifyActorInit and locates the skill-list frame inside the
+// coalesced burst. The deterministic novice default yields exactly one
+// NV_BASIC L1 entry → packetLength = 4 + 37 = 41.
+func TestDispatchHandler_CZNotifyActorInit_EmitsSkillInfoList(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZNOTIFYACTORINIT, make([]byte, 2)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+
+	// Locate the 0x010f frame inside the burst. Walk the packet
+	// stream by opcode so a payload byte that happens to match the
+	// header does not give a false positive.
+	offset := 8 // skip leading 8-byte ZC_MAPPROPERTY_R2
+	var skillStart, skillPlen int = -1, -1
+	for offset+2 <= len(out) {
+		cmd := binary.LittleEndian.Uint16(out[offset:])
+		switch cmd {
+		case 0x099b:
+			offset += 8
+		case 0x00b0, 0x00b1:
+			offset += 8
+		case 0x00bd:
+			offset += 44
+		case 0x00a3, 0x00a4, 0x010f:
+			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
+			if cmd == 0x010f {
+				skillStart = offset
+				skillPlen = plen
+			}
+			offset += plen
+		case 0x02b9:
+			offset += 191
+		case 0x09ff:
+			offset += 107
+		default:
+			t.Fatalf("unexpected packet 0x%04x at offset %d (buf=% x)", cmd, offset, out)
+		}
+	}
+	if skillStart < 0 {
+		t.Fatalf("ZC_SKILLINFO_LIST (0x010f) not found in burst")
+	}
+	if skillStart+skillPlen > len(out) {
+		t.Fatalf("ZC_SKILLINFO_LIST frame truncated: start=%d len=%d buf=%d",
+			skillStart, skillPlen, len(out))
+	}
+
+	frame := out[skillStart : skillStart+skillPlen]
+
+	// Opcode: 0x0f 0x01 (LE 0x010f).
+	if frame[0] != 0x0f || frame[1] != 0x01 {
+		t.Fatalf("ZC_SKILLINFO_LIST opcode = %02x %02x, want 0f 01 (LE 0x010f)",
+			frame[0], frame[1])
+	}
+
+	// Packet length: 4-byte header + 37 bytes per skill entry. NV_BASIC ×1 = 41.
+	const wantPlen = 41
+	if skillPlen != wantPlen {
+		t.Fatalf("ZC_SKILLINFO_LIST packetLength = %d, want %d (NV_BASIC ×1)", skillPlen, wantPlen)
+	}
+
+	// Total frame size matches packetLength.
+	if len(frame) != wantPlen {
+		t.Fatalf("ZC_SKILLINFO_LIST frame = %d bytes, want %d", len(frame), wantPlen)
+	}
+
+	// Name slot is at off 16 (4-byte header + 12 bytes of id/inf/level/sp/range2).
+	// writeFixedName NUL-pads after the string, so it must appear
+	// verbatim followed by zero bytes up to off 40.
+	nameStart := skillStart + 4 + 12
+	nameEnd := nameStart + len("NV_BASIC")
+	for i, b := range []byte("NV_BASIC") {
+		if out[nameStart+i] != b {
+			t.Fatalf("ZC_SKILLINFO_LIST name slot byte %d = %q, want %q (full: % x)",
+				i, out[nameStart+i], b, out[nameStart:nameStart+24])
+		}
+	}
+	for i := nameEnd; i < nameStart+24; i++ {
+		if out[i] != 0 {
+			t.Fatalf("ZC_SKILLINFO_LIST name slot not NUL-terminated at byte %d (got %02x)",
+				i-nameStart, out[i])
+		}
+	}
+
+	// Level field at SkillData+6 LE uint16 (after id uint16 + inf uint32).
+	// 4-byte packet header + 6-byte SkillData prefix.
+	level := binary.LittleEndian.Uint16(out[skillStart+4+6 : skillStart+4+8])
+	if level != 1 {
+		t.Errorf("NV_BASIC level = %d, want 1", level)
+	}
+
+	// Skill ID at SkillData+0 LE uint16 (right after the 4-byte packet header).
+	id := binary.LittleEndian.Uint16(out[skillStart+4 : skillStart+6])
+	if id != 1 {
+		t.Errorf("skill id = %d, want 1 (NV_BASIC)", id)
 	}
 }
