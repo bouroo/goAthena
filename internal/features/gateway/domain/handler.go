@@ -43,6 +43,10 @@ type ConnectionInfo struct {
 	BaseExp int32
 	// JobExp tracks the accumulated job experience (M19).
 	JobExp int32
+	// BaseLevel is the character's base level, cached from GetCharacter on
+	// map enter (handleCZNotifyActorInit). Used by applyMonsterKillExp to
+	// detect base-level-up via stats/domain.ApplyBaseExpGain (D-213).
+	BaseLevel uint32
 	// invIndex maps 0-based inventory position to DB item ID.
 	invIndex map[uint16]uint32
 	// shopNPCID tracks the NPC GID the player is currently in a shop

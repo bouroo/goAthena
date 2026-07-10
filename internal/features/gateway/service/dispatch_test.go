@@ -45,7 +45,11 @@ type fakeIdentityClient struct {
 	buyFromShopFn func(context.Context, *identityv1.BuyFromShopRequest) (*identityv1.BuyFromShopResponse, error)
 	sellToShopFn  func(context.Context, *identityv1.SellToShopRequest) (*identityv1.SellToShopResponse, error)
 	buyReqs       []*identityv1.BuyFromShopRequest
-	sellReqs      []*identityv1.SellToShopRequest
+	sellReqs       []*identityv1.SellToShopRequest
+	applyLevelUpFn func(context.Context, *identityv1.ApplyLevelUpRequest) (*identityv1.ApplyLevelUpResponse, error)
+	allocateStatFn func(context.Context, *identityv1.AllocateStatRequest) (*identityv1.AllocateStatResponse, error)
+	applyLevelUpReqs []*identityv1.ApplyLevelUpRequest
+	allocateStatReqs []*identityv1.AllocateStatRequest
 }
 
 func (f *fakeIdentityClient) Authenticate(ctx context.Context, req *identityv1.AuthenticateRequest, _ ...grpc.CallOption) (*identityv1.AuthenticateResponse, error) {
@@ -155,6 +159,28 @@ func (f *fakeIdentityClient) SellToShop(ctx context.Context, req *identityv1.Sel
 	f.mu.Unlock()
 	if fn == nil {
 		return &identityv1.SellToShopResponse{Result: identityv1.SellResult_SELL_RESULT_INVALID_ITEM, NewZeny: 0}, nil
+	}
+	return fn(ctx, req)
+}
+
+func (f *fakeIdentityClient) ApplyLevelUp(ctx context.Context, req *identityv1.ApplyLevelUpRequest, _ ...grpc.CallOption) (*identityv1.ApplyLevelUpResponse, error) {
+	f.mu.Lock()
+	f.applyLevelUpReqs = append(f.applyLevelUpReqs, req)
+	fn := f.applyLevelUpFn
+	f.mu.Unlock()
+	if fn == nil {
+		return &identityv1.ApplyLevelUpResponse{Success: false}, nil
+	}
+	return fn(ctx, req)
+}
+
+func (f *fakeIdentityClient) AllocateStat(ctx context.Context, req *identityv1.AllocateStatRequest, _ ...grpc.CallOption) (*identityv1.AllocateStatResponse, error) {
+	f.mu.Lock()
+	f.allocateStatReqs = append(f.allocateStatReqs, req)
+	fn := f.allocateStatFn
+	f.mu.Unlock()
+	if fn == nil {
+		return &identityv1.AllocateStatResponse{Result: identityv1.StatResult_STAT_RESULT_INVALID_STAT}, nil
 	}
 	return fn(ctx, req)
 }

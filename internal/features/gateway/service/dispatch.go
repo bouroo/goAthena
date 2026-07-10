@@ -1118,6 +1118,7 @@ func (h *DispatchHandler) handleCZNotifyActorInit(ctx context.Context, conn *dom
 		intV = uint8(min(char.GetInt(), 255)) //nolint:gosec // ditto
 		dexV = uint8(min(char.GetDex(), 255)) //nolint:gosec // ditto
 		lukV = uint8(min(char.GetLuk(), 255)) //nolint:gosec // ditto
+		conn.BaseLevel = baseLevel
 	}
 
 	// rAthena clamps HP to a minimum of 1 on LoadEndAck so the client
@@ -1971,7 +1972,7 @@ func (h *DispatchHandler) handleCZGlobalMessage(_ context.Context, conn *domain.
 // ZC_NOTIFY_ACT (0x08c8) with type=DMG_SIT_DOWN / DMG_STAND_UP — NOT the
 // compact 0x008b stub. M18 corrects the M11 mapping (which wrongly used
 // 0/1 for sit/stand) and adds the attack path.
-func (h *DispatchHandler) handleCZActionRequest(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+func (h *DispatchHandler) handleCZActionRequest(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZActionRequest(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -1992,7 +1993,7 @@ func (h *DispatchHandler) handleCZActionRequest(_ context.Context, conn *domain.
 
 	switch req.Action {
 	case packet.DMGNormal, packet.DMGRepeat:
-		return h.handleAttack(conn, resp, req.TargetGID)
+		return h.handleAttack(ctx, conn, resp, req.TargetGID)
 	case packet.DMGSitDown, packet.DMGStandUp:
 		return h.handleSitStand(conn, resp, req.Action)
 	default:
@@ -2039,7 +2040,7 @@ func (h *DispatchHandler) handleSitStand(conn *domain.ConnectionInfo, resp domai
 // fixed damage value (10), sends ZC_NOTIFY_ACT with the damage, and
 // if the monster's HP drops to 0 or below, sends ZC_NOTIFY_VANISH
 // and removes the monster from the per-connection HP map.
-func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.Responder, targetGID uint32) error {
+func (h *DispatchHandler) handleAttack(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, targetGID uint32) error {
 	// Fixed damage — no stat-based formula yet (deferred to zone service).
 	const fixedDamage int32 = 10
 
@@ -2097,7 +2098,7 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 		}
 
 		// M19: apply EXP
-		h.applyMonsterKillExp(conn, &burst, targetGID)
+		h.applyMonsterKillExp(ctx, conn, &burst, targetGID)
 
 		// M20: schedule respawn
 		h.scheduleMonsterRespawn(conn, resp, targetGID)
@@ -2125,7 +2126,7 @@ func (h *DispatchHandler) handleAttack(conn *domain.ConnectionInfo, resp domain.
 // applyMonsterKillExp looks up the dead monster's EXP values, accumulates
 // them in the connection state, and appends ZC_LONGPAR_CHANGE updates
 // to the response burst.
-func (h *DispatchHandler) applyMonsterKillExp(conn *domain.ConnectionInfo, burst *bytes.Buffer, targetGID uint32) {
+func (h *DispatchHandler) applyMonsterKillExp(ctx context.Context, conn *domain.ConnectionInfo, burst *bytes.Buffer, targetGID uint32) {
 	for _, m := range monsterSpawns {
 		if m.GID == targetGID {
 			conn.AddExp(m.BaseExp, m.JobExp)
