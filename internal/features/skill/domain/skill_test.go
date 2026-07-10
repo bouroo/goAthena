@@ -42,7 +42,7 @@ func TestLookup(t *testing.T) {
 		if !ok {
 			t.Fatal("Lookup(142) miss")
 		}
-		if s.Name != "NV_FIRSTAID" || s.MaxLevel != 1 || s.Inf != InfSelf || len(s.SpCost) != 1 || s.SpCost[0] != 3 {
+		if s.Name != "NV_FIRSTAID" || s.MaxLevel != 1 || s.Inf != InfSelf || len(s.spCost) != 1 || s.spCost[0] != 3 {
 			t.Errorf("got %+v", s)
 		}
 	})
@@ -52,8 +52,8 @@ func TestLookup(t *testing.T) {
 		if !ok {
 			t.Fatal("Lookup(143) miss")
 		}
-		if s.SpCost[0] != 5 {
-			t.Errorf("NV_TRICKDEAD SP = %d, want 5 (per skill_db.yml:5090)", s.SpCost[0])
+		if s.spCost[0] != 5 {
+			t.Errorf("NV_TRICKDEAD SP = %d, want 5 (per skill_db.yml:5090)", s.spCost[0])
 		}
 	})
 

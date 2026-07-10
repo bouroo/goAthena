@@ -1478,17 +1478,17 @@ func (h *DispatchHandler) encodeSkillList(conn *domain.ConnectionInfo) []byte {
 		return packet.EncodeEmptySkillList()
 	}
 
-	data := make([]packet.SkillData, 0, len(entries))
-	for _, e := range entries {
-		data = append(data, packet.SkillData{
+	data := make([]packet.SkillData, len(entries))
+	for i, e := range entries {
+		data[i] = packet.SkillData{
 			ID:     e.ID,
-			Inf:    uint32(e.Inf), //nolint:gosec // Inf fits in the lower 16 bits; upper bits are reserved (clif.cpp:5678)
+			Inf:    uint32(e.Inf),
 			Level:  e.Level,
 			SP:     e.SP,
 			Range2: e.Range2,
 			Name:   e.Name,
 			UpFlag: e.UpFlag,
-		})
+		}
 	}
 
 	resp := packet.SkillInfoListResponse{Skills: data}

@@ -16,7 +16,7 @@ const (
 	InfTrap    uint16 = 0x20
 )
 
-// Skill is the registry entry for a single skill. SpCost[level-1] is the
+// Skill is the registry entry for a single skill. spCost[level-1] is the
 // SP cost at that level; for passives the slice is empty.
 type Skill struct {
 	ID       uint16
@@ -24,16 +24,16 @@ type Skill struct {
 	MaxLevel uint8
 	Inf      uint16
 	Range    int16
-	SpCost   []uint16
+	spCost   []uint16
 }
 
 // SpAt returns the SP cost at the given (1-based) level, or 0 if the level
 // is out of range.
 func (s Skill) SpAt(level uint8) uint16 {
-	if level == 0 || int(level) > len(s.SpCost) {
+	if level == 0 || int(level) > len(s.spCost) {
 		return 0
 	}
-	return s.SpCost[level-1]
+	return s.spCost[level-1]
 }
 
 // LearnedSkill is a player's currently-learned skill reference.
@@ -113,7 +113,7 @@ var registry = map[uint16]Skill{
 		MaxLevel: 9,
 		Inf:      InfNone,
 		Range:    0,
-		SpCost:   nil,
+		spCost:   nil,
 	},
 	142: {
 		ID:       142,
@@ -121,7 +121,7 @@ var registry = map[uint16]Skill{
 		MaxLevel: 1,
 		Inf:      InfSelf,
 		Range:    0,
-		SpCost:   []uint16{3},
+		spCost:   []uint16{3},
 	},
 	143: {
 		ID:       143,
@@ -129,6 +129,6 @@ var registry = map[uint16]Skill{
 		MaxLevel: 1,
 		Inf:      InfSelf,
 		Range:    0,
-		SpCost:   []uint16{5},
+		spCost:   []uint16{5},
 	},
 }
