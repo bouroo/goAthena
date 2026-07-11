@@ -77,6 +77,8 @@ zone:
   default_map: prontera
   move_speed: 150
   shutdown_grace: 30s
+  mob_db_path: ./data/mob_db/mob_db.yml
+  mob_spawns_path: ./data/mob_spawns/prontera.yml
 
 assets:
   enabled: false

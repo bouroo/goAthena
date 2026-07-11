@@ -10,9 +10,11 @@
 package di
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -27,8 +29,23 @@ import (
 	"github.com/bouroo/goAthena/internal/infrastructure/agones"
 	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
 	"github.com/bouroo/goAthena/internal/shared/server"
+	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/romap"
 )
+
+// mobGIDCounter allocates zone-local GIDs for mob entities. Initialized to
+// 110_000_001 so values stay in the standard rAthena mob GID band and remain
+// distinct from player GIDs (which are allocated by the identity/gateway
+// services).
+var mobGIDCounter atomic.Uint32
+
+func init() {
+	mobGIDCounter.Store(110_000_001)
+}
+
+func nextMobGID() uint32 {
+	return mobGIDCounter.Add(1) - 1
+}
 
 // Register wires the zone feature (map instances, AOI, tick loop,
 // pathfinding, gRPC transport) into the DI container. It depends on
@@ -75,6 +92,13 @@ func Register(c do.Injector) error {
 	do.ProvideValue(c, zoneSvc)
 	do.ProvideValue(c, domain.ZoneService(zoneSvc))
 	do.ProvideValue(c, grpcServer)
+
+	if spawned := spawnStartupMobs(cfg, logger, zoneSvc, md); spawned > 0 {
+		logger.Info().
+			Int("count", spawned).
+			Str("map", md.Name).
+			Msg("zone: spawned startup mobs")
+	}
 
 	logger.Info().
 		Str("map", md.Name).
@@ -196,4 +220,86 @@ func loadMap(mapDir, name string) (*romap.MapData, error) {
 		return nil, fmt.Errorf("load %s: %w", name, err)
 	}
 	return md, nil
+}
+
+// spawnStartupMobs loads the configured mob_db and spawn config and registers
+// every spawned mob with the zone service. Both files are optional: an empty
+// path or a read/parse failure is logged and the function returns 0 without
+// failing zone boot. Each spawn entry's Count mobs are placed at deterministic
+// coordinates (X/Y from the entry, no per-instance random offset yet — the
+// XRange/YRange randomization lands in u3 alongside wander AI).
+//
+// The first mob GID comes from the package-level atomic counter starting at
+// 110_000_001, matching the rAthena mob GID band so the gateway's GID→MobID
+// routing in u4 stays unambiguous.
+func spawnStartupMobs(cfg *config.Config, logger *zerolog.Logger, zoneSvc *service.ZoneService, md *romap.MapData) int {
+	if cfg.Zone.MobDBPath == "" || cfg.Zone.MobSpawnsPath == "" {
+		return 0
+	}
+
+	registry, err := mobdb.LoadFile(cfg.Zone.MobDBPath)
+	if err != nil {
+		logger.Warn().Err(err).
+			Str("path", cfg.Zone.MobDBPath).
+			Msg("zone: mob_db load failed; skipping mob spawn")
+		return 0
+	}
+
+	spawnCfg, err := domain.LoadMobSpawnsFile(cfg.Zone.MobSpawnsPath)
+	if err != nil {
+		logger.Warn().Err(err).
+			Str("path", cfg.Zone.MobSpawnsPath).
+			Msg("zone: mob spawn config load failed; skipping mob spawn")
+		return 0
+	}
+
+	ctx := context.Background()
+	spawned := 0
+	for _, entry := range spawnCfg.Spawns {
+		mobID := int32(entry.MobID) //nolint:gosec // mob IDs are rAthena-allocated, bounded by DB lookup
+		mob := registry.Get(mobID)
+		if mob == nil {
+			logger.Warn().
+				Int32("mob_id", mobID).
+				Msg("zone: spawn entry references unknown mob_id; skipping")
+			continue
+		}
+		count := max(entry.Count, 1)
+		respawn := time.Duration(entry.RespawnMs) * time.Millisecond
+		if respawn <= 0 {
+			respawn = 5 * time.Second
+		}
+		for range count {
+			ent := &domain.Entity{
+				ID:           domain.EntityID(nextMobGID()),
+				Type:         domain.EntityMob,
+				X:            entry.X,
+				Y:            entry.Y,
+				MoveSpeed:    int(mob.WalkSpeed),
+				MobID:        mob.Id,
+				HP:           mob.Hp,
+				MaxHP:        mob.Hp,
+				AI:           uint8(mob.Ai), //nolint:gosec // mob_db AI codes are 0-99; truncation is harmless
+				SpawnOriginX: entry.X,
+				SpawnOriginY: entry.Y,
+				RespawnDelay: respawn,
+				Name:         mob.Name,
+			}
+			if !md.IsWalkable(ent.X, ent.Y) {
+				logger.Warn().
+					Int32("mob_id", mob.Id).
+					Int("x", ent.X).Int("y", ent.Y).
+					Msg("zone: mob spawn cell is not walkable; skipping")
+				continue
+			}
+			if err := zoneSvc.AddEntity(ctx, ent); err != nil {
+				logger.Warn().Err(err).
+					Int32("mob_id", mob.Id).
+					Msg("zone: failed to register mob entity")
+				continue
+			}
+			spawned++
+		}
+	}
+	return spawned
 }
