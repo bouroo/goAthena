@@ -1,0 +1,33 @@
+# Mob spawns for prontera — matches the previous hardcoded monster list.
+spawns:
+  - mob_id: 1002   # Poring
+    count: 1
+    x: 155
+    y: 165
+    x_range: 0
+    y_range: 0
+    respawn_ms: 5000
+
+  - mob_id: 1063   # Lunatic
+    count: 1
+    x: 165
+    y: 165
+    x_range: 0
+    y_range: 0
+    respawn_ms: 5000
+
+  - mob_id: 1113   # Drops
+    count: 1
+    x: 155
+    y: 175
+    x_range: 0
+    y_range: 0
+    respawn_ms: 5000
+
+  - mob_id: 1014   # Spore
+    count: 1
+    x: 165
+    y: 175
+    x_range: 0
+    y_range: 0
+    respawn_ms: 5000

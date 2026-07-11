@@ -939,6 +939,17 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCAckToUseSkill,
 		Direction: DirectionServerToClient,
 	})
+	// P3c: ground item drop notification. rAthena binds opcode 0x0ADD
+	// with size 22 for PACKETVER >= 20180418 (clif_packetdb.hpp:1921);
+	// the v5 layout adds <showDropEffect> + <dropEffectMode> on top of
+	// the v4 20-byte frame. See map_item_drop.go for the full struct
+	// documentation and per-field citations.
+	db.Register(Definition{
+		ID:        HeaderZCItemFallEntry,
+		Name:      "ZC_ITEM_FALL_ENTRY",
+		Length:    sizeZCItemFallEntry,
+		Direction: DirectionServerToClient,
+	})
 
 	return db
 }

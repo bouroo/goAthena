@@ -16,6 +16,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/gateway/handler"
 	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
+	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -245,6 +246,10 @@ func buildDispatchHandler(
 	if err != nil {
 		return nil, fmt.Errorf("resolve gateway.map_addr host %q: %w", zoneHost, err)
 	}
+	mobs, err := loadMobRegistry(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
 	return service.NewDispatchHandler(
 		identityClient,
 		zoneClient,
@@ -254,5 +259,24 @@ func buildDispatchHandler(
 		zoneIP,
 		zonePort,
 		registry,
+		mobs,
 	), nil
+}
+
+// loadMobRegistry loads the rAthena mob_db.yml from cfg.Zone.MobDBPath
+// when configured, or returns (nil, nil) when the path is empty. A
+// missing/unreadable file logs a warning and degrades gracefully so
+// the gateway still boots without drop-table support — the spec for
+// Phase 3c treats mob_db as an optional input.
+func loadMobRegistry(cfg *config.Config, logger zerolog.Logger) (*mobdb.Registry, error) {
+	if cfg == nil || cfg.Zone.MobDBPath == "" {
+		logger.Info().Msg("gateway di: mob_db_path unset; drop tables disabled (def/vit still fall back to monsterSpawns)")
+		return nil, nil
+	}
+	mobs, err := mobdb.LoadFile(cfg.Zone.MobDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("load mob_db %q: %w", cfg.Zone.MobDBPath, err)
+	}
+	logger.Info().Int("entries", mobs.Len()).Str("path", cfg.Zone.MobDBPath).Msg("gateway di: mob_db loaded")
+	return mobs, nil
 }

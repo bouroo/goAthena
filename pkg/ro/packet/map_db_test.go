@@ -62,6 +62,9 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderCZSTATUSCHANGE, "CZ_STATUS_CHANGE", sizeCZStatusChange, DirectionClientToServer},
 		{HeaderZCSTATUSCHANGEACK, "ZC_STATUS_CHANGE_ACK", sizeZCStatusChangeAck, DirectionServerToClient},
 		{HeaderZCNOTIFYEFFECT, "ZC_NOTIFY_EFFECT", sizeZCNotifyEffect, DirectionServerToClient},
+		// P3c: ground item drop — see NewMapServerDB for the rAthena
+		// packetdb citation (clif_packetdb.hpp:1921, opcode 0x0ADD).
+		{HeaderZCItemFallEntry, "ZC_ITEM_FALL_ENTRY", sizeZCItemFallEntry, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -93,9 +96,9 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// (CZ_PC_SELL_ITEMLIST, ZC_PC_SELL_ITEMLIST, ZC_PC_SELL_RESULT).
 	// P2C adds 3 stats entries (CZ_STATUS_CHANGE, ZC_STATUS_CHANGE_ACK,
 	// ZC_NOTIFY_EFFECT). P3b-2 adds 3 skill-usage entries
-	// (CZ_USE_SKILL2, ZC_NOTIFY_SKILL, ZC_ACK_TOUSESKILL) for a grand
-	// total of 58.
-	const want = 58
+	// (CZ_USE_SKILL2, ZC_NOTIFY_SKILL, ZC_ACK_TOUSESKILL). P3c adds
+	// ZC_ITEM_FALL_ENTRY (0x0ADD) for a grand total of 59.
+	const want = 59
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

@@ -3,6 +3,8 @@
 package domain
 
 import (
+	"time"
+
 	"github.com/bouroo/goAthena/pkg/ro/pathfinding"
 )
 
@@ -34,6 +36,10 @@ const (
 // the TickLoop's RWMutex; service methods from gRPC handlers take the
 // write lock. Keep the struct small and avoid pointers to mutable
 // sub-fields so it can be locked as a single value.
+//
+// Mob-specific fields (MobID, HP, MaxHP, AI, SpawnOrigin*, WanderTimer,
+// RespawnDelay, Name) are zero for player and NPC entities; only mobs
+// maintain combat and AI state in the zone.
 type Entity struct {
 	ID           EntityID
 	Type         EntityType
@@ -43,4 +49,15 @@ type Entity struct {
 	Path         []pathfinding.Point
 	NextMoveTick uint64 // tick number when next step occurs
 	MoveSpeed    int    // ms per cell (status data; default from ZoneConfig.MoveSpeed)
+
+	// Mob-specific fields (zero for players/NPCs)
+	MobID        int32         // mob_db ID (e.g. 1002 for Poring)
+	HP           int32         // current HP
+	MaxHP        int32         // maximum HP
+	AI           uint8         // AI type from mob_db (02=passive, 04=aggressive)
+	SpawnOriginX int           // original spawn X (mob wanders near this)
+	SpawnOriginY int           // original spawn Y
+	WanderTimer  uint64        // tick number when next wander attempt occurs
+	RespawnDelay time.Duration // respawn delay after death
+	Name         string        // display name for broadcast events
 }

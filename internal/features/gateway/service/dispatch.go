@@ -52,6 +52,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
 	skilldomain "github.com/bouroo/goAthena/internal/features/skill/domain"
 	statsdomain "github.com/bouroo/goAthena/internal/features/stats/domain"
+	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -120,6 +121,27 @@ type DispatchHandler struct {
 	// uniform distribution in the range [low, high], overrideable by
 	// tests for determinism.
 	damageRoll func(low, high int32) int32
+
+	// mobRegistry resolves a monster's mobdb.MobEntry by mob_db ID.
+	// Used by lookupMobEntry to fetch authoritative Def/Vit values
+	// (falling back to monsterSpawns when nil) and by appendMonsterDeath
+	// to roll drop tables. May be nil; the handler treats a nil
+	// registry as "mob_db not loaded" and degrades gracefully (no
+	// drops, use struct Def/Vit).
+	mobRegistry *mobdb.Registry
+
+	// groundItemCounter is the per-handler monotonic counter used to
+	// assign ground item object IDs in ZC_ITEM_FALL_ENTRY. rAthena
+	// uses a global counter but a per-handler value is sufficient for
+	// the single-player echo path (mobs and items do not cross
+	// connections).
+	groundItemCounter uint32
+
+	// dropRoll decides whether a single drop entry wins its roll.
+	// Defaulted to rand.IntN(10000) < rate (rAthena mob.cpp item_drop
+	// rate is on a 0..10000 scale). Overrideable for deterministic
+	// tests.
+	dropRoll func(rate int) bool
 }
 
 // NewDispatchHandler constructs a dispatch-backed PacketHandler.
@@ -144,6 +166,7 @@ func NewDispatchHandler(
 	zoneIP uint32,
 	zonePort uint16,
 	registry SessionRegistry,
+	mobs *mobdb.Registry,
 ) *DispatchHandler {
 	return &DispatchHandler{
 		identity:     identity,
@@ -154,12 +177,22 @@ func NewDispatchHandler(
 		zoneIP:       zoneIP,
 		zonePort:     zonePort,
 		registry:     registry,
+		mobRegistry:  mobs,
 		respawnDelay: 5 * time.Second,
 		damageRoll: func(low, high int32) int32 {
 			if low >= high {
 				return low
 			}
 			return low + rand.Int32N(high-low+1) //nolint:gosec // math/rand/v2 is sufficient for damage RNG
+		},
+		dropRoll: func(rate int) bool {
+			if rate <= 0 {
+				return false
+			}
+			if rate >= 10000 {
+				return true
+			}
+			return rand.IntN(10000) < rate //nolint:gosec // math/rand/v2 is sufficient for drop RNG
 		},
 	}
 }
@@ -169,6 +202,42 @@ func NewDispatchHandler(
 //nolint:unused // only used in tests
 func (h *DispatchHandler) setDamageRoll(f func(low, high int32) int32) {
 	h.damageRoll = f
+}
+
+// setDropRoll installs a custom drop-roll RNG for deterministic tests.
+//
+//nolint:unused // only used in tests
+func (h *DispatchHandler) setDropRoll(f func(rate int) bool) {
+	h.dropRoll = f
+}
+
+// lookupMobEntry resolves a GID → mobdb.MobEntry via the registry,
+// falling back to nil when the registry is empty or the GID has no
+// matching spawn. Callers should treat a nil return as "use struct
+// Def/Vit" so the pre-mob_db combat path still works.
+func (h *DispatchHandler) lookupMobEntry(gid uint32) *mobdb.MobEntry {
+	if h.mobRegistry == nil {
+		return nil
+	}
+	spawn, ok := spawnByGID(gid)
+	if !ok || spawn.MobID == 0 {
+		return nil
+	}
+	return h.mobRegistry.Get(spawn.MobID)
+}
+
+// defVitFor returns Def/Vit for a monster GID, preferring the mob_db
+// entry when present and falling back to the hardcoded monsterSpawns
+// struct otherwise. Returns 0,0 when the GID is unknown.
+func (h *DispatchHandler) defVitFor(gid uint32) (int, int) {
+	if mob := h.lookupMobEntry(gid); mob != nil {
+		return int(mob.Defense), int(mob.Vit) //nolint:gosec // Defense/Vit are small positive values
+	}
+	def, vit, ok := LookupMonsterStats(gid)
+	if !ok {
+		return 0, 0
+	}
+	return def, vit
 }
 
 // SetAreaSender installs the broadcast area-spawner used to show a
@@ -2130,10 +2199,7 @@ func (h *DispatchHandler) handleSitStand(conn *domain.ConnectionInfo, resp domai
 // if the monster's HP drops to 0 or below, sends ZC_NOTIFY_VANISH
 // and removes the monster from the per-connection HP map.
 func (h *DispatchHandler) handleAttack(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, targetGID uint32) error {
-	def, vit, found := LookupMonsterStats(targetGID)
-	if !found {
-		def, vit = 0, 0
-	}
+	def, vit := h.defVitFor(targetGID)
 
 	str, dex, luk := conn.CombatStats()
 	band := statsdomain.MeleeDamage(str, dex, luk, def, vit)
@@ -2220,6 +2286,14 @@ func (h *DispatchHandler) appendMonsterDeath(ctx context.Context, conn *domain.C
 		return false
 	}
 
+	// P3c u4: roll mob_db drop table and emit ZC_ITEM_FALL_ENTRY for
+	// each winning entry. Item pick-up is deferred to a later phase;
+	// the item NameID is resolved from the AegisName via a future item
+	// DB — for now we emit 0 (IT_ETC placeholder) so the client renders
+	// the drop tile. The spawn's (X, Y) is the drop origin (rAthena
+	// drops at the mob's position when no party-split rule applies).
+	h.appendMonsterDrops(burst, targetGID)
+
 	// M19: apply EXP
 	h.applyMonsterKillExp(ctx, conn, burst, targetGID)
 
@@ -2227,6 +2301,60 @@ func (h *DispatchHandler) appendMonsterDeath(ctx context.Context, conn *domain.C
 	h.scheduleMonsterRespawn(conn, resp, targetGID)
 
 	return true
+}
+
+// appendMonsterDrops rolls each entry in the mob's drop table and
+// appends a ZC_ITEM_FALL_ENTRY (0x0ADD) frame to burst for every
+// winning roll. The drop origin is the monster's spawn point (rAthena
+// drops at the mob's last known cell). No-ops when mob_db is unloaded
+// or the GID has no drop table.
+func (h *DispatchHandler) appendMonsterDrops(burst *bytes.Buffer, targetGID uint32) {
+	mob := h.lookupMobEntry(targetGID)
+	if mob == nil || len(mob.Drops) == 0 {
+		return
+	}
+	spawn, ok := spawnByGID(targetGID)
+	if !ok {
+		return
+	}
+	dropped := 0
+	for _, d := range mob.Drops {
+		if !h.dropRoll(d.Rate) {
+			continue
+		}
+		h.groundItemCounter++
+		drop := packet.ItemFallEntryResponse{
+			ID:     h.groundItemCounter,
+			NameID: 0, // item DB deferred; client renders a default sprite
+			Type:   3, // IT_ETC
+			// Identified=1 lets the client display the item name slot
+			// without the "?" overlay. rAthena drops items already
+			// identified by default (mob.cpp item_drop).
+			Identified: 1,
+			X:          uint16(spawn.X), //nolint:gosec // map cell coords fit in uint16
+			Y:          uint16(spawn.Y), //nolint:gosec // map cell coords fit in uint16
+			SubX:       0,
+			SubY:       0,
+			Amount:     1,
+		}
+		if err := drop.Encode(burst); err != nil {
+			h.logger.Error().
+				Err(err).
+				Uint64("conn", 0).
+				Uint32("target_gid", targetGID).
+				Str("item", d.Item).
+				Msg("encode ZC_ITEM_FALL_ENTRY failed")
+			continue
+		}
+		dropped++
+	}
+	if dropped > 0 {
+		h.logger.Debug().
+			Uint32("target_gid", targetGID).
+			Int("dropped", dropped).
+			Int("rolled", len(mob.Drops)).
+			Msg("monster dropped items")
+	}
 }
 
 // handleCZUseSkill processes a CZ_USE_SKILL2 (0x0438) single-target skill
@@ -2306,14 +2434,11 @@ func (h *DispatchHandler) handleCZUseSkill(ctx context.Context, conn *domain.Con
 		return h.sendSkillAckInsufficientSP(conn, resp, req.SkillID)
 	}
 
-	def, vit, found := LookupMonsterStats(req.TargetID)
-	if !found {
-		def, vit = 0, 0
-	}
+	def, vit := h.defVitFor(req.TargetID)
 
 	str, dex, luk := conn.CombatStats()
-	pct := int32(100 + 30*level) //nolint:gosec // level ≤ MaxLevel (≤255)
-	band := statsdomain.BashDamage(str, dex, luk, int32(def), int32(vit), pct)
+	pct := int32(100 + 30*level)                                               //nolint:gosec // level ≤ MaxLevel (≤255)
+	band := statsdomain.BashDamage(str, dex, luk, int32(def), int32(vit), pct) //nolint:gosec // mob_db Def/Vit are small positive values
 	dmg := h.damageRoll(band.Min, band.Max)
 
 	hp, ok := conn.ApplyDamage(req.TargetID, dmg)

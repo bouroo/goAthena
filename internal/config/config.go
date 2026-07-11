@@ -184,12 +184,18 @@ type LogConfig struct {
 // initial map loaded at startup when no zone is provided. MoveSpeed is the
 // baseline ms-per-cell used when an entity has no status data. ShutdownGrace
 // is the cooldown before Agones Shutdown after the last player leaves.
+// MobDBPath is the rAthena mob_db.yml (version 5) used to resolve mob stats;
+// MobSpawnsPath is the per-map spawn-group YAML applied at startup. Both are
+// optional: a missing or unreadable file logs a warning and disables mob
+// spawning rather than failing zone boot.
 type ZoneConfig struct {
 	TickRate      time.Duration `mapstructure:"tick_rate" yaml:"tick_rate" env:"ZONE_TICK_RATE" validate:"required,min=10ms"`
 	MapDir        string        `mapstructure:"map_dir" yaml:"map_dir" env:"ZONE_MAP_DIR" validate:"required"`
 	DefaultMap    string        `mapstructure:"default_map" yaml:"default_map" env:"ZONE_DEFAULT_MAP"`
 	MoveSpeed     int           `mapstructure:"move_speed" yaml:"move_speed" env:"ZONE_MOVE_SPEED" validate:"min=50,max=1000"`
 	ShutdownGrace time.Duration `mapstructure:"shutdown_grace" yaml:"shutdown_grace" env:"ZONE_SHUTDOWN_GRACE" validate:"min=0"`
+	MobDBPath     string        `mapstructure:"mob_db_path" yaml:"mob_db_path" env:"ZONE_MOB_DB_PATH" validate:"omitempty"`
+	MobSpawnsPath string        `mapstructure:"mob_spawns_path" yaml:"mob_spawns_path" env:"ZONE_MOB_SPAWNS_PATH" validate:"omitempty"`
 }
 
 // AssetsConfig configures the GRF-backed HTTP asset server that serves
@@ -453,6 +459,8 @@ func leafBindings() []leafBinding {
 		{"zone.default_map", "ZONE_DEFAULT_MAP"},
 		{"zone.move_speed", "ZONE_MOVE_SPEED"},
 		{"zone.shutdown_grace", "ZONE_SHUTDOWN_GRACE"},
+		{"zone.mob_db_path", "ZONE_MOB_DB_PATH"},
+		{"zone.mob_spawns_path", "ZONE_MOB_SPAWNS_PATH"},
 
 		{"assets.enabled", "ASSETS_ENABLED"},
 		{"assets.grf_dir", "ASSETS_GRF_DIR"},

@@ -204,6 +204,8 @@ func (tl *TickLoop) tick(ctx context.Context) error {
 	currentTick := tl.tickNum
 	tickRateMs := max(int(tl.tickRate/time.Millisecond), 1)
 
+	tickMobAI(tl.entities, currentTick, tickRateMs, tl.mapData, tl.pf)
+
 	type pending struct {
 		id   domain.EntityID
 		x, y int
