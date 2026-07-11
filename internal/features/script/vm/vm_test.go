@@ -349,3 +349,52 @@ func TestVMWithEmptyScript(t *testing.T) {
 	state := run(t, vm)
 	assert.Equal(t, StateEnd, state)
 }
+
+func TestNewAtLabel_LabelExists(t *testing.T) {
+	cs := mustCompile(t, `
+		OnInit:
+			.@initialized = 1;
+			end;
+	`)
+	vm, ok := NewAtLabel(cs, "OnInit", NewScopeStore(), defaultBuiltins(t))
+	require.True(t, ok)
+	require.NotNil(t, vm)
+
+	state := run(t, vm)
+	assert.Equal(t, StateEnd, state)
+
+	v, ok := vm.scopes.Get(".@initialized")
+	require.True(t, ok)
+	assert.Equal(t, int64(1), v.AsInt())
+}
+
+func TestNewAtLabel_LabelMissing(t *testing.T) {
+	cs := mustCompile(t, `
+		.@r = 1;
+		end;
+	`)
+	vm, ok := NewAtLabel(cs, "OnInit", NewScopeStore(), defaultBuiltins(t))
+	assert.False(t, ok)
+	assert.Nil(t, vm)
+}
+
+func TestNewAtLabel_StartsAtLabelNotTop(t *testing.T) {
+	cs := mustCompile(t, `
+		set .@x, 111;
+		end;
+		OnInit:
+			set .@x, 222;
+			end;
+	`)
+	vm, ok := NewAtLabel(cs, "OnInit", NewScopeStore(), defaultBuiltins(t))
+	require.True(t, ok)
+	require.NotNil(t, vm)
+
+	state := run(t, vm)
+	assert.Equal(t, StateEnd, state)
+
+	v, _ := vm.scopes.Get(".@x")
+	assert.Equal(t, int64(222), v.AsInt(),
+		"expected OnInit body to run (.@x == 222); got %d (top-of-script code was skipped)",
+		v.AsInt())
+}

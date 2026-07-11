@@ -79,6 +79,8 @@ zone:
   shutdown_grace: 30s
   mob_db_path: ./data/mob_db/mob_db.yml
   mob_spawns_path: ./data/mob_spawns/prontera.yml
+  script_dir: ./data/npc
+  script_reload_interval: 0s
 
 assets:
   enabled: false

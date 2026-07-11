@@ -187,15 +187,22 @@ type LogConfig struct {
 // MobDBPath is the rAthena mob_db.yml (version 5) used to resolve mob stats;
 // MobSpawnsPath is the per-map spawn-group YAML applied at startup. Both are
 // optional: a missing or unreadable file logs a warning and disables mob
-// spawning rather than failing zone boot.
+// spawning rather than failing zone boot. ScriptDir is the on-disk root of
+// the NPC .txt script corpus loaded once at zone startup and compiled into
+// the in-memory script engine. ScriptReloadInterval drives hot reload of
+// that corpus; 0 disables scheduled reloads. Like MobDBPath, ScriptDir is
+// optional: an empty or unreadable directory logs a warning and leaves the
+// engine holding an empty compiled set rather than failing zone boot.
 type ZoneConfig struct {
-	TickRate      time.Duration `mapstructure:"tick_rate" yaml:"tick_rate" env:"ZONE_TICK_RATE" validate:"required,min=10ms"`
-	MapDir        string        `mapstructure:"map_dir" yaml:"map_dir" env:"ZONE_MAP_DIR" validate:"required"`
-	DefaultMap    string        `mapstructure:"default_map" yaml:"default_map" env:"ZONE_DEFAULT_MAP"`
-	MoveSpeed     int           `mapstructure:"move_speed" yaml:"move_speed" env:"ZONE_MOVE_SPEED" validate:"min=50,max=1000"`
-	ShutdownGrace time.Duration `mapstructure:"shutdown_grace" yaml:"shutdown_grace" env:"ZONE_SHUTDOWN_GRACE" validate:"min=0"`
-	MobDBPath     string        `mapstructure:"mob_db_path" yaml:"mob_db_path" env:"ZONE_MOB_DB_PATH" validate:"omitempty"`
-	MobSpawnsPath string        `mapstructure:"mob_spawns_path" yaml:"mob_spawns_path" env:"ZONE_MOB_SPAWNS_PATH" validate:"omitempty"`
+	TickRate             time.Duration `mapstructure:"tick_rate" yaml:"tick_rate" env:"ZONE_TICK_RATE" validate:"required,min=10ms"`
+	MapDir               string        `mapstructure:"map_dir" yaml:"map_dir" env:"ZONE_MAP_DIR" validate:"required"`
+	DefaultMap           string        `mapstructure:"default_map" yaml:"default_map" env:"ZONE_DEFAULT_MAP"`
+	MoveSpeed            int           `mapstructure:"move_speed" yaml:"move_speed" env:"ZONE_MOVE_SPEED" validate:"min=50,max=1000"`
+	ShutdownGrace        time.Duration `mapstructure:"shutdown_grace" yaml:"shutdown_grace" env:"ZONE_SHUTDOWN_GRACE" validate:"min=0"`
+	MobDBPath            string        `mapstructure:"mob_db_path" yaml:"mob_db_path" env:"ZONE_MOB_DB_PATH" validate:"omitempty"`
+	MobSpawnsPath        string        `mapstructure:"mob_spawns_path" yaml:"mob_spawns_path" env:"ZONE_MOB_SPAWNS_PATH" validate:"omitempty"`
+	ScriptDir            string        `mapstructure:"script_dir" yaml:"script_dir" env:"ZONE_SCRIPT_DIR" validate:"omitempty"`
+	ScriptReloadInterval time.Duration `mapstructure:"script_reload_interval" yaml:"script_reload_interval" env:"ZONE_SCRIPT_RELOAD_INTERVAL" validate:"omitempty,min=0"`
 }
 
 // AssetsConfig configures the GRF-backed HTTP asset server that serves
