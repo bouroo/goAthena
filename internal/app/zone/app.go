@@ -37,6 +37,7 @@ import (
 	script "github.com/bouroo/goAthena/internal/features/script"
 	scriptdi "github.com/bouroo/goAthena/internal/features/script/di"
 	scriptservice "github.com/bouroo/goAthena/internal/features/script/service"
+	"github.com/bouroo/goAthena/internal/features/script/vm"
 	"github.com/bouroo/goAthena/internal/features/zone/di"
 	"github.com/bouroo/goAthena/internal/features/zone/service"
 	"github.com/bouroo/goAthena/internal/infrastructure/agones"
@@ -96,14 +97,13 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("resolve script engine: %w", err)
 	}
-	if set := engine.Current(); set != nil {
-		ran, onInitErrs := scriptservice.RunOnInit(ctx, set, logger)
-		if len(onInitErrs) > 0 {
-			logger.Warn().Int("errors", len(onInitErrs)).Msg("zone: some OnInit scripts failed")
-		}
-		if ran > 0 {
-			logger.Info().Int("ran", ran).Msg("zone: OnInit scripts executed")
-		}
+	initScopes, ran, onInitErrs := scriptservice.RunOnInit(ctx, engine.Current(), logger)
+	do.ProvideValue[*vm.ScopeStore](injector, initScopes)
+	if len(onInitErrs) > 0 {
+		logger.Warn().Int("errors", len(onInitErrs)).Msg("zone: some OnInit scripts failed")
+	}
+	if ran > 0 {
+		logger.Info().Int("ran", ran).Msg("zone: OnInit scripts executed")
 	}
 	if cfg.Zone.ScriptReloadInterval > 0 {
 		go runScriptReload(ctx, engine, cfg.Zone.ScriptReloadInterval, logger)

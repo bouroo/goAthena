@@ -42,7 +42,8 @@ func nopLogger() *zerolog.Logger {
 }
 
 func TestRunOnInit_NilSet(t *testing.T) {
-	ran, errs := RunOnInit(context.Background(), nil, nopLogger())
+	scopes, ran, errs := RunOnInit(context.Background(), nil, nopLogger())
+	require.NotNil(t, scopes, "ScopeStore is always returned so callers can persist it")
 	assert.Equal(t, 0, ran)
 	assert.Nil(t, errs)
 }

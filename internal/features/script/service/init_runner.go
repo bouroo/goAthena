@@ -27,12 +27,20 @@ const onInitLabel = "OnInit"
 // from individual scripts are collected and returned; one failing OnInit
 // never aborts the batch.
 //
-// Returns the number of OnInit scripts that ran (attempted) and any
-// per-script errors. OnInit runs at zone startup, single-threaded, with
-// no player context — it is server/map initialization, not per-character
-// logic.
-func RunOnInit(ctx context.Context, set *script.CompiledScriptSet, logger *zerolog.Logger) (int, []error) {
-	return runOnInitWithScope(ctx, set, vm.NewScopeStore(), logger)
+// Returns the shared ScopeStore (any $ map vars set by OnInit are
+// preserved here for future per-connection dialog VMs in Phase 4b), the
+// number of OnInit scripts that ran (attempted), and any per-script
+// errors. The ScopeStore is always non-nil: when set is nil, a fresh
+// empty store is returned so callers can persist it unconditionally.
+// OnInit runs at zone startup, single-threaded, with no player context —
+// it is server/map initialization, not per-character logic.
+func RunOnInit(ctx context.Context, set *script.CompiledScriptSet, logger *zerolog.Logger) (*vm.ScopeStore, int, []error) {
+	scopes := vm.NewScopeStore()
+	if set == nil {
+		return scopes, 0, nil
+	}
+	ran, errs := runOnInitWithScope(ctx, set, scopes, logger)
+	return scopes, ran, errs
 }
 
 // runOnInitWithScope is the testable inner worker: it takes the shared
