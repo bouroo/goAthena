@@ -299,6 +299,9 @@ type responderWriter struct {
 }
 
 func (w *responderWriter) Write(p []byte) (int, error) {
+	if w.resp == nil {
+		return 0, fmt.Errorf("dialog: responder not set")
+	}
 	buf := make([]byte, len(p))
 	copy(buf, p)
 	if err := w.resp.SendPacket(buf); err != nil {

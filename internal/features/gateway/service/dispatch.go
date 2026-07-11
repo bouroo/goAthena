@@ -3895,11 +3895,11 @@ func (h *DispatchHandler) handleCZReqNextScript(ctx context.Context, conn *domai
 
 	if v, ok := h.dialogSessions.Load(conn.ID); ok {
 		session, ok := v.(*DialogSession)
-		if !ok {
+		if !ok || session == nil {
 			h.logger.Error().
 				Uint64("conn", conn.ID).
 				Uint32("npc_id", req.NpcID).
-				Msg("dialogSessions map held non-*DialogSession value; cleaning up")
+				Msg("dialogSessions map held non-*DialogSession or nil value; cleaning up")
 			h.dialogSessions.Delete(conn.ID)
 			return nil
 		}
@@ -4001,11 +4001,11 @@ func (h *DispatchHandler) handleCZChooseMenu(ctx context.Context, conn *domain.C
 		return nil
 	}
 	session, ok := v.(*DialogSession)
-	if !ok {
+	if !ok || session == nil {
 		h.logger.Error().
 			Uint64("conn", conn.ID).
 			Uint32("npc_id", req.NpcID).
-			Msg("dialogSessions map held non-*DialogSession value; cleaning up")
+			Msg("dialogSessions map held non-*DialogSession or nil value; cleaning up")
 		h.dialogSessions.Delete(conn.ID)
 		return nil
 	}
