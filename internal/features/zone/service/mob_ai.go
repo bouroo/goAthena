@@ -32,7 +32,7 @@ func pickWanderTarget(md *romap.MapData, originX, originY int) (int, int, bool) 
 		dx := rand.IntN(2*wanderRadius+1) - wanderRadius //nolint:gosec // math/rand/v2 is sufficient for gameplay RNG
 		dy := rand.IntN(2*wanderRadius+1) - wanderRadius //nolint:gosec // math/rand/v2 is sufficient for gameplay RNG
 		tx, ty := originX+dx, originY+dy
-		if md.IsWalkable(tx, ty) {
+		if tx >= 0 && tx < md.Width && ty >= 0 && ty < md.Height && md.IsWalkable(tx, ty) {
 			return tx, ty, true
 		}
 	}

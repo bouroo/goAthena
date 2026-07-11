@@ -42,6 +42,7 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -135,7 +136,7 @@ type DispatchHandler struct {
 	// uses a global counter but a per-handler value is sufficient for
 	// the single-player echo path (mobs and items do not cross
 	// connections).
-	groundItemCounter uint32
+	groundItemCounter atomic.Uint32
 
 	// dropRoll decides whether a single drop entry wins its roll.
 	// Defaulted to rand.IntN(10000) < rate (rAthena mob.cpp item_drop
@@ -2322,9 +2323,9 @@ func (h *DispatchHandler) appendMonsterDrops(burst *bytes.Buffer, targetGID uint
 		if !h.dropRoll(d.Rate) {
 			continue
 		}
-		h.groundItemCounter++
+		id := h.groundItemCounter.Add(1)
 		drop := packet.ItemFallEntryResponse{
-			ID:     h.groundItemCounter,
+			ID:     id,
 			NameID: 0, // item DB deferred; client renders a default sprite
 			Type:   3, // IT_ETC
 			// Identified=1 lets the client display the item name slot
