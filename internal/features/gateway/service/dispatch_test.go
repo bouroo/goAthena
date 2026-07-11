@@ -20,6 +20,8 @@ import (
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
 	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
+	skilldomain "github.com/bouroo/goAthena/internal/features/skill/domain"
+	statsdomain "github.com/bouroo/goAthena/internal/features/stats/domain"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -4814,5 +4816,383 @@ func TestDispatchHandler_CZNotifyActorInit_EmitsSkillInfoList(t *testing.T) {
 	id := binary.LittleEndian.Uint16(out[skillStart+4 : skillStart+6])
 	if id != 1 {
 		t.Errorf("skill id = %d, want 1 (NV_BASIC)", id)
+	}
+}
+
+// --- Phase 3b-2 L3 acceptance: CZ_USE_SKILL2 → SM_BASH end-to-end path ---
+//
+// Wire sizes (see pkg/ro/packet/map_skill_usage.go godoc):
+//   CZ_USE_SKILL2   : 10 bytes  (cmd 0x0438 + SkillLv + SkillID + TargetID)
+//   ZC_NOTIFY_SKILL : 33 bytes  (cmd 0x01de + SKID + AID + TargetID + StartTime
+//                                 + AttackMT + AttackedMT + Damage + Level
+//                                 + Count + Action)
+//   ZC_PAR_CHANGE   : 8 bytes   (cmd 0x00b0 + varID u16 + value u32)
+//   ZC_ACK_TOUSESKILL: 14 bytes (cmd 0x0110 + SkillID + BType i32 + ItemID u32
+//                                 + Flag u8 + Cause u8)
+
+const (
+	// poringGID is the GID used by every CZ_USE_SKILL2 test below.
+	// Matches monster_spawns.go: Poring has Def=0, Vit=0.
+	poringGID uint32 = 110000005
+)
+
+// buildCZUseSkill encodes a CZ_USE_SKILL2 frame for a single-target skill.
+func buildCZUseSkill(t *testing.T, skillID uint16, level int16, targetID uint32) []byte {
+	t.Helper()
+	req := packet.CZUseSkill{SkillID: skillID, SkillLv: level, TargetID: targetID}
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		t.Fatalf("encode CZ_USE_SKILL2: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// TestDispatchHandler_CZUseSkill_BashHit_DeductsSPAndEmitsScaledDamage
+// is the L3 success path for the P3b-2 SM_BASH slice: SP=20, Bash L1
+// (spCost=8, pct=130) on a Poring with 50 HP.
+//
+//	(1) SP drops to 12 and a ZC_PAR_CHANGE carries the new value.
+//	(2) ZC_NOTIFY_SKILL is emitted with SKID=5, Level=1, Count=1, Action=0,
+//	    Damage equal to statsdomain.BashDamage(...,130) (scaled, not the
+//	    flat-10 melee damage).
+//	(3) Monster HP is decremented by that damage.
+func TestDispatchHandler_CZUseSkill_BashHit_DeductsSPAndEmitsScaledDamage(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	const wantAID uint32 = 200001
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: wantAID,
+		MonsterHP: map[uint32]int32{poringGID: 50},
+	}
+	conn.SetCombatStats(10, 5, 0) // matches melee-test baseline
+	conn.SetSP(20, 100)
+	// Force min damage so the assertion is deterministic.
+	h.setDamageRoll(func(min, max int32) int32 { return min })
+
+	reqBuf := buildCZUseSkill(t, skilldomain.SM_BASH, 1, poringGID)
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZUSESKILL, reqBuf); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	// ZC_NOTIFY_SKILL (33) + ZC_PAR_CHANGE (8) = 41 bytes.
+	if len(out) != 41 {
+		t.Fatalf("response length = %d, want 41 (ZC_NOTIFY_SKILL 33 + ZC_PAR_CHANGE 8); buf=% x", len(out), out)
+	}
+
+	// --- ZC_NOTIFY_SKILL @ offset 0 ---
+	if out[0] != 0xde || out[1] != 0x01 {
+		t.Fatalf("first opcode = %02x %02x, want de 01 (LE 0x01de ZC_NOTIFY_SKILL)", out[0], out[1])
+	}
+	// SKID @ [2:4]
+	if skid := binary.LittleEndian.Uint16(out[2:4]); skid != skilldomain.SM_BASH {
+		t.Errorf("SKID = %d, want %d (SM_BASH)", skid, skilldomain.SM_BASH)
+	}
+	// AID @ [4:8]
+	if aid := binary.LittleEndian.Uint32(out[4:8]); aid != wantAID {
+		t.Errorf("AID = %d, want %d", aid, wantAID)
+	}
+	// TargetID @ [8:12]
+	if tgt := binary.LittleEndian.Uint32(out[8:12]); tgt != poringGID {
+		t.Errorf("TargetID = %d, want %d", tgt, poringGID)
+	}
+	// Damage @ [24:28] — must equal BashDamage(str=10, dex=5, luk=0,
+	// def=0, vit=0, pct=130) (deterministic because damageRoll→min).
+	band := statsdomain.BashDamage(10, 5, 0, 0, 0, 130)
+	wantDmg := band.Min
+	if dmg := int32(binary.LittleEndian.Uint32(out[24:28])); dmg != wantDmg {
+		t.Errorf("ZC_NOTIFY_SKILL Damage = %d, want %d (BashDamage scaled, NOT flat 10)", dmg, wantDmg)
+	}
+	// Belt-and-suspenders: prove the damage is NOT the legacy flat-10.
+	if dmg := int32(binary.LittleEndian.Uint32(out[24:28])); dmg == 10 {
+		t.Errorf("Damage = 10 — this is the legacy flat-melee value; Bash must scale")
+	}
+	// Level @ [28:30]
+	if level := int16(binary.LittleEndian.Uint16(out[28:30])); level != 1 {
+		t.Errorf("Level = %d, want 1", level)
+	}
+	// Count @ [30:32]
+	if count := int16(binary.LittleEndian.Uint16(out[30:32])); count != 1 {
+		t.Errorf("Count = %d, want 1", count)
+	}
+	// Action @ [32]
+	if action := int8(out[32]); action != 0 {
+		t.Errorf("Action = %d, want 0 (DMG_NORMAL)", action)
+	}
+
+	// --- ZC_PAR_CHANGE @ offset 33 ---
+	if out[33] != 0xb0 || out[34] != 0x00 {
+		t.Fatalf("second opcode = %02x %02x, want b0 00 (LE 0x00b0 ZC_PAR_CHANGE)", out[33], out[34])
+	}
+	// varID @ [35:37] must be SPSP=7
+	if varID := binary.LittleEndian.Uint16(out[35:37]); varID != packet.SPSP {
+		t.Errorf("ZC_PAR_CHANGE varID = %d, want %d (SPSP)", varID, packet.SPSP)
+	}
+	// value @ [37:41] must be the post-spend SP (20 - SpAt(1)=8 = 12).
+	if sp := int32(binary.LittleEndian.Uint32(out[37:41])); sp != 12 {
+		t.Errorf("ZC_PAR_CHANGE SP value = %d, want 12 (20 - 8)", sp)
+	}
+
+	// --- Cache side effects ---
+	if got := conn.SP(); got != 12 {
+		t.Errorf("conn.SP() = %d, want 12 after Bash L1 (cost 8)", got)
+	}
+	if hp := conn.MonsterHP[poringGID]; hp != 50-wantDmg {
+		t.Errorf("monster HP = %d, want %d (50 - BashDamage scaled)", hp, 50-wantDmg)
+	}
+}
+
+// TestDispatchHandler_CZUseSkill_BashKill_FiresDeathPath covers the kill
+// path: Bash L1 with Poring HP set so a single hit kills it. The death
+// path (vanish + EXP + respawn) must fire exactly as it does for the
+// melee path — same helper, byte-identical byte stream after the
+// ZC_NOTIFY_SKILL + ZC_PAR_CHANGE prefix.
+func TestDispatchHandler_CZUseSkill_BashKill_FiresDeathPath(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+	h.respawnDelay = 50 * time.Millisecond
+
+	resp := &safeResponder{}
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: 200001,
+		MonsterHP: map[uint32]int32{poringGID: 5}, // 5 HP — any Bash hit kills
+		BaseExp:   10,
+		JobExp:    5,
+	}
+	conn.SetCombatStats(10, 5, 0)
+	conn.SetSP(50, 100)
+	h.setDamageRoll(func(min, max int32) int32 { return min })
+
+	reqBuf := buildCZUseSkill(t, skilldomain.SM_BASH, 1, poringGID)
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZUSESKILL, reqBuf); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	// Monster should have been removed from the HP map (death).
+	if _, ok := conn.ApplyDamage(poringGID, 0); ok {
+		t.Fatal("monster should be dead (removed from MonsterHP)")
+	}
+
+	// EXP must have been applied (Poring gives Base=2, Job=1).
+	if conn.BaseExp != 12 {
+		t.Errorf("BaseExp = %d, want 12", conn.BaseExp)
+	}
+	if conn.JobExp != 6 {
+		t.Errorf("JobExp = %d, want 6", conn.JobExp)
+	}
+
+	// The handler ships the burst as ONE SendPacket call, so
+	// safeResponder has a single packet containing:
+	//   ZC_NOTIFY_SKILL (33) + ZC_PAR_CHANGE (8) + ZC_NOTIFY_VANISH (7)
+	//   + ZC_LONGPAR_CHANGE BaseExp (8) + ZC_LONGPAR_CHANGE JobExp (8)
+	// = 64 bytes. Walk that one packet to assert each header.
+	pkts := resp.GetPackets()
+	if len(pkts) != 1 {
+		// The respawn SET_UNIT_IDLE arrives asynchronously and may
+		// not yet be present at the moment we assert; we only need
+		// ≥1 (the burst).
+		if len(pkts) < 1 {
+			t.Fatalf("got %d packets, want ≥1 (the burst); pkts=% x", len(pkts), pkts)
+		}
+	}
+	burst := pkts[0]
+	wantLen := 33 + 8 + 7 + 8 + 8
+	if len(burst) != wantLen {
+		t.Fatalf("burst length = %d, want %d (skill 33 + par 8 + vanish 7 + 2x longpar 8); buf=% x", len(burst), wantLen, burst)
+	}
+	// ZC_NOTIFY_SKILL @ [0:33]
+	if burst[0] != 0xde || burst[1] != 0x01 {
+		t.Fatalf("burst[0:2] = %02x %02x, want de 01 (ZC_NOTIFY_SKILL)", burst[0], burst[1])
+	}
+	// ZC_PAR_CHANGE @ [33:41]
+	if burst[33] != 0xb0 || burst[34] != 0x00 {
+		t.Fatalf("burst[33:35] = %02x %02x, want b0 00 (ZC_PAR_CHANGE)", burst[33], burst[34])
+	}
+	// ZC_NOTIFY_VANISH @ [41:48] — 7 bytes, opcode 0x0080.
+	if burst[41] != 0x80 || burst[42] != 0x00 {
+		t.Fatalf("burst[41:43] = %02x %02x, want 80 00 (ZC_NOTIFY_VANISH)", burst[41], burst[42])
+	}
+	if gid := binary.LittleEndian.Uint32(burst[43:47]); gid != poringGID {
+		t.Errorf("vanish GID = %d, want %d", gid, poringGID)
+	}
+
+	// Wait for the scheduled respawn (mirrors TestDispatchHandler_Attack_MonsterRespawns).
+	var respawnPkt []byte
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, p := range resp.GetPackets() {
+			if len(p) >= 9 && binary.LittleEndian.Uint16(p[0:2]) == 0x09ff &&
+				binary.LittleEndian.Uint32(p[5:9]) == poringGID {
+				respawnPkt = p
+				break
+			}
+		}
+		if respawnPkt != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if respawnPkt == nil {
+		t.Fatal("timed out waiting for monster respawn or respawn packet")
+	}
+}
+
+// TestDispatchHandler_CZUseSkill_BashInsufficientSP_AcksAndNoOps covers
+// the negative path: SP=5, Bash L1 (cost=8) →
+//
+//	(1) ZC_ACK_TOUSESKILL (14 bytes) with Cause=UseSkillFailSPInsufficient
+//	(2) SP unchanged (still 5)
+//	(3) No ZC_NOTIFY_SKILL, no damage applied.
+func TestDispatchHandler_CZUseSkill_BashInsufficientSP_AcksAndNoOps(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: 200001,
+		MonsterHP: map[uint32]int32{poringGID: 50},
+	}
+	conn.SetCombatStats(10, 5, 0)
+	conn.SetSP(5, 100) // SpAt(1)=8 > 5 → must fail.
+
+	reqBuf := buildCZUseSkill(t, skilldomain.SM_BASH, 1, poringGID)
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZUSESKILL, reqBuf); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	// Exactly one packet: ZC_ACK_TOUSESKILL (14 bytes).
+	if len(out) != 14 {
+		t.Fatalf("response length = %d, want 14 (ZC_ACK_TOUSESKILL only); buf=% x", len(out), out)
+	}
+	// Opcode = 0x0110.
+	if out[0] != 0x10 || out[1] != 0x01 {
+		t.Fatalf("opcode = %02x %02x, want 10 01 (LE 0x0110)", out[0], out[1])
+	}
+	// SkillID @ [2:4]
+	if skillID := binary.LittleEndian.Uint16(out[2:4]); skillID != skilldomain.SM_BASH {
+		t.Errorf("SkillID = %d, want %d (SM_BASH)", skillID, skilldomain.SM_BASH)
+	}
+	// Cause @ [13] = UseSkillFailSPInsufficient (12).
+	if cause := out[13]; cause != packet.UseSkillFailSPInsufficient {
+		t.Errorf("Cause = %d, want %d (UseSkillFailSPInsufficient)", cause, packet.UseSkillFailSPInsufficient)
+	}
+
+	// SP unchanged.
+	if got := conn.SP(); got != 5 {
+		t.Errorf("conn.SP() = %d, want 5 (no spend on insufficient-SP path)", got)
+	}
+	// Monster HP unchanged.
+	if hp := conn.MonsterHP[poringGID]; hp != 50 {
+		t.Errorf("monster HP = %d, want 50 (no damage on insufficient-SP path)", hp)
+	}
+}
+
+// TestDispatchHandler_CZUseSkill_UnknownTarget_NoSPSpend is the
+// regression for the HIGH-priority Gemini finding: a Bash cast against
+// a monster that is not tracked (already dead or never spawned) must
+// NOT deduct SP and must NOT emit a ZC_NOTIFY_SKILL / ZC_PAR_CHANGE
+// burst. Pre-fix the handler called SpendSP before the ApplyDamage
+// lookup, so a failed cast drained the SP cache while sending nothing
+// to the client — leaving the client's SP display desynced from the
+// server.
+func TestDispatchHandler_CZUseSkill_UnknownTarget_NoSPSpend(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: 200001,
+		// Intentionally do NOT seed the target GID in MonsterHP.
+		MonsterHP: map[uint32]int32{},
+	}
+	conn.SetCombatStats(10, 5, 0)
+	conn.SetSP(20, 100)
+
+	const unknownGID uint32 = 0xDEADBEEF
+	reqBuf := buildCZUseSkill(t, skilldomain.SM_BASH, 1, unknownGID)
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZUSESKILL, reqBuf); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	// (a) SP unchanged — SpendSP must not have been called.
+	if got := conn.SP(); got != 20 {
+		t.Errorf("conn.SP() = %d, want 20 (no spend on unknown-target path)", got)
+	}
+	// (b) No outbound burst.
+	if n := resp.buf.Len(); n != 0 {
+		t.Errorf("response length = %d, want 0 (no ZC_NOTIFY_SKILL, no ZC_PAR_CHANGE); buf=% x", n, resp.buf.Bytes())
+	}
+	// (c) MonsterHP untouched — the unknown GID should not have been
+	// inserted as a side effect.
+	if _, ok := conn.MonsterHP[unknownGID]; ok {
+		t.Errorf("unknown GID %d was inserted into MonsterHP", unknownGID)
+	}
+}
+
+// TestDispatchHandler_CZUseSkill_NonBashSkill_DropsSilently is the
+// regression for FINDING 4: the pct=100+30*level formula and the
+// statsdomain.BashDamage scaling are Bash-specific. A future offensive
+// skill (Pierce, Magnum Break, …) must NOT silently inherit them; the
+// handler must drop non-Bash use-skill requests without spending SP or
+// emitting any burst.
+//
+// The registry currently only contains SM_BASH as an offensive skill,
+// so we drive a non-Bash numeric ID (6 — no SM_PROVOKE in this slice's
+// registry). The test asserts the observable behavior: no SP drain,
+// no burst, monster HP untouched.
+func TestDispatchHandler_CZUseSkill_NonBashSkill_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: 200001,
+		MonsterHP: map[uint32]int32{poringGID: 50},
+	}
+	conn.SetCombatStats(10, 5, 0)
+	conn.SetSP(20, 100)
+
+	const nonBashSkillID uint16 = 6
+	reqBuf := buildCZUseSkill(t, nonBashSkillID, 1, poringGID)
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZUSESKILL, reqBuf); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	if got := conn.SP(); got != 20 {
+		t.Errorf("conn.SP() = %d, want 20 (non-Bash must not spend SP)", got)
+	}
+	if n := resp.buf.Len(); n != 0 {
+		t.Errorf("response length = %d, want 0 (non-Bash must not emit a burst); buf=% x", n, resp.buf.Bytes())
+	}
+	if hp := conn.MonsterHP[poringGID]; hp != 50 {
+		t.Errorf("monster HP = %d, want 50 (non-Bash must not apply damage)", hp)
 	}
 }

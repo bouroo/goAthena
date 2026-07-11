@@ -53,3 +53,16 @@ func MeleeDamage(str, dex, luk uint8, mobDef, mobVit int) DamageBand {
 
 	return DamageBand{Min: minDmg, Max: maxDmg}
 }
+
+// BashDamage returns the pre-Renewal physical damage band for a ratio skill,
+// scaling the base melee band by pct percent (floored at 1).
+// The caller supplies the skill's percent ratio (e.g. Bash L1 = 130).
+func BashDamage(str, dex, luk uint8, def, vit int32, pct int32) DamageBand {
+	base := MeleeDamage(str, dex, luk, int(def), int(vit))
+
+	// Multiply before divide so small bases do not collapse to 0.
+	minDmg := max(int32(1), base.Min*pct/100)
+	maxDmg := max(int32(1), base.Max*pct/100)
+
+	return DamageBand{Min: minDmg, Max: maxDmg}
+}

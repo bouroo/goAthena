@@ -50,6 +50,11 @@ type ConnectionInfo struct {
 	// Str, Dex, Luk are the character's base combat stats, cached from
 	// GetCharacter on map enter.
 	Str, Dex, Luk uint8
+	// sp and maxSP are the character's current and maximum spell points
+	// (SP, the mana pool), cached via SetSP from the identity
+	// CharacterDetail populated during handleCZNotifyActorInit. Guarded
+	// by mu alongside the other mutable combat fields.
+	sp, maxSP uint32
 	// invIndex maps 0-based inventory position to DB item ID.
 	invIndex map[uint16]uint32
 	// shopNPCID tracks the NPC GID the player is currently in a shop
@@ -144,6 +149,18 @@ func (c *ConnectionInfo) RemoveMonster(gid uint32) {
 	delete(c.MonsterHP, gid)
 }
 
+// HasMonster reports whether a monster with the given GID is currently
+// tracked in the per-connection HP map. Handlers consult this before
+// spending a resource (SP, items, casts) so that an invalid or already-
+// dead target fails fast without leaving the client's resource display
+// out of sync with the server cache.
+func (c *ConnectionInfo) HasMonster(gid uint32) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.MonsterHP[gid]
+	return ok
+}
+
 // RespawnMonster re-inserts a monster into the HP map with its max HP.
 // Returns false if the monster was not previously tracked or if the GID is not valid (no-op).
 func (c *ConnectionInfo) RespawnMonster(gid uint32, maxHP int32) bool {
@@ -179,6 +196,42 @@ func (c *ConnectionInfo) SetBaseExp(v int32) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.BaseExp = v
+}
+
+// SetSP updates the cached current and maximum spell points (SP).
+func (c *ConnectionInfo) SetSP(sp, maxSP uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sp = sp
+	c.maxSP = maxSP
+}
+
+// SP returns the current spell points (SP).
+func (c *ConnectionInfo) SP() uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sp
+}
+
+// MaxSP returns the maximum spell points (SP).
+func (c *ConnectionInfo) MaxSP() uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.maxSP
+}
+
+// SpendSP deducts cost from the cached SP if the current SP covers it,
+// returning the remaining SP and ok=true. If sp < cost the cache is left
+// untouched and (sp, false) is returned; the sp<cost guard ensures no
+// uint32 underflow.
+func (c *ConnectionInfo) SpendSP(cost uint32) (uint32, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sp < cost {
+		return c.sp, false
+	}
+	c.sp -= cost
+	return c.sp, true
 }
 
 // Responder sends serialized packets back to the client. Each transport

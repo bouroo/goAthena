@@ -159,3 +159,107 @@ func TestMeleeDamage(t *testing.T) {
 		}
 	})
 }
+
+func TestBashDamage(t *testing.T) {
+	// Hand-computed expected values from the formula:
+	// base = MeleeDamage(...); scaled = max(1, base*pct/100) for each bound.
+
+	cases := []struct {
+		name          string
+		str, dex, luk uint8
+		def, vit      int32
+		pct           int32
+		want          DamageBand
+	}{
+		// (a) pct=100 must equal base MeleeDamage band.
+		{
+			name: "pct100 equals Poring base",
+			str:  10, dex: 5, luk: 1, def: 0, vit: 0,
+			pct:  100,
+			want: DamageBand{12, 12}, // base from MeleeDamage Poring test
+		},
+		{
+			name: "pct100 equals Lunatic base",
+			str:  10, dex: 5, luk: 1, def: 0, vit: 3,
+			pct:  100,
+			want: DamageBand{11, 11},
+		},
+		{
+			name: "pct100 equals Def100 base (already floored)",
+			str:  99, dex: 0, luk: 0, def: 100, vit: 0,
+			pct:  100,
+			want: DamageBand{1, 1},
+		},
+		// (b) pct=130 scales up. 12 * 130 / 100 = 1560 / 100 = 15.
+		{
+			name: "pct130 scales Poring up to 15",
+			str:  10, dex: 5, luk: 1, def: 0, vit: 0,
+			pct:  130,
+			want: DamageBand{15, 15},
+		},
+		{
+			name: "pct130 against wider band",
+			// str=99,dex=0,luk=0,def=0,vit=100 -> base {65,100}
+			// 65*130/100 = 8450/100 = 84; 100*130/100 = 130.
+			str: 99, dex: 0, luk: 0, def: 0, vit: 100,
+			pct:  130,
+			want: DamageBand{84, 130},
+		},
+		// (c) Floor at 1: tiny pct or already-floor base must not dip below 1.
+		{
+			name: "pct1 floors small base at 1",
+			// base = {12,12}; 12*1/100 = 0 -> floor to 1.
+			str: 10, dex: 5, luk: 1, def: 0, vit: 0,
+			pct:  1,
+			want: DamageBand{1, 1},
+		},
+		{
+			name: "pct0 floors at 1",
+			str:  10, dex: 5, luk: 1, def: 0, vit: 0,
+			pct:  0,
+			want: DamageBand{1, 1},
+		},
+		{
+			name: "pct50 against Def100 base stays at 1",
+			// base = {1,1}; 1*50/100 = 0 -> floor to 1.
+			str: 99, dex: 0, luk: 0, def: 100, vit: 0,
+			pct:  50,
+			want: DamageBand{1, 1},
+		},
+		// (d) Multiply-before-divide: 12*50/100 = 6, not (12/100)*50 = 0.
+		{
+			name: "pct50 uses multiply-before-divide",
+			str:  10, dex: 5, luk: 1, def: 0, vit: 0,
+			pct:  50,
+			want: DamageBand{6, 6},
+		},
+		// 100 * 99 / 100 = 99 (MBD); wrong order would yield 0.
+		// Need a base of 100. BaseATK for str=100 doesn't fit in uint8 (max 255 ok, str=100 is fine).
+		// str=100,dex=0,luk=0 -> 100 + (100/10)^2 = 100 + 100 = 200. Too big.
+		// Use str=10,dex=0,luk=0 -> 10 + 1 = 11. *99/100 = 1089/100 = 10.
+		// Wrong order: 11/100=0, *99=0. MBD gives 10.
+		{
+			name: "pct99 multiply-before-divide against base 11",
+			str:  10, dex: 0, luk: 0, def: 0, vit: 0,
+			pct:  99,
+			want: DamageBand{10, 10},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := BashDamage(c.str, c.dex, c.luk, c.def, c.vit, c.pct)
+			if got != c.want {
+				t.Errorf("BashDamage(%d,%d,%d, def=%d, vit=%d, pct=%d) = %+v, want %+v",
+					c.str, c.dex, c.luk, c.def, c.vit, c.pct, got, c.want)
+			}
+			// Invariant (b): non-trivial pct should never reduce below base band.
+			if c.pct >= 100 && c.pct > 0 {
+				base := MeleeDamage(c.str, c.dex, c.luk, int(c.def), int(c.vit))
+				if got.Min < base.Min || got.Max < base.Max {
+					t.Errorf("BashDamage shrunk below base: got %+v, base %+v", got, base)
+				}
+			}
+		})
+	}
+}

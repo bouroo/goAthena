@@ -92,8 +92,10 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// ZC_USE_ITEM_ACK2). P2B adds 3 sell-flow entries
 	// (CZ_PC_SELL_ITEMLIST, ZC_PC_SELL_ITEMLIST, ZC_PC_SELL_RESULT).
 	// P2C adds 3 stats entries (CZ_STATUS_CHANGE, ZC_STATUS_CHANGE_ACK,
-	// ZC_NOTIFY_EFFECT) for a grand total of 55.
-	const want = 55
+	// ZC_NOTIFY_EFFECT). P3b-2 adds 3 skill-usage entries
+	// (CZ_USE_SKILL2, ZC_NOTIFY_SKILL, ZC_ACK_TOUSESKILL) for a grand
+	// total of 58.
+	const want = 58
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

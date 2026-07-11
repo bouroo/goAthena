@@ -187,6 +187,16 @@ const (
 	// server-side row index (clif.cpp:4482).
 	HeaderZCUSEITEMACK2   uint16 = 0x01c8
 	HeaderZCSKILLINFOLIST uint16 = 0x010f // rathena/src/map/packets_struct.hpp:4279 (ZC_SKILLINFO_LIST)
+	// P3b-2: skill usage family. The 20250604 PACKETVER falls into the
+	// PACKETVER_RE_NUM >= 20190904 / PACKETVER_MAIN_NUM >= 20190904
+	// branch of rathena/src/map/clif_shuffle.hpp:4750, which binds
+	// opcode 0x0438 to clif_parse_UseSkillToId with field offsets 2,4,6
+	// (the older "to pos" 0x0438 variant is for earlier PACKETVERs and
+	// shares the same opcode+length but parses 4 fields). Layouts are
+	// pinned to rathena/src/map/packets_struct.hpp.
+	HeaderCZUSESKILL      uint16 = 0x0438 // CZ_USE_SKILL2 — clif_parse_UseSkillToId (clif_shuffle.hpp:4750)
+	HeaderZCNOTIFYSKILL   uint16 = 0x01de // ZC_NOTIFY_SKILL — packets_struct.hpp:4671 (PACKETVER >= 3)
+	HeaderZCACKTOUSESKILL uint16 = 0x0110 // ZC_ACK_TOUSESKILL — packets_struct.hpp:2461
 	// P2C: stats & leveling — stat allocation + level-up effect.
 	// CZ_STATUS_CHANGE (0x00bb) is the client request to raise a base
 	// stat (rathena/src/map/clif.cpp:12714 clif_parse_StatusChange).
@@ -432,6 +442,21 @@ const (
 	// sizeZCNotifyVanish = int16 packetType + uint32 gid + uint8 type = 2+4+1 = 7
 	// (rathena/src/map/packets.hpp:604-608).
 	sizeZCNotifyVanish = 7
+	// sizeCZUseSkill2 = int16 packetType + int16 skillLv + uint16 skillID +
+	// uint32 targetID = 2+2+2+4 = 10 (clif_shuffle.hpp:4750 binds
+	// opcode 0x0438 to length 10 for PACKETVER_RE_NUM >= 20190904).
+	sizeCZUseSkill2 = 10
+	// sizeZCNotifySkill = int16 packetType + uint16 SKID + uint32 AID +
+	// uint32 targetID + uint32 startTime + int32 attackMT +
+	// int32 attackedMT + int32 damage + int16 level + int16 count +
+	// int8 action = 2+2+4+4+4+4+4+4+2+2+1 = 33
+	// (rathena/src/map/packets_struct.hpp:4658-4671, PACKETVER >= 3).
+	sizeZCNotifySkill = 33
+	// sizeZCAckToUseSkill = int16 packetType + uint16 skillId + int32 btype +
+	// uint32 itemId + uint8 flag + uint8 cause = 2+2+4+4+1+1 = 14
+	// (rathena/src/map/packets_struct.hpp:2448-2460, PACKETVER_MAIN_NUM
+	// >= 20181121 branch — 20250604 satisfies it).
+	sizeZCAckToUseSkill = 14
 	// sizeCZUseItem2 = int16 packetType + uint16 index + uint32 AID = 2+2+4 = 8
 	// (rathena/src/map/clif_packetdb.hpp:1151).
 	sizeCZUseItem2 = 8
@@ -889,6 +914,29 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCNOTIFYEFFECT,
 		Name:      "ZC_NOTIFY_EFFECT",
 		Length:    sizeZCNotifyEffect,
+		Direction: DirectionServerToClient,
+	})
+	// P3b-2: skill usage family (CZ_USE_SKILL2 + ZC_NOTIFY_SKILL +
+	// ZC_ACK_TOUSESKILL). See the per-constant source citations above
+	// (clif_shuffle.hpp:4750 + packets_struct.hpp:2448-2461, 4658-4671)
+	// for the rAthena packetdb lines pinning each opcode and on-wire
+	// size to PACKETVER 20250604.
+	db.Register(Definition{
+		ID:        HeaderCZUSESKILL,
+		Name:      "CZ_USE_SKILL2",
+		Length:    sizeCZUseSkill2,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCNOTIFYSKILL,
+		Name:      "ZC_NOTIFY_SKILL",
+		Length:    sizeZCNotifySkill,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCACKTOUSESKILL,
+		Name:      "ZC_ACK_TOUSESKILL",
+		Length:    sizeZCAckToUseSkill,
 		Direction: DirectionServerToClient,
 	})
 

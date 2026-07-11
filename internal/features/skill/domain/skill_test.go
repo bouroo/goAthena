@@ -62,6 +62,25 @@ func TestLookup(t *testing.T) {
 			t.Error("Lookup(99999) should miss")
 		}
 	})
+
+	t.Run("hit SM_BASH", func(t *testing.T) {
+		s, ok := Lookup(SM_BASH)
+		if !ok {
+			t.Fatal("Lookup(SM_BASH) miss")
+		}
+		if s.ID != SM_BASH || s.Name != "SM_BASH" || s.MaxLevel != 10 || s.Inf != InfAttack || s.Range != 0 {
+			t.Errorf("got %+v", s)
+		}
+		if got, want := len(s.spCost), 10; got != want {
+			t.Errorf("len(spCost) = %d, want %d", got, want)
+		}
+		wantSP := []uint16{8, 8, 8, 8, 8, 15, 15, 15, 15, 15}
+		for i, w := range wantSP {
+			if s.spCost[i] != w {
+				t.Errorf("spCost[%d] = %d, want %d (per skill_db.yml:164-200)", i, s.spCost[i], w)
+			}
+		}
+	})
 }
 
 func TestSkillSpAt(t *testing.T) {
@@ -90,6 +109,31 @@ func TestSkillSpAt(t *testing.T) {
 	}
 	if got := passive.SpAt(9); got != 0 {
 		t.Errorf("passive SpAt(9) = %d, want 0", got)
+	}
+}
+
+func TestSkillSpAt_SMBash(t *testing.T) {
+	s, ok := Lookup(SM_BASH)
+	if !ok {
+		t.Fatal("missing SM_BASH")
+	}
+	cases := []struct {
+		level uint8
+		want  uint16
+		note  string
+	}{
+		{0, 0, "under"},
+		{1, 8, "L1 floor"},
+		{5, 8, "L5 last 8-cost tier"},
+		{6, 15, "L6 first 15-cost tier"},
+		{10, 15, "L10 cap"},
+		{11, 0, "over MaxLevel=10"},
+		{255, 0, "far over"},
+	}
+	for _, c := range cases {
+		if got := s.SpAt(c.level); got != c.want {
+			t.Errorf("SM_BASH SpAt(%d) = %d, want %d (%s)", c.level, got, c.want, c.note)
+		}
 	}
 }
 
