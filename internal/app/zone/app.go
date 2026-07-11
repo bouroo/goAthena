@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/samber/do/v2"
@@ -33,6 +34,9 @@ import (
 
 	"github.com/bouroo/goAthena/internal/app/common"
 	"github.com/bouroo/goAthena/internal/config"
+	script "github.com/bouroo/goAthena/internal/features/script"
+	scriptdi "github.com/bouroo/goAthena/internal/features/script/di"
+	scriptservice "github.com/bouroo/goAthena/internal/features/script/service"
 	"github.com/bouroo/goAthena/internal/features/zone/di"
 	"github.com/bouroo/goAthena/internal/features/zone/service"
 	"github.com/bouroo/goAthena/internal/infrastructure/agones"
@@ -82,6 +86,27 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	tickLoop, grpcServer, err := startComponents(injector)
 	if err != nil {
 		return err
+	}
+
+	// Script engine: run OnInit for every script that defines it once at
+	// startup (rAthena npc_event_do_oninit semantics — single-threaded, no
+	// player context, runs before Agones Ready). Then optionally start a
+	// periodic hot-reload goroutine if cfg.Zone.ScriptReloadInterval > 0.
+	engine, err := scriptdi.ProvideEngine(injector)
+	if err != nil {
+		return fmt.Errorf("resolve script engine: %w", err)
+	}
+	if set := engine.Current(); set != nil {
+		ran, onInitErrs := scriptservice.RunOnInit(ctx, set, logger)
+		if len(onInitErrs) > 0 {
+			logger.Warn().Int("errors", len(onInitErrs)).Msg("zone: some OnInit scripts failed")
+		}
+		if ran > 0 {
+			logger.Info().Int("ran", ran).Msg("zone: OnInit scripts executed")
+		}
+	}
+	if cfg.Zone.ScriptReloadInterval > 0 {
+		go runScriptReload(ctx, engine, cfg.Zone.ScriptReloadInterval, logger)
 	}
 
 	grpcServeErr := make(chan error, 1)
@@ -140,12 +165,19 @@ func initInjector(ctx context.Context, injector do.Injector) (*zerolog.Logger, e
 	return logger, nil
 }
 
-// startComponents wires the zone feature into the injector and resolves
-// the long-lived runtime dependencies (tick loop + gRPC server). It
-// returns the resolved values or a wrapped error.
+// startComponents wires the zone feature and the script engine into the
+// injector and resolves the long-lived runtime dependencies (tick loop +
+// gRPC server). The script engine is registered after the zone feature so
+// any future feature-level port that needs to expose scripts can resolve
+// it; its initial load is soft-fail (empty/missing ScriptDir yields an
+// empty engine rather than aborting boot). It returns the resolved values
+// or a wrapped error.
 func startComponents(injector do.Injector) (*service.TickLoop, *grpc.Server, error) {
 	if err := di.Register(injector); err != nil {
 		return nil, nil, fmt.Errorf("register zone feature: %w", err)
+	}
+	if err := scriptdi.Register(injector); err != nil {
+		return nil, nil, fmt.Errorf("register script engine: %w", err)
 	}
 	tickLoop, err := di.ProvideTickLoop(injector)
 	if err != nil {
@@ -224,4 +256,30 @@ func tickLoopSettle(_ *service.TickLoop) {
 	// no-op for now; future versions may observe Done() once at least
 	// one tick has fired. Kept as a hook so the production startup
 	// sequence remains consistent across environments.
+}
+
+// runScriptReload periodically swaps the engine's compiled set until ctx
+// is cancelled. Reload failures are logged but never fatal: the prior
+// compiled set remains active, so a single bad reload cannot disable
+// scripting mid-flight. The ticker is stopped on return so the goroutine
+// does not leak past ctx cancellation.
+func runScriptReload(ctx context.Context, engine *script.Engine, interval time.Duration, logger *zerolog.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := engine.Reload(ctx); err != nil {
+				logger.Warn().Err(err).Msg("zone: script hot-reload failed")
+				continue
+			}
+			set := engine.Current()
+			logger.Info().
+				Int("scripts", len(set.Scripts)).
+				Int("funcs", len(set.Funcs)).
+				Msg("zone: scripts hot-reloaded")
+		}
+	}
 }

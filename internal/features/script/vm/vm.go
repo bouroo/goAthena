@@ -366,6 +366,23 @@ func (vm *VM) execReturn(context.Context, script.Instruction) error {
 	return nil
 }
 
+// NewAtLabel creates a VM positioned to begin execution at the named label.
+// It returns (vm, true) when the label exists in code, or (nil, false)
+// when it does not. Use this to run event entry points such as "OnInit"
+// without executing the script body that precedes them.
+//
+// The label instruction itself (OpLabel) is a no-op; execution begins with
+// that no-op, then proceeds into the label body.
+func NewAtLabel(code *script.CompiledScript, label string, scopes *ScopeStore, builtins *BuiltinRegistry) (*VM, bool) {
+	idx, ok := code.LookupLabel(label)
+	if !ok {
+		return nil, false
+	}
+	vm := New(code, scopes, builtins)
+	vm.pc = idx
+	return vm, true
+}
+
 // resolveLabel returns the instruction index for a label, defaulting to the
 // current pc if the label is missing.
 func (vm *VM) resolveLabel(name string) int {

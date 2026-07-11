@@ -1,0 +1,8 @@
+prontera,150,150,4	script	SampleNPC	4_M_01,{
+	mes "Hello, world!";
+	close;
+
+OnInit:
+	set $sampleInit, 1;
+	end;
+}
