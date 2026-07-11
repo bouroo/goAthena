@@ -2,6 +2,7 @@
 package di
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/rs/zerolog"
@@ -15,9 +16,11 @@ import (
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
 	"github.com/bouroo/goAthena/internal/features/gateway/handler"
 	"github.com/bouroo/goAthena/internal/features/gateway/service"
+	scriptengine "github.com/bouroo/goAthena/internal/features/script"
 	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
+	scriptpkg "github.com/bouroo/goAthena/pkg/ro/script"
 )
 
 // Register wires the gateway feature (packet codec, identity gRPC
@@ -250,6 +253,10 @@ func buildDispatchHandler(
 	if err != nil {
 		return nil, err
 	}
+	scripts, err := loadScriptSet(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
 	return service.NewDispatchHandler(
 		identityClient,
 		zoneClient,
@@ -260,6 +267,7 @@ func buildDispatchHandler(
 		zonePort,
 		registry,
 		mobs,
+		scripts,
 	), nil
 }
 
@@ -279,4 +287,35 @@ func loadMobRegistry(cfg *config.Config, logger zerolog.Logger) (*mobdb.Registry
 	}
 	logger.Info().Int("entries", mobs.Len()).Str("path", cfg.Zone.MobDBPath).Msg("gateway di: mob_db loaded")
 	return mobs, nil
+}
+
+// loadScriptSet constructs an in-process script engine bound to
+// cfg.Zone.ScriptDir and returns its current compiled snapshot for
+// the dispatch handler to resolve per-NPC scripts against. When
+// ScriptDir is empty, returns (nil, nil) so the dispatcher can keep
+// the M15/M16 hardcoded fallbacks. A load failure mirrors
+// loadMobRegistry's behavior: warn, leave the gateway with a nil
+// snapshot so dialog NPCs without a script still produce the
+// hardcoded welcome.
+func loadScriptSet(cfg *config.Config, logger zerolog.Logger) (*scriptpkg.CompiledScriptSet, error) {
+	if cfg == nil || cfg.Zone.ScriptDir == "" {
+		logger.Info().Msg("gateway di: script_dir unset; NPC script dialogs disabled (hardcoded fallback)")
+		return nil, nil
+	}
+	engine := scriptengine.NewEngine(&logger, cfg.Zone.ScriptDir)
+	if err := engine.Reload(context.Background()); err != nil {
+		logger.Warn().Err(err).
+			Str("script_dir", cfg.Zone.ScriptDir).
+			Msg("gateway di: script load failed; NPC script dialogs disabled (hardcoded fallback)")
+		return nil, nil
+	}
+	set := engine.Current()
+	logger.Info().
+		Int("scripts", len(set.Scripts)).
+		Int("funcs", len(set.Funcs)).
+		Int("warps", len(set.Warps)).
+		Int("shops", len(set.Shops)).
+		Str("script_dir", cfg.Zone.ScriptDir).
+		Msg("gateway di: script engine loaded")
+	return set, nil
 }

@@ -98,7 +98,8 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// ZC_NOTIFY_EFFECT). P3b-2 adds 3 skill-usage entries
 	// (CZ_USE_SKILL2, ZC_NOTIFY_SKILL, ZC_ACK_TOUSESKILL). P3c adds
 	// ZC_ITEM_FALL_ENTRY (0x0ADD) for a grand total of 59.
-	const want = 59
+	// P4b adds 2 menu entries (CZ_CHOOSE_MENU, ZC_MENU_LIST) → 61.
+	const want = 61
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

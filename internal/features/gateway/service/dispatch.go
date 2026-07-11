@@ -51,10 +51,12 @@ import (
 	identityv1 "github.com/bouroo/goAthena/api/pb/identity/v1"
 	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/gateway/domain"
+	"github.com/bouroo/goAthena/internal/features/script/vm"
 	skilldomain "github.com/bouroo/goAthena/internal/features/skill/domain"
 	statsdomain "github.com/bouroo/goAthena/internal/features/stats/domain"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
+	scriptpkg "github.com/bouroo/goAthena/pkg/ro/script"
 )
 
 // ErrIdentityUnavailableRefuse is the AC_REFUSE_LOGIN error code the
@@ -143,6 +145,22 @@ type DispatchHandler struct {
 	// rate is on a 0..10000 scale). Overrideable for deterministic
 	// tests.
 	dropRoll func(rate int) bool
+
+	// scriptSet is the snapshot of compiled NPC scripts supplied by
+	// the gateway DI provider. The dispatcher resolves a clicked
+	// NPC's ScriptName against scriptSet.Scripts to drive the
+	// per-connection DialogSession VM. May be nil (test fixtures
+	// that don't exercise the script path, or a gateway booted
+	// without cfg.Zone.ScriptDir); handleCZContactNPC falls back to
+	// the hardcoded M15 dialog when nil or when a name misses.
+	scriptSet *scriptpkg.CompiledScriptSet
+
+	// dialogSessions tracks the active per-connection dialog VM
+	// sessions. Keyed by conn.ID. Stored on the handler (not on
+	// ConnectionInfo) to avoid a domain→service import cycle:
+	// domain cannot depend on *service.DialogSession, and the
+	// dispatcher is the only consumer.
+	dialogSessions sync.Map
 }
 
 // NewDispatchHandler constructs a dispatch-backed PacketHandler.
@@ -168,6 +186,7 @@ func NewDispatchHandler(
 	zonePort uint16,
 	registry SessionRegistry,
 	mobs *mobdb.Registry,
+	scriptSet *scriptpkg.CompiledScriptSet,
 ) *DispatchHandler {
 	return &DispatchHandler{
 		identity:     identity,
@@ -179,6 +198,7 @@ func NewDispatchHandler(
 		zonePort:     zonePort,
 		registry:     registry,
 		mobRegistry:  mobs,
+		scriptSet:    scriptSet,
 		respawnDelay: 5 * time.Second,
 		damageRoll: func(low, high int32) int32 {
 			if low >= high {
@@ -334,6 +354,8 @@ func (h *DispatchHandler) handleMapPacketNPC(ctx context.Context, conn *domain.C
 		return h.handleCZContactNPC(ctx, conn, resp, frame)
 	case packet.HeaderCZREQNEXTSCRIPT:
 		return h.handleCZReqNextScript(ctx, conn, resp, frame)
+	case packet.HeaderCZCHOOSEMENU:
+		return h.handleCZChooseMenu(ctx, conn, resp, frame)
 	case packet.HeaderCZCLOSEDIALOG:
 		return h.handleCZCloseDialog(ctx, conn, resp, frame)
 	case packet.HeaderCZACKSELECTDEALTYPE:
@@ -3025,14 +3047,14 @@ func (h *DispatchHandler) handleCZRestart(_ context.Context, conn *domain.Connec
 //   - ShopType == 1 (shop NPC): send ZC_SELECT_DEALTYPE so the client
 //     pops up the Buy / Sell / Cancel deal-type selector. Sell is
 //     deferred (M16 only supports Buy); Cancel is a no-op response.
-//   - ShopType == 0 (dialog NPC): send the M15 dialog sequence
-//     (ZC_SAY_DIALOG2 + ZC_WAIT_DIALOG2).
+//   - ShopType == 0 (dialog NPC): if the NPC has a ScriptName that
+//     resolves in h.scriptSet, build a DialogSession and run the VM
+//     to drive the dialog via script. Otherwise fall back to the M15
+//     hardcoded ZC_SAY_DIALOG2 + ZC_WAIT_DIALOG2 flow.
 //
 // If the NPC GID is not found in npcSpawns, the handler logs a warning
-// and returns nil (no response). The full script engine (DEL-04) is
-// deferred to Phase 3; M15/M16 provide hardcoded dialog text and a
-// hardcoded stock list for each NPC.
-func (h *DispatchHandler) handleCZContactNPC(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+// and returns nil (no response).
+func (h *DispatchHandler) handleCZContactNPC(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZContactNPC(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -3091,9 +3113,65 @@ func (h *DispatchHandler) handleCZContactNPC(_ context.Context, conn *domain.Con
 		return nil
 	}
 
-	// Dialog NPC — M15 welcome sequence.
+	// Dialog NPC — script-driven when ScriptName resolves in the
+	// script set; otherwise fall back to the M15 hardcoded welcome.
+	if h.startScriptDialog(ctx, conn, resp, npc) {
+		return nil
+	}
+	return h.sendHardcodedWelcome(conn, resp, npc)
+}
+
+// startScriptDialog attempts to start a script-driven dialog for the
+// NPC. Returns true when the session was created (and the script
+// executed or paused for input); false when the NPC has no
+// ScriptName or the script isn't compiled in the current snapshot
+// and the caller should fall back to the hardcoded dialog.
+//
+// A new dialog for this connection always replaces any prior one
+// (rAthena semantics: clicking a second NPC closes the first dialog
+// on the client).
+func (h *DispatchHandler) startScriptDialog(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, npc *npcSpawn) bool {
+	if h.scriptSet == nil || npc.ScriptName == "" {
+		return false
+	}
+	cs, ok := h.scriptSet.Scripts[npc.ScriptName]
+	if !ok || cs == nil {
+		return false
+	}
+
+	session := NewDialogSessionForResponder(cs, npc.GID, npc.Name, resp)
+	h.dialogSessions.Store(conn.ID, session)
+
+	if _, err := session.VM.Run(ctx); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("npc_gid", npc.GID).
+			Str("npc_name", npc.Name).
+			Str("script", npc.ScriptName).
+			Msg("script dialog VM run failed; cleaning up session")
+		h.dialogSessions.Delete(conn.ID)
+		return true
+	}
+	if session.IsDone() {
+		h.dialogSessions.Delete(conn.ID)
+	}
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("npc_gid", npc.GID).
+		Str("npc_name", npc.Name).
+		Str("script", npc.ScriptName).
+		Msg("NPC script dialog started")
+	return true
+}
+
+// sendHardcodedWelcome emits the M15 ZC_SAY_DIALOG2 + ZC_WAIT_DIALOG2
+// fallback for dialog NPCs without a compiled script. Used when
+// scriptSet is nil, the NPC has no ScriptName, or the named script
+// isn't in the current snapshot.
+func (h *DispatchHandler) sendHardcodedWelcome(conn *domain.ConnectionInfo, resp domain.Responder, npc *npcSpawn) error {
 	say := packet.SayDialog2Response{
-		NpcID:   req.AID,
+		NpcID:   npc.GID,
 		Type:    0,
 		Message: "Welcome to goAthena! This is " + npc.Name + ".",
 	}
@@ -3102,13 +3180,13 @@ func (h *DispatchHandler) handleCZContactNPC(_ context.Context, conn *domain.Con
 		h.logger.Error().
 			Err(err).
 			Uint64("conn", conn.ID).
-			Uint32("npc_aid", req.AID).
+			Uint32("npc_aid", npc.GID).
 			Msg("encode ZC_SAY_DIALOG2 failed; dropping packet")
 		return nil
 	}
 
 	wait := packet.WaitDialog2Response{
-		NpcID: req.AID,
+		NpcID: npc.GID,
 		Type:  0,
 	}
 	var waitBuf bytes.Buffer
@@ -3116,14 +3194,14 @@ func (h *DispatchHandler) handleCZContactNPC(_ context.Context, conn *domain.Con
 		h.logger.Error().
 			Err(err).
 			Uint64("conn", conn.ID).
-			Uint32("npc_aid", req.AID).
+			Uint32("npc_aid", npc.GID).
 			Msg("encode ZC_WAIT_DIALOG2 failed; dropping packet")
 		return nil
 	}
 
 	h.logger.Info().
 		Uint64("conn", conn.ID).
-		Uint32("npc_aid", req.AID).
+		Uint32("npc_aid", npc.GID).
 		Str("npc_name", npc.Name).
 		Msg("NPC dialog started")
 
@@ -3789,15 +3867,14 @@ func (h *DispatchHandler) sendZenyParChange(resp domain.Responder, newZeny uint3
 }
 
 // handleCZReqNextScript responds to CZ_REQNEXTSCRIPT (0x00b9) — the
-// client clicking "Next" in the NPC dialog. The handler sends the
-// second part of the dialog:
-//
-//  1. ZC_SAY_DIALOG2 with a continuation message
-//  2. ZC_CLOSE_DIALOG to show the "Close" button
-//
-// The full script engine (DEL-04) is deferred to Phase 3; M15 provides
-// a single hardcoded continuation message for every NPC.
-func (h *DispatchHandler) handleCZReqNextScript(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+// client clicking "Next" in the NPC dialog. If the connection has an
+// active script-driven DialogSession, the handler swaps in the
+// current Responder and resumes the VM; builtins emit the next
+// dialog page (ZC_SAY_DIALOG2, ZC_WAIT_DIALOG2, ZC_MENU_LIST, or
+// ZC_CLOSE_DIALOG) as the script runs. Otherwise the handler falls
+// back to a single hardcoded continuation + close, matching the M15
+// behavior that pre-dates the script engine.
+func (h *DispatchHandler) handleCZReqNextScript(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZReqNextScript(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -3813,6 +3890,36 @@ func (h *DispatchHandler) handleCZReqNextScript(_ context.Context, conn *domain.
 			Uint64("conn", conn.ID).
 			Uint32("npc_id", req.NpcID).
 			Msg("CZ_REQNEXTSCRIPT without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	if v, ok := h.dialogSessions.Load(conn.ID); ok {
+		session, ok := v.(*DialogSession)
+		if !ok {
+			h.logger.Error().
+				Uint64("conn", conn.ID).
+				Uint32("npc_id", req.NpcID).
+				Msg("dialogSessions map held non-*DialogSession value; cleaning up")
+			h.dialogSessions.Delete(conn.ID)
+			return nil
+		}
+		session.SetResponder(resp)
+		if _, runErr := session.VM.Resume(ctx); runErr != nil {
+			h.logger.Error().
+				Err(runErr).
+				Uint64("conn", conn.ID).
+				Uint32("npc_id", req.NpcID).
+				Msg("script dialog VM resume failed; cleaning up session")
+			h.dialogSessions.Delete(conn.ID)
+			return nil
+		}
+		if session.IsDone() {
+			h.dialogSessions.Delete(conn.ID)
+		}
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Msg("NPC script dialog resumed")
 		return nil
 	}
 
@@ -3856,10 +3963,101 @@ func (h *DispatchHandler) handleCZReqNextScript(_ context.Context, conn *domain.
 	return nil
 }
 
+// handleCZChooseMenu responds to CZ_CHOOSE_MENU (0x00b8) — the client
+// selecting an option from a ZC_MENU_LIST. The 1-based menu index is
+// written into the active DialogSession's scope as ".@menu" and the
+// VM is resumed; builtins emit the next packet as the script runs.
+// A selection of -1 (0xff on the wire) means the player cancelled
+// the dialog: the handler closes the dialog window and drops the
+// session without resuming. If no session is active, the packet is
+// dropped silently (matches the existing handling for stray menu
+// replies from the pre-script-engine M15 flow).
+func (h *DispatchHandler) handleCZChooseMenu(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZChooseMenu(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_CHOOSE_MENU; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Msg("CZ_CHOOSE_MENU without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	v, ok := h.dialogSessions.Load(conn.ID)
+	if !ok {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Int8("selected", req.Selected).
+			Msg("CZ_CHOOSE_MENU with no active dialog session; dropping")
+		return nil
+	}
+	session, ok := v.(*DialogSession)
+	if !ok {
+		h.logger.Error().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Msg("dialogSessions map held non-*DialogSession value; cleaning up")
+		h.dialogSessions.Delete(conn.ID)
+		return nil
+	}
+
+	if req.Selected < 0 {
+		// 0xff on the wire (rAthena: "cancel") → close the dialog
+		// window and drop the session. No resume; the player
+		// explicitly chose to leave.
+		closeD := packet.CloseDialogResponse{NpcID: req.NpcID} //nolint:staticcheck // explicit struct init keeps the wire struct decoupled from SayDialog2Response
+		var closeBuf bytes.Buffer
+		if err := closeD.Encode(&closeBuf); err != nil {
+			return fmt.Errorf("encode ZC_CLOSE_DIALOG on menu cancel: %w", err)
+		}
+		if err := resp.SendPacket(closeBuf.Bytes()); err != nil {
+			return fmt.Errorf("send ZC_CLOSE_DIALOG on menu cancel: %w", err)
+		}
+		h.dialogSessions.Delete(conn.ID)
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Msg("NPC menu cancelled by client")
+		return nil
+	}
+
+	session.SetResponder(resp)
+	session.Scopes.Set(".@menu", vm.IntValue(int64(req.Selected)))
+	if _, runErr := session.VM.Resume(ctx); runErr != nil {
+		h.logger.Error().
+			Err(runErr).
+			Uint64("conn", conn.ID).
+			Uint32("npc_id", req.NpcID).
+			Int8("selected", req.Selected).
+			Msg("script dialog VM resume failed on menu; cleaning up session")
+		h.dialogSessions.Delete(conn.ID)
+		return nil
+	}
+	if session.IsDone() {
+		h.dialogSessions.Delete(conn.ID)
+	}
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("npc_id", req.NpcID).
+		Int8("selected", req.Selected).
+		Msg("NPC script menu resumed")
+	return nil
+}
+
 // handleCZCloseDialog responds to CZ_CLOSE_DIALOG (0x0146) — the
 // client clicking "Close" in the NPC dialog. The client closes the
 // dialog window locally; the server does not need to send a response.
-// The handler logs the close event and returns nil.
+// The handler also drops any active DialogSession for this
+// connection so a subsequent CZ_CONTACTNPC starts fresh.
 func (h *DispatchHandler) handleCZCloseDialog(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCZCloseDialog(frame)
 	if err != nil {
@@ -3878,6 +4076,8 @@ func (h *DispatchHandler) handleCZCloseDialog(_ context.Context, conn *domain.Co
 			Msg("CZ_CLOSE_DIALOG without prior CZ_ENTER; dropping")
 		return nil
 	}
+
+	h.dialogSessions.Delete(conn.ID)
 
 	h.logger.Info().
 		Uint64("conn", conn.ID).

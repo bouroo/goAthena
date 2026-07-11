@@ -66,7 +66,7 @@ func TestDispatchHandler_CZEnter_RegistersSession(t *testing.T) {
 
 	registry := NewSessionRegistry()
 	h := NewDispatchHandler(identity, zone, 20250604,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, registry, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, registry, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -130,7 +130,7 @@ func TestDispatchHandler_CZEnter_IdentityFails_StillRegisters(t *testing.T) {
 
 	registry := NewSessionRegistry()
 	h := NewDispatchHandler(identity, zone, 20250604,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, registry, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, registry, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -163,7 +163,7 @@ func TestDispatchHandler_CZEnter_ZoneRejects_DoesNotRegister(t *testing.T) {
 
 	registry := NewSessionRegistry()
 	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, registry, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, registry, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
