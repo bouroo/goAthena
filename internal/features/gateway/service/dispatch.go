@@ -2230,14 +2230,19 @@ func (h *DispatchHandler) appendMonsterDeath(ctx context.Context, conn *domain.C
 }
 
 // handleCZUseSkill processes a CZ_USE_SKILL2 (0x0438) single-target skill
-// request. It validates the skill against the static registry, deducts SP,
-// computes the pre-Renewal Bash damage band via statsdomain.BashDamage
-// scaled by 100+30*level, applies the rolled damage to the target
-// monster, and emits ZC_NOTIFY_SKILL (0x01de). On kill it reuses the
-// shared monster-death path (vanish + EXP + respawn). On insufficient
-// SP it emits ZC_ACK_TOUSESKILL (0x0110) with cause
-// USESKILL_FAIL_SP_INSUFFICIENT (12) and returns without damaging the
-// target. Unknown or non-offensive skills are dropped silently.
+// request. Currently restricted to SM_BASH — the pct=100+30*level damage
+// formula is Bash-specific and must not silently apply to a future
+// offensive skill (Pierce, Magnum Break, …). It validates the skill
+// against the static registry, verifies the target monster is tracked
+// before spending SP (so a failed cast does not desync the client's SP
+// display), computes the pre-Renewal Bash damage band via
+// statsdomain.BashDamage scaled by 100+30*level, applies the rolled
+// damage to the target monster, and emits ZC_NOTIFY_SKILL (0x01de).
+// On kill it reuses the shared monster-death path (vanish + EXP +
+// respawn). On insufficient SP it emits ZC_ACK_TOUSESKILL (0x0110) with
+// cause USESKILL_FAIL_SP_INSUFFICIENT (12) and returns without damaging
+// the target. Unknown skills, non-Bash skills, or invalid/dead targets
+// are dropped silently.
 //
 // Mirrors the shape of handleAttack (same parameter signature, same mob
 // lookup, same damage RNG) so the two paths stay symmetric; the only
@@ -2262,16 +2267,38 @@ func (h *DispatchHandler) handleCZUseSkill(ctx context.Context, conn *domain.Con
 		return nil
 	}
 
+	if req.SkillID != skilldomain.SM_BASH {
+		// Non-Bash offensive skills are out of scope for this slice:
+		// the pct=100+30*level formula below is Bash-specific and
+		// must not silently apply to a future registry entry
+		// (Pierce, Magnum Break, ...). Drop silently — rAthena
+		// ignores unhandled use-skill requests the same way
+		// (clif.cpp:13010 clif_parse_UseSkillToId).
+		return nil
+	}
+
 	sk, ok := skilldomain.Lookup(req.SkillID)
 	if !ok || sk.Inf != skilldomain.InfAttack {
-		// Unknown skill or non-offensive skill: out of scope for the
-		// single-target Bash slice. Drop silently rather than ack
-		// failure — rAthena ignores unhandled use-skill requests the
-		// same way (clif.cpp:13010 clif_parse_UseSkillToId).
+		// Defensive lookup guard: SM_BASH above is the gate that
+		// matters, but keep the registry check so a misconfigured
+		// registry still fails closed.
 		return nil
 	}
 
 	level := clampSkillLevel(int(req.SkillLv), int(sk.MaxLevel))
+
+	// Validate the target BEFORE spending SP. Otherwise an invalid or
+	// already-dead target would silently drain SP without producing a
+	// ZC_PAR_CHANGE, leaving the client's SP display out of sync with
+	// the server cache.
+	if !conn.HasMonster(req.TargetID) {
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint16("skill_id", req.SkillID).
+			Uint32("target_gid", req.TargetID).
+			Msg("CZ_USE_SKILL2 on unknown/dead target; dropping without spending SP")
+		return nil
+	}
 
 	spCost := uint32(sk.SpAt(uint8(level))) //nolint:gosec // level ≤ MaxLevel (≤255)
 	remaining, ok := conn.SpendSP(spCost)

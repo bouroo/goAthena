@@ -111,3 +111,37 @@ func TestSpendSP_Concurrent(t *testing.T) {
 		t.Errorf("SP() = %d, want %d", got, startSP-uint32(successes))
 	}
 }
+
+func TestHasMonster_Tracked(t *testing.T) {
+	t.Parallel()
+
+	c := &ConnectionInfo{}
+	c.InitMonsterHP([]MonsterSpawn{{GID: 42, MaxHP: 100}})
+
+	if !c.HasMonster(42) {
+		t.Errorf("HasMonster(42) = false, want true after InitMonsterHP")
+	}
+}
+
+func TestHasMonster_Untracked(t *testing.T) {
+	t.Parallel()
+
+	c := &ConnectionInfo{}
+	c.InitMonsterHP([]MonsterSpawn{{GID: 42, MaxHP: 100}})
+
+	if c.HasMonster(99) {
+		t.Errorf("HasMonster(99) = true, want false (GID not seeded)")
+	}
+}
+
+func TestHasMonster_AfterRemoval(t *testing.T) {
+	t.Parallel()
+
+	c := &ConnectionInfo{}
+	c.InitMonsterHP([]MonsterSpawn{{GID: 42, MaxHP: 100}})
+	c.RemoveMonster(42)
+
+	if c.HasMonster(42) {
+		t.Errorf("HasMonster(42) = true after RemoveMonster, want false")
+	}
+}

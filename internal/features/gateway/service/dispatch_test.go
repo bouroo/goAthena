@@ -5104,3 +5104,95 @@ func TestDispatchHandler_CZUseSkill_BashInsufficientSP_AcksAndNoOps(t *testing.T
 		t.Errorf("monster HP = %d, want 50 (no damage on insufficient-SP path)", hp)
 	}
 }
+
+// TestDispatchHandler_CZUseSkill_UnknownTarget_NoSPSpend is the
+// regression for the HIGH-priority Gemini finding: a Bash cast against
+// a monster that is not tracked (already dead or never spawned) must
+// NOT deduct SP and must NOT emit a ZC_NOTIFY_SKILL / ZC_PAR_CHANGE
+// burst. Pre-fix the handler called SpendSP before the ApplyDamage
+// lookup, so a failed cast drained the SP cache while sending nothing
+// to the client — leaving the client's SP display desynced from the
+// server.
+func TestDispatchHandler_CZUseSkill_UnknownTarget_NoSPSpend(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: 200001,
+		// Intentionally do NOT seed the target GID in MonsterHP.
+		MonsterHP: map[uint32]int32{},
+	}
+	conn.SetCombatStats(10, 5, 0)
+	conn.SetSP(20, 100)
+
+	const unknownGID uint32 = 0xDEADBEEF
+	reqBuf := buildCZUseSkill(t, skilldomain.SM_BASH, 1, unknownGID)
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZUSESKILL, reqBuf); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	// (a) SP unchanged — SpendSP must not have been called.
+	if got := conn.SP(); got != 20 {
+		t.Errorf("conn.SP() = %d, want 20 (no spend on unknown-target path)", got)
+	}
+	// (b) No outbound burst.
+	if n := resp.buf.Len(); n != 0 {
+		t.Errorf("response length = %d, want 0 (no ZC_NOTIFY_SKILL, no ZC_PAR_CHANGE); buf=% x", n, resp.buf.Bytes())
+	}
+	// (c) MonsterHP untouched — the unknown GID should not have been
+	// inserted as a side effect.
+	if _, ok := conn.MonsterHP[unknownGID]; ok {
+		t.Errorf("unknown GID %d was inserted into MonsterHP", unknownGID)
+	}
+}
+
+// TestDispatchHandler_CZUseSkill_NonBashSkill_DropsSilently is the
+// regression for FINDING 4: the pct=100+30*level formula and the
+// statsdomain.BashDamage scaling are Bash-specific. A future offensive
+// skill (Pierce, Magnum Break, …) must NOT silently inherit them; the
+// handler must drop non-Bash use-skill requests without spending SP or
+// emitting any burst.
+//
+// The registry currently only contains SM_BASH as an offensive skill,
+// so we drive a non-Bash numeric ID (6 — no SM_PROVOKE in this slice's
+// registry). The test asserts the observable behavior: no SP drain,
+// no burst, monster HP untouched.
+func TestDispatchHandler_CZUseSkill_NonBashSkill_DropsSilently(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry())
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{
+		ID:        1,
+		AccountID: 200001,
+		MonsterHP: map[uint32]int32{poringGID: 50},
+	}
+	conn.SetCombatStats(10, 5, 0)
+	conn.SetSP(20, 100)
+
+	const nonBashSkillID uint16 = 6
+	reqBuf := buildCZUseSkill(t, nonBashSkillID, 1, poringGID)
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZUSESKILL, reqBuf); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	if got := conn.SP(); got != 20 {
+		t.Errorf("conn.SP() = %d, want 20 (non-Bash must not spend SP)", got)
+	}
+	if n := resp.buf.Len(); n != 0 {
+		t.Errorf("response length = %d, want 0 (non-Bash must not emit a burst); buf=% x", n, resp.buf.Bytes())
+	}
+	if hp := conn.MonsterHP[poringGID]; hp != 50 {
+		t.Errorf("monster HP = %d, want 50 (non-Bash must not apply damage)", hp)
+	}
+}
