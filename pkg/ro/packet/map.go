@@ -133,6 +133,14 @@ const (
 	// rathena/src/map/clif_packetdb.hpp:58 (`packet(0x00b6,6,clif_parse_CloseDialog,0)`).
 	// Fixed 6 bytes: [2:cmd][4:NpcID].
 	HeaderZCCLOSEDIALOG uint16 = 0x00b6
+	// ZC_MENU_LIST (0x00b7) — server sends menu items for selection.
+	// rathena/src/map/packets_struct.hpp: PACKET_ZC_MENU_LIST.
+	// Variable length: [2:cmd][2:packetLength][4:NpcID][n:menu items colon-separated + NUL].
+	HeaderZCMENULIST uint16 = 0x00b7
+	// CZ_CHOOSE_MENU (0x00b8) — client selects a menu option.
+	// rathena/src/map/clif_packetdb.hpp:62 (`parseable_packet(0x00b8,7,clif_parse_NpcSelectMenu,2,6)`).
+	// Fixed 7 bytes: [2:cmd][4:NpcID][1:selected byte].
+	HeaderCZCHOOSEMENU uint16 = 0x00b8
 	// M16: NPC shop interaction. CZ_ACK_SELECT_DEALTYPE / ZC_SELECT_DEALTYPE
 	// carry the deal-type selection (Buy / Sell / Cancel) that follows
 	// CZ_CONTACTNPC for shop-type NPCs. CZ_PC_PURCHASE_ITEMLIST /
@@ -400,6 +408,9 @@ const (
 	// sizeZCCloseDialog = int16 packetType + uint32 NpcID = 2+4 = 6
 	// (rathena/src/map/clif_packetdb.hpp:58).
 	sizeZCCloseDialog = 6
+	// sizeCZChooseMenu = int16 packetType + uint32 NpcID + uint8 selected = 2+4+1 = 7
+	// (rathena/src/map/clif_packetdb.hpp:62).
+	sizeCZChooseMenu = 7
 	// sizeZCSelectDealtype = int16 packetType + uint32 NpcID = 2+4 = 6
 	// (rathena/src/map/packets.hpp: ZC_SELECT_DEALTYPE).
 	sizeZCSelectDealtype = 6
@@ -765,6 +776,13 @@ func NewMapServerDB() *DB {
 		Length:    sizeCZCloseDialog,
 		Direction: DirectionClientToServer,
 	})
+	// CZ_CHOOSE_MENU — client selects an item from a ZC_MENU_LIST dialog.
+	db.Register(Definition{
+		ID:        HeaderCZCHOOSEMENU,
+		Name:      "CZ_CHOOSE_MENU",
+		Length:    sizeCZChooseMenu,
+		Direction: DirectionClientToServer,
+	})
 	// M15: ZC_SAY_DIALOG2 (variable length), ZC_WAIT_DIALOG2 (fixed 7 bytes),
 	// ZC_CLOSE_DIALOG (fixed 6 bytes).
 	db.Register(Definition{
@@ -783,6 +801,13 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCCLOSEDIALOG,
 		Name:      "ZC_CLOSE_DIALOG",
 		Length:    sizeZCCloseDialog,
+		Direction: DirectionServerToClient,
+	})
+	// ZC_MENU_LIST — server sends menu items for the NPC dialog selector.
+	db.Register(Definition{
+		ID:        HeaderZCMENULIST,
+		Name:      "ZC_MENU_LIST",
+		Length:    VariableLength,
 		Direction: DirectionServerToClient,
 	})
 	// M16: NPC shop interaction — CZ_ACK_SELECT_DEALTYPE (fixed 7 bytes),

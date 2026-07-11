@@ -1,5 +1,13 @@
 prontera,150,150,4	script	SampleNPC	4_M_01,{
-	mes "Hello, world!";
+	mes "Hello!";
+	next;
+	mes "How can I help?";
+	menu "Info",L_Info,"Bye",L_Bye;
+L_Info:
+	mes "We're goAthena!";
+	close;
+L_Bye:
+	mes "Goodbye!";
 	close;
 
 OnInit:

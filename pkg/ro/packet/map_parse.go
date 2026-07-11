@@ -950,3 +950,37 @@ func (r CZStatusChangeRequest) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// CZChooseMenuRequest is the decoded form of a client → map-server
+// CZ_CHOOSE_MENU packet (header 0x00b8, 7 bytes on the wire).
+// Source: rathena/src/map/clif.cpp NpcSelectMenu handler (the parseable_packet
+// entry at clif_packetdb.hpp:62 pins opcode 0x00b8 to 7 bytes with field
+// offsets [2, 6] — NpcID at 2, selected at 6).
+//
+// The on-wire `selected` byte is 1-based; the rAthena handler treats 0xff
+// (-1 as int8) as "cancel" and any other value as the 1-based menu index.
+type CZChooseMenuRequest struct {
+	// NpcID is the NPC entity ID the menu belongs to.
+	NpcID uint32
+	// Selected is the 1-based menu index chosen by the player; -1 means
+	// the player cancelled the dialog.
+	Selected int8
+}
+
+// ParseCZChooseMenu decodes a CZ_CHOOSE_MENU frame. The frame must carry
+// cmd 0x00b8 and contain 7 bytes.
+//
+// Returns a wrapped error naming the byte count if the frame is short,
+// or naming the unexpected cmd id if the header is not 0x00b8.
+func ParseCZChooseMenu(frame []byte) (CZChooseMenuRequest, error) {
+	if len(frame) < sizeCZChooseMenu {
+		return CZChooseMenuRequest{}, fmt.Errorf("packet: parse CZ_CHOOSE_MENU: want at least %d bytes, got %d", sizeCZChooseMenu, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCHOOSEMENU {
+		return CZChooseMenuRequest{}, fmt.Errorf("packet: parse CZ_CHOOSE_MENU: unexpected cmd 0x%04x", cmd)
+	}
+	return CZChooseMenuRequest{
+		NpcID:    binary.LittleEndian.Uint32(frame[2:6]),
+		Selected: int8(frame[6]), //nolint:gosec // byte→int8 conversion is the wire format — 0xff means "cancel" per rAthena.
+	}, nil
+}

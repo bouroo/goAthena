@@ -33,6 +33,12 @@ type npcSpawn struct {
 	// NPCs follow the M16 CZ_CONTACTNPC → ZC_SELECT_DEALTYPE flow and
 	// carry a non-empty ShopItems list.
 	ShopType uint8
+	// ScriptName, when non-empty, identifies a compiled NPC script
+	// keyed in CompiledScriptSet.Scripts. The dispatch handler
+	// resolves a clicked NPC's ScriptName to the script set and
+	// runs it through the per-connection DialogSession VM; an empty
+	// ScriptName falls back to the hardcoded M15 dialog flow.
+	ScriptName string
 	// ShopItems is the stock list for shop-type NPCs. Ignored when
 	// ShopType is 0. The list is sent verbatim in
 	// ZC_PC_PURCHASE_ITEMLIST when the player picks "Buy" in the
@@ -91,11 +97,12 @@ var npcSpawns = []npcSpawn{
 		Dir:      0,
 	},
 	{
-		GID:      110000004,
-		Name:     "Guide",
-		SpriteID: 111,
-		X:        160,
-		Y:        190,
-		Dir:      0,
+		GID:        110000004,
+		Name:       "Guide",
+		SpriteID:   111,
+		X:          160,
+		Y:          190,
+		Dir:        0,
+		ScriptName: "SampleNPC",
 	},
 }

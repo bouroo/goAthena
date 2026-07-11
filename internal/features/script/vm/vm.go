@@ -65,6 +65,14 @@ func (vm *VM) SetMaxInstr(n int) {
 // State returns the current VM state.
 func (vm *VM) State() State { return vm.state }
 
+// StateSet transitions the VM to the given state. External callers
+// (e.g. gateway dialog builtins running in another package) use this
+// to pause or terminate the VM in response to script builtins whose
+// semantics (next, menu, close, end) are defined by the host rather
+// than by the VM. The VM honors the new state on its next Step or
+// Run iteration.
+func (vm *VM) StateSet(s State) { vm.state = s }
+
 // Run executes the script to completion (or until STOP/END).
 // It returns the final VM state.
 func (vm *VM) Run(ctx context.Context) (State, error) {

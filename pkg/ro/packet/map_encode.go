@@ -1321,6 +1321,49 @@ type CloseDialogResponse struct {
 	NpcID uint32
 }
 
+// MenuListResponse encodes a ZC_MENU_LIST packet (command 0x00b7,
+// variable length). The server sends this to present a list of menu
+// items in the NPC dialog window for the player to choose from.
+//
+// Wire layout (rathena/src/map/packets_struct.hpp: PACKET_ZC_MENU_LIST):
+//
+//	int16  packetType   (0x00b7)
+//	int16  packetLength (total size)
+//	uint32 NpcID
+//	char   menu[]       (colon-separated items, null-terminated)
+type MenuListResponse struct {
+	// NpcID is the NPC entity ID the menu belongs to.
+	NpcID uint32
+	// Items is the colon-separated menu items displayed to the player.
+	Items string
+}
+
+// Size returns the on-wire byte length that Encode will write.
+func (r MenuListResponse) Size() int {
+	return 2 + 2 + 4 + len(r.Items) + 1 // cmd + length + NpcID + items + NUL
+}
+
+// Encode writes the ZC_MENU_LIST packet to w. The packet length slot
+// is computed from the trailing item bytes plus the NUL terminator so
+// the caller cannot accidentally emit a frame whose length slot
+// disagrees with the trailing bytes.
+func (r MenuListResponse) Encode(w io.Writer) error {
+	itemBytes := []byte(r.Items)
+	total := r.Size()
+	if total > 0xffff {
+		return fmt.Errorf("packet: write ZC_MENU_LIST: items too long (%d bytes)", len(itemBytes))
+	}
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCMENULIST)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // total guarded by the 0xffff check above
+	binary.LittleEndian.PutUint32(buf[4:], r.NpcID)
+	copy(buf[8:], itemBytes)
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_MENU_LIST: %w", err)
+	}
+	return nil
+}
+
 // Size returns the on-wire byte length that Encode will write (always 6).
 func (r CloseDialogResponse) Size() int {
 	return sizeZCCloseDialog
