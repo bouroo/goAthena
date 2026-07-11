@@ -212,8 +212,8 @@ func (h *DispatchHandler) handleMapPacket(ctx context.Context, conn *domain.Conn
 		return h.handleCZRequestTime(ctx, conn, resp, frame)
 	case packet.HeaderCZGLOBALMESSAGE:
 		return h.handleCZGlobalMessage(ctx, conn, resp, frame)
-	case packet.HeaderCZACTIONREQUEST:
-		return h.handleCZActionRequest(ctx, conn, resp, frame)
+	case packet.HeaderCZACTIONREQUEST, packet.HeaderCZUSESKILL:
+		return h.handleMapPacketCombat(ctx, conn, resp, cmd, frame)
 	case packet.HeaderCZCHANGEDIR:
 		return h.handleCZChangeDir(ctx, conn, resp, frame)
 	case packet.HeaderCZREQEMOTION:
@@ -232,6 +232,25 @@ func (h *DispatchHandler) handleMapPacket(ctx context.Context, conn *domain.Conn
 		return h.handleCZStatusChange(ctx, conn, resp, frame)
 	default:
 		return h.handleMapPacketNPC(ctx, conn, resp, cmd, frame)
+	}
+}
+
+// handleMapPacketCombat dispatches the combat sub-group (CZ_ACTION_REQUEST
+// and CZ_USE_SKILL2). Extracted from handleMapPacket so the top-level
+// switch stays under the gocyclo limit (the table grew past 15 cases in
+// P3b-2 when CZ_USE_SKILL2 was added).
+func (h *DispatchHandler) handleMapPacketCombat(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
+	switch cmd {
+	case packet.HeaderCZACTIONREQUEST:
+		return h.handleCZActionRequest(ctx, conn, resp, frame)
+	case packet.HeaderCZUSESKILL:
+		return h.handleCZUseSkill(ctx, conn, resp, frame)
+	default:
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint16("cmd", cmd).
+			Msg("unhandled combat packet")
+		return nil
 	}
 }
 
@@ -1143,6 +1162,7 @@ func (h *DispatchHandler) handleCZNotifyActorInit(ctx context.Context, conn *dom
 		lukV = uint8(min(char.GetLuk(), 255)) //nolint:gosec // ditto
 		conn.BaseLevel = baseLevel
 		conn.SetCombatStats(strV, dexV, lukV)
+		conn.SetSP(sp, maxSP)
 	}
 
 	// rAthena clamps HP to a minimum of 1 on LoadEndAck so the client
@@ -2158,25 +2178,9 @@ func (h *DispatchHandler) handleAttack(ctx context.Context, conn *domain.Connect
 	}
 
 	if dead {
-		// Monster died — send ZC_NOTIFY_VANISH and remove from HP map.
-		vanish := packet.NotifyVanishResponse{
-			GID:  targetGID,
-			Type: packet.VanishDead,
-		}
-		if err := vanish.Encode(&burst); err != nil {
-			h.logger.Error().
-				Err(err).
-				Uint64("conn", conn.ID).
-				Msg("encode ZC_NOTIFY_VANISH failed")
+		if !h.appendMonsterDeath(ctx, conn, resp, &burst, targetGID) {
 			return nil
 		}
-
-		// M19: apply EXP
-		h.applyMonsterKillExp(ctx, conn, &burst, targetGID)
-
-		// M20: schedule respawn
-		h.scheduleMonsterRespawn(conn, resp, targetGID)
-
 		h.logger.Info().
 			Uint64("conn", conn.ID).
 			Uint32("target_gid", targetGID).
@@ -2195,6 +2199,225 @@ func (h *DispatchHandler) handleAttack(ctx context.Context, conn *domain.Connect
 		return fmt.Errorf("send attack burst: %w", err)
 	}
 	return nil
+}
+
+// appendMonsterDeath encodes ZC_NOTIFY_VANISH into burst, forwards EXP via
+// identity, and schedules the respawn timer. Extracted from handleAttack so
+// handleCZUseSkill can reuse the byte-identical sequence (rathena clif
+// clif_clearunit + clif_exp + respawn at clif.cpp:5358-5380 / mob.cpp).
+//
+// Returns false if the vanish encode failed (caller must abort the burst send).
+func (h *DispatchHandler) appendMonsterDeath(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, burst *bytes.Buffer, targetGID uint32) bool {
+	vanish := packet.NotifyVanishResponse{
+		GID:  targetGID,
+		Type: packet.VanishDead,
+	}
+	if err := vanish.Encode(burst); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Msg("encode ZC_NOTIFY_VANISH failed")
+		return false
+	}
+
+	// M19: apply EXP
+	h.applyMonsterKillExp(ctx, conn, burst, targetGID)
+
+	// M20: schedule respawn
+	h.scheduleMonsterRespawn(conn, resp, targetGID)
+
+	return true
+}
+
+// handleCZUseSkill processes a CZ_USE_SKILL2 (0x0438) single-target skill
+// request. It validates the skill against the static registry, deducts SP,
+// computes the pre-Renewal Bash damage band via statsdomain.BashDamage
+// scaled by 100+30*level, applies the rolled damage to the target
+// monster, and emits ZC_NOTIFY_SKILL (0x01de). On kill it reuses the
+// shared monster-death path (vanish + EXP + respawn). On insufficient
+// SP it emits ZC_ACK_TOUSESKILL (0x0110) with cause
+// USESKILL_FAIL_SP_INSUFFICIENT (12) and returns without damaging the
+// target. Unknown or non-offensive skills are dropped silently.
+//
+// Mirrors the shape of handleAttack (same parameter signature, same mob
+// lookup, same damage RNG) so the two paths stay symmetric; the only
+// outbound differences are the ZC_NOTIFY_SKILL / ZC_ACK_TOUSESKILL
+// headers instead of ZC_NOTIFY_ACT.
+func (h *DispatchHandler) handleCZUseSkill(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZUseSkill(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_USE_SKILL2; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint16("skill_id", req.SkillID).
+			Msg("CZ_USE_SKILL2 without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	sk, ok := skilldomain.Lookup(req.SkillID)
+	if !ok || sk.Inf != skilldomain.InfAttack {
+		// Unknown skill or non-offensive skill: out of scope for the
+		// single-target Bash slice. Drop silently rather than ack
+		// failure — rAthena ignores unhandled use-skill requests the
+		// same way (clif.cpp:13010 clif_parse_UseSkillToId).
+		return nil
+	}
+
+	level := clampSkillLevel(int(req.SkillLv), int(sk.MaxLevel))
+
+	spCost := uint32(sk.SpAt(uint8(level))) //nolint:gosec // level ≤ MaxLevel (≤255)
+	remaining, ok := conn.SpendSP(spCost)
+	if !ok {
+		return h.sendSkillAckInsufficientSP(conn, resp, req.SkillID)
+	}
+
+	def, vit, found := LookupMonsterStats(req.TargetID)
+	if !found {
+		def, vit = 0, 0
+	}
+
+	str, dex, luk := conn.CombatStats()
+	pct := int32(100 + 30*level) //nolint:gosec // level ≤ MaxLevel (≤255)
+	band := statsdomain.BashDamage(str, dex, luk, int32(def), int32(vit), pct)
+	dmg := h.damageRoll(band.Min, band.Max)
+
+	hp, ok := conn.ApplyDamage(req.TargetID, dmg)
+	if !ok {
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint32("target_gid", req.TargetID).
+			Msg("CZ_USE_SKILL2 on unknown/dead target; dropping")
+		return nil
+	}
+
+	dead := hp <= 0
+	if dead {
+		conn.RemoveMonster(req.TargetID)
+	}
+
+	var burst bytes.Buffer
+	if !h.appendSkillHitBurst(conn, &burst, req, dmg, level, remaining) {
+		return nil
+	}
+
+	if dead {
+		if !h.appendMonsterDeath(ctx, conn, resp, &burst, req.TargetID) {
+			return nil
+		}
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint16("skill_id", req.SkillID).
+			Uint32("target_gid", req.TargetID).
+			Int32("damage", dmg).
+			Uint32("sp_cost", spCost).
+			Uint32("sp_remaining", remaining).
+			Msg("monster killed by skill")
+	} else {
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint16("skill_id", req.SkillID).
+			Uint32("target_gid", req.TargetID).
+			Int32("damage", dmg).
+			Int32("remaining_hp", hp).
+			Uint32("sp_remaining", remaining).
+			Msg("monster damaged by skill")
+	}
+
+	if err := resp.SendPacket(burst.Bytes()); err != nil {
+		return fmt.Errorf("send skill burst: %w", err)
+	}
+	return nil
+}
+
+// clampSkillLevel bounds a CZ_USE_SKILL2.SkillLv to [1, maxLevel].
+// Out-of-range levels silently clamp rather than fail — matches rAthena's
+// pc->skill_lv handling at clif_parse_UseSkillToId (clif.cpp:13014).
+func clampSkillLevel(reqLevel, maxLevel int) int {
+	if reqLevel < 1 {
+		return 1
+	}
+	if reqLevel > maxLevel {
+		return maxLevel
+	}
+	return reqLevel
+}
+
+// sendSkillAckInsufficientSP emits a 14-byte ZC_ACK_TOUSESKILL with
+// Cause=USESKILL_FAIL_SP_INSUFFICIENT. Extracted from handleCZUseSkill
+// to keep that function under the gocyclo limit.
+func (h *DispatchHandler) sendSkillAckInsufficientSP(conn *domain.ConnectionInfo, resp domain.Responder, skillID uint16) error {
+	ack := packet.AckUseSkillResponse{
+		SkillID: skillID,
+		BType:   0,
+		ItemID:  0,
+		Flag:    0,
+		Cause:   packet.UseSkillFailSPInsufficient,
+	}
+	var ackBuf bytes.Buffer
+	if err := ack.Encode(&ackBuf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint16("skill_id", skillID).
+			Msg("encode ZC_ACK_TOUSESKILL failed")
+		return nil
+	}
+	if err := resp.SendPacket(ackBuf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_ACK_TOUSESKILL: %w", err)
+	}
+	return nil
+}
+
+// appendSkillHitBurst encodes ZC_NOTIFY_SKILL + ZC_PAR_CHANGE (SP) into
+// burst. StartTime is the same low-32-bit server tick handleAttack uses
+// for ZC_NOTIFY_ACT (rathena clif_parse_UseSkillToId → clif_skill_damage).
+// Extracted from handleCZUseSkill to keep that function under the gocyclo
+// limit. Returns true on success, false if either encode failed (caller
+// must abort the burst send — matches the rest of the dispatcher's
+// "log + drop" convention).
+func (h *DispatchHandler) appendSkillHitBurst(conn *domain.ConnectionInfo, burst *bytes.Buffer, req packet.CZUseSkill, dmg int32, level int, spRemaining uint32) bool {
+	skill := packet.NotifySkillResponse{
+		SKID:       req.SkillID,
+		AID:        conn.AccountID,
+		TargetID:   req.TargetID,
+		StartTime:  uint32(time.Now().UnixMilli()), //nolint:gosec // low 32 bits per rAthena time convention
+		AttackMT:   0,
+		AttackedMT: 0,
+		Damage:     dmg,
+		Level:      int16(level), //nolint:gosec // level ≤ MaxLevel (≤255)
+		Count:      1,
+		Action:     0,
+	}
+	if err := skill.Encode(burst); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint16("skill_id", req.SkillID).
+			Msg("encode ZC_NOTIFY_SKILL failed")
+		return false
+	}
+
+	par := packet.ParChangeResponse{
+		VarID: packet.SPSP,
+		Count: int32(spRemaining), //nolint:gosec // remaining ≤ MaxSP (≤ int32)
+	}
+	if err := par.Encode(burst); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint16("skill_id", req.SkillID).
+			Msg("encode ZC_PAR_CHANGE (SP) failed")
+		return false
+	}
+	return true
 }
 
 // applyBaseLevelUp detects whether the most recent EXP gain triggers a

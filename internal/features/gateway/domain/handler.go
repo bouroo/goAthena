@@ -50,6 +50,10 @@ type ConnectionInfo struct {
 	// Str, Dex, Luk are the character's base combat stats, cached from
 	// GetCharacter on map enter.
 	Str, Dex, Luk uint8
+	// sp and maxSP are the character's current and maximum skill points,
+	// cached from GetCharacter on map enter. Guarded by mu alongside the
+	// other mutable combat fields.
+	sp, maxSP uint32
 	// invIndex maps 0-based inventory position to DB item ID.
 	invIndex map[uint16]uint32
 	// shopNPCID tracks the NPC GID the player is currently in a shop
@@ -179,6 +183,42 @@ func (c *ConnectionInfo) SetBaseExp(v int32) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.BaseExp = v
+}
+
+// SetSP updates the cached current and maximum skill points.
+func (c *ConnectionInfo) SetSP(sp, maxSP uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sp = sp
+	c.maxSP = maxSP
+}
+
+// SP returns the current skill points.
+func (c *ConnectionInfo) SP() uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sp
+}
+
+// MaxSP returns the maximum skill points.
+func (c *ConnectionInfo) MaxSP() uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.maxSP
+}
+
+// SpendSP deducts cost from the cached SP if the current SP covers it,
+// returning the remaining SP and ok=true. If sp < cost the cache is left
+// untouched and (sp, false) is returned; the sp<cost guard ensures no
+// uint32 underflow.
+func (c *ConnectionInfo) SpendSP(cost uint32) (uint32, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sp < cost {
+		return c.sp, false
+	}
+	c.sp -= cost
+	return c.sp, true
 }
 
 // Responder sends serialized packets back to the client. Each transport

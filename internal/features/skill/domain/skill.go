@@ -16,6 +16,14 @@ const (
 	InfTrap    uint16 = 0x20
 )
 
+// Exported skill-ID handles. Callers should use these (not bare literals)
+// when looking skills up via Lookup and reading SP via Skill.SpAt. Values
+// mirror rAthena's SM_BASH enum in src/map/skill.hpp:729 and the entry id
+// in db/pre-re/skill_db.yml.
+const (
+	SM_BASH uint16 = 5 //nolint:revive // matches rAthena SM_BASH enum used by handlers
+)
+
 // Skill is the registry entry for a single skill. spCost[level-1] is the
 // SP cost at that level; for passives the slice is empty.
 type Skill struct {
@@ -106,6 +114,7 @@ func Lookup(id uint16) (Skill, bool) {
 // NV_BASIC — pre-re/skill_db.yml:146-149 (passive, no SP).
 // NV_FIRSTAID — pre-re/skill_db.yml:5063-5075 (InfSelf, SP=3).
 // NV_TRICKDEAD — pre-re/skill_db.yml:5076-5091 (InfSelf, SP=5).
+// SM_BASH — pre-re/skill_db.yml:164-200 (InfAttack, MaxLevel=10, SP=8/15).
 var registry = map[uint16]Skill{
 	1: {
 		ID:       1,
@@ -130,5 +139,13 @@ var registry = map[uint16]Skill{
 		Inf:      InfSelf,
 		Range:    0,
 		spCost:   []uint16{5},
+	},
+	SM_BASH: {
+		ID:       SM_BASH,
+		Name:     "SM_BASH",
+		MaxLevel: 10,
+		Inf:      InfAttack,
+		Range:    0,
+		spCost:   []uint16{8, 8, 8, 8, 8, 15, 15, 15, 15, 15},
 	},
 }
