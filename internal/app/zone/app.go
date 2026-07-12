@@ -243,12 +243,12 @@ func shutdown(
 ) {
 	stopServers(grpcServer, grpcServeErr, logger)
 	tickCancel()
-	
+
 	// Use a fresh context with timeout for shutdown operations to avoid
 	// blocking indefinitely when the parent context is already cancelled.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer shutdownCancel()
-	
+
 	select {
 	case <-tickDone:
 	case <-shutdownCtx.Done():
