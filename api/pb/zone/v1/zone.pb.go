@@ -1834,6 +1834,1498 @@ func (x *StorageItem) GetCard3() uint64 {
 	return 0
 }
 
+type WhisperRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SenderCharId  uint32                 `protobuf:"varint,1,opt,name=sender_char_id,json=senderCharId,proto3" json:"sender_char_id,omitempty"`
+	TargetCharId  uint32                 `protobuf:"varint,2,opt,name=target_char_id,json=targetCharId,proto3" json:"target_char_id,omitempty"`
+	Content       string                 `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WhisperRequest) Reset() {
+	*x = WhisperRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WhisperRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WhisperRequest) ProtoMessage() {}
+
+func (x *WhisperRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WhisperRequest.ProtoReflect.Descriptor instead.
+func (*WhisperRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *WhisperRequest) GetSenderCharId() uint32 {
+	if x != nil {
+		return x.SenderCharId
+	}
+	return 0
+}
+
+func (x *WhisperRequest) GetTargetCharId() uint32 {
+	if x != nil {
+		return x.TargetCharId
+	}
+	return 0
+}
+
+func (x *WhisperRequest) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+type WhisperResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WhisperResponse) Reset() {
+	*x = WhisperResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WhisperResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WhisperResponse) ProtoMessage() {}
+
+func (x *WhisperResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WhisperResponse.ProtoReflect.Descriptor instead.
+func (*WhisperResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *WhisperResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *WhisperResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type SendPartyChatRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SenderCharId  uint32                 `protobuf:"varint,1,opt,name=sender_char_id,json=senderCharId,proto3" json:"sender_char_id,omitempty"`
+	Content       string                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendPartyChatRequest) Reset() {
+	*x = SendPartyChatRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendPartyChatRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendPartyChatRequest) ProtoMessage() {}
+
+func (x *SendPartyChatRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendPartyChatRequest.ProtoReflect.Descriptor instead.
+func (*SendPartyChatRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *SendPartyChatRequest) GetSenderCharId() uint32 {
+	if x != nil {
+		return x.SenderCharId
+	}
+	return 0
+}
+
+func (x *SendPartyChatRequest) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+type SendPartyChatResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendPartyChatResponse) Reset() {
+	*x = SendPartyChatResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendPartyChatResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendPartyChatResponse) ProtoMessage() {}
+
+func (x *SendPartyChatResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendPartyChatResponse.ProtoReflect.Descriptor instead.
+func (*SendPartyChatResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *SendPartyChatResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *SendPartyChatResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type SendMapChatRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SenderCharId  uint32                 `protobuf:"varint,1,opt,name=sender_char_id,json=senderCharId,proto3" json:"sender_char_id,omitempty"`
+	MapName       string                 `protobuf:"bytes,2,opt,name=map_name,json=mapName,proto3" json:"map_name,omitempty"`
+	Content       string                 `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendMapChatRequest) Reset() {
+	*x = SendMapChatRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendMapChatRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendMapChatRequest) ProtoMessage() {}
+
+func (x *SendMapChatRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendMapChatRequest.ProtoReflect.Descriptor instead.
+func (*SendMapChatRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *SendMapChatRequest) GetSenderCharId() uint32 {
+	if x != nil {
+		return x.SenderCharId
+	}
+	return 0
+}
+
+func (x *SendMapChatRequest) GetMapName() string {
+	if x != nil {
+		return x.MapName
+	}
+	return ""
+}
+
+func (x *SendMapChatRequest) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+type SendMapChatResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendMapChatResponse) Reset() {
+	*x = SendMapChatResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendMapChatResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendMapChatResponse) ProtoMessage() {}
+
+func (x *SendMapChatResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendMapChatResponse.ProtoReflect.Descriptor instead.
+func (*SendMapChatResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *SendMapChatResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *SendMapChatResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type SendFriendRequestRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FromAccountId uint32                 `protobuf:"varint,1,opt,name=from_account_id,json=fromAccountId,proto3" json:"from_account_id,omitempty"`
+	ToAccountId   uint32                 `protobuf:"varint,2,opt,name=to_account_id,json=toAccountId,proto3" json:"to_account_id,omitempty"`
+	FromName      string                 `protobuf:"bytes,3,opt,name=from_name,json=fromName,proto3" json:"from_name,omitempty"`
+	ToName        string                 `protobuf:"bytes,4,opt,name=to_name,json=toName,proto3" json:"to_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendFriendRequestRequest) Reset() {
+	*x = SendFriendRequestRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendFriendRequestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendFriendRequestRequest) ProtoMessage() {}
+
+func (x *SendFriendRequestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendFriendRequestRequest.ProtoReflect.Descriptor instead.
+func (*SendFriendRequestRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *SendFriendRequestRequest) GetFromAccountId() uint32 {
+	if x != nil {
+		return x.FromAccountId
+	}
+	return 0
+}
+
+func (x *SendFriendRequestRequest) GetToAccountId() uint32 {
+	if x != nil {
+		return x.ToAccountId
+	}
+	return 0
+}
+
+func (x *SendFriendRequestRequest) GetFromName() string {
+	if x != nil {
+		return x.FromName
+	}
+	return ""
+}
+
+func (x *SendFriendRequestRequest) GetToName() string {
+	if x != nil {
+		return x.ToName
+	}
+	return ""
+}
+
+type SendFriendRequestResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	RequestId     uint64                 `protobuf:"varint,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendFriendRequestResponse) Reset() {
+	*x = SendFriendRequestResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendFriendRequestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendFriendRequestResponse) ProtoMessage() {}
+
+func (x *SendFriendRequestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendFriendRequestResponse.ProtoReflect.Descriptor instead.
+func (*SendFriendRequestResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *SendFriendRequestResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *SendFriendRequestResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *SendFriendRequestResponse) GetRequestId() uint64 {
+	if x != nil {
+		return x.RequestId
+	}
+	return 0
+}
+
+type AcceptFriendRequestRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     uint64                 `protobuf:"varint,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AcceptFriendRequestRequest) Reset() {
+	*x = AcceptFriendRequestRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcceptFriendRequestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcceptFriendRequestRequest) ProtoMessage() {}
+
+func (x *AcceptFriendRequestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcceptFriendRequestRequest.ProtoReflect.Descriptor instead.
+func (*AcceptFriendRequestRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *AcceptFriendRequestRequest) GetRequestId() uint64 {
+	if x != nil {
+		return x.RequestId
+	}
+	return 0
+}
+
+type AcceptFriendRequestResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AcceptFriendRequestResponse) Reset() {
+	*x = AcceptFriendRequestResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcceptFriendRequestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcceptFriendRequestResponse) ProtoMessage() {}
+
+func (x *AcceptFriendRequestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcceptFriendRequestResponse.ProtoReflect.Descriptor instead.
+func (*AcceptFriendRequestResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *AcceptFriendRequestResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *AcceptFriendRequestResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type RejectFriendRequestRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     uint64                 `protobuf:"varint,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RejectFriendRequestRequest) Reset() {
+	*x = RejectFriendRequestRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RejectFriendRequestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RejectFriendRequestRequest) ProtoMessage() {}
+
+func (x *RejectFriendRequestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RejectFriendRequestRequest.ProtoReflect.Descriptor instead.
+func (*RejectFriendRequestRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *RejectFriendRequestRequest) GetRequestId() uint64 {
+	if x != nil {
+		return x.RequestId
+	}
+	return 0
+}
+
+type RejectFriendRequestResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RejectFriendRequestResponse) Reset() {
+	*x = RejectFriendRequestResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RejectFriendRequestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RejectFriendRequestResponse) ProtoMessage() {}
+
+func (x *RejectFriendRequestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RejectFriendRequestResponse.ProtoReflect.Descriptor instead.
+func (*RejectFriendRequestResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *RejectFriendRequestResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RejectFriendRequestResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type RemoveFriendRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	AccountId       uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	FriendAccountId uint32                 `protobuf:"varint,2,opt,name=friend_account_id,json=friendAccountId,proto3" json:"friend_account_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RemoveFriendRequest) Reset() {
+	*x = RemoveFriendRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveFriendRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveFriendRequest) ProtoMessage() {}
+
+func (x *RemoveFriendRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveFriendRequest.ProtoReflect.Descriptor instead.
+func (*RemoveFriendRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *RemoveFriendRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *RemoveFriendRequest) GetFriendAccountId() uint32 {
+	if x != nil {
+		return x.FriendAccountId
+	}
+	return 0
+}
+
+type RemoveFriendResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveFriendResponse) Reset() {
+	*x = RemoveFriendResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveFriendResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveFriendResponse) ProtoMessage() {}
+
+func (x *RemoveFriendResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveFriendResponse.ProtoReflect.Descriptor instead.
+func (*RemoveFriendResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *RemoveFriendResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RemoveFriendResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type ListFriendsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListFriendsRequest) Reset() {
+	*x = ListFriendsRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListFriendsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListFriendsRequest) ProtoMessage() {}
+
+func (x *ListFriendsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListFriendsRequest.ProtoReflect.Descriptor instead.
+func (*ListFriendsRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *ListFriendsRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+type ListFriendsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	Friends       []*FriendInfo          `protobuf:"bytes,3,rep,name=friends,proto3" json:"friends,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListFriendsResponse) Reset() {
+	*x = ListFriendsResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListFriendsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListFriendsResponse) ProtoMessage() {}
+
+func (x *ListFriendsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListFriendsResponse.ProtoReflect.Descriptor instead.
+func (*ListFriendsResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *ListFriendsResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ListFriendsResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *ListFriendsResponse) GetFriends() []*FriendInfo {
+	if x != nil {
+		return x.Friends
+	}
+	return nil
+}
+
+type FriendInfo struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	AccountId       uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	FriendAccountId uint32                 `protobuf:"varint,2,opt,name=friend_account_id,json=friendAccountId,proto3" json:"friend_account_id,omitempty"`
+	FriendName      string                 `protobuf:"bytes,3,opt,name=friend_name,json=friendName,proto3" json:"friend_name,omitempty"`
+	Online          bool                   `protobuf:"varint,4,opt,name=online,proto3" json:"online,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *FriendInfo) Reset() {
+	*x = FriendInfo{}
+	mi := &file_zone_v1_zone_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FriendInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FriendInfo) ProtoMessage() {}
+
+func (x *FriendInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FriendInfo.ProtoReflect.Descriptor instead.
+func (*FriendInfo) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *FriendInfo) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *FriendInfo) GetFriendAccountId() uint32 {
+	if x != nil {
+		return x.FriendAccountId
+	}
+	return 0
+}
+
+func (x *FriendInfo) GetFriendName() string {
+	if x != nil {
+		return x.FriendName
+	}
+	return ""
+}
+
+func (x *FriendInfo) GetOnline() bool {
+	if x != nil {
+		return x.Online
+	}
+	return false
+}
+
+type CreatePartyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	LeaderCharId  uint32                 `protobuf:"varint,2,opt,name=leader_char_id,json=leaderCharId,proto3" json:"leader_char_id,omitempty"`
+	LeaderName    string                 `protobuf:"bytes,3,opt,name=leader_name,json=leaderName,proto3" json:"leader_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreatePartyRequest) Reset() {
+	*x = CreatePartyRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreatePartyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreatePartyRequest) ProtoMessage() {}
+
+func (x *CreatePartyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreatePartyRequest.ProtoReflect.Descriptor instead.
+func (*CreatePartyRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *CreatePartyRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CreatePartyRequest) GetLeaderCharId() uint32 {
+	if x != nil {
+		return x.LeaderCharId
+	}
+	return 0
+}
+
+func (x *CreatePartyRequest) GetLeaderName() string {
+	if x != nil {
+		return x.LeaderName
+	}
+	return ""
+}
+
+type CreatePartyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	PartyId       string                 `protobuf:"bytes,3,opt,name=party_id,json=partyId,proto3" json:"party_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreatePartyResponse) Reset() {
+	*x = CreatePartyResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreatePartyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreatePartyResponse) ProtoMessage() {}
+
+func (x *CreatePartyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreatePartyResponse.ProtoReflect.Descriptor instead.
+func (*CreatePartyResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *CreatePartyResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CreatePartyResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *CreatePartyResponse) GetPartyId() string {
+	if x != nil {
+		return x.PartyId
+	}
+	return ""
+}
+
+type JoinPartyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PartyId       string                 `protobuf:"bytes,1,opt,name=party_id,json=partyId,proto3" json:"party_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	CharName      string                 `protobuf:"bytes,3,opt,name=char_name,json=charName,proto3" json:"char_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JoinPartyRequest) Reset() {
+	*x = JoinPartyRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JoinPartyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JoinPartyRequest) ProtoMessage() {}
+
+func (x *JoinPartyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JoinPartyRequest.ProtoReflect.Descriptor instead.
+func (*JoinPartyRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *JoinPartyRequest) GetPartyId() string {
+	if x != nil {
+		return x.PartyId
+	}
+	return ""
+}
+
+func (x *JoinPartyRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *JoinPartyRequest) GetCharName() string {
+	if x != nil {
+		return x.CharName
+	}
+	return ""
+}
+
+type JoinPartyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JoinPartyResponse) Reset() {
+	*x = JoinPartyResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JoinPartyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JoinPartyResponse) ProtoMessage() {}
+
+func (x *JoinPartyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JoinPartyResponse.ProtoReflect.Descriptor instead.
+func (*JoinPartyResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *JoinPartyResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *JoinPartyResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type LeavePartyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PartyId       string                 `protobuf:"bytes,1,opt,name=party_id,json=partyId,proto3" json:"party_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LeavePartyRequest) Reset() {
+	*x = LeavePartyRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LeavePartyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LeavePartyRequest) ProtoMessage() {}
+
+func (x *LeavePartyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LeavePartyRequest.ProtoReflect.Descriptor instead.
+func (*LeavePartyRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *LeavePartyRequest) GetPartyId() string {
+	if x != nil {
+		return x.PartyId
+	}
+	return ""
+}
+
+func (x *LeavePartyRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+type LeavePartyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LeavePartyResponse) Reset() {
+	*x = LeavePartyResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LeavePartyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LeavePartyResponse) ProtoMessage() {}
+
+func (x *LeavePartyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LeavePartyResponse.ProtoReflect.Descriptor instead.
+func (*LeavePartyResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *LeavePartyResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *LeavePartyResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type GetPartyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PartyId       string                 `protobuf:"bytes,1,opt,name=party_id,json=partyId,proto3" json:"party_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPartyRequest) Reset() {
+	*x = GetPartyRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPartyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPartyRequest) ProtoMessage() {}
+
+func (x *GetPartyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPartyRequest.ProtoReflect.Descriptor instead.
+func (*GetPartyRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *GetPartyRequest) GetPartyId() string {
+	if x != nil {
+		return x.PartyId
+	}
+	return ""
+}
+
+type GetPartyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	Party         *PartyInfo             `protobuf:"bytes,3,opt,name=party,proto3" json:"party,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPartyResponse) Reset() {
+	*x = GetPartyResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPartyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPartyResponse) ProtoMessage() {}
+
+func (x *GetPartyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPartyResponse.ProtoReflect.Descriptor instead.
+func (*GetPartyResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *GetPartyResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *GetPartyResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *GetPartyResponse) GetParty() *PartyInfo {
+	if x != nil {
+		return x.Party
+	}
+	return nil
+}
+
+type PartyInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	LeaderCharId  uint32                 `protobuf:"varint,3,opt,name=leader_char_id,json=leaderCharId,proto3" json:"leader_char_id,omitempty"`
+	Members       []*PartyMemberInfo     `protobuf:"bytes,4,rep,name=members,proto3" json:"members,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PartyInfo) Reset() {
+	*x = PartyInfo{}
+	mi := &file_zone_v1_zone_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PartyInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PartyInfo) ProtoMessage() {}
+
+func (x *PartyInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PartyInfo.ProtoReflect.Descriptor instead.
+func (*PartyInfo) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *PartyInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *PartyInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PartyInfo) GetLeaderCharId() uint32 {
+	if x != nil {
+		return x.LeaderCharId
+	}
+	return 0
+}
+
+func (x *PartyInfo) GetMembers() []*PartyMemberInfo {
+	if x != nil {
+		return x.Members
+	}
+	return nil
+}
+
+type PartyMemberInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CharId        uint32                 `protobuf:"varint,1,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	IsLeader      bool                   `protobuf:"varint,3,opt,name=is_leader,json=isLeader,proto3" json:"is_leader,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PartyMemberInfo) Reset() {
+	*x = PartyMemberInfo{}
+	mi := &file_zone_v1_zone_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PartyMemberInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PartyMemberInfo) ProtoMessage() {}
+
+func (x *PartyMemberInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PartyMemberInfo.ProtoReflect.Descriptor instead.
+func (*PartyMemberInfo) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *PartyMemberInfo) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *PartyMemberInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PartyMemberInfo) GetIsLeader() bool {
+	if x != nil {
+		return x.IsLeader
+	}
+	return false
+}
+
 var File_zone_v1_zone_proto protoreflect.FileDescriptor
 
 const file_zone_v1_zone_proto_rawDesc = "" +
@@ -1971,7 +3463,108 @@ const file_zone_v1_zone_proto_rawDesc = "" +
 	"\x05card1\x18\t \x01(\x04R\x05card1\x12\x14\n" +
 	"\x05card2\x18\n" +
 	" \x01(\x04R\x05card2\x12\x14\n" +
-	"\x05card3\x18\v \x01(\x04R\x05card32\xa8\b\n" +
+	"\x05card3\x18\v \x01(\x04R\x05card3\"v\n" +
+	"\x0eWhisperRequest\x12$\n" +
+	"\x0esender_char_id\x18\x01 \x01(\rR\fsenderCharId\x12$\n" +
+	"\x0etarget_char_id\x18\x02 \x01(\rR\ftargetCharId\x12\x18\n" +
+	"\acontent\x18\x03 \x01(\tR\acontent\"P\n" +
+	"\x0fWhisperResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"V\n" +
+	"\x14SendPartyChatRequest\x12$\n" +
+	"\x0esender_char_id\x18\x01 \x01(\rR\fsenderCharId\x12\x18\n" +
+	"\acontent\x18\x02 \x01(\tR\acontent\"V\n" +
+	"\x15SendPartyChatResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"o\n" +
+	"\x12SendMapChatRequest\x12$\n" +
+	"\x0esender_char_id\x18\x01 \x01(\rR\fsenderCharId\x12\x19\n" +
+	"\bmap_name\x18\x02 \x01(\tR\amapName\x12\x18\n" +
+	"\acontent\x18\x03 \x01(\tR\acontent\"T\n" +
+	"\x13SendMapChatResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\x9c\x01\n" +
+	"\x18SendFriendRequestRequest\x12&\n" +
+	"\x0ffrom_account_id\x18\x01 \x01(\rR\rfromAccountId\x12\"\n" +
+	"\rto_account_id\x18\x02 \x01(\rR\vtoAccountId\x12\x1b\n" +
+	"\tfrom_name\x18\x03 \x01(\tR\bfromName\x12\x17\n" +
+	"\ato_name\x18\x04 \x01(\tR\x06toName\"y\n" +
+	"\x19SendFriendRequestResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\x04R\trequestId\";\n" +
+	"\x1aAcceptFriendRequestRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\x04R\trequestId\"\\\n" +
+	"\x1bAcceptFriendRequestResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\";\n" +
+	"\x1aRejectFriendRequestRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\x04R\trequestId\"\\\n" +
+	"\x1bRejectFriendRequestResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"`\n" +
+	"\x13RemoveFriendRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12*\n" +
+	"\x11friend_account_id\x18\x02 \x01(\rR\x0ffriendAccountId\"U\n" +
+	"\x14RemoveFriendResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"3\n" +
+	"\x12ListFriendsRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\"\x83\x01\n" +
+	"\x13ListFriendsResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12-\n" +
+	"\afriends\x18\x03 \x03(\v2\x13.zone.v1.FriendInfoR\afriends\"\x90\x01\n" +
+	"\n" +
+	"FriendInfo\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12*\n" +
+	"\x11friend_account_id\x18\x02 \x01(\rR\x0ffriendAccountId\x12\x1f\n" +
+	"\vfriend_name\x18\x03 \x01(\tR\n" +
+	"friendName\x12\x16\n" +
+	"\x06online\x18\x04 \x01(\bR\x06online\"o\n" +
+	"\x12CreatePartyRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12$\n" +
+	"\x0eleader_char_id\x18\x02 \x01(\rR\fleaderCharId\x12\x1f\n" +
+	"\vleader_name\x18\x03 \x01(\tR\n" +
+	"leaderName\"o\n" +
+	"\x13CreatePartyResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12\x19\n" +
+	"\bparty_id\x18\x03 \x01(\tR\apartyId\"c\n" +
+	"\x10JoinPartyRequest\x12\x19\n" +
+	"\bparty_id\x18\x01 \x01(\tR\apartyId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\x12\x1b\n" +
+	"\tchar_name\x18\x03 \x01(\tR\bcharName\"R\n" +
+	"\x11JoinPartyResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"G\n" +
+	"\x11LeavePartyRequest\x12\x19\n" +
+	"\bparty_id\x18\x01 \x01(\tR\apartyId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\"S\n" +
+	"\x12LeavePartyResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\",\n" +
+	"\x0fGetPartyRequest\x12\x19\n" +
+	"\bparty_id\x18\x01 \x01(\tR\apartyId\"{\n" +
+	"\x10GetPartyResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12(\n" +
+	"\x05party\x18\x03 \x01(\v2\x12.zone.v1.PartyInfoR\x05party\"\x89\x01\n" +
+	"\tPartyInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12$\n" +
+	"\x0eleader_char_id\x18\x03 \x01(\rR\fleaderCharId\x122\n" +
+	"\amembers\x18\x04 \x03(\v2\x18.zone.v1.PartyMemberInfoR\amembers\"[\n" +
+	"\x0fPartyMemberInfo\x12\x17\n" +
+	"\achar_id\x18\x01 \x01(\rR\x06charId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
+	"\tis_leader\x18\x03 \x01(\bR\bisLeader2\xcd\x0f\n" +
 	"\vZoneService\x12B\n" +
 	"\tEnterZone\x12\x19.zone.v1.EnterZoneRequest\x1a\x1a.zone.v1.EnterZoneResponse\x12E\n" +
 	"\n" +
@@ -1988,7 +3581,20 @@ const file_zone_v1_zone_proto_rawDesc = "" +
 	"\vOpenStorage\x12\x1b.zone.v1.OpenStorageRequest\x1a\x1c.zone.v1.OpenStorageResponse\x12H\n" +
 	"\vDepositItem\x12\x1b.zone.v1.DepositItemRequest\x1a\x1c.zone.v1.DepositItemResponse\x12K\n" +
 	"\fWithdrawItem\x12\x1c.zone.v1.WithdrawItemRequest\x1a\x1d.zone.v1.WithdrawItemResponse\x12K\n" +
-	"\fCloseStorage\x12\x1c.zone.v1.CloseStorageRequest\x1a\x1d.zone.v1.CloseStorageResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
+	"\fCloseStorage\x12\x1c.zone.v1.CloseStorageRequest\x1a\x1d.zone.v1.CloseStorageResponse\x12<\n" +
+	"\aWhisper\x12\x17.zone.v1.WhisperRequest\x1a\x18.zone.v1.WhisperResponse\x12N\n" +
+	"\rSendPartyChat\x12\x1d.zone.v1.SendPartyChatRequest\x1a\x1e.zone.v1.SendPartyChatResponse\x12H\n" +
+	"\vSendMapChat\x12\x1b.zone.v1.SendMapChatRequest\x1a\x1c.zone.v1.SendMapChatResponse\x12Z\n" +
+	"\x11SendFriendRequest\x12!.zone.v1.SendFriendRequestRequest\x1a\".zone.v1.SendFriendRequestResponse\x12`\n" +
+	"\x13AcceptFriendRequest\x12#.zone.v1.AcceptFriendRequestRequest\x1a$.zone.v1.AcceptFriendRequestResponse\x12`\n" +
+	"\x13RejectFriendRequest\x12#.zone.v1.RejectFriendRequestRequest\x1a$.zone.v1.RejectFriendRequestResponse\x12K\n" +
+	"\fRemoveFriend\x12\x1c.zone.v1.RemoveFriendRequest\x1a\x1d.zone.v1.RemoveFriendResponse\x12H\n" +
+	"\vListFriends\x12\x1b.zone.v1.ListFriendsRequest\x1a\x1c.zone.v1.ListFriendsResponse\x12H\n" +
+	"\vCreateParty\x12\x1b.zone.v1.CreatePartyRequest\x1a\x1c.zone.v1.CreatePartyResponse\x12B\n" +
+	"\tJoinParty\x12\x19.zone.v1.JoinPartyRequest\x1a\x1a.zone.v1.JoinPartyResponse\x12E\n" +
+	"\n" +
+	"LeaveParty\x12\x1a.zone.v1.LeavePartyRequest\x1a\x1b.zone.v1.LeavePartyResponse\x12?\n" +
+	"\bGetParty\x12\x18.zone.v1.GetPartyRequest\x1a\x19.zone.v1.GetPartyResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
 
 var (
 	file_zone_v1_zone_proto_rawDescOnce sync.Once
@@ -2002,73 +3608,127 @@ func file_zone_v1_zone_proto_rawDescGZIP() []byte {
 	return file_zone_v1_zone_proto_rawDescData
 }
 
-var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
 var file_zone_v1_zone_proto_goTypes = []any{
-	(*EnterZoneRequest)(nil),      // 0: zone.v1.EnterZoneRequest
-	(*EnterZoneResponse)(nil),     // 1: zone.v1.EnterZoneResponse
-	(*MoveEntityRequest)(nil),     // 2: zone.v1.MoveEntityRequest
-	(*MoveEntityResponse)(nil),    // 3: zone.v1.MoveEntityResponse
-	(*AttackEntityRequest)(nil),   // 4: zone.v1.AttackEntityRequest
-	(*AttackEntityResponse)(nil),  // 5: zone.v1.AttackEntityResponse
-	(*PickupItemRequest)(nil),     // 6: zone.v1.PickupItemRequest
-	(*PickupItemResponse)(nil),    // 7: zone.v1.PickupItemResponse
-	(*RequestTradeRequest)(nil),   // 8: zone.v1.RequestTradeRequest
-	(*RequestTradeResponse)(nil),  // 9: zone.v1.RequestTradeResponse
-	(*AddTradeItemRequest)(nil),   // 10: zone.v1.AddTradeItemRequest
-	(*AddTradeItemResponse)(nil),  // 11: zone.v1.AddTradeItemResponse
-	(*AddTradeZenyRequest)(nil),   // 12: zone.v1.AddTradeZenyRequest
-	(*AddTradeZenyResponse)(nil),  // 13: zone.v1.AddTradeZenyResponse
-	(*ConfirmTradeRequest)(nil),   // 14: zone.v1.ConfirmTradeRequest
-	(*ConfirmTradeResponse)(nil),  // 15: zone.v1.ConfirmTradeResponse
-	(*CompleteTradeRequest)(nil),  // 16: zone.v1.CompleteTradeRequest
-	(*CompleteTradeResponse)(nil), // 17: zone.v1.CompleteTradeResponse
-	(*CancelTradeRequest)(nil),    // 18: zone.v1.CancelTradeRequest
-	(*CancelTradeResponse)(nil),   // 19: zone.v1.CancelTradeResponse
-	(*OpenStorageRequest)(nil),    // 20: zone.v1.OpenStorageRequest
-	(*OpenStorageResponse)(nil),   // 21: zone.v1.OpenStorageResponse
-	(*DepositItemRequest)(nil),    // 22: zone.v1.DepositItemRequest
-	(*DepositItemResponse)(nil),   // 23: zone.v1.DepositItemResponse
-	(*WithdrawItemRequest)(nil),   // 24: zone.v1.WithdrawItemRequest
-	(*WithdrawItemResponse)(nil),  // 25: zone.v1.WithdrawItemResponse
-	(*CloseStorageRequest)(nil),   // 26: zone.v1.CloseStorageRequest
-	(*CloseStorageResponse)(nil),  // 27: zone.v1.CloseStorageResponse
-	(*StorageItem)(nil),           // 28: zone.v1.StorageItem
+	(*EnterZoneRequest)(nil),            // 0: zone.v1.EnterZoneRequest
+	(*EnterZoneResponse)(nil),           // 1: zone.v1.EnterZoneResponse
+	(*MoveEntityRequest)(nil),           // 2: zone.v1.MoveEntityRequest
+	(*MoveEntityResponse)(nil),          // 3: zone.v1.MoveEntityResponse
+	(*AttackEntityRequest)(nil),         // 4: zone.v1.AttackEntityRequest
+	(*AttackEntityResponse)(nil),        // 5: zone.v1.AttackEntityResponse
+	(*PickupItemRequest)(nil),           // 6: zone.v1.PickupItemRequest
+	(*PickupItemResponse)(nil),          // 7: zone.v1.PickupItemResponse
+	(*RequestTradeRequest)(nil),         // 8: zone.v1.RequestTradeRequest
+	(*RequestTradeResponse)(nil),        // 9: zone.v1.RequestTradeResponse
+	(*AddTradeItemRequest)(nil),         // 10: zone.v1.AddTradeItemRequest
+	(*AddTradeItemResponse)(nil),        // 11: zone.v1.AddTradeItemResponse
+	(*AddTradeZenyRequest)(nil),         // 12: zone.v1.AddTradeZenyRequest
+	(*AddTradeZenyResponse)(nil),        // 13: zone.v1.AddTradeZenyResponse
+	(*ConfirmTradeRequest)(nil),         // 14: zone.v1.ConfirmTradeRequest
+	(*ConfirmTradeResponse)(nil),        // 15: zone.v1.ConfirmTradeResponse
+	(*CompleteTradeRequest)(nil),        // 16: zone.v1.CompleteTradeRequest
+	(*CompleteTradeResponse)(nil),       // 17: zone.v1.CompleteTradeResponse
+	(*CancelTradeRequest)(nil),          // 18: zone.v1.CancelTradeRequest
+	(*CancelTradeResponse)(nil),         // 19: zone.v1.CancelTradeResponse
+	(*OpenStorageRequest)(nil),          // 20: zone.v1.OpenStorageRequest
+	(*OpenStorageResponse)(nil),         // 21: zone.v1.OpenStorageResponse
+	(*DepositItemRequest)(nil),          // 22: zone.v1.DepositItemRequest
+	(*DepositItemResponse)(nil),         // 23: zone.v1.DepositItemResponse
+	(*WithdrawItemRequest)(nil),         // 24: zone.v1.WithdrawItemRequest
+	(*WithdrawItemResponse)(nil),        // 25: zone.v1.WithdrawItemResponse
+	(*CloseStorageRequest)(nil),         // 26: zone.v1.CloseStorageRequest
+	(*CloseStorageResponse)(nil),        // 27: zone.v1.CloseStorageResponse
+	(*StorageItem)(nil),                 // 28: zone.v1.StorageItem
+	(*WhisperRequest)(nil),              // 29: zone.v1.WhisperRequest
+	(*WhisperResponse)(nil),             // 30: zone.v1.WhisperResponse
+	(*SendPartyChatRequest)(nil),        // 31: zone.v1.SendPartyChatRequest
+	(*SendPartyChatResponse)(nil),       // 32: zone.v1.SendPartyChatResponse
+	(*SendMapChatRequest)(nil),          // 33: zone.v1.SendMapChatRequest
+	(*SendMapChatResponse)(nil),         // 34: zone.v1.SendMapChatResponse
+	(*SendFriendRequestRequest)(nil),    // 35: zone.v1.SendFriendRequestRequest
+	(*SendFriendRequestResponse)(nil),   // 36: zone.v1.SendFriendRequestResponse
+	(*AcceptFriendRequestRequest)(nil),  // 37: zone.v1.AcceptFriendRequestRequest
+	(*AcceptFriendRequestResponse)(nil), // 38: zone.v1.AcceptFriendRequestResponse
+	(*RejectFriendRequestRequest)(nil),  // 39: zone.v1.RejectFriendRequestRequest
+	(*RejectFriendRequestResponse)(nil), // 40: zone.v1.RejectFriendRequestResponse
+	(*RemoveFriendRequest)(nil),         // 41: zone.v1.RemoveFriendRequest
+	(*RemoveFriendResponse)(nil),        // 42: zone.v1.RemoveFriendResponse
+	(*ListFriendsRequest)(nil),          // 43: zone.v1.ListFriendsRequest
+	(*ListFriendsResponse)(nil),         // 44: zone.v1.ListFriendsResponse
+	(*FriendInfo)(nil),                  // 45: zone.v1.FriendInfo
+	(*CreatePartyRequest)(nil),          // 46: zone.v1.CreatePartyRequest
+	(*CreatePartyResponse)(nil),         // 47: zone.v1.CreatePartyResponse
+	(*JoinPartyRequest)(nil),            // 48: zone.v1.JoinPartyRequest
+	(*JoinPartyResponse)(nil),           // 49: zone.v1.JoinPartyResponse
+	(*LeavePartyRequest)(nil),           // 50: zone.v1.LeavePartyRequest
+	(*LeavePartyResponse)(nil),          // 51: zone.v1.LeavePartyResponse
+	(*GetPartyRequest)(nil),             // 52: zone.v1.GetPartyRequest
+	(*GetPartyResponse)(nil),            // 53: zone.v1.GetPartyResponse
+	(*PartyInfo)(nil),                   // 54: zone.v1.PartyInfo
+	(*PartyMemberInfo)(nil),             // 55: zone.v1.PartyMemberInfo
 }
 var file_zone_v1_zone_proto_depIdxs = []int32{
 	28, // 0: zone.v1.OpenStorageResponse.items:type_name -> zone.v1.StorageItem
-	0,  // 1: zone.v1.ZoneService.EnterZone:input_type -> zone.v1.EnterZoneRequest
-	2,  // 2: zone.v1.ZoneService.MoveEntity:input_type -> zone.v1.MoveEntityRequest
-	4,  // 3: zone.v1.ZoneService.AttackEntity:input_type -> zone.v1.AttackEntityRequest
-	6,  // 4: zone.v1.ZoneService.PickupItem:input_type -> zone.v1.PickupItemRequest
-	8,  // 5: zone.v1.ZoneService.RequestTrade:input_type -> zone.v1.RequestTradeRequest
-	10, // 6: zone.v1.ZoneService.AddTradeItem:input_type -> zone.v1.AddTradeItemRequest
-	12, // 7: zone.v1.ZoneService.AddTradeZeny:input_type -> zone.v1.AddTradeZenyRequest
-	14, // 8: zone.v1.ZoneService.ConfirmTrade:input_type -> zone.v1.ConfirmTradeRequest
-	16, // 9: zone.v1.ZoneService.CompleteTrade:input_type -> zone.v1.CompleteTradeRequest
-	18, // 10: zone.v1.ZoneService.CancelTrade:input_type -> zone.v1.CancelTradeRequest
-	20, // 11: zone.v1.ZoneService.OpenStorage:input_type -> zone.v1.OpenStorageRequest
-	22, // 12: zone.v1.ZoneService.DepositItem:input_type -> zone.v1.DepositItemRequest
-	24, // 13: zone.v1.ZoneService.WithdrawItem:input_type -> zone.v1.WithdrawItemRequest
-	26, // 14: zone.v1.ZoneService.CloseStorage:input_type -> zone.v1.CloseStorageRequest
-	1,  // 15: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
-	3,  // 16: zone.v1.ZoneService.MoveEntity:output_type -> zone.v1.MoveEntityResponse
-	5,  // 17: zone.v1.ZoneService.AttackEntity:output_type -> zone.v1.AttackEntityResponse
-	7,  // 18: zone.v1.ZoneService.PickupItem:output_type -> zone.v1.PickupItemResponse
-	9,  // 19: zone.v1.ZoneService.RequestTrade:output_type -> zone.v1.RequestTradeResponse
-	11, // 20: zone.v1.ZoneService.AddTradeItem:output_type -> zone.v1.AddTradeItemResponse
-	13, // 21: zone.v1.ZoneService.AddTradeZeny:output_type -> zone.v1.AddTradeZenyResponse
-	15, // 22: zone.v1.ZoneService.ConfirmTrade:output_type -> zone.v1.ConfirmTradeResponse
-	17, // 23: zone.v1.ZoneService.CompleteTrade:output_type -> zone.v1.CompleteTradeResponse
-	19, // 24: zone.v1.ZoneService.CancelTrade:output_type -> zone.v1.CancelTradeResponse
-	21, // 25: zone.v1.ZoneService.OpenStorage:output_type -> zone.v1.OpenStorageResponse
-	23, // 26: zone.v1.ZoneService.DepositItem:output_type -> zone.v1.DepositItemResponse
-	25, // 27: zone.v1.ZoneService.WithdrawItem:output_type -> zone.v1.WithdrawItemResponse
-	27, // 28: zone.v1.ZoneService.CloseStorage:output_type -> zone.v1.CloseStorageResponse
-	15, // [15:29] is the sub-list for method output_type
-	1,  // [1:15] is the sub-list for method input_type
-	1,  // [1:1] is the sub-list for extension type_name
-	1,  // [1:1] is the sub-list for extension extendee
-	0,  // [0:1] is the sub-list for field type_name
+	45, // 1: zone.v1.ListFriendsResponse.friends:type_name -> zone.v1.FriendInfo
+	54, // 2: zone.v1.GetPartyResponse.party:type_name -> zone.v1.PartyInfo
+	55, // 3: zone.v1.PartyInfo.members:type_name -> zone.v1.PartyMemberInfo
+	0,  // 4: zone.v1.ZoneService.EnterZone:input_type -> zone.v1.EnterZoneRequest
+	2,  // 5: zone.v1.ZoneService.MoveEntity:input_type -> zone.v1.MoveEntityRequest
+	4,  // 6: zone.v1.ZoneService.AttackEntity:input_type -> zone.v1.AttackEntityRequest
+	6,  // 7: zone.v1.ZoneService.PickupItem:input_type -> zone.v1.PickupItemRequest
+	8,  // 8: zone.v1.ZoneService.RequestTrade:input_type -> zone.v1.RequestTradeRequest
+	10, // 9: zone.v1.ZoneService.AddTradeItem:input_type -> zone.v1.AddTradeItemRequest
+	12, // 10: zone.v1.ZoneService.AddTradeZeny:input_type -> zone.v1.AddTradeZenyRequest
+	14, // 11: zone.v1.ZoneService.ConfirmTrade:input_type -> zone.v1.ConfirmTradeRequest
+	16, // 12: zone.v1.ZoneService.CompleteTrade:input_type -> zone.v1.CompleteTradeRequest
+	18, // 13: zone.v1.ZoneService.CancelTrade:input_type -> zone.v1.CancelTradeRequest
+	20, // 14: zone.v1.ZoneService.OpenStorage:input_type -> zone.v1.OpenStorageRequest
+	22, // 15: zone.v1.ZoneService.DepositItem:input_type -> zone.v1.DepositItemRequest
+	24, // 16: zone.v1.ZoneService.WithdrawItem:input_type -> zone.v1.WithdrawItemRequest
+	26, // 17: zone.v1.ZoneService.CloseStorage:input_type -> zone.v1.CloseStorageRequest
+	29, // 18: zone.v1.ZoneService.Whisper:input_type -> zone.v1.WhisperRequest
+	31, // 19: zone.v1.ZoneService.SendPartyChat:input_type -> zone.v1.SendPartyChatRequest
+	33, // 20: zone.v1.ZoneService.SendMapChat:input_type -> zone.v1.SendMapChatRequest
+	35, // 21: zone.v1.ZoneService.SendFriendRequest:input_type -> zone.v1.SendFriendRequestRequest
+	37, // 22: zone.v1.ZoneService.AcceptFriendRequest:input_type -> zone.v1.AcceptFriendRequestRequest
+	39, // 23: zone.v1.ZoneService.RejectFriendRequest:input_type -> zone.v1.RejectFriendRequestRequest
+	41, // 24: zone.v1.ZoneService.RemoveFriend:input_type -> zone.v1.RemoveFriendRequest
+	43, // 25: zone.v1.ZoneService.ListFriends:input_type -> zone.v1.ListFriendsRequest
+	46, // 26: zone.v1.ZoneService.CreateParty:input_type -> zone.v1.CreatePartyRequest
+	48, // 27: zone.v1.ZoneService.JoinParty:input_type -> zone.v1.JoinPartyRequest
+	50, // 28: zone.v1.ZoneService.LeaveParty:input_type -> zone.v1.LeavePartyRequest
+	52, // 29: zone.v1.ZoneService.GetParty:input_type -> zone.v1.GetPartyRequest
+	1,  // 30: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
+	3,  // 31: zone.v1.ZoneService.MoveEntity:output_type -> zone.v1.MoveEntityResponse
+	5,  // 32: zone.v1.ZoneService.AttackEntity:output_type -> zone.v1.AttackEntityResponse
+	7,  // 33: zone.v1.ZoneService.PickupItem:output_type -> zone.v1.PickupItemResponse
+	9,  // 34: zone.v1.ZoneService.RequestTrade:output_type -> zone.v1.RequestTradeResponse
+	11, // 35: zone.v1.ZoneService.AddTradeItem:output_type -> zone.v1.AddTradeItemResponse
+	13, // 36: zone.v1.ZoneService.AddTradeZeny:output_type -> zone.v1.AddTradeZenyResponse
+	15, // 37: zone.v1.ZoneService.ConfirmTrade:output_type -> zone.v1.ConfirmTradeResponse
+	17, // 38: zone.v1.ZoneService.CompleteTrade:output_type -> zone.v1.CompleteTradeResponse
+	19, // 39: zone.v1.ZoneService.CancelTrade:output_type -> zone.v1.CancelTradeResponse
+	21, // 40: zone.v1.ZoneService.OpenStorage:output_type -> zone.v1.OpenStorageResponse
+	23, // 41: zone.v1.ZoneService.DepositItem:output_type -> zone.v1.DepositItemResponse
+	25, // 42: zone.v1.ZoneService.WithdrawItem:output_type -> zone.v1.WithdrawItemResponse
+	27, // 43: zone.v1.ZoneService.CloseStorage:output_type -> zone.v1.CloseStorageResponse
+	30, // 44: zone.v1.ZoneService.Whisper:output_type -> zone.v1.WhisperResponse
+	32, // 45: zone.v1.ZoneService.SendPartyChat:output_type -> zone.v1.SendPartyChatResponse
+	34, // 46: zone.v1.ZoneService.SendMapChat:output_type -> zone.v1.SendMapChatResponse
+	36, // 47: zone.v1.ZoneService.SendFriendRequest:output_type -> zone.v1.SendFriendRequestResponse
+	38, // 48: zone.v1.ZoneService.AcceptFriendRequest:output_type -> zone.v1.AcceptFriendRequestResponse
+	40, // 49: zone.v1.ZoneService.RejectFriendRequest:output_type -> zone.v1.RejectFriendRequestResponse
+	42, // 50: zone.v1.ZoneService.RemoveFriend:output_type -> zone.v1.RemoveFriendResponse
+	44, // 51: zone.v1.ZoneService.ListFriends:output_type -> zone.v1.ListFriendsResponse
+	47, // 52: zone.v1.ZoneService.CreateParty:output_type -> zone.v1.CreatePartyResponse
+	49, // 53: zone.v1.ZoneService.JoinParty:output_type -> zone.v1.JoinPartyResponse
+	51, // 54: zone.v1.ZoneService.LeaveParty:output_type -> zone.v1.LeavePartyResponse
+	53, // 55: zone.v1.ZoneService.GetParty:output_type -> zone.v1.GetPartyResponse
+	30, // [30:56] is the sub-list for method output_type
+	4,  // [4:30] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_zone_v1_zone_proto_init() }
@@ -2082,7 +3742,7 @@ func file_zone_v1_zone_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_zone_v1_zone_proto_rawDesc), len(file_zone_v1_zone_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   29,
+			NumMessages:   56,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
