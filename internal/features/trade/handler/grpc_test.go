@@ -61,6 +61,12 @@ func TestRequestTrade_Validation(t *testing.T) {
 			expectedCode: codes.InvalidArgument,
 			expectedMsg:  "target_char_id must be > 0",
 		},
+		{
+			name:         "same requester and target",
+			req:          &zonev1.RequestTradeRequest{RequesterCharId: 123, TargetCharId: 123},
+			expectedCode: codes.InvalidArgument,
+			expectedMsg:  "requester and target must be different characters",
+		},
 	}
 
 	for _, tt := range tests {

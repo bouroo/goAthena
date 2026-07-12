@@ -49,6 +49,10 @@ func NewTradeService(repo tradedomain.TradeRepository, locks tradedomain.LockSto
 // The target must accept before the trade moves to TradeStateOpen.
 // Returns the created trade session.
 func (s *tradeService) RequestTrade(ctx context.Context, charID uint32, targetCharID uint32) (tradedomain.Trade, error) {
+	if charID == targetCharID {
+		return tradedomain.Trade{}, fmt.Errorf("cannot trade with self (char %d)", charID)
+	}
+
 	token, res, err := s.acquire(ctx, charID)
 	if err != nil {
 		return tradedomain.Trade{}, err
@@ -123,42 +127,46 @@ func (s *tradeService) AddTradeItem(ctx context.Context, tradeID string, charID 
 	if res == acquireLockBusy {
 		return tradedomain.ErrLockBusy
 	}
-	defer s.release(ctx, charID, token)
 
 	trade, err := s.repo.GetTrade(ctx, tradeID)
 	if err != nil {
+		s.release(ctx, charID, token)
 		return fmt.Errorf("get trade (id %s): %w", tradeID, err)
 	}
 
 	if trade.State != tradedomain.TradeStateOpen {
+		s.release(ctx, charID, token)
 		return fmt.Errorf("%w: trade is in state %d, expected %d", tradedomain.ErrInvalidTradeState, trade.State, tradedomain.TradeStateOpen)
 	}
 
-	if err := s.validateItemOwnership(ctx, charID, itemID, amount); err != nil {
+	isPlayer1, peerID, err := s.determinePlayerRole(ctx, trade, charID, token)
+	if err != nil {
 		return err
 	}
 
-	tradeItem := tradedomain.TradeItem{
-		ItemID: itemID,
-		Amount: amount,
+	addItemFunc := func(trade *tradedomain.Trade) error {
+		return s.addTradeItemToPlayer(ctx, trade, charID, itemID, amount, tradeID, isPlayer1)
 	}
 
-	switch {
-	case trade.Player1CharID == charID:
-		trade.Player1Items = append(trade.Player1Items, tradeItem)
-	case trade.Player2CharID == charID:
-		trade.Player2Items = append(trade.Player2Items, tradeItem)
-	default:
-		return fmt.Errorf("character %d is not a participant in trade %s", charID, tradeID)
+	if peerID == 0 || peerID == charID {
+		defer s.release(ctx, charID, token)
+		return addItemFunc(&trade)
 	}
 
-	trade.UpdatedAt = time.Now()
+	s.release(ctx, charID, token)
 
-	if err := s.repo.UpdateTrade(ctx, trade); err != nil {
-		return fmt.Errorf("update trade item (id %s): %w", tradeID, err)
-	}
+	return s.withBothLocks(ctx, charID, peerID, func() error {
+		trade, err := s.repo.GetTrade(ctx, tradeID)
+		if err != nil {
+			return fmt.Errorf("get trade (id %s): %w", tradeID, err)
+		}
 
-	return nil
+		if trade.State != tradedomain.TradeStateOpen {
+			return fmt.Errorf("%w: trade is in state %d, expected %d", tradedomain.ErrInvalidTradeState, trade.State, tradedomain.TradeStateOpen)
+		}
+
+		return addItemFunc(&trade)
+	})
 }
 
 // AddTradeZeny adds zeny to the trade window for the offering character.
@@ -175,32 +183,121 @@ func (s *tradeService) AddTradeZeny(ctx context.Context, tradeID string, charID 
 	if res == acquireLockBusy {
 		return tradedomain.ErrLockBusy
 	}
-	defer s.release(ctx, charID, token)
 
 	trade, err := s.repo.GetTrade(ctx, tradeID)
 	if err != nil {
+		s.release(ctx, charID, token)
 		return fmt.Errorf("get trade (id %s): %w", tradeID, err)
 	}
 
 	if trade.State != tradedomain.TradeStateOpen {
+		s.release(ctx, charID, token)
 		return fmt.Errorf("%w: trade is in state %d, expected %d", tradedomain.ErrInvalidTradeState, trade.State, tradedomain.TradeStateOpen)
 	}
 
-	if s.zenyRepo == nil {
-		return s.addZenyWithoutValidation(ctx, &trade, charID, zeny, tradeID)
+	isPlayer1, peerID, err := s.determinePlayerRole(ctx, trade, charID, token)
+	if err != nil {
+		return err
 	}
 
-	return s.addZenyWithValidation(ctx, &trade, charID, zeny, tradeID)
+	addZenyFunc := func(trade *tradedomain.Trade) error {
+		return s.addZenyToTrade(ctx, trade, charID, zeny, tradeID, isPlayer1)
+	}
+
+	if peerID == 0 || peerID == charID {
+		defer s.release(ctx, charID, token)
+		return addZenyFunc(&trade)
+	}
+
+	s.release(ctx, charID, token)
+
+	return s.withBothLocks(ctx, charID, peerID, func() error {
+		trade, err := s.repo.GetTrade(ctx, tradeID)
+		if err != nil {
+			return fmt.Errorf("get trade (id %s): %w", tradeID, err)
+		}
+
+		if trade.State != tradedomain.TradeStateOpen {
+			return fmt.Errorf("%w: trade is in state %d, expected %d", tradedomain.ErrInvalidTradeState, trade.State, tradedomain.TradeStateOpen)
+		}
+
+		return addZenyFunc(&trade)
+	})
 }
 
-func (s *tradeService) addZenyWithoutValidation(ctx context.Context, trade *tradedomain.Trade, charID uint32, zeny uint32, tradeID string) error {
-	switch {
-	case trade.Player1CharID == charID:
+func (s *tradeService) confirmPlayerTrade(ctx context.Context, trade *tradedomain.Trade, tradeID string, isPlayer1 bool) error {
+	if isPlayer1 {
+		trade.Player1Confirmed = true
+	} else {
+		trade.Player2Confirmed = true
+	}
+
+	if trade.Player1Confirmed && trade.Player2Confirmed {
+		trade.State = tradedomain.TradeStateLocked
+	} else {
+		trade.State = tradedomain.TradeStateConfirmed
+	}
+
+	trade.UpdatedAt = time.Now()
+
+	if err := s.repo.UpdateTrade(ctx, *trade); err != nil {
+		return fmt.Errorf("update trade confirm (id %s): %w", tradeID, err)
+	}
+
+	return nil
+}
+
+func (s *tradeService) addTradeItemToPlayer(ctx context.Context, trade *tradedomain.Trade, charID uint32, itemID uint32, amount int32, tradeID string, isPlayer1 bool) error {
+	var alreadyOffered int64
+	var items []tradedomain.TradeItem
+	if isPlayer1 {
+		items = trade.Player1Items
+	} else {
+		items = trade.Player2Items
+	}
+	for _, item := range items {
+		if item.ItemID == itemID {
+			alreadyOffered += int64(item.Amount)
+		}
+	}
+
+	if err := s.validateItemOwnership(ctx, charID, itemID, amount, alreadyOffered); err != nil {
+		return err
+	}
+
+	tradeItem := tradedomain.TradeItem{
+		ItemID: itemID,
+		Amount: amount,
+	}
+
+	if isPlayer1 {
+		trade.Player1Items = append(trade.Player1Items, tradeItem)
+	} else {
+		trade.Player2Items = append(trade.Player2Items, tradeItem)
+	}
+
+	trade.UpdatedAt = time.Now()
+
+	if err := s.repo.UpdateTrade(ctx, *trade); err != nil {
+		return fmt.Errorf("update trade item (id %s): %w", tradeID, err)
+	}
+
+	return nil
+}
+
+func (s *tradeService) addZenyToTrade(ctx context.Context, trade *tradedomain.Trade, charID uint32, zeny uint32, tradeID string, isPlayer1 bool) error {
+	if s.zenyRepo == nil {
+		return s.addZenyWithoutValidation(ctx, trade, charID, zeny, tradeID, isPlayer1)
+	}
+
+	return s.addZenyWithValidation(ctx, trade, charID, zeny, tradeID, isPlayer1)
+}
+
+func (s *tradeService) addZenyWithoutValidation(ctx context.Context, trade *tradedomain.Trade, charID uint32, zeny uint32, tradeID string, isPlayer1 bool) error {
+	if isPlayer1 {
 		trade.Player1Zeny += zeny
-	case trade.Player2CharID == charID:
+	} else {
 		trade.Player2Zeny += zeny
-	default:
-		return fmt.Errorf("character %d is not a participant in trade %s", charID, tradeID)
 	}
 	trade.UpdatedAt = time.Now()
 	if err := s.repo.UpdateTrade(ctx, *trade); err != nil {
@@ -209,25 +306,22 @@ func (s *tradeService) addZenyWithoutValidation(ctx context.Context, trade *trad
 	return nil
 }
 
-func (s *tradeService) addZenyWithValidation(ctx context.Context, trade *tradedomain.Trade, charID uint32, zeny uint32, tradeID string) error {
+func (s *tradeService) addZenyWithValidation(ctx context.Context, trade *tradedomain.Trade, charID uint32, zeny uint32, tradeID string, isPlayer1 bool) error {
 	currentZeny, err := s.zenyRepo.GetZeny(ctx, charID)
 	if err != nil {
 		return fmt.Errorf("get zeny (char %d): %w", charID, err)
 	}
 
-	switch {
-	case trade.Player1CharID == charID:
+	if isPlayer1 {
 		if trade.Player1Zeny+zeny > currentZeny {
 			return tradedomain.ErrInsufficientInventory
 		}
 		trade.Player1Zeny += zeny
-	case trade.Player2CharID == charID:
+	} else {
 		if trade.Player2Zeny+zeny > currentZeny {
 			return tradedomain.ErrInsufficientInventory
 		}
 		trade.Player2Zeny += zeny
-	default:
-		return fmt.Errorf("character %d is not a participant in trade %s", charID, tradeID)
 	}
 
 	trade.UpdatedAt = time.Now()
@@ -249,39 +343,46 @@ func (s *tradeService) ConfirmTrade(ctx context.Context, tradeID string, charID 
 	if res == acquireLockBusy {
 		return tradedomain.ErrLockBusy
 	}
-	defer s.release(ctx, charID, token)
 
 	trade, err := s.repo.GetTrade(ctx, tradeID)
 	if err != nil {
+		s.release(ctx, charID, token)
 		return fmt.Errorf("get trade (id %s): %w", tradeID, err)
 	}
 
 	if trade.State != tradedomain.TradeStateOpen && trade.State != tradedomain.TradeStateConfirmed {
+		s.release(ctx, charID, token)
 		return fmt.Errorf("%w: trade is in state %d, expected open or confirmed", tradedomain.ErrInvalidTradeState, trade.State)
 	}
 
-	switch {
-	case trade.Player1CharID == charID:
-		trade.Player1Confirmed = true
-	case trade.Player2CharID == charID:
-		trade.Player2Confirmed = true
-	default:
-		return fmt.Errorf("character %d is not a participant in trade %s", charID, tradeID)
+	isPlayer1, peerID, err := s.determinePlayerRole(ctx, trade, charID, token)
+	if err != nil {
+		return err
 	}
 
-	if trade.Player1Confirmed && trade.Player2Confirmed {
-		trade.State = tradedomain.TradeStateLocked
-	} else {
-		trade.State = tradedomain.TradeStateConfirmed
+	confirmFunc := func(trade *tradedomain.Trade) error {
+		return s.confirmPlayerTrade(ctx, trade, tradeID, isPlayer1)
 	}
 
-	trade.UpdatedAt = time.Now()
-
-	if err := s.repo.UpdateTrade(ctx, trade); err != nil {
-		return fmt.Errorf("update trade confirm (id %s): %w", tradeID, err)
+	if peerID == 0 || peerID == charID {
+		defer s.release(ctx, charID, token)
+		return confirmFunc(&trade)
 	}
 
-	return nil
+	s.release(ctx, charID, token)
+
+	return s.withBothLocks(ctx, charID, peerID, func() error {
+		trade, err := s.repo.GetTrade(ctx, tradeID)
+		if err != nil {
+			return fmt.Errorf("get trade (id %s): %w", tradeID, err)
+		}
+
+		if trade.State != tradedomain.TradeStateOpen && trade.State != tradedomain.TradeStateConfirmed {
+			return fmt.Errorf("%w: trade is in state %d, expected open or confirmed", tradedomain.ErrInvalidTradeState, trade.State)
+		}
+
+		return confirmFunc(&trade)
+	})
 }
 
 // CompleteTrade executes the atomic transfer when both parties have confirmed.
@@ -300,36 +401,29 @@ func (s *tradeService) CompleteTrade(ctx context.Context, tradeID string, charID
 		return fmt.Errorf("character %d is not a participant in trade %s", charID, tradeID)
 	}
 
-	token1, res1, err1 := s.acquire(ctx, trade.Player1CharID)
-	if err1 != nil {
-		return err1
-	}
-	if res1 == acquireLockBusy {
-		return tradedomain.ErrLockBusy
-	}
-	defer s.release(ctx, trade.Player1CharID, token1)
+	return s.withBothLocks(ctx, trade.Player1CharID, trade.Player2CharID, func() error {
+		trade, err := s.repo.GetTrade(ctx, tradeID)
+		if err != nil {
+			return fmt.Errorf("get trade (id %s): %w", tradeID, err)
+		}
 
-	token2, res2, err2 := s.acquire(ctx, trade.Player2CharID)
-	if err2 != nil {
-		return err2
-	}
-	if res2 == acquireLockBusy {
-		return tradedomain.ErrLockBusy
-	}
-	defer s.release(ctx, trade.Player2CharID, token2)
+		if trade.State != tradedomain.TradeStateLocked {
+			return fmt.Errorf("%w: trade is in state %d, expected locked", tradedomain.ErrInvalidTradeState, trade.State)
+		}
 
-	if err := s.repo.ExecuteTradeTransfer(ctx, trade); err != nil {
-		return fmt.Errorf("execute trade transfer (id %s): %w", tradeID, err)
-	}
+		if err := s.repo.ExecuteTradeTransfer(ctx, trade); err != nil {
+			return fmt.Errorf("execute trade transfer (id %s): %w", tradeID, err)
+		}
 
-	trade.State = tradedomain.TradeStateCompleted
-	trade.UpdatedAt = time.Now()
+		trade.State = tradedomain.TradeStateCompleted
+		trade.UpdatedAt = time.Now()
 
-	if err := s.repo.UpdateTrade(ctx, trade); err != nil {
-		return fmt.Errorf("update trade complete (id %s): %w", tradeID, err)
-	}
+		if err := s.repo.UpdateTrade(ctx, trade); err != nil {
+			return fmt.Errorf("update trade complete (id %s): %w", tradeID, err)
+		}
 
-	return nil
+		return nil
+	})
 }
 
 // CancelTrade aborts the trade session from any state.
@@ -342,29 +436,70 @@ func (s *tradeService) CancelTrade(ctx context.Context, tradeID string, charID u
 	if res == acquireLockBusy {
 		return tradedomain.ErrLockBusy
 	}
-	defer s.release(ctx, charID, token)
 
 	trade, err := s.repo.GetTrade(ctx, tradeID)
 	if err != nil {
+		s.release(ctx, charID, token)
 		return fmt.Errorf("get trade (id %s): %w", tradeID, err)
 	}
 
-	if trade.Player1CharID != charID && trade.Player2CharID != charID {
-		return fmt.Errorf("character %d is not a participant in trade %s", charID, tradeID)
+	_, peerID, err := s.determinePlayerRole(ctx, trade, charID, token)
+	if err != nil {
+		return err
 	}
 
-	trade.State = tradedomain.TradeStateCancelled
-	trade.UpdatedAt = time.Now()
+	cancelFunc := func(trade *tradedomain.Trade) error {
+		trade.State = tradedomain.TradeStateCancelled
+		trade.UpdatedAt = time.Now()
 
-	if err := s.repo.UpdateTrade(ctx, trade); err != nil {
-		return fmt.Errorf("update trade cancel (id %s): %w", tradeID, err)
+		if err := s.repo.UpdateTrade(ctx, *trade); err != nil {
+			return fmt.Errorf("update trade cancel (id %s): %w", tradeID, err)
+		}
+
+		return nil
 	}
 
-	return nil
+	if peerID == 0 || peerID == charID {
+		defer s.release(ctx, charID, token)
+		return cancelFunc(&trade)
+	}
+
+	s.release(ctx, charID, token)
+
+	return s.withBothLocks(ctx, charID, peerID, func() error {
+		trade, err := s.repo.GetTrade(ctx, tradeID)
+		if err != nil {
+			return fmt.Errorf("get trade (id %s): %w", tradeID, err)
+		}
+
+		return cancelFunc(&trade)
+	})
+}
+
+// determinePlayerRole checks if charID is a participant and determines their role and peer.
+// Returns (isPlayer1, peerID, error). Releases token and returns error if charID is not a participant.
+func (s *tradeService) determinePlayerRole(ctx context.Context, trade tradedomain.Trade, charID uint32, token string) (bool, uint32, error) {
+	var isPlayer1 bool
+	var peerID uint32
+
+	switch {
+	case trade.Player1CharID == charID:
+		isPlayer1 = true
+		peerID = trade.Player2CharID
+	case trade.Player2CharID == charID:
+		isPlayer1 = false
+		peerID = trade.Player1CharID
+	default:
+		s.release(ctx, charID, token)
+		return false, 0, fmt.Errorf("character %d is not a participant in trade %s", charID, trade.ID)
+	}
+
+	return isPlayer1, peerID, nil
 }
 
 // validateItemOwnership checks that the character owns the item and has sufficient quantity.
-func (s *tradeService) validateItemOwnership(ctx context.Context, charID uint32, itemID uint32, amount int32) error {
+// alreadyOffered is the sum of this item already in the trade (for cumulative validation).
+func (s *tradeService) validateItemOwnership(ctx context.Context, charID uint32, itemID uint32, amount int32, alreadyOffered int64) error {
 	if s.invRepo == nil {
 		return nil
 	}
@@ -381,7 +516,7 @@ func (s *tradeService) validateItemOwnership(ctx context.Context, charID uint32,
 		}
 	}
 
-	if totalAmount < int64(amount) {
+	if totalAmount < (alreadyOffered + int64(amount)) {
 		return tradedomain.ErrInsufficientInventory
 	}
 
@@ -424,4 +559,50 @@ func (s *tradeService) release(ctx context.Context, charID uint32, token string)
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 	defer cancel()
 	_ = s.locks.Release(releaseCtx, tradedomain.CharLockKey(charID), token)
+}
+
+// withBothLocks acquires the per-character locks for a and b in a
+// deadlock-free order (smaller char ID first), runs fn, then releases
+// both. If a == b it locks once. A busy lock returns ErrLockBusy.
+func (s *tradeService) withBothLocks(ctx context.Context, a, b uint32, fn func() error) error {
+	first, second := a, b
+	if first > second {
+		first, second = second, first
+	}
+
+	if first == 0 || second == 0 {
+		return fmt.Errorf("invalid character IDs for dual lock: %d, %d", a, b)
+	}
+
+	if first == second {
+		token, res, err := s.acquire(ctx, first)
+		if err != nil {
+			return err
+		}
+		if res == acquireLockBusy {
+			return tradedomain.ErrLockBusy
+		}
+		defer s.release(ctx, first, token)
+		return fn()
+	}
+
+	token1, res1, err1 := s.acquire(ctx, first)
+	if err1 != nil {
+		return err1
+	}
+	if res1 == acquireLockBusy {
+		return tradedomain.ErrLockBusy
+	}
+	defer s.release(ctx, first, token1)
+
+	token2, res2, err2 := s.acquire(ctx, second)
+	if err2 != nil {
+		return err2
+	}
+	if res2 == acquireLockBusy {
+		return tradedomain.ErrLockBusy
+	}
+	defer s.release(ctx, second, token2)
+
+	return fn()
 }

@@ -65,6 +65,9 @@ func (h *grpcHandler) RequestTrade(
 	if req.GetTargetCharId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "target_char_id must be > 0")
 	}
+	if req.GetRequesterCharId() == req.GetTargetCharId() {
+		return nil, status.Error(codes.InvalidArgument, "requester and target must be different characters")
+	}
 
 	h.logger.Debug().
 		Uint32("requester_char_id", req.GetRequesterCharId()).
