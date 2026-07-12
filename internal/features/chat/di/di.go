@@ -2,6 +2,7 @@ package di
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -52,11 +53,18 @@ type lockStoreAdapter struct {
 }
 
 func (a lockStoreAdapter) Acquire(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	return a.inner.Acquire(ctx, key, ttl)
+	token, err := a.inner.Acquire(ctx, key, ttl)
+	if err != nil {
+		return "", fmt.Errorf("chat: acquire lock %q: %w", key, err)
+	}
+	return token, nil
 }
 
 func (a lockStoreAdapter) Release(ctx context.Context, key, token string) error {
-	return a.inner.Release(ctx, key, token)
+	if err := a.inner.Release(ctx, key, token); err != nil {
+		return fmt.Errorf("chat: release lock %q: %w", key, err)
+	}
+	return nil
 }
 
 // noopLockStore is a no-op implementation of LockStore that always succeeds.
