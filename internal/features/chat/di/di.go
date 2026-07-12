@@ -1,6 +1,7 @@
 package di
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -9,7 +10,6 @@ import (
 	"github.com/bouroo/goAthena/internal/features/chat/domain"
 	chatrepository "github.com/bouroo/goAthena/internal/features/chat/repository"
 	"github.com/bouroo/goAthena/internal/features/chat/service"
-	storagerepository "github.com/bouroo/goAthena/internal/features/storage/repository"
 )
 
 // Register wires the chat feature into the DI container.
@@ -25,8 +25,10 @@ func Register(c do.Injector) error {
 	partyRepo := chatrepository.NewMemoryPartyRepository()
 	do.ProvideValue(c, partyRepo)
 
-	locks := storagerepository.NewMemoryLockStore()
-	do.ProvideValue(c, locks)
+	locks, err := do.Invoke[domain.LockStore](c)
+	if err != nil {
+		return fmt.Errorf("invoke lock store: %w", err)
+	}
 
 	chatSvc := service.NewChatService(chatRepo, friendRepo, partyRepo, locks, 5*time.Second)
 	do.ProvideValue(c, chatSvc)
