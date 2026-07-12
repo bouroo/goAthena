@@ -16,17 +16,18 @@ func reportStats(t *testing.T, title string, cfg LoadTestConfig, s TickStats) {
 	if s.AllUnder50ms {
 		check = "\u2713"
 	}
-	t.Logf("\n%s\n"+
-		"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"+
-		"Map:            %d\u00d7%d\n"+
-		"Entities:       %d (moving ratio %.0f%%)\n"+
-		"Ticks measured: %d\n"+
-		"Avg latency:    %s\n"+
-		"P50 latency:    %s\n"+
-		"P99 latency:    %s\n"+
-		"Min latency:    %s\n"+
-		"Max latency:    %s\n"+
-		"All under 50ms: %s",
+	t.Logf(
+		"\n%s\n"+
+			"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"+
+			"Map:            %d\u00d7%d\n"+
+			"Entities:       %d (moving ratio %.0f%%)\n"+
+			"Ticks measured: %d\n"+
+			"Avg latency:    %s\n"+
+			"P50 latency:    %s\n"+
+			"P99 latency:    %s\n"+
+			"Min latency:    %s\n"+
+			"Max latency:    %s\n"+
+			"All under 50ms: %s",
 		title,
 		cfg.MapWidth, cfg.MapHeight,
 		cfg.EntityCount, cfg.MovingRatio*100,
@@ -97,10 +98,11 @@ func TestWOEDensity_HotspotClustering(t *testing.T) {
 		}
 	}
 	dist := MeasureSqueeze(tl, probes)
-	t.Logf("Squeeze tier distribution across castle (%d probes):\n"+
-		"  normal  (r=%d): %d\n"+
-		"  reduced (r=%d): %d\n"+
-		"  minimal (r=%d): %d",
+	t.Logf(
+		"Squeeze tier distribution across castle (%d probes):\n"+
+			"  normal  (r=%d): %d\n"+
+			"  reduced (r=%d): %d\n"+
+			"  minimal (r=%d): %d",
 		dist.Total,
 		aoi.SqueezeRadiusNormal, dist.Normal,
 		aoi.SqueezeRadiusTier1, dist.Reduced,

@@ -225,6 +225,22 @@ func (f *fakeZoneClient) MoveEntity(ctx context.Context, req *zonev1.MoveEntityR
 	return fn(ctx, req, opts...)
 }
 
+func (f *fakeZoneClient) AttackEntity(ctx context.Context, req *zonev1.AttackEntityRequest, opts ...grpc.CallOption) (*zonev1.AttackEntityResponse, error) {
+	return &zonev1.AttackEntityResponse{
+		Success:       true,
+		TargetDied:    false,
+		DamageApplied: 10,
+	}, nil
+}
+
+func (f *fakeZoneClient) PickupItem(ctx context.Context, req *zonev1.PickupItemRequest, opts ...grpc.CallOption) (*zonev1.PickupItemResponse, error) {
+	return &zonev1.PickupItemResponse{
+		Success: true,
+		ItemId:  501,
+		Amount:  1,
+	}, nil
+}
+
 // bufResponder captures every packet HandlePacket sends. Matched in
 // parallel with the in-process dispatch under test.
 type bufResponder struct {
@@ -1670,7 +1686,7 @@ func TestDispatchHandler_CZGlobalMessage_Success_EncodesZCNotifyChat(t *testing.
 	const wantMessage = "hello world"
 	req := packet.CZGlobalMessageRequest{Message: wantMessage}
 	var reqBuf bytes.Buffer
-	if err := (req).Encode(&reqBuf); err != nil {
+	if err := req.Encode(&reqBuf); err != nil {
 		t.Fatalf("Encode CZ_GLOBAL_MESSAGE: %v", err)
 	}
 	if _, err := reqBuf.Write([]byte{0x00}); err != nil { // explicit NUL terminator

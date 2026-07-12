@@ -80,6 +80,10 @@ func Register(c do.Injector) error {
 		logger,
 	)
 
+	tickLoop.SetDamageEntity(func(ctx context.Context, entityID domain.EntityID, damage int32, attackerID domain.EntityID) (*domain.DamageResponse, error) {
+		return zoneSvc.DamageEntity(ctx, entityID, damage, attackerID, 0, 0)
+	})
+
 	spawnX, spawnY := findWalkableSpawn(md)
 
 	grpcServer := server.NewGRPC(logger)

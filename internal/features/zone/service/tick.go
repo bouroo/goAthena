@@ -51,6 +51,8 @@ type TickLoop struct {
 
 	publisher domain.Publisher
 
+	damageEntity func(ctx context.Context, entityID domain.EntityID, damage int32, attackerID domain.EntityID) (*domain.DamageResponse, error)
+
 	// startWallMillis and startMono anchor the monotonic timestamp
 	// stream emitted in MoveStartTime. Wall time is frozen at
 	// construction; the elapsed offset is measured on the monotonic
@@ -109,6 +111,12 @@ func (tl *TickLoop) setOnEmpty(fn func()) {
 	tl.mu.Lock()
 	tl.onEmpty = fn
 	tl.mu.Unlock()
+}
+
+// SetDamageEntity sets the callback for handling damage events. Used by
+// the DI container to wire the damage handler from ZoneService.
+func (tl *TickLoop) SetDamageEntity(fn func(context.Context, domain.EntityID, int32, domain.EntityID) (*domain.DamageResponse, error)) {
+	tl.damageEntity = fn
 }
 
 // MapData returns the loaded map. Useful for tests and diagnostic dumps.
@@ -205,6 +213,7 @@ func (tl *TickLoop) tick(ctx context.Context) error {
 	tickRateMs := max(int(tl.tickRate/time.Millisecond), 1)
 
 	tickMobAI(tl.entities, currentTick, tickRateMs, tl.mapData, tl.pf)
+	tickAggressiveAI(ctx, tl.entities, currentTick, tickRateMs, tl.grid, tl.pf, tl.damageEntity)
 
 	type pending struct {
 		id   domain.EntityID
@@ -478,4 +487,48 @@ func (tl *TickLoop) entityCount() int {
 	n := len(tl.entities)
 	tl.mu.RUnlock()
 	return n
+}
+
+// removeEntityInternal is the internal version that publishes events.
+// It's called by ZoneService and tickAggressiveAI.
+func (tl *TickLoop) removeEntityInternal(ctx context.Context, id domain.EntityID, vanishType uint32) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("zone: remove entity: %w", err)
+	}
+
+	tl.mu.Lock()
+	if _, exists := tl.entities[id]; !exists {
+		tl.mu.Unlock()
+		return fmt.Errorf("%w: id=%d", ErrEntityMissing, id)
+	}
+	delete(tl.entities, id)
+	if err := tl.grid.RemoveEntity(aoi.EntityID(id)); err != nil {
+		tl.logger.Warn().Err(err).Uint32("entity_id", uint32(id)).Msg("zone: AOI remove failed")
+	}
+	tl.mu.Unlock()
+
+	tl.publish(ctx, &zonev1.ZoneEvent{
+		Event: &zonev1.ZoneEvent_Vanished{
+			Vanished: &zonev1.EntityVanished{
+				EntityId: uint32(id),
+				Type:     vanishType,
+			},
+		},
+	}, "vanish")
+
+	return nil
+}
+
+// publishKill publishes an EntityKilled event. This method is called
+// by killEntityLocked which already holds the mutex, so it does not
+// acquire any locks internally. Publish failures are logged but never
+// propagate — the entity is still marked as dead.
+func (tl *TickLoop) publishKill(ctx context.Context, entityID domain.EntityID) {
+	tl.publish(ctx, &zonev1.ZoneEvent{
+		Event: &zonev1.ZoneEvent_Killed{
+			Killed: &zonev1.EntityKilled{
+				EntityId: uint32(entityID),
+			},
+		},
+	}, "kill")
 }

@@ -3517,7 +3517,8 @@ func (h *DispatchHandler) commitBuyAndReply(ctx context.Context, conn *domain.Co
 	if buyResp == nil || buyResp.GetResult() != identityv1.BuyResult_BUY_RESULT_OK {
 		return h.sendPurchaseResultFail(resp)
 	}
-	return h.replyShopOK(resp, conn, buyResp.GetNewZeny(),
+	return h.replyShopOK(
+		resp, conn, buyResp.GetNewZeny(),
 		func(w io.Writer) error { return packet.PurchaseResultResponse{Result: 0}.Encode(w) },
 		"ZC_PC_PURCHASE_RESULT",
 	)
@@ -3781,7 +3782,8 @@ func (h *DispatchHandler) commitSellAndReply(ctx context.Context, conn *domain.C
 	if sellResp == nil || sellResp.GetResult() != identityv1.SellResult_SELL_RESULT_OK {
 		return h.sendSellResultFail(resp)
 	}
-	return h.replyShopOK(resp, conn, sellResp.GetNewZeny(),
+	return h.replyShopOK(
+		resp, conn, sellResp.GetNewZeny(),
 		func(w io.Writer) error { return packet.SellResultResponse{Result: 0}.Encode(w) },
 		"ZC_PC_SELL_RESULT",
 	)

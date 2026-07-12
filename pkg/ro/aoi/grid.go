@@ -344,7 +344,7 @@ func (gm *GridManager) Count9Grid(x, y int) int {
 // (radius 15 cells) around (x, y). Out-of-bounds coordinates yield nil.
 // The result is freshly allocated; callers may mutate it freely.
 func (gm *GridManager) QueryVisible(x, y int) []*Entity {
-	return gm.queryWithin(x, y, DefaultBroadcastRadius)
+	return gm.QueryWithin(x, y, DefaultBroadcastRadius)
 }
 
 // QueryVisibleSqueezed returns all entities in the adaptive broadcast
@@ -352,13 +352,14 @@ func (gm *GridManager) QueryVisible(x, y int) []*Entity {
 // the local 9-grid density, so high-density areas broadcast less far.
 func (gm *GridManager) QueryVisibleSqueezed(x, y int) []*Entity {
 	radius := SqueezeRadius(gm.Count9Grid(x, y))
-	return gm.queryWithin(x, y, radius)
+	return gm.QueryWithin(x, y, radius)
 }
 
 // DefaultBroadcastRadius is the normal AOI broadcast radius in cells.
 const DefaultBroadcastRadius = 15
 
-func (gm *GridManager) queryWithin(x, y, radius int) []*Entity {
+// QueryWithin returns all entities within the given radius of the point (x, y).
+func (gm *GridManager) QueryWithin(x, y, radius int) []*Entity {
 	if !gm.inBounds(x, y) || radius < 0 {
 		return nil
 	}

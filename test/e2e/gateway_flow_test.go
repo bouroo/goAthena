@@ -272,7 +272,8 @@ func stageCHSelectChar(t *testing.T, conn net.Conn, dec *netcodec.Decoder, deadl
 	if gotMap == "" {
 		t.Fatalf("HC_NOTIFY_ZONESVR map name is empty (frame=% x)", frame)
 	}
-	t.Logf("CH_SELECT_CHAR ok: map=%q ip=%d port=%d",
+	t.Logf(
+		"CH_SELECT_CHAR ok: map=%q ip=%d port=%d",
 		gotMap,
 		binary.LittleEndian.Uint32(frame[22:26]),
 		binary.LittleEndian.Uint16(frame[26:28]),

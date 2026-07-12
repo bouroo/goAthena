@@ -40,6 +40,37 @@ type ZoneService interface {
 
 	// EntityCount returns the number of entities tracked by the zone.
 	EntityCount(ctx context.Context) int
+
+	// DamageEntity applies damage to the target entity. Validates the entity
+	// exists and is a mob (or player). Reduces HP, publishes EntityDamaged
+	// event, and if HP <= 0, calls KillEntity and publishes EntityKilled event.
+	// Returns the damage response with updated HP and death status.
+	DamageEntity(ctx context.Context, entityID EntityID, damage int32, attackerID EntityID, skillID, skillLevel uint32) (*DamageResponse, error)
+
+	// KillEntity removes an entity from the zone and publishes EntityKilled event.
+	// Used internally by DamageEntity when HP <= 0.
+	KillEntity(ctx context.Context, entityID EntityID) error
+
+	// PickupItem processes a ground-item pickup request. Validates the item
+	// exists, is in range, and is owned by the requesting player. Removes it
+	// from the ground registry and publishes ItemPickedUp event.
+	PickupItem(ctx context.Context, groundItemID EntityID, playerID EntityID) (*PickupResponse, error)
+}
+
+// DamageResponse contains the result of applying damage.
+type DamageResponse struct {
+	Success       bool
+	TargetDied    bool
+	DamageApplied int32
+	CurrentHP     int32
+	MaxHP         int32
+}
+
+// PickupResponse contains the result of picking up an item.
+type PickupResponse struct {
+	Success bool
+	ItemID  uint32
+	Amount  int32
 }
 
 // MapRepository is the outbound port for loading map data. The default

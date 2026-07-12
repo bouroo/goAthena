@@ -401,7 +401,8 @@ func (l *lexer) advance() {
 
 // ----- helpers -----
 
-func isDigit(b byte) bool    { return b >= '0' && b <= '9' }
+func isDigit(b byte) bool { return b >= '0' && b <= '9' }
+
 func isHexDigit(b byte) bool { return isDigit(b) || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F') }
 func isHexStart(b byte) bool { return b == 'x' || b == 'X' }
 

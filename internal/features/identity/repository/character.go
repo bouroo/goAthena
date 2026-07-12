@@ -153,7 +153,8 @@ func (r *characterRepo) ApplyLevelUp(
 ) (newLevel, newStatusPoint uint32, applied bool, err error) {
 	if accountID == 0 || charID == 0 {
 		return 0, 0, false, fmt.Errorf(
-			"apply level up (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound)
+			"apply level up (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound,
+		)
 	}
 
 	res := r.db.WithContext(ctx).
@@ -167,7 +168,8 @@ func (r *characterRepo) ApplyLevelUp(
 		})
 	if err := res.Error; err != nil {
 		return 0, 0, false, fmt.Errorf(
-			"apply level up (account=%d, char=%d): %w", accountID, charID, err)
+			"apply level up (account=%d, char=%d): %w", accountID, charID, err,
+		)
 	}
 
 	if res.RowsAffected == 0 {
@@ -183,11 +185,13 @@ func (r *characterRepo) ApplyLevelUp(
 			Take(&exists).Error
 		if errors.Is(existsErr, gorm.ErrRecordNotFound) {
 			return 0, 0, false, fmt.Errorf(
-				"apply level up (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound)
+				"apply level up (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound,
+			)
 		}
 		if existsErr != nil {
 			return 0, 0, false, fmt.Errorf(
-				"apply level up (account=%d, char=%d): %w", accountID, charID, existsErr)
+				"apply level up (account=%d, char=%d): %w", accountID, charID, existsErr,
+			)
 		}
 		return 0, 0, false, nil
 	}
@@ -200,7 +204,8 @@ func (r *characterRepo) ApplyLevelUp(
 		Take(&model).Error
 	if err != nil {
 		return 0, 0, false, fmt.Errorf(
-			"apply level up (account=%d, char=%d): %w", accountID, charID, err)
+			"apply level up (account=%d, char=%d): %w", accountID, charID, err,
+		)
 	}
 	return model.BaseLevel, model.StatusPoint, true, nil
 }
@@ -224,7 +229,8 @@ func (r *characterRepo) AllocateStat(
 ) (newValue, newStatusPoint uint32, result int, err error) {
 	if accountID == 0 || charID == 0 {
 		return 0, 0, 0, fmt.Errorf(
-			"allocate stat (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound)
+			"allocate stat (account=%d, char=%d): %w", accountID, charID, domain.ErrCharacterNotFound,
+		)
 	}
 
 	newCol := gorm.Expr(statColumn+" + ?", amount)
@@ -239,7 +245,8 @@ func (r *characterRepo) AllocateStat(
 
 	if err := res.Error; err != nil {
 		return 0, 0, 0, fmt.Errorf(
-			"allocate stat (account=%d, char=%d): %w", accountID, charID, err)
+			"allocate stat (account=%d, char=%d): %w", accountID, charID, err,
+		)
 	}
 
 	var model CharModel
@@ -250,7 +257,8 @@ func (r *characterRepo) AllocateStat(
 		Take(&model).Error
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf(
-			"allocate stat (account=%d, char=%d): %w", accountID, charID, err)
+			"allocate stat (account=%d, char=%d): %w", accountID, charID, err,
+		)
 	}
 
 	if res.RowsAffected > 0 {

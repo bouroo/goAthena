@@ -20,6 +20,17 @@ service ZoneService {
   // destination (cell the path targets). The gateway uses src+dest to
   // encode the broadcast packet ZC_NOTIFY_PLAYERMOVE 0x0087.
   rpc MoveEntity(MoveEntityRequest) returns (MoveEntityResponse);
+
+  // AttackEntity processes a client's attack action (CZ_ACTION_REQUEST
+  // 0x0092 / ActionRequest). The zone validates the target entity, computes
+  // damage, updates HP, and may kill the entity. The gateway uses the response
+  // to encode ZC_NOTIFY_ACT and ZC_NOTIFY_EFFECT packets.
+  rpc AttackEntity(AttackEntityRequest) returns (AttackEntityResponse);
+
+  // PickupItem processes a client's ground-item pickup request (CZ_ITEM_PICKUP
+  // 0x0092 / ItemPickup). Validates the item exists, is in range, and is
+  // pickable. Returns success or error.
+  rpc PickupItem(PickupItemRequest) returns (PickupItemResponse);
 }
 
 message EnterZoneRequest {
@@ -53,4 +64,33 @@ message MoveEntityResponse {
   uint32 dest_x = 4;        // cell the path targets (echoed back)
   uint32 dest_y = 5;
   string error = 6;         // human-readable error when success == false
+}
+
+message AttackEntityRequest {
+  uint32 entity_id = 1;       // target entity ID
+  uint32 damage = 2;          // damage to apply (optional; defaults to 1)
+  uint32 attacker_id = 3;     // source entity ID (player/GM)
+  uint32 skill_id = 4;        // skill ID used (0 for auto-attack)
+  uint32 skill_level = 5;     // skill level (0 if skill_id == 0)
+}
+
+message AttackEntityResponse {
+  bool success = 1;
+  bool target_died = 2;       // true if entity HP <= 0
+  int32 damage_applied = 3;   // damage actually applied
+  int32 current_hp = 4;       // target's HP after damage
+  int32 max_hp = 5;           // target's MaxHP (unchanged)
+  string error = 6;           // human-readable error if success == false
+}
+
+message PickupItemRequest {
+  uint32 ground_item_id = 1;  // ground item ID
+  uint32 player_id = 2;       // requesting player entity ID
+}
+
+message PickupItemResponse {
+  bool success = 1;
+  uint32 item_id = 2;         // numeric item ID
+  uint32 amount = 3;          // item amount (typically 1)
+  string error = 4;           // human-readable error if success == false
 }

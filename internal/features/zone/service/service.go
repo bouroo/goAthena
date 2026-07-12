@@ -12,8 +12,10 @@ import (
 
 	"github.com/rs/zerolog"
 
+	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/zone/domain"
 	"github.com/bouroo/goAthena/internal/infrastructure/agones"
+	"github.com/bouroo/goAthena/pkg/ro/aoi"
 )
 
 // ErrEntityExists is returned by AddEntity when the ID is already tracked.
@@ -207,4 +209,246 @@ func (s *ZoneService) scheduleShutdown() {
 			s.tickLoop.logger.Warn().Err(err).Msg("zone: agones shutdown failed")
 		}
 	}()
+}
+
+// PickupItem processes a ground-item pickup request. Validates the item exists, is in range, and is owned by the requesting player. Removes it from the ground registry and publishes ItemPickedUp event.
+func (s *ZoneService) PickupItem(ctx context.Context, groundItemID domain.EntityID, playerID domain.EntityID) (*domain.PickupResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("zone: pickup item: %w", err)
+	}
+
+	const attackRange = 3
+
+	var itemID uint32
+	var itemAmount int32
+	itemX, itemY := 0, 0
+	playerX, playerY := 0, 0
+
+	// Read phase: lookup item and player, validate distance
+	s.tickLoop.mu.RLock()
+	item, itemExists := s.tickLoop.entities[groundItemID]
+	if !itemExists {
+		s.tickLoop.mu.RUnlock()
+		return nil, fmt.Errorf("%w: ground item id=%d", ErrEntityMissing, groundItemID)
+	}
+	player, playerExists := s.tickLoop.entities[playerID]
+	if !playerExists {
+		s.tickLoop.mu.RUnlock()
+		return nil, fmt.Errorf("%w: player id=%d", ErrEntityMissing, playerID)
+	}
+	itemX, itemY = item.X, item.Y
+	playerX, playerY = player.X, player.Y
+	itemID = item.ItemID
+	itemAmount = item.ItemAmount
+	s.tickLoop.mu.RUnlock()
+
+	dx := itemX - playerX
+	dy := itemY - playerY
+	distance := max(abs(dx), abs(dy))
+	if distance > attackRange {
+		return nil, fmt.Errorf("%w: item too far (distance=%d, max=%d)", ErrEntityMissing, distance, attackRange)
+	}
+
+	if item.Owner != 0 && item.Owner != playerID {
+		return nil, fmt.Errorf("%w: item id=%d, owner=%d, player=%d", ErrEntityMissing, groundItemID, item.Owner, playerID)
+	}
+
+	// Write phase: remove item from entities map and AOI grid
+	s.tickLoop.mu.Lock()
+	_, itemExists = s.tickLoop.entities[groundItemID]
+	if !itemExists {
+		s.tickLoop.mu.Unlock()
+		return nil, fmt.Errorf("%w: ground item id=%d", ErrEntityMissing, groundItemID)
+	}
+	delete(s.tickLoop.entities, groundItemID)
+	if err := s.tickLoop.grid.RemoveEntity(aoi.EntityID(groundItemID)); err != nil {
+		s.tickLoop.logger.Warn().Err(err).Uint32("entity_id", uint32(groundItemID)).Msg("zone: AOI remove failed")
+	}
+	s.tickLoop.mu.Unlock()
+
+	s.tickLoop.publish(ctx, &zonev1.ZoneEvent{
+		Event: &zonev1.ZoneEvent_PickedUp{
+			PickedUp: &zonev1.ItemPickedUp{
+				GroundItemId: uint32(groundItemID),
+				ItemId:       itemID,
+				Amount:       itemAmount,
+				PlayerId:     uint32(playerID),
+			},
+		},
+	}, "pickup")
+
+	resp := &domain.PickupResponse{
+		Success: true,
+		ItemID:  itemID,
+		Amount:  itemAmount,
+	}
+	return resp, nil
+}
+
+// DamageEntity applies damage to an entity and returns the damage response.
+func (s *ZoneService) DamageEntity(ctx context.Context, entityID domain.EntityID, damage int32, attackerID domain.EntityID, skillID, skillLevel uint32) (*domain.DamageResponse, error) {
+	if damage <= 0 {
+		return &domain.DamageResponse{
+			Success:       false,
+			TargetDied:    false,
+			DamageApplied: 0,
+			CurrentHP:     0,
+			MaxHP:         0,
+		}, nil
+	}
+
+	s.tickLoop.mu.RLock()
+	e, ok := s.tickLoop.entities[entityID]
+	if !ok {
+		s.tickLoop.mu.RUnlock()
+		return nil, fmt.Errorf("%w: entity id=%d", ErrEntityMissing, entityID)
+	}
+
+	if e.Type != domain.EntityMob && e.Type != domain.EntityPlayer {
+		s.tickLoop.mu.RUnlock()
+		return nil, fmt.Errorf("zone: invalid entity type for damage: %v", e.Type)
+	}
+
+	currentHP := e.HP
+	maxHP := e.MaxHP
+	s.tickLoop.mu.RUnlock()
+
+	if currentHP <= 0 {
+		return &domain.DamageResponse{
+			Success:       true,
+			TargetDied:    false,
+			DamageApplied: 0,
+			CurrentHP:     0,
+			MaxHP:         maxHP,
+		}, nil
+	}
+
+	appliedDamage := min(damage, currentHP)
+
+	newHP := currentHP - appliedDamage
+	targetDied := newHP <= 0
+
+	s.tickLoop.mu.Lock()
+	if e, ok := s.tickLoop.entities[entityID]; ok {
+		e.HP = newHP
+	}
+	s.tickLoop.mu.Unlock()
+
+	s.tickLoop.publish(ctx, &zonev1.ZoneEvent{
+		Event: &zonev1.ZoneEvent_Damaged{
+			Damaged: &zonev1.EntityDamaged{
+				EntityId: uint32(entityID),
+				Damage:   appliedDamage,
+				NewHp:    newHP,
+				MaxHp:    maxHP,
+			},
+		},
+	}, "damage")
+
+	if targetDied {
+		if err := s.KillEntity(ctx, entityID); err != nil {
+			s.tickLoop.logger.Warn().Err(err).Uint32("entity_id", uint32(entityID)).Msg("zone: kill entity after damage failed")
+		}
+	}
+
+	return &domain.DamageResponse{
+		Success:       true,
+		TargetDied:    targetDied,
+		DamageApplied: appliedDamage,
+		CurrentHP:     newHP,
+		MaxHP:         maxHP,
+	}, nil
+}
+
+// KillEntity kills an entity, handles item drops, and broadcasts the death.
+func (s *ZoneService) KillEntity(ctx context.Context, entityID domain.EntityID) error {
+	s.tickLoop.mu.RLock()
+	e, ok := s.tickLoop.entities[entityID]
+	if !ok {
+		s.tickLoop.mu.RUnlock()
+		return fmt.Errorf("%w: entity id=%d", ErrEntityMissing, entityID)
+	}
+
+	entityType := e.Type
+	mobID := e.MobID
+	x, y := e.X, e.Y
+	s.tickLoop.mu.RUnlock()
+
+	s.tickLoop.publishKill(ctx, entityID)
+
+	if entityType != domain.EntityMob || mobID <= 0 {
+		return s.tickLoop.removeEntityInternal(ctx, entityID, 0)
+	}
+
+	const redPotionItemID = 501
+	const groundItemIDStart = 1000000
+
+	s.tickLoop.mu.Lock()
+	nextGroundItemID := domain.EntityID(groundItemIDStart)
+	for id, ent := range s.tickLoop.entities {
+		if ent.Type != domain.EntityMob {
+			continue
+		}
+		if uint32(id) >= uint32(nextGroundItemID) {
+			nextGroundItemID = domain.EntityID(uint32(id) + 1)
+		}
+	}
+	groundItemID := nextGroundItemID
+
+	groundItem := &domain.Entity{
+		ID:         groundItemID,
+		Type:       domain.EntityMob,
+		X:          x,
+		Y:          y,
+		ItemID:     redPotionItemID,
+		ItemAmount: 1,
+		Owner:      0,
+	}
+
+	aoiEnt := &aoi.Entity{
+		ID:   aoi.EntityID(groundItemID),
+		Type: toAOIType(groundItem.Type),
+		X:    groundItem.X,
+		Y:    groundItem.Y,
+	}
+
+	if err := s.tickLoop.grid.AddEntity(aoiEnt); err != nil {
+		s.tickLoop.mu.Unlock()
+		s.tickLoop.logger.Warn().Err(err).Uint32("ground_item_id", uint32(groundItemID)).Msg("zone: failed to add ground item to AOI")
+		return s.tickLoop.removeEntityInternal(ctx, entityID, 0)
+	}
+
+	s.tickLoop.entities[groundItemID] = groundItem
+	s.tickLoop.mu.Unlock()
+
+	s.tickLoop.publish(ctx, &zonev1.ZoneEvent{
+		Event: &zonev1.ZoneEvent_Spawned{
+			Spawned: &zonev1.EntitySpawned{
+				EntityId:   uint32(groundItemID),    //nolint:gosec // G115: entity ID is safe to convert
+				EntityType: uint32(groundItem.Type), //nolint:gosec // G115: entity type is safe to convert
+				X:          uint32(groundItem.X),    //nolint:gosec // G115: X coordinate is safe to convert
+				Y:          uint32(groundItem.Y),    //nolint:gosec // G115: Y coordinate is safe to convert
+				Name:       "",
+			},
+		},
+	}, "spawn")
+
+	s.tickLoop.publish(ctx, &zonev1.ZoneEvent{
+		Event: &zonev1.ZoneEvent_Dropped{
+			Dropped: &zonev1.ItemDropped{
+				GroundItemId: uint32(groundItemID),
+				ItemId:       groundItem.ItemID,
+				Amount:       groundItem.ItemAmount,
+				X:            uint32(x), //nolint:gosec // G115: coordinate is safe to convert
+				Y:            uint32(y), //nolint:gosec // G115: coordinate is safe to convert
+				MapName:      s.tickLoop.mapData.Name,
+			},
+		},
+	}, "drop")
+
+	if err := s.tickLoop.removeEntityInternal(ctx, entityID, 0); err != nil {
+		s.tickLoop.logger.Warn().Err(err).Uint32("entity_id", uint32(entityID)).Msg("zone: remove entity after kill failed")
+	}
+
+	return nil
 }

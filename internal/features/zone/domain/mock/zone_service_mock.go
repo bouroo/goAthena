@@ -55,6 +55,21 @@ func (mr *MockZoneServiceMockRecorder) AddEntity(ctx, e any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddEntity", reflect.TypeOf((*MockZoneService)(nil).AddEntity), ctx, e)
 }
 
+// DamageEntity mocks base method.
+func (m *MockZoneService) DamageEntity(ctx context.Context, entityID domain.EntityID, damage int32, attackerID domain.EntityID, skillID, skillLevel uint32) (*domain.DamageResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DamageEntity", ctx, entityID, damage, attackerID, skillID, skillLevel)
+	ret0, _ := ret[0].(*domain.DamageResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DamageEntity indicates an expected call of DamageEntity.
+func (mr *MockZoneServiceMockRecorder) DamageEntity(ctx, entityID, damage, attackerID, skillID, skillLevel any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DamageEntity", reflect.TypeOf((*MockZoneService)(nil).DamageEntity), ctx, entityID, damage, attackerID, skillID, skillLevel)
+}
+
 // EntityCount mocks base method.
 func (m *MockZoneService) EntityCount(ctx context.Context) int {
 	m.ctrl.T.Helper()
@@ -99,6 +114,20 @@ func (mr *MockZoneServiceMockRecorder) GetVisible(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVisible", reflect.TypeOf((*MockZoneService)(nil).GetVisible), ctx, id)
 }
 
+// KillEntity mocks base method.
+func (m *MockZoneService) KillEntity(ctx context.Context, entityID domain.EntityID) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "KillEntity", ctx, entityID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// KillEntity indicates an expected call of KillEntity.
+func (mr *MockZoneServiceMockRecorder) KillEntity(ctx, entityID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "KillEntity", reflect.TypeOf((*MockZoneService)(nil).KillEntity), ctx, entityID)
+}
+
 // MoveEntity mocks base method.
 func (m *MockZoneService) MoveEntity(ctx context.Context, id domain.EntityID, x, y int) error {
 	m.ctrl.T.Helper()
@@ -111,6 +140,21 @@ func (m *MockZoneService) MoveEntity(ctx context.Context, id domain.EntityID, x,
 func (mr *MockZoneServiceMockRecorder) MoveEntity(ctx, id, x, y any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MoveEntity", reflect.TypeOf((*MockZoneService)(nil).MoveEntity), ctx, id, x, y)
+}
+
+// PickupItem mocks base method.
+func (m *MockZoneService) PickupItem(ctx context.Context, groundItemID, playerID domain.EntityID) (*domain.PickupResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PickupItem", ctx, groundItemID, playerID)
+	ret0, _ := ret[0].(*domain.PickupResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// PickupItem indicates an expected call of PickupItem.
+func (mr *MockZoneServiceMockRecorder) PickupItem(ctx, groundItemID, playerID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PickupItem", reflect.TypeOf((*MockZoneService)(nil).PickupItem), ctx, groundItemID, playerID)
 }
 
 // RemoveEntity mocks base method.
