@@ -20,20 +20,32 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ZoneService_EnterZone_FullMethodName     = "/zone.v1.ZoneService/EnterZone"
-	ZoneService_MoveEntity_FullMethodName    = "/zone.v1.ZoneService/MoveEntity"
-	ZoneService_AttackEntity_FullMethodName  = "/zone.v1.ZoneService/AttackEntity"
-	ZoneService_PickupItem_FullMethodName    = "/zone.v1.ZoneService/PickupItem"
-	ZoneService_RequestTrade_FullMethodName  = "/zone.v1.ZoneService/RequestTrade"
-	ZoneService_AddTradeItem_FullMethodName  = "/zone.v1.ZoneService/AddTradeItem"
-	ZoneService_AddTradeZeny_FullMethodName  = "/zone.v1.ZoneService/AddTradeZeny"
-	ZoneService_ConfirmTrade_FullMethodName  = "/zone.v1.ZoneService/ConfirmTrade"
-	ZoneService_CompleteTrade_FullMethodName = "/zone.v1.ZoneService/CompleteTrade"
-	ZoneService_CancelTrade_FullMethodName   = "/zone.v1.ZoneService/CancelTrade"
-	ZoneService_OpenStorage_FullMethodName   = "/zone.v1.ZoneService/OpenStorage"
-	ZoneService_DepositItem_FullMethodName   = "/zone.v1.ZoneService/DepositItem"
-	ZoneService_WithdrawItem_FullMethodName  = "/zone.v1.ZoneService/WithdrawItem"
-	ZoneService_CloseStorage_FullMethodName  = "/zone.v1.ZoneService/CloseStorage"
+	ZoneService_EnterZone_FullMethodName           = "/zone.v1.ZoneService/EnterZone"
+	ZoneService_MoveEntity_FullMethodName          = "/zone.v1.ZoneService/MoveEntity"
+	ZoneService_AttackEntity_FullMethodName        = "/zone.v1.ZoneService/AttackEntity"
+	ZoneService_PickupItem_FullMethodName          = "/zone.v1.ZoneService/PickupItem"
+	ZoneService_RequestTrade_FullMethodName        = "/zone.v1.ZoneService/RequestTrade"
+	ZoneService_AddTradeItem_FullMethodName        = "/zone.v1.ZoneService/AddTradeItem"
+	ZoneService_AddTradeZeny_FullMethodName        = "/zone.v1.ZoneService/AddTradeZeny"
+	ZoneService_ConfirmTrade_FullMethodName        = "/zone.v1.ZoneService/ConfirmTrade"
+	ZoneService_CompleteTrade_FullMethodName       = "/zone.v1.ZoneService/CompleteTrade"
+	ZoneService_CancelTrade_FullMethodName         = "/zone.v1.ZoneService/CancelTrade"
+	ZoneService_OpenStorage_FullMethodName         = "/zone.v1.ZoneService/OpenStorage"
+	ZoneService_DepositItem_FullMethodName         = "/zone.v1.ZoneService/DepositItem"
+	ZoneService_WithdrawItem_FullMethodName        = "/zone.v1.ZoneService/WithdrawItem"
+	ZoneService_CloseStorage_FullMethodName        = "/zone.v1.ZoneService/CloseStorage"
+	ZoneService_Whisper_FullMethodName             = "/zone.v1.ZoneService/Whisper"
+	ZoneService_SendPartyChat_FullMethodName       = "/zone.v1.ZoneService/SendPartyChat"
+	ZoneService_SendMapChat_FullMethodName         = "/zone.v1.ZoneService/SendMapChat"
+	ZoneService_SendFriendRequest_FullMethodName   = "/zone.v1.ZoneService/SendFriendRequest"
+	ZoneService_AcceptFriendRequest_FullMethodName = "/zone.v1.ZoneService/AcceptFriendRequest"
+	ZoneService_RejectFriendRequest_FullMethodName = "/zone.v1.ZoneService/RejectFriendRequest"
+	ZoneService_RemoveFriend_FullMethodName        = "/zone.v1.ZoneService/RemoveFriend"
+	ZoneService_ListFriends_FullMethodName         = "/zone.v1.ZoneService/ListFriends"
+	ZoneService_CreateParty_FullMethodName         = "/zone.v1.ZoneService/CreateParty"
+	ZoneService_JoinParty_FullMethodName           = "/zone.v1.ZoneService/JoinParty"
+	ZoneService_LeaveParty_FullMethodName          = "/zone.v1.ZoneService/LeaveParty"
+	ZoneService_GetParty_FullMethodName            = "/zone.v1.ZoneService/GetParty"
 )
 
 // ZoneServiceClient is the client API for ZoneService service.
@@ -84,6 +96,30 @@ type ZoneServiceClient interface {
 	WithdrawItem(ctx context.Context, in *WithdrawItemRequest, opts ...grpc.CallOption) (*WithdrawItemResponse, error)
 	// CloseStorage closes a character's storage session
 	CloseStorage(ctx context.Context, in *CloseStorageRequest, opts ...grpc.CallOption) (*CloseStorageResponse, error)
+	// Whisper sends a private message
+	Whisper(ctx context.Context, in *WhisperRequest, opts ...grpc.CallOption) (*WhisperResponse, error)
+	// SendPartyChat sends a message to party members
+	SendPartyChat(ctx context.Context, in *SendPartyChatRequest, opts ...grpc.CallOption) (*SendPartyChatResponse, error)
+	// SendMapChat sends a message to players on the same map
+	SendMapChat(ctx context.Context, in *SendMapChatRequest, opts ...grpc.CallOption) (*SendMapChatResponse, error)
+	// SendFriendRequest sends a friend request
+	SendFriendRequest(ctx context.Context, in *SendFriendRequestRequest, opts ...grpc.CallOption) (*SendFriendRequestResponse, error)
+	// AcceptFriendRequest accepts a friend request
+	AcceptFriendRequest(ctx context.Context, in *AcceptFriendRequestRequest, opts ...grpc.CallOption) (*AcceptFriendRequestResponse, error)
+	// RejectFriendRequest rejects a friend request
+	RejectFriendRequest(ctx context.Context, in *RejectFriendRequestRequest, opts ...grpc.CallOption) (*RejectFriendRequestResponse, error)
+	// RemoveFriend removes a friend
+	RemoveFriend(ctx context.Context, in *RemoveFriendRequest, opts ...grpc.CallOption) (*RemoveFriendResponse, error)
+	// ListFriends returns the friend list
+	ListFriends(ctx context.Context, in *ListFriendsRequest, opts ...grpc.CallOption) (*ListFriendsResponse, error)
+	// CreateParty creates a new party
+	CreateParty(ctx context.Context, in *CreatePartyRequest, opts ...grpc.CallOption) (*CreatePartyResponse, error)
+	// JoinParty adds a character to a party
+	JoinParty(ctx context.Context, in *JoinPartyRequest, opts ...grpc.CallOption) (*JoinPartyResponse, error)
+	// LeaveParty removes a character from a party
+	LeaveParty(ctx context.Context, in *LeavePartyRequest, opts ...grpc.CallOption) (*LeavePartyResponse, error)
+	// GetParty returns party info
+	GetParty(ctx context.Context, in *GetPartyRequest, opts ...grpc.CallOption) (*GetPartyResponse, error)
 }
 
 type zoneServiceClient struct {
@@ -234,6 +270,126 @@ func (c *zoneServiceClient) CloseStorage(ctx context.Context, in *CloseStorageRe
 	return out, nil
 }
 
+func (c *zoneServiceClient) Whisper(ctx context.Context, in *WhisperRequest, opts ...grpc.CallOption) (*WhisperResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WhisperResponse)
+	err := c.cc.Invoke(ctx, ZoneService_Whisper_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) SendPartyChat(ctx context.Context, in *SendPartyChatRequest, opts ...grpc.CallOption) (*SendPartyChatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SendPartyChatResponse)
+	err := c.cc.Invoke(ctx, ZoneService_SendPartyChat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) SendMapChat(ctx context.Context, in *SendMapChatRequest, opts ...grpc.CallOption) (*SendMapChatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SendMapChatResponse)
+	err := c.cc.Invoke(ctx, ZoneService_SendMapChat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) SendFriendRequest(ctx context.Context, in *SendFriendRequestRequest, opts ...grpc.CallOption) (*SendFriendRequestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SendFriendRequestResponse)
+	err := c.cc.Invoke(ctx, ZoneService_SendFriendRequest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) AcceptFriendRequest(ctx context.Context, in *AcceptFriendRequestRequest, opts ...grpc.CallOption) (*AcceptFriendRequestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AcceptFriendRequestResponse)
+	err := c.cc.Invoke(ctx, ZoneService_AcceptFriendRequest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) RejectFriendRequest(ctx context.Context, in *RejectFriendRequestRequest, opts ...grpc.CallOption) (*RejectFriendRequestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RejectFriendRequestResponse)
+	err := c.cc.Invoke(ctx, ZoneService_RejectFriendRequest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) RemoveFriend(ctx context.Context, in *RemoveFriendRequest, opts ...grpc.CallOption) (*RemoveFriendResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveFriendResponse)
+	err := c.cc.Invoke(ctx, ZoneService_RemoveFriend_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) ListFriends(ctx context.Context, in *ListFriendsRequest, opts ...grpc.CallOption) (*ListFriendsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListFriendsResponse)
+	err := c.cc.Invoke(ctx, ZoneService_ListFriends_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) CreateParty(ctx context.Context, in *CreatePartyRequest, opts ...grpc.CallOption) (*CreatePartyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreatePartyResponse)
+	err := c.cc.Invoke(ctx, ZoneService_CreateParty_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) JoinParty(ctx context.Context, in *JoinPartyRequest, opts ...grpc.CallOption) (*JoinPartyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(JoinPartyResponse)
+	err := c.cc.Invoke(ctx, ZoneService_JoinParty_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) LeaveParty(ctx context.Context, in *LeavePartyRequest, opts ...grpc.CallOption) (*LeavePartyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LeavePartyResponse)
+	err := c.cc.Invoke(ctx, ZoneService_LeaveParty_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) GetParty(ctx context.Context, in *GetPartyRequest, opts ...grpc.CallOption) (*GetPartyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPartyResponse)
+	err := c.cc.Invoke(ctx, ZoneService_GetParty_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ZoneServiceServer is the server API for ZoneService service.
 // All implementations must embed UnimplementedZoneServiceServer
 // for forward compatibility.
@@ -282,6 +438,30 @@ type ZoneServiceServer interface {
 	WithdrawItem(context.Context, *WithdrawItemRequest) (*WithdrawItemResponse, error)
 	// CloseStorage closes a character's storage session
 	CloseStorage(context.Context, *CloseStorageRequest) (*CloseStorageResponse, error)
+	// Whisper sends a private message
+	Whisper(context.Context, *WhisperRequest) (*WhisperResponse, error)
+	// SendPartyChat sends a message to party members
+	SendPartyChat(context.Context, *SendPartyChatRequest) (*SendPartyChatResponse, error)
+	// SendMapChat sends a message to players on the same map
+	SendMapChat(context.Context, *SendMapChatRequest) (*SendMapChatResponse, error)
+	// SendFriendRequest sends a friend request
+	SendFriendRequest(context.Context, *SendFriendRequestRequest) (*SendFriendRequestResponse, error)
+	// AcceptFriendRequest accepts a friend request
+	AcceptFriendRequest(context.Context, *AcceptFriendRequestRequest) (*AcceptFriendRequestResponse, error)
+	// RejectFriendRequest rejects a friend request
+	RejectFriendRequest(context.Context, *RejectFriendRequestRequest) (*RejectFriendRequestResponse, error)
+	// RemoveFriend removes a friend
+	RemoveFriend(context.Context, *RemoveFriendRequest) (*RemoveFriendResponse, error)
+	// ListFriends returns the friend list
+	ListFriends(context.Context, *ListFriendsRequest) (*ListFriendsResponse, error)
+	// CreateParty creates a new party
+	CreateParty(context.Context, *CreatePartyRequest) (*CreatePartyResponse, error)
+	// JoinParty adds a character to a party
+	JoinParty(context.Context, *JoinPartyRequest) (*JoinPartyResponse, error)
+	// LeaveParty removes a character from a party
+	LeaveParty(context.Context, *LeavePartyRequest) (*LeavePartyResponse, error)
+	// GetParty returns party info
+	GetParty(context.Context, *GetPartyRequest) (*GetPartyResponse, error)
 	mustEmbedUnimplementedZoneServiceServer()
 }
 
@@ -333,6 +513,42 @@ func (UnimplementedZoneServiceServer) WithdrawItem(context.Context, *WithdrawIte
 }
 func (UnimplementedZoneServiceServer) CloseStorage(context.Context, *CloseStorageRequest) (*CloseStorageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CloseStorage not implemented")
+}
+func (UnimplementedZoneServiceServer) Whisper(context.Context, *WhisperRequest) (*WhisperResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Whisper not implemented")
+}
+func (UnimplementedZoneServiceServer) SendPartyChat(context.Context, *SendPartyChatRequest) (*SendPartyChatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SendPartyChat not implemented")
+}
+func (UnimplementedZoneServiceServer) SendMapChat(context.Context, *SendMapChatRequest) (*SendMapChatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SendMapChat not implemented")
+}
+func (UnimplementedZoneServiceServer) SendFriendRequest(context.Context, *SendFriendRequestRequest) (*SendFriendRequestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SendFriendRequest not implemented")
+}
+func (UnimplementedZoneServiceServer) AcceptFriendRequest(context.Context, *AcceptFriendRequestRequest) (*AcceptFriendRequestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AcceptFriendRequest not implemented")
+}
+func (UnimplementedZoneServiceServer) RejectFriendRequest(context.Context, *RejectFriendRequestRequest) (*RejectFriendRequestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RejectFriendRequest not implemented")
+}
+func (UnimplementedZoneServiceServer) RemoveFriend(context.Context, *RemoveFriendRequest) (*RemoveFriendResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveFriend not implemented")
+}
+func (UnimplementedZoneServiceServer) ListFriends(context.Context, *ListFriendsRequest) (*ListFriendsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListFriends not implemented")
+}
+func (UnimplementedZoneServiceServer) CreateParty(context.Context, *CreatePartyRequest) (*CreatePartyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateParty not implemented")
+}
+func (UnimplementedZoneServiceServer) JoinParty(context.Context, *JoinPartyRequest) (*JoinPartyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method JoinParty not implemented")
+}
+func (UnimplementedZoneServiceServer) LeaveParty(context.Context, *LeavePartyRequest) (*LeavePartyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method LeaveParty not implemented")
+}
+func (UnimplementedZoneServiceServer) GetParty(context.Context, *GetPartyRequest) (*GetPartyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetParty not implemented")
 }
 func (UnimplementedZoneServiceServer) mustEmbedUnimplementedZoneServiceServer() {}
 func (UnimplementedZoneServiceServer) testEmbeddedByValue()                     {}
@@ -607,6 +823,222 @@ func _ZoneService_CloseStorage_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ZoneService_Whisper_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WhisperRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).Whisper(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_Whisper_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).Whisper(ctx, req.(*WhisperRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_SendPartyChat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendPartyChatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).SendPartyChat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_SendPartyChat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).SendPartyChat(ctx, req.(*SendPartyChatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_SendMapChat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendMapChatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).SendMapChat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_SendMapChat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).SendMapChat(ctx, req.(*SendMapChatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_SendFriendRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendFriendRequestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).SendFriendRequest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_SendFriendRequest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).SendFriendRequest(ctx, req.(*SendFriendRequestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_AcceptFriendRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcceptFriendRequestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).AcceptFriendRequest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_AcceptFriendRequest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).AcceptFriendRequest(ctx, req.(*AcceptFriendRequestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_RejectFriendRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RejectFriendRequestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).RejectFriendRequest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_RejectFriendRequest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).RejectFriendRequest(ctx, req.(*RejectFriendRequestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_RemoveFriend_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveFriendRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).RemoveFriend(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_RemoveFriend_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).RemoveFriend(ctx, req.(*RemoveFriendRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_ListFriends_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListFriendsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).ListFriends(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_ListFriends_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).ListFriends(ctx, req.(*ListFriendsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_CreateParty_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreatePartyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).CreateParty(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_CreateParty_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).CreateParty(ctx, req.(*CreatePartyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_JoinParty_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(JoinPartyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).JoinParty(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_JoinParty_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).JoinParty(ctx, req.(*JoinPartyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_LeaveParty_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LeavePartyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).LeaveParty(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_LeaveParty_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).LeaveParty(ctx, req.(*LeavePartyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_GetParty_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPartyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).GetParty(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_GetParty_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).GetParty(ctx, req.(*GetPartyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ZoneService_ServiceDesc is the grpc.ServiceDesc for ZoneService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -669,6 +1101,54 @@ var ZoneService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CloseStorage",
 			Handler:    _ZoneService_CloseStorage_Handler,
+		},
+		{
+			MethodName: "Whisper",
+			Handler:    _ZoneService_Whisper_Handler,
+		},
+		{
+			MethodName: "SendPartyChat",
+			Handler:    _ZoneService_SendPartyChat_Handler,
+		},
+		{
+			MethodName: "SendMapChat",
+			Handler:    _ZoneService_SendMapChat_Handler,
+		},
+		{
+			MethodName: "SendFriendRequest",
+			Handler:    _ZoneService_SendFriendRequest_Handler,
+		},
+		{
+			MethodName: "AcceptFriendRequest",
+			Handler:    _ZoneService_AcceptFriendRequest_Handler,
+		},
+		{
+			MethodName: "RejectFriendRequest",
+			Handler:    _ZoneService_RejectFriendRequest_Handler,
+		},
+		{
+			MethodName: "RemoveFriend",
+			Handler:    _ZoneService_RemoveFriend_Handler,
+		},
+		{
+			MethodName: "ListFriends",
+			Handler:    _ZoneService_ListFriends_Handler,
+		},
+		{
+			MethodName: "CreateParty",
+			Handler:    _ZoneService_CreateParty_Handler,
+		},
+		{
+			MethodName: "JoinParty",
+			Handler:    _ZoneService_JoinParty_Handler,
+		},
+		{
+			MethodName: "LeaveParty",
+			Handler:    _ZoneService_LeaveParty_Handler,
+		},
+		{
+			MethodName: "GetParty",
+			Handler:    _ZoneService_GetParty_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

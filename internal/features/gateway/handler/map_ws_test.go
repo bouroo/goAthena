@@ -109,6 +109,54 @@ func (f *fakeZoneClient) CloseStorage(_ context.Context, _ *zonev1.CloseStorageR
 	return &zonev1.CloseStorageResponse{Success: true}, nil
 }
 
+func (f *fakeZoneClient) Whisper(_ context.Context, _ *zonev1.WhisperRequest, _ ...grpc.CallOption) (*zonev1.WhisperResponse, error) {
+	return &zonev1.WhisperResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) SendPartyChat(_ context.Context, _ *zonev1.SendPartyChatRequest, _ ...grpc.CallOption) (*zonev1.SendPartyChatResponse, error) {
+	return &zonev1.SendPartyChatResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) SendMapChat(_ context.Context, _ *zonev1.SendMapChatRequest, _ ...grpc.CallOption) (*zonev1.SendMapChatResponse, error) {
+	return &zonev1.SendMapChatResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) SendFriendRequest(_ context.Context, _ *zonev1.SendFriendRequestRequest, _ ...grpc.CallOption) (*zonev1.SendFriendRequestResponse, error) {
+	return &zonev1.SendFriendRequestResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) AcceptFriendRequest(_ context.Context, _ *zonev1.AcceptFriendRequestRequest, _ ...grpc.CallOption) (*zonev1.AcceptFriendRequestResponse, error) {
+	return &zonev1.AcceptFriendRequestResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) RejectFriendRequest(_ context.Context, _ *zonev1.RejectFriendRequestRequest, _ ...grpc.CallOption) (*zonev1.RejectFriendRequestResponse, error) {
+	return &zonev1.RejectFriendRequestResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) RemoveFriend(_ context.Context, _ *zonev1.RemoveFriendRequest, _ ...grpc.CallOption) (*zonev1.RemoveFriendResponse, error) {
+	return &zonev1.RemoveFriendResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) ListFriends(_ context.Context, _ *zonev1.ListFriendsRequest, _ ...grpc.CallOption) (*zonev1.ListFriendsResponse, error) {
+	return &zonev1.ListFriendsResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) CreateParty(_ context.Context, _ *zonev1.CreatePartyRequest, _ ...grpc.CallOption) (*zonev1.CreatePartyResponse, error) {
+	return &zonev1.CreatePartyResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) JoinParty(_ context.Context, _ *zonev1.JoinPartyRequest, _ ...grpc.CallOption) (*zonev1.JoinPartyResponse, error) {
+	return &zonev1.JoinPartyResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) LeaveParty(_ context.Context, _ *zonev1.LeavePartyRequest, _ ...grpc.CallOption) (*zonev1.LeavePartyResponse, error) {
+	return &zonev1.LeavePartyResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) GetParty(_ context.Context, _ *zonev1.GetPartyRequest, _ ...grpc.CallOption) (*zonev1.GetPartyResponse, error) {
+	return &zonev1.GetPartyResponse{Success: true}, nil
+}
+
 // wsMapDispatchAdapter mirrors service.DispatchHandler for the WS path
 // so this test exercises the full real WSHandler → processBytes →
 // domain.PacketHandler → zone client → ZC_ACCEPT_ENTER → WS write

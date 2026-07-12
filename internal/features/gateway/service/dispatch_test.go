@@ -281,6 +281,54 @@ func (f *fakeZoneClient) CloseStorage(ctx context.Context, in *zonev1.CloseStora
 	return &zonev1.CloseStorageResponse{Success: true}, nil
 }
 
+func (f *fakeZoneClient) Whisper(ctx context.Context, in *zonev1.WhisperRequest, opts ...grpc.CallOption) (*zonev1.WhisperResponse, error) {
+	return &zonev1.WhisperResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) SendPartyChat(ctx context.Context, in *zonev1.SendPartyChatRequest, opts ...grpc.CallOption) (*zonev1.SendPartyChatResponse, error) {
+	return &zonev1.SendPartyChatResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) SendMapChat(ctx context.Context, in *zonev1.SendMapChatRequest, opts ...grpc.CallOption) (*zonev1.SendMapChatResponse, error) {
+	return &zonev1.SendMapChatResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) SendFriendRequest(ctx context.Context, in *zonev1.SendFriendRequestRequest, opts ...grpc.CallOption) (*zonev1.SendFriendRequestResponse, error) {
+	return &zonev1.SendFriendRequestResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) AcceptFriendRequest(ctx context.Context, in *zonev1.AcceptFriendRequestRequest, opts ...grpc.CallOption) (*zonev1.AcceptFriendRequestResponse, error) {
+	return &zonev1.AcceptFriendRequestResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) RejectFriendRequest(ctx context.Context, in *zonev1.RejectFriendRequestRequest, opts ...grpc.CallOption) (*zonev1.RejectFriendRequestResponse, error) {
+	return &zonev1.RejectFriendRequestResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) RemoveFriend(ctx context.Context, in *zonev1.RemoveFriendRequest, opts ...grpc.CallOption) (*zonev1.RemoveFriendResponse, error) {
+	return &zonev1.RemoveFriendResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) ListFriends(ctx context.Context, in *zonev1.ListFriendsRequest, opts ...grpc.CallOption) (*zonev1.ListFriendsResponse, error) {
+	return &zonev1.ListFriendsResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) CreateParty(ctx context.Context, in *zonev1.CreatePartyRequest, opts ...grpc.CallOption) (*zonev1.CreatePartyResponse, error) {
+	return &zonev1.CreatePartyResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) JoinParty(ctx context.Context, in *zonev1.JoinPartyRequest, opts ...grpc.CallOption) (*zonev1.JoinPartyResponse, error) {
+	return &zonev1.JoinPartyResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) LeaveParty(ctx context.Context, in *zonev1.LeavePartyRequest, opts ...grpc.CallOption) (*zonev1.LeavePartyResponse, error) {
+	return &zonev1.LeavePartyResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) GetParty(ctx context.Context, in *zonev1.GetPartyRequest, opts ...grpc.CallOption) (*zonev1.GetPartyResponse, error) {
+	return &zonev1.GetPartyResponse{Success: true}, nil
+}
+
 // bufResponder captures every packet HandlePacket sends. Matched in
 // parallel with the in-process dispatch under test.
 type bufResponder struct {

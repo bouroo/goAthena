@@ -22,6 +22,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type ChatType int32
+
+const (
+	ChatType_CHAT_TYPE_UNSPECIFIED ChatType = 0
+	ChatType_CHAT_TYPE_WHISPER     ChatType = 1 // Private message
+	ChatType_CHAT_TYPE_PARTY       ChatType = 2 // Party chat
+	ChatType_CHAT_TYPE_MAP         ChatType = 3 // Map-wide chat
+)
+
+// Enum value maps for ChatType.
+var (
+	ChatType_name = map[int32]string{
+		0: "CHAT_TYPE_UNSPECIFIED",
+		1: "CHAT_TYPE_WHISPER",
+		2: "CHAT_TYPE_PARTY",
+		3: "CHAT_TYPE_MAP",
+	}
+	ChatType_value = map[string]int32{
+		"CHAT_TYPE_UNSPECIFIED": 0,
+		"CHAT_TYPE_WHISPER":     1,
+		"CHAT_TYPE_PARTY":       2,
+		"CHAT_TYPE_MAP":         3,
+	}
+)
+
+func (x ChatType) Enum() *ChatType {
+	p := new(ChatType)
+	*p = x
+	return p
+}
+
+func (x ChatType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ChatType) Descriptor() protoreflect.EnumDescriptor {
+	return file_zone_v1_event_proto_enumTypes[0].Descriptor()
+}
+
+func (ChatType) Type() protoreflect.EnumType {
+	return &file_zone_v1_event_proto_enumTypes[0]
+}
+
+func (x ChatType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ChatType.Descriptor instead.
+func (ChatType) EnumDescriptor() ([]byte, []int) {
+	return file_zone_v1_event_proto_rawDescGZIP(), []int{0}
+}
+
 // ZoneEvent represents an event occurring within a zone (map).
 // These events are broadcast via NATS.
 type ZoneEvent struct {
@@ -41,6 +93,7 @@ type ZoneEvent struct {
 	//	*ZoneEvent_Confirmed
 	//	*ZoneEvent_Completed
 	//	*ZoneEvent_Cancelled
+	//	*ZoneEvent_Chat
 	Event         isZoneEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -200,6 +253,15 @@ func (x *ZoneEvent) GetCancelled() *TradeCancelled {
 	return nil
 }
 
+func (x *ZoneEvent) GetChat() *ChatMessage {
+	if x != nil {
+		if x, ok := x.Event.(*ZoneEvent_Chat); ok {
+			return x.Chat
+		}
+	}
+	return nil
+}
+
 type isZoneEvent_Event interface {
 	isZoneEvent_Event()
 }
@@ -256,6 +318,10 @@ type ZoneEvent_Cancelled struct {
 	Cancelled *TradeCancelled `protobuf:"bytes,13,opt,name=cancelled,proto3,oneof"`
 }
 
+type ZoneEvent_Chat struct {
+	Chat *ChatMessage `protobuf:"bytes,14,opt,name=chat,proto3,oneof"` // Chat message (whisper/party/map)
+}
+
 func (*ZoneEvent_Moved) isZoneEvent_Event() {}
 
 func (*ZoneEvent_Spawned) isZoneEvent_Event() {}
@@ -281,6 +347,8 @@ func (*ZoneEvent_Confirmed) isZoneEvent_Event() {}
 func (*ZoneEvent_Completed) isZoneEvent_Event() {}
 
 func (*ZoneEvent_Cancelled) isZoneEvent_Event() {}
+
+func (*ZoneEvent_Chat) isZoneEvent_Event() {}
 
 // EntityMoved indicates an entity has started moving to a new cell.
 type EntityMoved struct {
@@ -1109,11 +1177,142 @@ func (x *TradeCancelled) GetCharId() uint32 {
 	return 0
 }
 
+// ChatMessage represents any chat message sent by a player
+type ChatMessage struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	SenderCharId uint32                 `protobuf:"varint,1,opt,name=sender_char_id,json=senderCharId,proto3" json:"sender_char_id,omitempty"`
+	SenderName   string                 `protobuf:"bytes,2,opt,name=sender_name,json=senderName,proto3" json:"sender_name,omitempty"`
+	Content      string                 `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"`
+	Type         ChatType               `protobuf:"varint,4,opt,name=type,proto3,enum=zone.v1.ChatType" json:"type,omitempty"`
+	// Types that are valid to be assigned to Target:
+	//
+	//	*ChatMessage_TargetCharId
+	//	*ChatMessage_PartyId
+	//	*ChatMessage_MapName
+	Target        isChatMessage_Target `protobuf_oneof:"target"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChatMessage) Reset() {
+	*x = ChatMessage{}
+	mi := &file_zone_v1_event_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChatMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChatMessage) ProtoMessage() {}
+
+func (x *ChatMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_event_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChatMessage.ProtoReflect.Descriptor instead.
+func (*ChatMessage) Descriptor() ([]byte, []int) {
+	return file_zone_v1_event_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ChatMessage) GetSenderCharId() uint32 {
+	if x != nil {
+		return x.SenderCharId
+	}
+	return 0
+}
+
+func (x *ChatMessage) GetSenderName() string {
+	if x != nil {
+		return x.SenderName
+	}
+	return ""
+}
+
+func (x *ChatMessage) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *ChatMessage) GetType() ChatType {
+	if x != nil {
+		return x.Type
+	}
+	return ChatType_CHAT_TYPE_UNSPECIFIED
+}
+
+func (x *ChatMessage) GetTarget() isChatMessage_Target {
+	if x != nil {
+		return x.Target
+	}
+	return nil
+}
+
+func (x *ChatMessage) GetTargetCharId() uint32 {
+	if x != nil {
+		if x, ok := x.Target.(*ChatMessage_TargetCharId); ok {
+			return x.TargetCharId
+		}
+	}
+	return 0
+}
+
+func (x *ChatMessage) GetPartyId() string {
+	if x != nil {
+		if x, ok := x.Target.(*ChatMessage_PartyId); ok {
+			return x.PartyId
+		}
+	}
+	return ""
+}
+
+func (x *ChatMessage) GetMapName() string {
+	if x != nil {
+		if x, ok := x.Target.(*ChatMessage_MapName); ok {
+			return x.MapName
+		}
+	}
+	return ""
+}
+
+type isChatMessage_Target interface {
+	isChatMessage_Target()
+}
+
+type ChatMessage_TargetCharId struct {
+	TargetCharId uint32 `protobuf:"varint,5,opt,name=target_char_id,json=targetCharId,proto3,oneof"` // For whisper
+}
+
+type ChatMessage_PartyId struct {
+	PartyId string `protobuf:"bytes,6,opt,name=party_id,json=partyId,proto3,oneof"` // For party chat
+}
+
+type ChatMessage_MapName struct {
+	MapName string `protobuf:"bytes,7,opt,name=map_name,json=mapName,proto3,oneof"` // For map chat
+}
+
+func (*ChatMessage_TargetCharId) isChatMessage_Target() {}
+
+func (*ChatMessage_PartyId) isChatMessage_Target() {}
+
+func (*ChatMessage_MapName) isChatMessage_Target() {}
+
 var File_zone_v1_event_proto protoreflect.FileDescriptor
 
 const file_zone_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x13zone/v1/event.proto\x12\azone.v1\"\xd2\x05\n" +
+	"\x13zone/v1/event.proto\x12\azone.v1\"\xfe\x05\n" +
 	"\tZoneEvent\x12,\n" +
 	"\x05moved\x18\x01 \x01(\v2\x14.zone.v1.EntityMovedH\x00R\x05moved\x122\n" +
 	"\aspawned\x18\x02 \x01(\v2\x16.zone.v1.EntitySpawnedH\x00R\aspawned\x125\n" +
@@ -1130,7 +1329,8 @@ const file_zone_v1_event_proto_rawDesc = "" +
 	" \x01(\v2\x17.zone.v1.TradeZenyAddedH\x00R\tzenyAdded\x127\n" +
 	"\tconfirmed\x18\v \x01(\v2\x17.zone.v1.TradeConfirmedH\x00R\tconfirmed\x127\n" +
 	"\tcompleted\x18\f \x01(\v2\x17.zone.v1.TradeCompletedH\x00R\tcompleted\x127\n" +
-	"\tcancelled\x18\r \x01(\v2\x17.zone.v1.TradeCancelledH\x00R\tcancelledB\a\n" +
+	"\tcancelled\x18\r \x01(\v2\x17.zone.v1.TradeCancelledH\x00R\tcancelled\x12*\n" +
+	"\x04chat\x18\x0e \x01(\v2\x14.zone.v1.ChatMessageH\x00R\x04chatB\a\n" +
 	"\x05event\"\xaa\x01\n" +
 	"\vEntityMoved\x12\x1b\n" +
 	"\tentity_id\x18\x01 \x01(\rR\bentityId\x12\x15\n" +
@@ -1189,7 +1389,22 @@ const file_zone_v1_event_proto_rawDesc = "" +
 	"\btrade_id\x18\x01 \x01(\tR\atradeId\"D\n" +
 	"\x0eTradeCancelled\x12\x19\n" +
 	"\btrade_id\x18\x01 \x01(\tR\atradeId\x12\x17\n" +
-	"\achar_id\x18\x02 \x01(\rR\x06charIdB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
+	"\achar_id\x18\x02 \x01(\rR\x06charId\"\x81\x02\n" +
+	"\vChatMessage\x12$\n" +
+	"\x0esender_char_id\x18\x01 \x01(\rR\fsenderCharId\x12\x1f\n" +
+	"\vsender_name\x18\x02 \x01(\tR\n" +
+	"senderName\x12\x18\n" +
+	"\acontent\x18\x03 \x01(\tR\acontent\x12%\n" +
+	"\x04type\x18\x04 \x01(\x0e2\x11.zone.v1.ChatTypeR\x04type\x12&\n" +
+	"\x0etarget_char_id\x18\x05 \x01(\rH\x00R\ftargetCharId\x12\x1b\n" +
+	"\bparty_id\x18\x06 \x01(\tH\x00R\apartyId\x12\x1b\n" +
+	"\bmap_name\x18\a \x01(\tH\x00R\amapNameB\b\n" +
+	"\x06target*d\n" +
+	"\bChatType\x12\x19\n" +
+	"\x15CHAT_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11CHAT_TYPE_WHISPER\x10\x01\x12\x13\n" +
+	"\x0fCHAT_TYPE_PARTY\x10\x02\x12\x11\n" +
+	"\rCHAT_TYPE_MAP\x10\x03B2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
 
 var (
 	file_zone_v1_event_proto_rawDescOnce sync.Once
@@ -1203,42 +1418,47 @@ func file_zone_v1_event_proto_rawDescGZIP() []byte {
 	return file_zone_v1_event_proto_rawDescData
 }
 
-var file_zone_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_zone_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_zone_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_zone_v1_event_proto_goTypes = []any{
-	(*ZoneEvent)(nil),      // 0: zone.v1.ZoneEvent
-	(*EntityMoved)(nil),    // 1: zone.v1.EntityMoved
-	(*EntitySpawned)(nil),  // 2: zone.v1.EntitySpawned
-	(*EntityVanished)(nil), // 3: zone.v1.EntityVanished
-	(*EntityDamaged)(nil),  // 4: zone.v1.EntityDamaged
-	(*EntityKilled)(nil),   // 5: zone.v1.EntityKilled
-	(*ItemDropped)(nil),    // 6: zone.v1.ItemDropped
-	(*ItemPickedUp)(nil),   // 7: zone.v1.ItemPickedUp
-	(*TradeRequested)(nil), // 8: zone.v1.TradeRequested
-	(*TradeItemAdded)(nil), // 9: zone.v1.TradeItemAdded
-	(*TradeZenyAdded)(nil), // 10: zone.v1.TradeZenyAdded
-	(*TradeConfirmed)(nil), // 11: zone.v1.TradeConfirmed
-	(*TradeCompleted)(nil), // 12: zone.v1.TradeCompleted
-	(*TradeCancelled)(nil), // 13: zone.v1.TradeCancelled
+	(ChatType)(0),          // 0: zone.v1.ChatType
+	(*ZoneEvent)(nil),      // 1: zone.v1.ZoneEvent
+	(*EntityMoved)(nil),    // 2: zone.v1.EntityMoved
+	(*EntitySpawned)(nil),  // 3: zone.v1.EntitySpawned
+	(*EntityVanished)(nil), // 4: zone.v1.EntityVanished
+	(*EntityDamaged)(nil),  // 5: zone.v1.EntityDamaged
+	(*EntityKilled)(nil),   // 6: zone.v1.EntityKilled
+	(*ItemDropped)(nil),    // 7: zone.v1.ItemDropped
+	(*ItemPickedUp)(nil),   // 8: zone.v1.ItemPickedUp
+	(*TradeRequested)(nil), // 9: zone.v1.TradeRequested
+	(*TradeItemAdded)(nil), // 10: zone.v1.TradeItemAdded
+	(*TradeZenyAdded)(nil), // 11: zone.v1.TradeZenyAdded
+	(*TradeConfirmed)(nil), // 12: zone.v1.TradeConfirmed
+	(*TradeCompleted)(nil), // 13: zone.v1.TradeCompleted
+	(*TradeCancelled)(nil), // 14: zone.v1.TradeCancelled
+	(*ChatMessage)(nil),    // 15: zone.v1.ChatMessage
 }
 var file_zone_v1_event_proto_depIdxs = []int32{
-	1,  // 0: zone.v1.ZoneEvent.moved:type_name -> zone.v1.EntityMoved
-	2,  // 1: zone.v1.ZoneEvent.spawned:type_name -> zone.v1.EntitySpawned
-	3,  // 2: zone.v1.ZoneEvent.vanished:type_name -> zone.v1.EntityVanished
-	4,  // 3: zone.v1.ZoneEvent.damaged:type_name -> zone.v1.EntityDamaged
-	5,  // 4: zone.v1.ZoneEvent.killed:type_name -> zone.v1.EntityKilled
-	6,  // 5: zone.v1.ZoneEvent.dropped:type_name -> zone.v1.ItemDropped
-	7,  // 6: zone.v1.ZoneEvent.picked_up:type_name -> zone.v1.ItemPickedUp
-	8,  // 7: zone.v1.ZoneEvent.requested:type_name -> zone.v1.TradeRequested
-	9,  // 8: zone.v1.ZoneEvent.item_added:type_name -> zone.v1.TradeItemAdded
-	10, // 9: zone.v1.ZoneEvent.zeny_added:type_name -> zone.v1.TradeZenyAdded
-	11, // 10: zone.v1.ZoneEvent.confirmed:type_name -> zone.v1.TradeConfirmed
-	12, // 11: zone.v1.ZoneEvent.completed:type_name -> zone.v1.TradeCompleted
-	13, // 12: zone.v1.ZoneEvent.cancelled:type_name -> zone.v1.TradeCancelled
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	2,  // 0: zone.v1.ZoneEvent.moved:type_name -> zone.v1.EntityMoved
+	3,  // 1: zone.v1.ZoneEvent.spawned:type_name -> zone.v1.EntitySpawned
+	4,  // 2: zone.v1.ZoneEvent.vanished:type_name -> zone.v1.EntityVanished
+	5,  // 3: zone.v1.ZoneEvent.damaged:type_name -> zone.v1.EntityDamaged
+	6,  // 4: zone.v1.ZoneEvent.killed:type_name -> zone.v1.EntityKilled
+	7,  // 5: zone.v1.ZoneEvent.dropped:type_name -> zone.v1.ItemDropped
+	8,  // 6: zone.v1.ZoneEvent.picked_up:type_name -> zone.v1.ItemPickedUp
+	9,  // 7: zone.v1.ZoneEvent.requested:type_name -> zone.v1.TradeRequested
+	10, // 8: zone.v1.ZoneEvent.item_added:type_name -> zone.v1.TradeItemAdded
+	11, // 9: zone.v1.ZoneEvent.zeny_added:type_name -> zone.v1.TradeZenyAdded
+	12, // 10: zone.v1.ZoneEvent.confirmed:type_name -> zone.v1.TradeConfirmed
+	13, // 11: zone.v1.ZoneEvent.completed:type_name -> zone.v1.TradeCompleted
+	14, // 12: zone.v1.ZoneEvent.cancelled:type_name -> zone.v1.TradeCancelled
+	15, // 13: zone.v1.ZoneEvent.chat:type_name -> zone.v1.ChatMessage
+	0,  // 14: zone.v1.ChatMessage.type:type_name -> zone.v1.ChatType
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_zone_v1_event_proto_init() }
@@ -1260,19 +1480,26 @@ func file_zone_v1_event_proto_init() {
 		(*ZoneEvent_Confirmed)(nil),
 		(*ZoneEvent_Completed)(nil),
 		(*ZoneEvent_Cancelled)(nil),
+		(*ZoneEvent_Chat)(nil),
+	}
+	file_zone_v1_event_proto_msgTypes[14].OneofWrappers = []any{
+		(*ChatMessage_TargetCharId)(nil),
+		(*ChatMessage_PartyId)(nil),
+		(*ChatMessage_MapName)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_zone_v1_event_proto_rawDesc), len(file_zone_v1_event_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   14,
+			NumEnums:      1,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_zone_v1_event_proto_goTypes,
 		DependencyIndexes: file_zone_v1_event_proto_depIdxs,
+		EnumInfos:         file_zone_v1_event_proto_enumTypes,
 		MessageInfos:      file_zone_v1_event_proto_msgTypes,
 	}.Build()
 	File_zone_v1_event_proto = out.File

@@ -61,6 +61,42 @@ service ZoneService {
 
   // CloseStorage closes a character's storage session
   rpc CloseStorage(CloseStorageRequest) returns (CloseStorageResponse);
+
+  // Whisper sends a private message
+  rpc Whisper(WhisperRequest) returns (WhisperResponse);
+
+  // SendPartyChat sends a message to party members
+  rpc SendPartyChat(SendPartyChatRequest) returns (SendPartyChatResponse);
+
+  // SendMapChat sends a message to players on the same map
+  rpc SendMapChat(SendMapChatRequest) returns (SendMapChatResponse);
+
+  // SendFriendRequest sends a friend request
+  rpc SendFriendRequest(SendFriendRequestRequest) returns (SendFriendRequestResponse);
+
+  // AcceptFriendRequest accepts a friend request
+  rpc AcceptFriendRequest(AcceptFriendRequestRequest) returns (AcceptFriendRequestResponse);
+
+  // RejectFriendRequest rejects a friend request
+  rpc RejectFriendRequest(RejectFriendRequestRequest) returns (RejectFriendRequestResponse);
+
+  // RemoveFriend removes a friend
+  rpc RemoveFriend(RemoveFriendRequest) returns (RemoveFriendResponse);
+
+  // ListFriends returns the friend list
+  rpc ListFriends(ListFriendsRequest) returns (ListFriendsResponse);
+
+  // CreateParty creates a new party
+  rpc CreateParty(CreatePartyRequest) returns (CreatePartyResponse);
+
+  // JoinParty adds a character to a party
+  rpc JoinParty(JoinPartyRequest) returns (JoinPartyResponse);
+
+  // LeaveParty removes a character from a party
+  rpc LeaveParty(LeavePartyRequest) returns (LeavePartyResponse);
+
+  // GetParty returns party info
+  rpc GetParty(GetPartyRequest) returns (GetPartyResponse);
 }
 
 message EnterZoneRequest {
@@ -244,4 +280,150 @@ message StorageItem {
   uint64 card1 = 9;
   uint64 card2 = 10;
   uint64 card3 = 11;
+}
+
+message WhisperRequest {
+  uint32 sender_char_id = 1;
+  uint32 target_char_id = 2;
+  string content = 3;
+}
+
+message WhisperResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message SendPartyChatRequest {
+  uint32 sender_char_id = 1;
+  string content = 2;
+}
+
+message SendPartyChatResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message SendMapChatRequest {
+  uint32 sender_char_id = 1;
+  string map_name = 2;
+  string content = 3;
+}
+
+message SendMapChatResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message SendFriendRequestRequest {
+  uint32 from_account_id = 1;
+  uint32 to_account_id = 2;
+  string from_name = 3;
+  string to_name = 4;
+}
+
+message SendFriendRequestResponse {
+  bool success = 1;
+  string error_message = 2;
+  uint64 request_id = 3;
+}
+
+message AcceptFriendRequestRequest {
+  uint64 request_id = 1;
+}
+
+message AcceptFriendRequestResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message RejectFriendRequestRequest {
+  uint64 request_id = 1;
+}
+
+message RejectFriendRequestResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message RemoveFriendRequest {
+  uint32 account_id = 1;
+  uint32 friend_account_id = 2;
+}
+
+message RemoveFriendResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message ListFriendsRequest {
+  uint32 account_id = 1;
+}
+
+message ListFriendsResponse {
+  bool success = 1;
+  string error_message = 2;
+  repeated FriendInfo friends = 3;
+}
+
+message FriendInfo {
+  uint32 account_id = 1;
+  uint32 friend_account_id = 2;
+  string friend_name = 3;
+  bool online = 4;
+}
+
+message CreatePartyRequest {
+  string name = 1;
+  uint32 leader_char_id = 2;
+  string leader_name = 3;
+}
+
+message CreatePartyResponse {
+  bool success = 1;
+  string error_message = 2;
+  string party_id = 3;
+}
+
+message JoinPartyRequest {
+  string party_id = 1;
+  uint32 char_id = 2;
+  string char_name = 3;
+}
+
+message JoinPartyResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message LeavePartyRequest {
+  string party_id = 1;
+  uint32 char_id = 2;
+}
+
+message LeavePartyResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message GetPartyRequest {
+  string party_id = 1;
+}
+
+message GetPartyResponse {
+  bool success = 1;
+  string error_message = 2;
+  PartyInfo party = 3;
+}
+
+message PartyInfo {
+  string id = 1;
+  string name = 2;
+  uint32 leader_char_id = 3;
+  repeated PartyMemberInfo members = 4;
+}
+
+message PartyMemberInfo {
+  uint32 char_id = 1;
+  string name = 2;
+  bool is_leader = 3;
 }

@@ -21,6 +21,7 @@ message ZoneEvent {
     TradeConfirmed confirmed = 11;
     TradeCompleted completed = 12;
     TradeCancelled cancelled = 13;
+    ChatMessage chat = 14;      // Chat message (whisper/party/map)
   }
 }
 
@@ -112,4 +113,24 @@ message TradeCompleted {
 message TradeCancelled {
   string trade_id = 1;
   uint32 char_id = 2;
+}
+
+// ChatMessage represents any chat message sent by a player
+message ChatMessage {
+  uint32 sender_char_id = 1;
+  string sender_name = 2;
+  string content = 3;
+  ChatType type = 4;
+  oneof target {
+    uint32 target_char_id = 5;       // For whisper
+    string party_id = 6;             // For party chat
+    string map_name = 7;              // For map chat
+  }
+}
+
+enum ChatType {
+  CHAT_TYPE_UNSPECIFIED = 0;
+  CHAT_TYPE_WHISPER = 1;             // Private message
+  CHAT_TYPE_PARTY = 2;               // Party chat
+  CHAT_TYPE_MAP = 3;                 // Map-wide chat
 }

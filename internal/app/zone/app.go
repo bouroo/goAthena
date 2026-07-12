@@ -34,6 +34,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/app/common"
 	"github.com/bouroo/goAthena/internal/config"
+	chatdi "github.com/bouroo/goAthena/internal/features/chat/di"
 	script "github.com/bouroo/goAthena/internal/features/script"
 	scriptdi "github.com/bouroo/goAthena/internal/features/script/di"
 	scriptservice "github.com/bouroo/goAthena/internal/features/script/service"
@@ -182,6 +183,9 @@ func startComponents(injector do.Injector) (*service.TickLoop, *grpc.Server, err
 	}
 	if err := storagedi.Register(injector); err != nil {
 		return nil, nil, fmt.Errorf("register storage feature: %w", err)
+	}
+	if err := chatdi.Register(injector); err != nil {
+		return nil, nil, fmt.Errorf("register chat feature: %w", err)
 	}
 	tickLoop, err := zonedi.ProvideTickLoop(injector)
 	if err != nil {
