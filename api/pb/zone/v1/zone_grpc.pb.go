@@ -30,6 +30,10 @@ const (
 	ZoneService_ConfirmTrade_FullMethodName  = "/zone.v1.ZoneService/ConfirmTrade"
 	ZoneService_CompleteTrade_FullMethodName = "/zone.v1.ZoneService/CompleteTrade"
 	ZoneService_CancelTrade_FullMethodName   = "/zone.v1.ZoneService/CancelTrade"
+	ZoneService_OpenStorage_FullMethodName   = "/zone.v1.ZoneService/OpenStorage"
+	ZoneService_DepositItem_FullMethodName   = "/zone.v1.ZoneService/DepositItem"
+	ZoneService_WithdrawItem_FullMethodName  = "/zone.v1.ZoneService/WithdrawItem"
+	ZoneService_CloseStorage_FullMethodName  = "/zone.v1.ZoneService/CloseStorage"
 )
 
 // ZoneServiceClient is the client API for ZoneService service.
@@ -72,6 +76,14 @@ type ZoneServiceClient interface {
 	CompleteTrade(ctx context.Context, in *CompleteTradeRequest, opts ...grpc.CallOption) (*CompleteTradeResponse, error)
 	// CancelTrade aborts the current trade session.
 	CancelTrade(ctx context.Context, in *CancelTradeRequest, opts ...grpc.CallOption) (*CancelTradeResponse, error)
+	// OpenStorage opens a character's storage session for operations
+	OpenStorage(ctx context.Context, in *OpenStorageRequest, opts ...grpc.CallOption) (*OpenStorageResponse, error)
+	// DepositItem moves an item from character inventory to storage
+	DepositItem(ctx context.Context, in *DepositItemRequest, opts ...grpc.CallOption) (*DepositItemResponse, error)
+	// WithdrawItem moves an item from storage to character inventory
+	WithdrawItem(ctx context.Context, in *WithdrawItemRequest, opts ...grpc.CallOption) (*WithdrawItemResponse, error)
+	// CloseStorage closes a character's storage session
+	CloseStorage(ctx context.Context, in *CloseStorageRequest, opts ...grpc.CallOption) (*CloseStorageResponse, error)
 }
 
 type zoneServiceClient struct {
@@ -182,6 +194,46 @@ func (c *zoneServiceClient) CancelTrade(ctx context.Context, in *CancelTradeRequ
 	return out, nil
 }
 
+func (c *zoneServiceClient) OpenStorage(ctx context.Context, in *OpenStorageRequest, opts ...grpc.CallOption) (*OpenStorageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OpenStorageResponse)
+	err := c.cc.Invoke(ctx, ZoneService_OpenStorage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) DepositItem(ctx context.Context, in *DepositItemRequest, opts ...grpc.CallOption) (*DepositItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DepositItemResponse)
+	err := c.cc.Invoke(ctx, ZoneService_DepositItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) WithdrawItem(ctx context.Context, in *WithdrawItemRequest, opts ...grpc.CallOption) (*WithdrawItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WithdrawItemResponse)
+	err := c.cc.Invoke(ctx, ZoneService_WithdrawItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) CloseStorage(ctx context.Context, in *CloseStorageRequest, opts ...grpc.CallOption) (*CloseStorageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CloseStorageResponse)
+	err := c.cc.Invoke(ctx, ZoneService_CloseStorage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ZoneServiceServer is the server API for ZoneService service.
 // All implementations must embed UnimplementedZoneServiceServer
 // for forward compatibility.
@@ -222,6 +274,14 @@ type ZoneServiceServer interface {
 	CompleteTrade(context.Context, *CompleteTradeRequest) (*CompleteTradeResponse, error)
 	// CancelTrade aborts the current trade session.
 	CancelTrade(context.Context, *CancelTradeRequest) (*CancelTradeResponse, error)
+	// OpenStorage opens a character's storage session for operations
+	OpenStorage(context.Context, *OpenStorageRequest) (*OpenStorageResponse, error)
+	// DepositItem moves an item from character inventory to storage
+	DepositItem(context.Context, *DepositItemRequest) (*DepositItemResponse, error)
+	// WithdrawItem moves an item from storage to character inventory
+	WithdrawItem(context.Context, *WithdrawItemRequest) (*WithdrawItemResponse, error)
+	// CloseStorage closes a character's storage session
+	CloseStorage(context.Context, *CloseStorageRequest) (*CloseStorageResponse, error)
 	mustEmbedUnimplementedZoneServiceServer()
 }
 
@@ -261,6 +321,18 @@ func (UnimplementedZoneServiceServer) CompleteTrade(context.Context, *CompleteTr
 }
 func (UnimplementedZoneServiceServer) CancelTrade(context.Context, *CancelTradeRequest) (*CancelTradeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CancelTrade not implemented")
+}
+func (UnimplementedZoneServiceServer) OpenStorage(context.Context, *OpenStorageRequest) (*OpenStorageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OpenStorage not implemented")
+}
+func (UnimplementedZoneServiceServer) DepositItem(context.Context, *DepositItemRequest) (*DepositItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DepositItem not implemented")
+}
+func (UnimplementedZoneServiceServer) WithdrawItem(context.Context, *WithdrawItemRequest) (*WithdrawItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WithdrawItem not implemented")
+}
+func (UnimplementedZoneServiceServer) CloseStorage(context.Context, *CloseStorageRequest) (*CloseStorageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CloseStorage not implemented")
 }
 func (UnimplementedZoneServiceServer) mustEmbedUnimplementedZoneServiceServer() {}
 func (UnimplementedZoneServiceServer) testEmbeddedByValue()                     {}
@@ -463,6 +535,78 @@ func _ZoneService_CancelTrade_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ZoneService_OpenStorage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OpenStorageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).OpenStorage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_OpenStorage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).OpenStorage(ctx, req.(*OpenStorageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_DepositItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DepositItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).DepositItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_DepositItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).DepositItem(ctx, req.(*DepositItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_WithdrawItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WithdrawItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).WithdrawItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_WithdrawItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).WithdrawItem(ctx, req.(*WithdrawItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_CloseStorage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloseStorageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).CloseStorage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_CloseStorage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).CloseStorage(ctx, req.(*CloseStorageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ZoneService_ServiceDesc is the grpc.ServiceDesc for ZoneService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -509,6 +653,22 @@ var ZoneService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CancelTrade",
 			Handler:    _ZoneService_CancelTrade_Handler,
+		},
+		{
+			MethodName: "OpenStorage",
+			Handler:    _ZoneService_OpenStorage_Handler,
+		},
+		{
+			MethodName: "DepositItem",
+			Handler:    _ZoneService_DepositItem_Handler,
+		},
+		{
+			MethodName: "WithdrawItem",
+			Handler:    _ZoneService_WithdrawItem_Handler,
+		},
+		{
+			MethodName: "CloseStorage",
+			Handler:    _ZoneService_CloseStorage_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

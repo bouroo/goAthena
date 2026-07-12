@@ -265,6 +265,22 @@ func (f *fakeZoneClient) CancelTrade(ctx context.Context, in *zonev1.CancelTrade
 	return &zonev1.CancelTradeResponse{Success: true}, nil
 }
 
+func (f *fakeZoneClient) OpenStorage(ctx context.Context, in *zonev1.OpenStorageRequest, opts ...grpc.CallOption) (*zonev1.OpenStorageResponse, error) {
+	return &zonev1.OpenStorageResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) DepositItem(ctx context.Context, in *zonev1.DepositItemRequest, opts ...grpc.CallOption) (*zonev1.DepositItemResponse, error) {
+	return &zonev1.DepositItemResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) WithdrawItem(ctx context.Context, in *zonev1.WithdrawItemRequest, opts ...grpc.CallOption) (*zonev1.WithdrawItemResponse, error) {
+	return &zonev1.WithdrawItemResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) CloseStorage(ctx context.Context, in *zonev1.CloseStorageRequest, opts ...grpc.CallOption) (*zonev1.CloseStorageResponse, error) {
+	return &zonev1.CloseStorageResponse{Success: true}, nil
+}
+
 // bufResponder captures every packet HandlePacket sends. Matched in
 // parallel with the in-process dispatch under test.
 type bufResponder struct {

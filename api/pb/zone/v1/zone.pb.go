@@ -1270,6 +1270,570 @@ func (x *CancelTradeResponse) GetError() string {
 	return ""
 }
 
+type OpenStorageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CharId        uint32                 `protobuf:"varint,1,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"` // Character whose storage to open
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OpenStorageRequest) Reset() {
+	*x = OpenStorageRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OpenStorageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OpenStorageRequest) ProtoMessage() {}
+
+func (x *OpenStorageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OpenStorageRequest.ProtoReflect.Descriptor instead.
+func (*OpenStorageRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *OpenStorageRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+type OpenStorageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	Items         []*StorageItem         `protobuf:"bytes,3,rep,name=items,proto3" json:"items,omitempty"` // List of items in storage
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OpenStorageResponse) Reset() {
+	*x = OpenStorageResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OpenStorageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OpenStorageResponse) ProtoMessage() {}
+
+func (x *OpenStorageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OpenStorageResponse.ProtoReflect.Descriptor instead.
+func (*OpenStorageResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *OpenStorageResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *OpenStorageResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *OpenStorageResponse) GetItems() []*StorageItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+type DepositItemRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	CharId          uint32                 `protobuf:"varint,1,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	InventoryItemId uint64                 `protobuf:"varint,2,opt,name=inventory_item_id,json=inventoryItemId,proto3" json:"inventory_item_id,omitempty"` // Item ID from character inventory
+	Amount          int32                  `protobuf:"varint,3,opt,name=amount,proto3" json:"amount,omitempty"`                                            // Amount to deposit (must be > 0)
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *DepositItemRequest) Reset() {
+	*x = DepositItemRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DepositItemRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DepositItemRequest) ProtoMessage() {}
+
+func (x *DepositItemRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DepositItemRequest.ProtoReflect.Descriptor instead.
+func (*DepositItemRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *DepositItemRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *DepositItemRequest) GetInventoryItemId() uint64 {
+	if x != nil {
+		return x.InventoryItemId
+	}
+	return 0
+}
+
+func (x *DepositItemRequest) GetAmount() int32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+type DepositItemResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	StorageItemId uint64                 `protobuf:"varint,3,opt,name=storage_item_id,json=storageItemId,proto3" json:"storage_item_id,omitempty"` // ID of the created/updated storage item
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DepositItemResponse) Reset() {
+	*x = DepositItemResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DepositItemResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DepositItemResponse) ProtoMessage() {}
+
+func (x *DepositItemResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DepositItemResponse.ProtoReflect.Descriptor instead.
+func (*DepositItemResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *DepositItemResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *DepositItemResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *DepositItemResponse) GetStorageItemId() uint64 {
+	if x != nil {
+		return x.StorageItemId
+	}
+	return 0
+}
+
+type WithdrawItemRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CharId        uint32                 `protobuf:"varint,1,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	StorageItemId uint64                 `protobuf:"varint,2,opt,name=storage_item_id,json=storageItemId,proto3" json:"storage_item_id,omitempty"` // Item ID in storage
+	Amount        int32                  `protobuf:"varint,3,opt,name=amount,proto3" json:"amount,omitempty"`                                      // Amount to withdraw (must be > 0)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WithdrawItemRequest) Reset() {
+	*x = WithdrawItemRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WithdrawItemRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WithdrawItemRequest) ProtoMessage() {}
+
+func (x *WithdrawItemRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WithdrawItemRequest.ProtoReflect.Descriptor instead.
+func (*WithdrawItemRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *WithdrawItemRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *WithdrawItemRequest) GetStorageItemId() uint64 {
+	if x != nil {
+		return x.StorageItemId
+	}
+	return 0
+}
+
+func (x *WithdrawItemRequest) GetAmount() int32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+type WithdrawItemResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Success         bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage    string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	InventoryItemId uint64                 `protobuf:"varint,3,opt,name=inventory_item_id,json=inventoryItemId,proto3" json:"inventory_item_id,omitempty"` // ID of the created/updated inventory item
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *WithdrawItemResponse) Reset() {
+	*x = WithdrawItemResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WithdrawItemResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WithdrawItemResponse) ProtoMessage() {}
+
+func (x *WithdrawItemResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WithdrawItemResponse.ProtoReflect.Descriptor instead.
+func (*WithdrawItemResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *WithdrawItemResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *WithdrawItemResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *WithdrawItemResponse) GetInventoryItemId() uint64 {
+	if x != nil {
+		return x.InventoryItemId
+	}
+	return 0
+}
+
+type CloseStorageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CharId        uint32                 `protobuf:"varint,1,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CloseStorageRequest) Reset() {
+	*x = CloseStorageRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CloseStorageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloseStorageRequest) ProtoMessage() {}
+
+func (x *CloseStorageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloseStorageRequest.ProtoReflect.Descriptor instead.
+func (*CloseStorageRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *CloseStorageRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+type CloseStorageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CloseStorageResponse) Reset() {
+	*x = CloseStorageResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CloseStorageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloseStorageResponse) ProtoMessage() {}
+
+func (x *CloseStorageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloseStorageResponse.ProtoReflect.Descriptor instead.
+func (*CloseStorageResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *CloseStorageResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CloseStorageResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type StorageItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	NameId        uint32                 `protobuf:"varint,3,opt,name=name_id,json=nameId,proto3" json:"name_id,omitempty"`
+	Amount        int32                  `protobuf:"varint,4,opt,name=amount,proto3" json:"amount,omitempty"`
+	Identify      uint32                 `protobuf:"varint,5,opt,name=identify,proto3" json:"identify,omitempty"`
+	Refine        uint32                 `protobuf:"varint,6,opt,name=refine,proto3" json:"refine,omitempty"`
+	Attribute     uint32                 `protobuf:"varint,7,opt,name=attribute,proto3" json:"attribute,omitempty"`
+	Card0         uint64                 `protobuf:"varint,8,opt,name=card0,proto3" json:"card0,omitempty"`
+	Card1         uint64                 `protobuf:"varint,9,opt,name=card1,proto3" json:"card1,omitempty"`
+	Card2         uint64                 `protobuf:"varint,10,opt,name=card2,proto3" json:"card2,omitempty"`
+	Card3         uint64                 `protobuf:"varint,11,opt,name=card3,proto3" json:"card3,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StorageItem) Reset() {
+	*x = StorageItem{}
+	mi := &file_zone_v1_zone_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StorageItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StorageItem) ProtoMessage() {}
+
+func (x *StorageItem) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StorageItem.ProtoReflect.Descriptor instead.
+func (*StorageItem) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *StorageItem) GetId() uint64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *StorageItem) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *StorageItem) GetNameId() uint32 {
+	if x != nil {
+		return x.NameId
+	}
+	return 0
+}
+
+func (x *StorageItem) GetAmount() int32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+func (x *StorageItem) GetIdentify() uint32 {
+	if x != nil {
+		return x.Identify
+	}
+	return 0
+}
+
+func (x *StorageItem) GetRefine() uint32 {
+	if x != nil {
+		return x.Refine
+	}
+	return 0
+}
+
+func (x *StorageItem) GetAttribute() uint32 {
+	if x != nil {
+		return x.Attribute
+	}
+	return 0
+}
+
+func (x *StorageItem) GetCard0() uint64 {
+	if x != nil {
+		return x.Card0
+	}
+	return 0
+}
+
+func (x *StorageItem) GetCard1() uint64 {
+	if x != nil {
+		return x.Card1
+	}
+	return 0
+}
+
+func (x *StorageItem) GetCard2() uint64 {
+	if x != nil {
+		return x.Card2
+	}
+	return 0
+}
+
+func (x *StorageItem) GetCard3() uint64 {
+	if x != nil {
+		return x.Card3
+	}
+	return 0
+}
+
 var File_zone_v1_zone_proto protoreflect.FileDescriptor
 
 const file_zone_v1_zone_proto_rawDesc = "" +
@@ -1367,7 +1931,47 @@ const file_zone_v1_zone_proto_rawDesc = "" +
 	"\achar_id\x18\x02 \x01(\rR\x06charId\"E\n" +
 	"\x13CancelTradeResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\xfa\x05\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"-\n" +
+	"\x12OpenStorageRequest\x12\x17\n" +
+	"\achar_id\x18\x01 \x01(\rR\x06charId\"\x80\x01\n" +
+	"\x13OpenStorageResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12*\n" +
+	"\x05items\x18\x03 \x03(\v2\x14.zone.v1.StorageItemR\x05items\"q\n" +
+	"\x12DepositItemRequest\x12\x17\n" +
+	"\achar_id\x18\x01 \x01(\rR\x06charId\x12*\n" +
+	"\x11inventory_item_id\x18\x02 \x01(\x04R\x0finventoryItemId\x12\x16\n" +
+	"\x06amount\x18\x03 \x01(\x05R\x06amount\"|\n" +
+	"\x13DepositItemResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12&\n" +
+	"\x0fstorage_item_id\x18\x03 \x01(\x04R\rstorageItemId\"n\n" +
+	"\x13WithdrawItemRequest\x12\x17\n" +
+	"\achar_id\x18\x01 \x01(\rR\x06charId\x12&\n" +
+	"\x0fstorage_item_id\x18\x02 \x01(\x04R\rstorageItemId\x12\x16\n" +
+	"\x06amount\x18\x03 \x01(\x05R\x06amount\"\x81\x01\n" +
+	"\x14WithdrawItemResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12*\n" +
+	"\x11inventory_item_id\x18\x03 \x01(\x04R\x0finventoryItemId\".\n" +
+	"\x13CloseStorageRequest\x12\x17\n" +
+	"\achar_id\x18\x01 \x01(\rR\x06charId\"U\n" +
+	"\x14CloseStorageResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\x91\x02\n" +
+	"\vStorageItem\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\x12\x17\n" +
+	"\aname_id\x18\x03 \x01(\rR\x06nameId\x12\x16\n" +
+	"\x06amount\x18\x04 \x01(\x05R\x06amount\x12\x1a\n" +
+	"\bidentify\x18\x05 \x01(\rR\bidentify\x12\x16\n" +
+	"\x06refine\x18\x06 \x01(\rR\x06refine\x12\x1c\n" +
+	"\tattribute\x18\a \x01(\rR\tattribute\x12\x14\n" +
+	"\x05card0\x18\b \x01(\x04R\x05card0\x12\x14\n" +
+	"\x05card1\x18\t \x01(\x04R\x05card1\x12\x14\n" +
+	"\x05card2\x18\n" +
+	" \x01(\x04R\x05card2\x12\x14\n" +
+	"\x05card3\x18\v \x01(\x04R\x05card32\xa8\b\n" +
 	"\vZoneService\x12B\n" +
 	"\tEnterZone\x12\x19.zone.v1.EnterZoneRequest\x1a\x1a.zone.v1.EnterZoneResponse\x12E\n" +
 	"\n" +
@@ -1380,7 +1984,11 @@ const file_zone_v1_zone_proto_rawDesc = "" +
 	"\fAddTradeZeny\x12\x1c.zone.v1.AddTradeZenyRequest\x1a\x1d.zone.v1.AddTradeZenyResponse\x12K\n" +
 	"\fConfirmTrade\x12\x1c.zone.v1.ConfirmTradeRequest\x1a\x1d.zone.v1.ConfirmTradeResponse\x12N\n" +
 	"\rCompleteTrade\x12\x1d.zone.v1.CompleteTradeRequest\x1a\x1e.zone.v1.CompleteTradeResponse\x12H\n" +
-	"\vCancelTrade\x12\x1b.zone.v1.CancelTradeRequest\x1a\x1c.zone.v1.CancelTradeResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
+	"\vCancelTrade\x12\x1b.zone.v1.CancelTradeRequest\x1a\x1c.zone.v1.CancelTradeResponse\x12H\n" +
+	"\vOpenStorage\x12\x1b.zone.v1.OpenStorageRequest\x1a\x1c.zone.v1.OpenStorageResponse\x12H\n" +
+	"\vDepositItem\x12\x1b.zone.v1.DepositItemRequest\x1a\x1c.zone.v1.DepositItemResponse\x12K\n" +
+	"\fWithdrawItem\x12\x1c.zone.v1.WithdrawItemRequest\x1a\x1d.zone.v1.WithdrawItemResponse\x12K\n" +
+	"\fCloseStorage\x12\x1c.zone.v1.CloseStorageRequest\x1a\x1d.zone.v1.CloseStorageResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
 
 var (
 	file_zone_v1_zone_proto_rawDescOnce sync.Once
@@ -1394,7 +2002,7 @@ func file_zone_v1_zone_proto_rawDescGZIP() []byte {
 	return file_zone_v1_zone_proto_rawDescData
 }
 
-var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_zone_v1_zone_proto_goTypes = []any{
 	(*EnterZoneRequest)(nil),      // 0: zone.v1.EnterZoneRequest
 	(*EnterZoneResponse)(nil),     // 1: zone.v1.EnterZoneResponse
@@ -1416,33 +2024,51 @@ var file_zone_v1_zone_proto_goTypes = []any{
 	(*CompleteTradeResponse)(nil), // 17: zone.v1.CompleteTradeResponse
 	(*CancelTradeRequest)(nil),    // 18: zone.v1.CancelTradeRequest
 	(*CancelTradeResponse)(nil),   // 19: zone.v1.CancelTradeResponse
+	(*OpenStorageRequest)(nil),    // 20: zone.v1.OpenStorageRequest
+	(*OpenStorageResponse)(nil),   // 21: zone.v1.OpenStorageResponse
+	(*DepositItemRequest)(nil),    // 22: zone.v1.DepositItemRequest
+	(*DepositItemResponse)(nil),   // 23: zone.v1.DepositItemResponse
+	(*WithdrawItemRequest)(nil),   // 24: zone.v1.WithdrawItemRequest
+	(*WithdrawItemResponse)(nil),  // 25: zone.v1.WithdrawItemResponse
+	(*CloseStorageRequest)(nil),   // 26: zone.v1.CloseStorageRequest
+	(*CloseStorageResponse)(nil),  // 27: zone.v1.CloseStorageResponse
+	(*StorageItem)(nil),           // 28: zone.v1.StorageItem
 }
 var file_zone_v1_zone_proto_depIdxs = []int32{
-	0,  // 0: zone.v1.ZoneService.EnterZone:input_type -> zone.v1.EnterZoneRequest
-	2,  // 1: zone.v1.ZoneService.MoveEntity:input_type -> zone.v1.MoveEntityRequest
-	4,  // 2: zone.v1.ZoneService.AttackEntity:input_type -> zone.v1.AttackEntityRequest
-	6,  // 3: zone.v1.ZoneService.PickupItem:input_type -> zone.v1.PickupItemRequest
-	8,  // 4: zone.v1.ZoneService.RequestTrade:input_type -> zone.v1.RequestTradeRequest
-	10, // 5: zone.v1.ZoneService.AddTradeItem:input_type -> zone.v1.AddTradeItemRequest
-	12, // 6: zone.v1.ZoneService.AddTradeZeny:input_type -> zone.v1.AddTradeZenyRequest
-	14, // 7: zone.v1.ZoneService.ConfirmTrade:input_type -> zone.v1.ConfirmTradeRequest
-	16, // 8: zone.v1.ZoneService.CompleteTrade:input_type -> zone.v1.CompleteTradeRequest
-	18, // 9: zone.v1.ZoneService.CancelTrade:input_type -> zone.v1.CancelTradeRequest
-	1,  // 10: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
-	3,  // 11: zone.v1.ZoneService.MoveEntity:output_type -> zone.v1.MoveEntityResponse
-	5,  // 12: zone.v1.ZoneService.AttackEntity:output_type -> zone.v1.AttackEntityResponse
-	7,  // 13: zone.v1.ZoneService.PickupItem:output_type -> zone.v1.PickupItemResponse
-	9,  // 14: zone.v1.ZoneService.RequestTrade:output_type -> zone.v1.RequestTradeResponse
-	11, // 15: zone.v1.ZoneService.AddTradeItem:output_type -> zone.v1.AddTradeItemResponse
-	13, // 16: zone.v1.ZoneService.AddTradeZeny:output_type -> zone.v1.AddTradeZenyResponse
-	15, // 17: zone.v1.ZoneService.ConfirmTrade:output_type -> zone.v1.ConfirmTradeResponse
-	17, // 18: zone.v1.ZoneService.CompleteTrade:output_type -> zone.v1.CompleteTradeResponse
-	19, // 19: zone.v1.ZoneService.CancelTrade:output_type -> zone.v1.CancelTradeResponse
-	10, // [10:20] is the sub-list for method output_type
-	0,  // [0:10] is the sub-list for method input_type
-	0,  // [0:0] is the sub-list for extension type_name
-	0,  // [0:0] is the sub-list for extension extendee
-	0,  // [0:0] is the sub-list for field type_name
+	28, // 0: zone.v1.OpenStorageResponse.items:type_name -> zone.v1.StorageItem
+	0,  // 1: zone.v1.ZoneService.EnterZone:input_type -> zone.v1.EnterZoneRequest
+	2,  // 2: zone.v1.ZoneService.MoveEntity:input_type -> zone.v1.MoveEntityRequest
+	4,  // 3: zone.v1.ZoneService.AttackEntity:input_type -> zone.v1.AttackEntityRequest
+	6,  // 4: zone.v1.ZoneService.PickupItem:input_type -> zone.v1.PickupItemRequest
+	8,  // 5: zone.v1.ZoneService.RequestTrade:input_type -> zone.v1.RequestTradeRequest
+	10, // 6: zone.v1.ZoneService.AddTradeItem:input_type -> zone.v1.AddTradeItemRequest
+	12, // 7: zone.v1.ZoneService.AddTradeZeny:input_type -> zone.v1.AddTradeZenyRequest
+	14, // 8: zone.v1.ZoneService.ConfirmTrade:input_type -> zone.v1.ConfirmTradeRequest
+	16, // 9: zone.v1.ZoneService.CompleteTrade:input_type -> zone.v1.CompleteTradeRequest
+	18, // 10: zone.v1.ZoneService.CancelTrade:input_type -> zone.v1.CancelTradeRequest
+	20, // 11: zone.v1.ZoneService.OpenStorage:input_type -> zone.v1.OpenStorageRequest
+	22, // 12: zone.v1.ZoneService.DepositItem:input_type -> zone.v1.DepositItemRequest
+	24, // 13: zone.v1.ZoneService.WithdrawItem:input_type -> zone.v1.WithdrawItemRequest
+	26, // 14: zone.v1.ZoneService.CloseStorage:input_type -> zone.v1.CloseStorageRequest
+	1,  // 15: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
+	3,  // 16: zone.v1.ZoneService.MoveEntity:output_type -> zone.v1.MoveEntityResponse
+	5,  // 17: zone.v1.ZoneService.AttackEntity:output_type -> zone.v1.AttackEntityResponse
+	7,  // 18: zone.v1.ZoneService.PickupItem:output_type -> zone.v1.PickupItemResponse
+	9,  // 19: zone.v1.ZoneService.RequestTrade:output_type -> zone.v1.RequestTradeResponse
+	11, // 20: zone.v1.ZoneService.AddTradeItem:output_type -> zone.v1.AddTradeItemResponse
+	13, // 21: zone.v1.ZoneService.AddTradeZeny:output_type -> zone.v1.AddTradeZenyResponse
+	15, // 22: zone.v1.ZoneService.ConfirmTrade:output_type -> zone.v1.ConfirmTradeResponse
+	17, // 23: zone.v1.ZoneService.CompleteTrade:output_type -> zone.v1.CompleteTradeResponse
+	19, // 24: zone.v1.ZoneService.CancelTrade:output_type -> zone.v1.CancelTradeResponse
+	21, // 25: zone.v1.ZoneService.OpenStorage:output_type -> zone.v1.OpenStorageResponse
+	23, // 26: zone.v1.ZoneService.DepositItem:output_type -> zone.v1.DepositItemResponse
+	25, // 27: zone.v1.ZoneService.WithdrawItem:output_type -> zone.v1.WithdrawItemResponse
+	27, // 28: zone.v1.ZoneService.CloseStorage:output_type -> zone.v1.CloseStorageResponse
+	15, // [15:29] is the sub-list for method output_type
+	1,  // [1:15] is the sub-list for method input_type
+	1,  // [1:1] is the sub-list for extension type_name
+	1,  // [1:1] is the sub-list for extension extendee
+	0,  // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_zone_v1_zone_proto_init() }
@@ -1456,7 +2082,7 @@ func file_zone_v1_zone_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_zone_v1_zone_proto_rawDesc), len(file_zone_v1_zone_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   20,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
