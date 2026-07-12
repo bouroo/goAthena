@@ -60,4 +60,9 @@ type Entity struct {
 	WanderTimer  uint64        // tick number when next wander attempt occurs
 	RespawnDelay time.Duration // respawn delay after death
 	Name         string        // display name for broadcast events
+
+	// Item-specific fields (zero for all other entity types)
+	ItemID     uint32   // numeric item ID (e.g., 501 for Zeny)
+	ItemAmount int32    // item quantity (typically 1)
+	Owner      EntityID // entity ID of the player who owns this item (0 = public ground item)
 }

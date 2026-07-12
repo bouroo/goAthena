@@ -53,6 +53,22 @@ func (f *fakeZoneClient) MoveEntity(_ context.Context, _ *zonev1.MoveEntityReque
 	return nil, status.Error(codes.Unimplemented, "MoveEntity not configured in fakeZoneClient")
 }
 
+func (f *fakeZoneClient) AttackEntity(_ context.Context, _ *zonev1.AttackEntityRequest, _ ...grpc.CallOption) (*zonev1.AttackEntityResponse, error) {
+	return &zonev1.AttackEntityResponse{
+		Success:       true,
+		TargetDied:    false,
+		DamageApplied: 10,
+	}, nil
+}
+
+func (f *fakeZoneClient) PickupItem(_ context.Context, _ *zonev1.PickupItemRequest, _ ...grpc.CallOption) (*zonev1.PickupItemResponse, error) {
+	return &zonev1.PickupItemResponse{
+		Success: true,
+		ItemId:  501,
+		Amount:  1,
+	}, nil
+}
+
 // wsMapDispatchAdapter mirrors service.DispatchHandler for the WS path
 // so this test exercises the full real WSHandler → processBytes →
 // domain.PacketHandler → zone client → ZC_ACCEPT_ENTER → WS write

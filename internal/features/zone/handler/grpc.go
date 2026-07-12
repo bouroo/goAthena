@@ -179,3 +179,90 @@ func (h *grpcHandler) MoveEntity(
 		DestY:   uint32(destY), //nolint:gosec // map cell position
 	}, nil
 }
+
+// AttackEntity handles ZC_DAMAGE_PACKET (0x003E / CheckAttack) packets
+// forwarded from the gateway as structured gRPC. It validates the request,
+// invokes DamageEntity on the zone service, and returns the damage response
+// with updated HP and death status.
+func (h *grpcHandler) AttackEntity(
+	ctx context.Context,
+	req *zonev1.AttackEntityRequest,
+) (*zonev1.AttackEntityResponse, error) {
+	if req.GetAttackerId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "attacker_id must be > 0")
+	}
+	if req.GetEntityId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "entity_id is required")
+	}
+
+	entityID := domain.EntityID(req.GetEntityId())
+	damage := int32(req.GetDamage()) //nolint:gosec // G115: damage is validated and safe to convert
+	if damage <= 0 {
+		damage = 1 // auto-attack default
+	}
+	attackerID := domain.EntityID(req.GetAttackerId())
+
+	resp, err := h.svc.DamageEntity(ctx, entityID, damage, attackerID, req.GetSkillId(), req.GetSkillLevel())
+	if err != nil {
+		h.logger.Error().Err(err).Uint32("entity_id", req.GetEntityId()).Msg("zone: AttackEntity failed")
+		return nil, status.Error(codes.Internal, "zone: attack failed")
+	}
+
+	if !resp.Success {
+		return nil, status.Error(codes.NotFound, "zone: entity not found")
+	}
+
+	h.logger.Debug().
+		Uint32("entity_id", req.GetEntityId()).
+		Bool("died", resp.TargetDied).
+		Int32("damage_applied", resp.DamageApplied).
+		Msg("zone: attack processed")
+
+	return &zonev1.AttackEntityResponse{
+		Success:       resp.Success,
+		TargetDied:    resp.TargetDied,
+		DamageApplied: resp.DamageApplied,
+		CurrentHp:     resp.CurrentHP,
+		MaxHp:         resp.MaxHP,
+	}, nil
+}
+
+// PickupItem handles ZC_ITEM_TAKE (0x0032 / TakeItem) packets forwarded
+// from the gateway as structured gRPC. It validates the request, invokes
+// PickupItem on the zone service, and returns the pickup response with
+// item_id and amount.
+func (h *grpcHandler) PickupItem(
+	ctx context.Context,
+	req *zonev1.PickupItemRequest,
+) (*zonev1.PickupItemResponse, error) {
+	if req.GetPlayerId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "player_id must be > 0")
+	}
+	if req.GetGroundItemId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "ground_item_id is required")
+	}
+
+	groundItemID := domain.EntityID(req.GetGroundItemId())
+	playerID := domain.EntityID(req.GetPlayerId())
+
+	resp, err := h.svc.PickupItem(ctx, groundItemID, playerID)
+	if err != nil {
+		h.logger.Error().Err(err).Uint32("ground_item_id", req.GetGroundItemId()).Msg("zone: PickupItem failed")
+		return nil, status.Error(codes.Internal, "zone: pickup failed")
+	}
+
+	if !resp.Success {
+		return nil, status.Error(codes.NotFound, "zone: ground item not found")
+	}
+
+	h.logger.Debug().
+		Uint32("ground_item_id", req.GetGroundItemId()).
+		Uint32("item_id", resp.ItemID).
+		Msg("zone: pickup processed")
+
+	return &zonev1.PickupItemResponse{
+		Success: resp.Success,
+		ItemId:  resp.ItemID,
+		Amount:  uint32(resp.Amount), //nolint:gosec // G115: amount is validated and safe to convert
+	}, nil
+}

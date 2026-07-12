@@ -11,6 +11,10 @@ message ZoneEvent {
     EntityMoved moved = 1;
     EntitySpawned spawned = 2;
     EntityVanished vanished = 3;
+    EntityDamaged damaged = 4;  // HP changed (not necessarily death)
+    EntityKilled killed = 5;    // Entity died (HP <= 0)
+    ItemDropped dropped = 6;    // Ground item appeared
+    ItemPickedUp picked_up = 7; // Ground item collected
   }
 }
 
@@ -37,4 +41,36 @@ message EntitySpawned {
 message EntityVanished {
   uint32 entity_id = 1;
   uint32 type = 2; // 0=out of sight, 1=logged out, 2=teleported, etc.
+}
+
+// EntityDamaged indicates an entity's HP changed (not necessarily death).
+message EntityDamaged {
+  uint32 entity_id = 1;
+  int32 damage = 2;
+  int32 new_hp = 3;
+  int32 max_hp = 4;
+}
+
+// EntityKilled indicates an entity died (HP <= 0).
+message EntityKilled {
+  uint32 entity_id = 1;
+  int32 damage_dealt = 2;
+}
+
+// ItemDropped indicates a ground item appeared on the map.
+message ItemDropped {
+  uint32 ground_item_id = 1;
+  uint32 item_id = 2;          // numeric item ID
+  int32 amount = 3;            // stack amount
+  uint32 x = 4;
+  uint32 y = 5;
+  string map_name = 6;
+}
+
+// ItemPickedUp indicates a ground item was collected by a player.
+message ItemPickedUp {
+  uint32 ground_item_id = 1;
+  uint32 item_id = 2;
+  int32 amount = 3;
+  uint32 player_id = 4;        // entity ID of player who picked it up
 }
