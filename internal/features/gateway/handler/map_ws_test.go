@@ -93,6 +93,22 @@ func (f *fakeZoneClient) CancelTrade(_ context.Context, _ *zonev1.CancelTradeReq
 	return &zonev1.CancelTradeResponse{Success: true}, nil
 }
 
+func (f *fakeZoneClient) OpenStorage(_ context.Context, _ *zonev1.OpenStorageRequest, _ ...grpc.CallOption) (*zonev1.OpenStorageResponse, error) {
+	return &zonev1.OpenStorageResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) DepositItem(_ context.Context, _ *zonev1.DepositItemRequest, _ ...grpc.CallOption) (*zonev1.DepositItemResponse, error) {
+	return &zonev1.DepositItemResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) WithdrawItem(_ context.Context, _ *zonev1.WithdrawItemRequest, _ ...grpc.CallOption) (*zonev1.WithdrawItemResponse, error) {
+	return &zonev1.WithdrawItemResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) CloseStorage(_ context.Context, _ *zonev1.CloseStorageRequest, _ ...grpc.CallOption) (*zonev1.CloseStorageResponse, error) {
+	return &zonev1.CloseStorageResponse{Success: true}, nil
+}
+
 // wsMapDispatchAdapter mirrors service.DispatchHandler for the WS path
 // so this test exercises the full real WSHandler → processBytes →
 // domain.PacketHandler → zone client → ZC_ACCEPT_ENTER → WS write

@@ -49,6 +49,18 @@ service ZoneService {
 
   // CancelTrade aborts the current trade session.
   rpc CancelTrade(CancelTradeRequest) returns (CancelTradeResponse);
+
+  // OpenStorage opens a character's storage session for operations
+  rpc OpenStorage(OpenStorageRequest) returns (OpenStorageResponse);
+
+  // DepositItem moves an item from character inventory to storage
+  rpc DepositItem(DepositItemRequest) returns (DepositItemResponse);
+
+  // WithdrawItem moves an item from storage to character inventory
+  rpc WithdrawItem(WithdrawItemRequest) returns (WithdrawItemResponse);
+
+  // CloseStorage closes a character's storage session
+  rpc CloseStorage(CloseStorageRequest) returns (CloseStorageResponse);
 }
 
 message EnterZoneRequest {
@@ -175,4 +187,61 @@ message CancelTradeRequest {
 message CancelTradeResponse {
   bool success = 1;
   string error = 2;
+}
+
+message OpenStorageRequest {
+  uint32 char_id = 1;  // Character whose storage to open
+}
+
+message OpenStorageResponse {
+  bool success = 1;
+  string error_message = 2;
+  repeated StorageItem items = 3;  // List of items in storage
+}
+
+message DepositItemRequest {
+  uint32 char_id = 1;
+  uint64 inventory_item_id = 2;  // Item ID from character inventory
+  int32 amount = 3;  // Amount to deposit (must be > 0)
+}
+
+message DepositItemResponse {
+  bool success = 1;
+  string error_message = 2;
+  uint64 storage_item_id = 3;  // ID of the created/updated storage item
+}
+
+message WithdrawItemRequest {
+  uint32 char_id = 1;
+  uint64 storage_item_id = 2;  // Item ID in storage
+  int32 amount = 3;  // Amount to withdraw (must be > 0)
+}
+
+message WithdrawItemResponse {
+  bool success = 1;
+  string error_message = 2;
+  uint64 inventory_item_id = 3;  // ID of the created/updated inventory item
+}
+
+message CloseStorageRequest {
+  uint32 char_id = 1;
+}
+
+message CloseStorageResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message StorageItem {
+  uint64 id = 1;
+  uint32 char_id = 2;
+  uint32 name_id = 3;
+  int32 amount = 4;
+  uint32 identify = 5;
+  uint32 refine = 6;
+  uint32 attribute = 7;
+  uint64 card0 = 8;
+  uint64 card1 = 9;
+  uint64 card2 = 10;
+  uint64 card3 = 11;
 }

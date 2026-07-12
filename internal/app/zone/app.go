@@ -38,7 +38,8 @@ import (
 	scriptdi "github.com/bouroo/goAthena/internal/features/script/di"
 	scriptservice "github.com/bouroo/goAthena/internal/features/script/service"
 	"github.com/bouroo/goAthena/internal/features/script/vm"
-	"github.com/bouroo/goAthena/internal/features/zone/di"
+	storagedi "github.com/bouroo/goAthena/internal/features/storage/di"
+	zonedi "github.com/bouroo/goAthena/internal/features/zone/di"
 	"github.com/bouroo/goAthena/internal/features/zone/service"
 	"github.com/bouroo/goAthena/internal/infrastructure/agones"
 	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
@@ -173,17 +174,20 @@ func initInjector(ctx context.Context, injector do.Injector) (*zerolog.Logger, e
 // empty engine rather than aborting boot). It returns the resolved values
 // or a wrapped error.
 func startComponents(injector do.Injector) (*service.TickLoop, *grpc.Server, error) {
-	if err := di.Register(injector); err != nil {
+	if err := zonedi.Register(injector); err != nil {
 		return nil, nil, fmt.Errorf("register zone feature: %w", err)
 	}
 	if err := scriptdi.Register(injector); err != nil {
 		return nil, nil, fmt.Errorf("register script engine: %w", err)
 	}
-	tickLoop, err := di.ProvideTickLoop(injector)
+	if err := storagedi.Register(injector); err != nil {
+		return nil, nil, fmt.Errorf("register storage feature: %w", err)
+	}
+	tickLoop, err := zonedi.ProvideTickLoop(injector)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve tick loop: %w", err)
 	}
-	grpcServer, err := di.ProvideGRPCServer(injector)
+	grpcServer, err := zonedi.ProvideGRPCServer(injector)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve grpc server: %w", err)
 	}
