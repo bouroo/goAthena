@@ -31,6 +31,24 @@ service ZoneService {
   // 0x0092 / ItemPickup). Validates the item exists, is in range, and is
   // pickable. Returns success or error.
   rpc PickupItem(PickupItemRequest) returns (PickupItemResponse);
+
+  // RequestTrade initiates a trade request from one player to another.
+  rpc RequestTrade(RequestTradeRequest) returns (RequestTradeResponse);
+
+  // AddTradeItem adds an item to the trade window.
+  rpc AddTradeItem(AddTradeItemRequest) returns (AddTradeItemResponse);
+
+  // AddTradeZeny adds zeny to the trade window.
+  rpc AddTradeZeny(AddTradeZenyRequest) returns (AddTradeZenyResponse);
+
+  // ConfirmTrade locks the current trade offer (ready state).
+  rpc ConfirmTrade(ConfirmTradeRequest) returns (ConfirmTradeResponse);
+
+  // CompleteTrade executes the atomic item/zeny transfer (both parties confirmed).
+  rpc CompleteTrade(CompleteTradeRequest) returns (CompleteTradeResponse);
+
+  // CancelTrade aborts the current trade session.
+  rpc CancelTrade(CancelTradeRequest) returns (CancelTradeResponse);
 }
 
 message EnterZoneRequest {
@@ -93,4 +111,68 @@ message PickupItemResponse {
   uint32 item_id = 2;         // numeric item ID
   uint32 amount = 3;          // item amount (typically 1)
   string error = 4;           // human-readable error if success == false
+}
+
+message RequestTradeRequest {
+  uint32 requester_char_id = 1;
+  uint32 target_char_id = 2;
+}
+
+message RequestTradeResponse {
+  bool success = 1;
+  string trade_id = 2;       // Assigned trade session ID
+  string error = 3;          // Human-readable error if success == false
+}
+
+message AddTradeItemRequest {
+  string trade_id = 1;
+  uint32 char_id = 2;
+  uint32 inventory_id = 3;
+  int32 amount = 4;
+}
+
+message AddTradeItemResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message AddTradeZenyRequest {
+  string trade_id = 1;
+  uint32 char_id = 2;
+  uint32 zeny = 3;
+}
+
+message AddTradeZenyResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ConfirmTradeRequest {
+  string trade_id = 1;
+  uint32 char_id = 2;
+}
+
+message ConfirmTradeResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message CompleteTradeRequest {
+  string trade_id = 1;
+  uint32 char_id = 2;
+}
+
+message CompleteTradeResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message CancelTradeRequest {
+  string trade_id = 1;
+  uint32 char_id = 2;
+}
+
+message CancelTradeResponse {
+  bool success = 1;
+  string error = 2;
 }

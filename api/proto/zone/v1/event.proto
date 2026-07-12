@@ -15,6 +15,12 @@ message ZoneEvent {
     EntityKilled killed = 5;    // Entity died (HP <= 0)
     ItemDropped dropped = 6;    // Ground item appeared
     ItemPickedUp picked_up = 7; // Ground item collected
+    TradeRequested requested = 8;
+    TradeItemAdded item_added = 9;
+    TradeZenyAdded zeny_added = 10;
+    TradeConfirmed confirmed = 11;
+    TradeCompleted completed = 12;
+    TradeCancelled cancelled = 13;
   }
 }
 
@@ -73,4 +79,37 @@ message ItemPickedUp {
   uint32 item_id = 2;
   int32 amount = 3;
   uint32 player_id = 4;        // entity ID of player who picked it up
+}
+
+message TradeRequested {
+  string trade_id = 1;
+  uint32 requester_char_id = 2;
+  uint32 target_char_id = 3;
+}
+
+message TradeItemAdded {
+  string trade_id = 1;
+  uint32 char_id = 2;
+  uint32 item_id = 3;
+  int32 amount = 4;
+}
+
+message TradeZenyAdded {
+  string trade_id = 1;
+  uint32 char_id = 2;
+  uint32 zeny = 3;
+}
+
+message TradeConfirmed {
+  string trade_id = 1;
+  uint32 char_id = 2;
+}
+
+message TradeCompleted {
+  string trade_id = 1;
+}
+
+message TradeCancelled {
+  string trade_id = 1;
+  uint32 char_id = 2;
 }

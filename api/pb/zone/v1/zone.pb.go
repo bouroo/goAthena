@@ -614,6 +614,662 @@ func (x *PickupItemResponse) GetError() string {
 	return ""
 }
 
+type RequestTradeRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	RequesterCharId uint32                 `protobuf:"varint,1,opt,name=requester_char_id,json=requesterCharId,proto3" json:"requester_char_id,omitempty"`
+	TargetCharId    uint32                 `protobuf:"varint,2,opt,name=target_char_id,json=targetCharId,proto3" json:"target_char_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RequestTradeRequest) Reset() {
+	*x = RequestTradeRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestTradeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestTradeRequest) ProtoMessage() {}
+
+func (x *RequestTradeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestTradeRequest.ProtoReflect.Descriptor instead.
+func (*RequestTradeRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *RequestTradeRequest) GetRequesterCharId() uint32 {
+	if x != nil {
+		return x.RequesterCharId
+	}
+	return 0
+}
+
+func (x *RequestTradeRequest) GetTargetCharId() uint32 {
+	if x != nil {
+		return x.TargetCharId
+	}
+	return 0
+}
+
+type RequestTradeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	TradeId       string                 `protobuf:"bytes,2,opt,name=trade_id,json=tradeId,proto3" json:"trade_id,omitempty"` // Assigned trade session ID
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`                    // Human-readable error if success == false
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RequestTradeResponse) Reset() {
+	*x = RequestTradeResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestTradeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestTradeResponse) ProtoMessage() {}
+
+func (x *RequestTradeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestTradeResponse.ProtoReflect.Descriptor instead.
+func (*RequestTradeResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RequestTradeResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RequestTradeResponse) GetTradeId() string {
+	if x != nil {
+		return x.TradeId
+	}
+	return ""
+}
+
+func (x *RequestTradeResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type AddTradeItemRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TradeId       string                 `protobuf:"bytes,1,opt,name=trade_id,json=tradeId,proto3" json:"trade_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	InventoryId   uint32                 `protobuf:"varint,3,opt,name=inventory_id,json=inventoryId,proto3" json:"inventory_id,omitempty"`
+	Amount        int32                  `protobuf:"varint,4,opt,name=amount,proto3" json:"amount,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddTradeItemRequest) Reset() {
+	*x = AddTradeItemRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddTradeItemRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddTradeItemRequest) ProtoMessage() {}
+
+func (x *AddTradeItemRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddTradeItemRequest.ProtoReflect.Descriptor instead.
+func (*AddTradeItemRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *AddTradeItemRequest) GetTradeId() string {
+	if x != nil {
+		return x.TradeId
+	}
+	return ""
+}
+
+func (x *AddTradeItemRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *AddTradeItemRequest) GetInventoryId() uint32 {
+	if x != nil {
+		return x.InventoryId
+	}
+	return 0
+}
+
+func (x *AddTradeItemRequest) GetAmount() int32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+type AddTradeItemResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddTradeItemResponse) Reset() {
+	*x = AddTradeItemResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddTradeItemResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddTradeItemResponse) ProtoMessage() {}
+
+func (x *AddTradeItemResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddTradeItemResponse.ProtoReflect.Descriptor instead.
+func (*AddTradeItemResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *AddTradeItemResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *AddTradeItemResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type AddTradeZenyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TradeId       string                 `protobuf:"bytes,1,opt,name=trade_id,json=tradeId,proto3" json:"trade_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	Zeny          uint32                 `protobuf:"varint,3,opt,name=zeny,proto3" json:"zeny,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddTradeZenyRequest) Reset() {
+	*x = AddTradeZenyRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddTradeZenyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddTradeZenyRequest) ProtoMessage() {}
+
+func (x *AddTradeZenyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddTradeZenyRequest.ProtoReflect.Descriptor instead.
+func (*AddTradeZenyRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *AddTradeZenyRequest) GetTradeId() string {
+	if x != nil {
+		return x.TradeId
+	}
+	return ""
+}
+
+func (x *AddTradeZenyRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *AddTradeZenyRequest) GetZeny() uint32 {
+	if x != nil {
+		return x.Zeny
+	}
+	return 0
+}
+
+type AddTradeZenyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddTradeZenyResponse) Reset() {
+	*x = AddTradeZenyResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddTradeZenyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddTradeZenyResponse) ProtoMessage() {}
+
+func (x *AddTradeZenyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddTradeZenyResponse.ProtoReflect.Descriptor instead.
+func (*AddTradeZenyResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *AddTradeZenyResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *AddTradeZenyResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type ConfirmTradeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TradeId       string                 `protobuf:"bytes,1,opt,name=trade_id,json=tradeId,proto3" json:"trade_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfirmTradeRequest) Reset() {
+	*x = ConfirmTradeRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfirmTradeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfirmTradeRequest) ProtoMessage() {}
+
+func (x *ConfirmTradeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfirmTradeRequest.ProtoReflect.Descriptor instead.
+func (*ConfirmTradeRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ConfirmTradeRequest) GetTradeId() string {
+	if x != nil {
+		return x.TradeId
+	}
+	return ""
+}
+
+func (x *ConfirmTradeRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+type ConfirmTradeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfirmTradeResponse) Reset() {
+	*x = ConfirmTradeResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfirmTradeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfirmTradeResponse) ProtoMessage() {}
+
+func (x *ConfirmTradeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfirmTradeResponse.ProtoReflect.Descriptor instead.
+func (*ConfirmTradeResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ConfirmTradeResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ConfirmTradeResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type CompleteTradeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TradeId       string                 `protobuf:"bytes,1,opt,name=trade_id,json=tradeId,proto3" json:"trade_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompleteTradeRequest) Reset() {
+	*x = CompleteTradeRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompleteTradeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompleteTradeRequest) ProtoMessage() {}
+
+func (x *CompleteTradeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompleteTradeRequest.ProtoReflect.Descriptor instead.
+func (*CompleteTradeRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *CompleteTradeRequest) GetTradeId() string {
+	if x != nil {
+		return x.TradeId
+	}
+	return ""
+}
+
+func (x *CompleteTradeRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+type CompleteTradeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompleteTradeResponse) Reset() {
+	*x = CompleteTradeResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompleteTradeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompleteTradeResponse) ProtoMessage() {}
+
+func (x *CompleteTradeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompleteTradeResponse.ProtoReflect.Descriptor instead.
+func (*CompleteTradeResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *CompleteTradeResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CompleteTradeResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type CancelTradeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TradeId       string                 `protobuf:"bytes,1,opt,name=trade_id,json=tradeId,proto3" json:"trade_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelTradeRequest) Reset() {
+	*x = CancelTradeRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelTradeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelTradeRequest) ProtoMessage() {}
+
+func (x *CancelTradeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelTradeRequest.ProtoReflect.Descriptor instead.
+func (*CancelTradeRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *CancelTradeRequest) GetTradeId() string {
+	if x != nil {
+		return x.TradeId
+	}
+	return ""
+}
+
+func (x *CancelTradeRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+type CancelTradeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelTradeResponse) Reset() {
+	*x = CancelTradeResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelTradeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelTradeResponse) ProtoMessage() {}
+
+func (x *CancelTradeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelTradeResponse.ProtoReflect.Descriptor instead.
+func (*CancelTradeResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *CancelTradeResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CancelTradeResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_zone_v1_zone_proto protoreflect.FileDescriptor
 
 const file_zone_v1_zone_proto_rawDesc = "" +
@@ -671,14 +1327,60 @@ const file_zone_v1_zone_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x17\n" +
 	"\aitem_id\x18\x02 \x01(\rR\x06itemId\x12\x16\n" +
 	"\x06amount\x18\x03 \x01(\rR\x06amount\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error2\xac\x02\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"g\n" +
+	"\x13RequestTradeRequest\x12*\n" +
+	"\x11requester_char_id\x18\x01 \x01(\rR\x0frequesterCharId\x12$\n" +
+	"\x0etarget_char_id\x18\x02 \x01(\rR\ftargetCharId\"a\n" +
+	"\x14RequestTradeResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x19\n" +
+	"\btrade_id\x18\x02 \x01(\tR\atradeId\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\x84\x01\n" +
+	"\x13AddTradeItemRequest\x12\x19\n" +
+	"\btrade_id\x18\x01 \x01(\tR\atradeId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\x12!\n" +
+	"\finventory_id\x18\x03 \x01(\rR\vinventoryId\x12\x16\n" +
+	"\x06amount\x18\x04 \x01(\x05R\x06amount\"F\n" +
+	"\x14AddTradeItemResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"]\n" +
+	"\x13AddTradeZenyRequest\x12\x19\n" +
+	"\btrade_id\x18\x01 \x01(\tR\atradeId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\x12\x12\n" +
+	"\x04zeny\x18\x03 \x01(\rR\x04zeny\"F\n" +
+	"\x14AddTradeZenyResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"I\n" +
+	"\x13ConfirmTradeRequest\x12\x19\n" +
+	"\btrade_id\x18\x01 \x01(\tR\atradeId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\"F\n" +
+	"\x14ConfirmTradeResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"J\n" +
+	"\x14CompleteTradeRequest\x12\x19\n" +
+	"\btrade_id\x18\x01 \x01(\tR\atradeId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\"G\n" +
+	"\x15CompleteTradeResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"H\n" +
+	"\x12CancelTradeRequest\x12\x19\n" +
+	"\btrade_id\x18\x01 \x01(\tR\atradeId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\"E\n" +
+	"\x13CancelTradeResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\xfa\x05\n" +
 	"\vZoneService\x12B\n" +
 	"\tEnterZone\x12\x19.zone.v1.EnterZoneRequest\x1a\x1a.zone.v1.EnterZoneResponse\x12E\n" +
 	"\n" +
 	"MoveEntity\x12\x1a.zone.v1.MoveEntityRequest\x1a\x1b.zone.v1.MoveEntityResponse\x12K\n" +
 	"\fAttackEntity\x12\x1c.zone.v1.AttackEntityRequest\x1a\x1d.zone.v1.AttackEntityResponse\x12E\n" +
 	"\n" +
-	"PickupItem\x12\x1a.zone.v1.PickupItemRequest\x1a\x1b.zone.v1.PickupItemResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
+	"PickupItem\x12\x1a.zone.v1.PickupItemRequest\x1a\x1b.zone.v1.PickupItemResponse\x12K\n" +
+	"\fRequestTrade\x12\x1c.zone.v1.RequestTradeRequest\x1a\x1d.zone.v1.RequestTradeResponse\x12K\n" +
+	"\fAddTradeItem\x12\x1c.zone.v1.AddTradeItemRequest\x1a\x1d.zone.v1.AddTradeItemResponse\x12K\n" +
+	"\fAddTradeZeny\x12\x1c.zone.v1.AddTradeZenyRequest\x1a\x1d.zone.v1.AddTradeZenyResponse\x12K\n" +
+	"\fConfirmTrade\x12\x1c.zone.v1.ConfirmTradeRequest\x1a\x1d.zone.v1.ConfirmTradeResponse\x12N\n" +
+	"\rCompleteTrade\x12\x1d.zone.v1.CompleteTradeRequest\x1a\x1e.zone.v1.CompleteTradeResponse\x12H\n" +
+	"\vCancelTrade\x12\x1b.zone.v1.CancelTradeRequest\x1a\x1c.zone.v1.CancelTradeResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
 
 var (
 	file_zone_v1_zone_proto_rawDescOnce sync.Once
@@ -692,31 +1394,55 @@ func file_zone_v1_zone_proto_rawDescGZIP() []byte {
 	return file_zone_v1_zone_proto_rawDescData
 }
 
-var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_zone_v1_zone_proto_goTypes = []any{
-	(*EnterZoneRequest)(nil),     // 0: zone.v1.EnterZoneRequest
-	(*EnterZoneResponse)(nil),    // 1: zone.v1.EnterZoneResponse
-	(*MoveEntityRequest)(nil),    // 2: zone.v1.MoveEntityRequest
-	(*MoveEntityResponse)(nil),   // 3: zone.v1.MoveEntityResponse
-	(*AttackEntityRequest)(nil),  // 4: zone.v1.AttackEntityRequest
-	(*AttackEntityResponse)(nil), // 5: zone.v1.AttackEntityResponse
-	(*PickupItemRequest)(nil),    // 6: zone.v1.PickupItemRequest
-	(*PickupItemResponse)(nil),   // 7: zone.v1.PickupItemResponse
+	(*EnterZoneRequest)(nil),      // 0: zone.v1.EnterZoneRequest
+	(*EnterZoneResponse)(nil),     // 1: zone.v1.EnterZoneResponse
+	(*MoveEntityRequest)(nil),     // 2: zone.v1.MoveEntityRequest
+	(*MoveEntityResponse)(nil),    // 3: zone.v1.MoveEntityResponse
+	(*AttackEntityRequest)(nil),   // 4: zone.v1.AttackEntityRequest
+	(*AttackEntityResponse)(nil),  // 5: zone.v1.AttackEntityResponse
+	(*PickupItemRequest)(nil),     // 6: zone.v1.PickupItemRequest
+	(*PickupItemResponse)(nil),    // 7: zone.v1.PickupItemResponse
+	(*RequestTradeRequest)(nil),   // 8: zone.v1.RequestTradeRequest
+	(*RequestTradeResponse)(nil),  // 9: zone.v1.RequestTradeResponse
+	(*AddTradeItemRequest)(nil),   // 10: zone.v1.AddTradeItemRequest
+	(*AddTradeItemResponse)(nil),  // 11: zone.v1.AddTradeItemResponse
+	(*AddTradeZenyRequest)(nil),   // 12: zone.v1.AddTradeZenyRequest
+	(*AddTradeZenyResponse)(nil),  // 13: zone.v1.AddTradeZenyResponse
+	(*ConfirmTradeRequest)(nil),   // 14: zone.v1.ConfirmTradeRequest
+	(*ConfirmTradeResponse)(nil),  // 15: zone.v1.ConfirmTradeResponse
+	(*CompleteTradeRequest)(nil),  // 16: zone.v1.CompleteTradeRequest
+	(*CompleteTradeResponse)(nil), // 17: zone.v1.CompleteTradeResponse
+	(*CancelTradeRequest)(nil),    // 18: zone.v1.CancelTradeRequest
+	(*CancelTradeResponse)(nil),   // 19: zone.v1.CancelTradeResponse
 }
 var file_zone_v1_zone_proto_depIdxs = []int32{
-	0, // 0: zone.v1.ZoneService.EnterZone:input_type -> zone.v1.EnterZoneRequest
-	2, // 1: zone.v1.ZoneService.MoveEntity:input_type -> zone.v1.MoveEntityRequest
-	4, // 2: zone.v1.ZoneService.AttackEntity:input_type -> zone.v1.AttackEntityRequest
-	6, // 3: zone.v1.ZoneService.PickupItem:input_type -> zone.v1.PickupItemRequest
-	1, // 4: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
-	3, // 5: zone.v1.ZoneService.MoveEntity:output_type -> zone.v1.MoveEntityResponse
-	5, // 6: zone.v1.ZoneService.AttackEntity:output_type -> zone.v1.AttackEntityResponse
-	7, // 7: zone.v1.ZoneService.PickupItem:output_type -> zone.v1.PickupItemResponse
-	4, // [4:8] is the sub-list for method output_type
-	0, // [0:4] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0,  // 0: zone.v1.ZoneService.EnterZone:input_type -> zone.v1.EnterZoneRequest
+	2,  // 1: zone.v1.ZoneService.MoveEntity:input_type -> zone.v1.MoveEntityRequest
+	4,  // 2: zone.v1.ZoneService.AttackEntity:input_type -> zone.v1.AttackEntityRequest
+	6,  // 3: zone.v1.ZoneService.PickupItem:input_type -> zone.v1.PickupItemRequest
+	8,  // 4: zone.v1.ZoneService.RequestTrade:input_type -> zone.v1.RequestTradeRequest
+	10, // 5: zone.v1.ZoneService.AddTradeItem:input_type -> zone.v1.AddTradeItemRequest
+	12, // 6: zone.v1.ZoneService.AddTradeZeny:input_type -> zone.v1.AddTradeZenyRequest
+	14, // 7: zone.v1.ZoneService.ConfirmTrade:input_type -> zone.v1.ConfirmTradeRequest
+	16, // 8: zone.v1.ZoneService.CompleteTrade:input_type -> zone.v1.CompleteTradeRequest
+	18, // 9: zone.v1.ZoneService.CancelTrade:input_type -> zone.v1.CancelTradeRequest
+	1,  // 10: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
+	3,  // 11: zone.v1.ZoneService.MoveEntity:output_type -> zone.v1.MoveEntityResponse
+	5,  // 12: zone.v1.ZoneService.AttackEntity:output_type -> zone.v1.AttackEntityResponse
+	7,  // 13: zone.v1.ZoneService.PickupItem:output_type -> zone.v1.PickupItemResponse
+	9,  // 14: zone.v1.ZoneService.RequestTrade:output_type -> zone.v1.RequestTradeResponse
+	11, // 15: zone.v1.ZoneService.AddTradeItem:output_type -> zone.v1.AddTradeItemResponse
+	13, // 16: zone.v1.ZoneService.AddTradeZeny:output_type -> zone.v1.AddTradeZenyResponse
+	15, // 17: zone.v1.ZoneService.ConfirmTrade:output_type -> zone.v1.ConfirmTradeResponse
+	17, // 18: zone.v1.ZoneService.CompleteTrade:output_type -> zone.v1.CompleteTradeResponse
+	19, // 19: zone.v1.ZoneService.CancelTrade:output_type -> zone.v1.CancelTradeResponse
+	10, // [10:20] is the sub-list for method output_type
+	0,  // [0:10] is the sub-list for method input_type
+	0,  // [0:0] is the sub-list for extension type_name
+	0,  // [0:0] is the sub-list for extension extendee
+	0,  // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_zone_v1_zone_proto_init() }
@@ -730,7 +1456,7 @@ func file_zone_v1_zone_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_zone_v1_zone_proto_rawDesc), len(file_zone_v1_zone_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

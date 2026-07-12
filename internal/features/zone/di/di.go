@@ -23,6 +23,7 @@ import (
 
 	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/config"
+	tradedi "github.com/bouroo/goAthena/internal/features/trade/di"
 	"github.com/bouroo/goAthena/internal/features/zone/domain"
 	"github.com/bouroo/goAthena/internal/features/zone/handler"
 	"github.com/bouroo/goAthena/internal/features/zone/service"
@@ -57,6 +58,15 @@ func Register(c do.Injector) error {
 	ag := do.MustInvoke[agones.Lifecycle](c)
 	nc := do.MustInvoke[*natsinfra.Client](c)
 
+	if err := tradedi.Register(c); err != nil {
+		return fmt.Errorf("register trade feature: %w", err)
+	}
+
+	tradeSvc, err := tradedi.ProvideTradeService(c)
+	if err != nil {
+		return fmt.Errorf("resolve trade service: %w", err)
+	}
+
 	md, err := loadMap(cfg.Zone.MapDir, cfg.Zone.DefaultMap)
 	if err != nil {
 		// Don't hard-fail: surface a clear log and substitute a synthetic
@@ -89,7 +99,7 @@ func Register(c do.Injector) error {
 	grpcServer := server.NewGRPC(logger)
 	zonev1.RegisterZoneServiceServer(
 		grpcServer,
-		handler.NewGRPCHandler(zoneSvc, md.Name, spawnX, spawnY, logger),
+		handler.NewGRPCHandler(zoneSvc, tradeSvc, md.Name, spawnX, spawnY, logger),
 	)
 
 	do.ProvideValue(c, tickLoop)

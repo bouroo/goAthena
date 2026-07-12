@@ -5,6 +5,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/rs/zerolog"
@@ -12,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
+	tradedomain "github.com/bouroo/goAthena/internal/features/trade/domain"
 	"github.com/bouroo/goAthena/internal/features/zone/domain"
 )
 
@@ -19,11 +21,12 @@ import (
 // proto <-> domain mapping, request validation, and error translation.
 type grpcHandler struct {
 	zonev1.UnimplementedZoneServiceServer
-	svc     domain.ZoneService
-	mapName string
-	spawnX  int
-	spawnY  int
-	logger  *zerolog.Logger
+	svc      domain.ZoneService
+	tradeSvc tradedomain.TradeService
+	mapName  string
+	spawnX   int
+	spawnY   int
+	logger   *zerolog.Logger
 }
 
 // NewGRPCHandler creates a gRPC handler for the ZoneService. The returned
@@ -31,16 +34,18 @@ type grpcHandler struct {
 // zonev1.RegisterZoneServiceServer.
 func NewGRPCHandler(
 	svc domain.ZoneService,
+	tradeSvc tradedomain.TradeService,
 	mapName string,
 	spawnX, spawnY int,
 	logger *zerolog.Logger,
 ) zonev1.ZoneServiceServer {
 	return &grpcHandler{
-		svc:     svc,
-		mapName: mapName,
-		spawnX:  spawnX,
-		spawnY:  spawnY,
-		logger:  logger,
+		svc:      svc,
+		tradeSvc: tradeSvc,
+		mapName:  mapName,
+		spawnX:   spawnX,
+		spawnY:   spawnY,
+		logger:   logger,
 	}
 }
 
@@ -264,5 +269,265 @@ func (h *grpcHandler) PickupItem(
 		Success: resp.Success,
 		ItemId:  resp.ItemID,
 		Amount:  uint32(resp.Amount), //nolint:gosec // G115: amount is validated and safe to convert
+	}, nil
+}
+
+// mapTradeError converts domain errors to human-readable error messages.
+func mapTradeError(err error) string {
+	switch {
+	case errors.Is(err, tradedomain.ErrTradeNotFound):
+		return "trade not found"
+	case errors.Is(err, tradedomain.ErrInvalidTradeState):
+		return "invalid trade state"
+	case errors.Is(err, tradedomain.ErrInsufficientInventory):
+		return "insufficient inventory"
+	case errors.Is(err, tradedomain.ErrLockBusy):
+		return "trade lock busy"
+	case errors.Is(err, tradedomain.ErrTradeTargetUnavailable):
+		return "trade target unavailable"
+	default:
+		return fmt.Sprintf("trade error: %v", err)
+	}
+}
+
+// RequestTrade handles trade initiation requests.
+func (h *grpcHandler) RequestTrade(
+	ctx context.Context,
+	req *zonev1.RequestTradeRequest,
+) (*zonev1.RequestTradeResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetRequesterCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "requester_char_id must be > 0")
+	}
+	if req.GetTargetCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "target_char_id must be > 0")
+	}
+
+	trade, err := h.tradeSvc.RequestTrade(ctx, req.GetRequesterCharId(), req.GetTargetCharId())
+	if err != nil {
+		h.logger.Error().Stack().Err(err).
+			Uint32("requester_char_id", req.GetRequesterCharId()).
+			Uint32("target_char_id", req.GetTargetCharId()).
+			Msg("zone: RequestTrade failed")
+
+		return &zonev1.RequestTradeResponse{
+			Success: false,
+			Error:   mapTradeError(err),
+		}, nil
+	}
+
+	h.logger.Debug().
+		Str("trade_id", trade.ID).
+		Uint32("requester_char_id", req.GetRequesterCharId()).
+		Uint32("target_char_id", req.GetTargetCharId()).
+		Msg("zone: trade requested")
+
+	return &zonev1.RequestTradeResponse{
+		Success: true,
+		TradeId: trade.ID,
+	}, nil
+}
+
+// AddTradeItem handles adding items to the trade window.
+func (h *grpcHandler) AddTradeItem(
+	ctx context.Context,
+	req *zonev1.AddTradeItemRequest,
+) (*zonev1.AddTradeItemResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetTradeId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "trade_id is required")
+	}
+	if req.GetCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "char_id must be > 0")
+	}
+	if req.GetInventoryId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "inventory_id must be > 0")
+	}
+	if req.GetAmount() <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "amount must be > 0")
+	}
+
+	err := h.tradeSvc.AddTradeItem(ctx, req.GetTradeId(), req.GetCharId(), req.GetInventoryId(), req.GetAmount())
+	if err != nil {
+		h.logger.Error().Stack().Err(err).
+			Str("trade_id", req.GetTradeId()).
+			Uint32("char_id", req.GetCharId()).
+			Uint32("inventory_id", req.GetInventoryId()).
+			Int32("amount", req.GetAmount()).
+			Msg("zone: AddTradeItem failed")
+
+		return &zonev1.AddTradeItemResponse{
+			Success: false,
+			Error:   mapTradeError(err),
+		}, nil
+	}
+
+	h.logger.Debug().
+		Str("trade_id", req.GetTradeId()).
+		Uint32("char_id", req.GetCharId()).
+		Uint32("inventory_id", req.GetInventoryId()).
+		Int32("amount", req.GetAmount()).
+		Msg("zone: trade item added")
+
+	return &zonev1.AddTradeItemResponse{
+		Success: true,
+	}, nil
+}
+
+// AddTradeZeny handles adding zeny to the trade window.
+func (h *grpcHandler) AddTradeZeny(
+	ctx context.Context,
+	req *zonev1.AddTradeZenyRequest,
+) (*zonev1.AddTradeZenyResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetTradeId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "trade_id is required")
+	}
+	if req.GetCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "char_id must be > 0")
+	}
+
+	err := h.tradeSvc.AddTradeZeny(ctx, req.GetTradeId(), req.GetCharId(), req.GetZeny())
+	if err != nil {
+		h.logger.Error().Stack().Err(err).
+			Str("trade_id", req.GetTradeId()).
+			Uint32("char_id", req.GetCharId()).
+			Uint32("zeny", req.GetZeny()).
+			Msg("zone: AddTradeZeny failed")
+
+		return &zonev1.AddTradeZenyResponse{
+			Success: false,
+			Error:   mapTradeError(err),
+		}, nil
+	}
+
+	h.logger.Debug().
+		Str("trade_id", req.GetTradeId()).
+		Uint32("char_id", req.GetCharId()).
+		Uint32("zeny", req.GetZeny()).
+		Msg("zone: trade zeny added")
+
+	return &zonev1.AddTradeZenyResponse{
+		Success: true,
+	}, nil
+}
+
+// ConfirmTrade handles trade confirmation requests.
+func (h *grpcHandler) ConfirmTrade(
+	ctx context.Context,
+	req *zonev1.ConfirmTradeRequest,
+) (*zonev1.ConfirmTradeResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetTradeId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "trade_id is required")
+	}
+	if req.GetCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "char_id must be > 0")
+	}
+
+	err := h.tradeSvc.ConfirmTrade(ctx, req.GetTradeId(), req.GetCharId())
+	if err != nil {
+		h.logger.Error().Stack().Err(err).
+			Str("trade_id", req.GetTradeId()).
+			Uint32("char_id", req.GetCharId()).
+			Msg("zone: ConfirmTrade failed")
+
+		return &zonev1.ConfirmTradeResponse{
+			Success: false,
+			Error:   mapTradeError(err),
+		}, nil
+	}
+
+	h.logger.Debug().
+		Str("trade_id", req.GetTradeId()).
+		Uint32("char_id", req.GetCharId()).
+		Msg("zone: trade confirmed")
+
+	return &zonev1.ConfirmTradeResponse{
+		Success: true,
+	}, nil
+}
+
+// CompleteTrade handles trade completion requests.
+func (h *grpcHandler) CompleteTrade(
+	ctx context.Context,
+	req *zonev1.CompleteTradeRequest,
+) (*zonev1.CompleteTradeResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetTradeId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "trade_id is required")
+	}
+	if req.GetCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "char_id must be > 0")
+	}
+
+	err := h.tradeSvc.CompleteTrade(ctx, req.GetTradeId(), req.GetCharId())
+	if err != nil {
+		h.logger.Error().Stack().Err(err).
+			Str("trade_id", req.GetTradeId()).
+			Uint32("char_id", req.GetCharId()).
+			Msg("zone: CompleteTrade failed")
+
+		return &zonev1.CompleteTradeResponse{
+			Success: false,
+			Error:   mapTradeError(err),
+		}, nil
+	}
+
+	h.logger.Debug().
+		Str("trade_id", req.GetTradeId()).
+		Uint32("char_id", req.GetCharId()).
+		Msg("zone: trade completed")
+
+	return &zonev1.CompleteTradeResponse{
+		Success: true,
+	}, nil
+}
+
+// CancelTrade handles trade cancellation requests.
+func (h *grpcHandler) CancelTrade(
+	ctx context.Context,
+	req *zonev1.CancelTradeRequest,
+) (*zonev1.CancelTradeResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetTradeId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "trade_id is required")
+	}
+	if req.GetCharId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "char_id must be > 0")
+	}
+
+	err := h.tradeSvc.CancelTrade(ctx, req.GetTradeId(), req.GetCharId())
+	if err != nil {
+		h.logger.Error().Stack().Err(err).
+			Str("trade_id", req.GetTradeId()).
+			Uint32("char_id", req.GetCharId()).
+			Msg("zone: CancelTrade failed")
+
+		return &zonev1.CancelTradeResponse{
+			Success: false,
+			Error:   mapTradeError(err),
+		}, nil
+	}
+
+	h.logger.Debug().
+		Str("trade_id", req.GetTradeId()).
+		Uint32("char_id", req.GetCharId()).
+		Msg("zone: trade cancelled")
+
+	return &zonev1.CancelTradeResponse{
+		Success: true,
 	}, nil
 }

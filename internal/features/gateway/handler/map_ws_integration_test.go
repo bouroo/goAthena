@@ -31,8 +31,9 @@ import (
 
 	zonev1 "github.com/bouroo/goAthena/api/pb/zone/v1"
 	"github.com/bouroo/goAthena/internal/features/gateway/service"
+	tradedomainmock "github.com/bouroo/goAthena/internal/features/trade/domain/mock"
 	"github.com/bouroo/goAthena/internal/features/zone/domain"
-	domainmock "github.com/bouroo/goAthena/internal/features/zone/domain/mock"
+	znmock "github.com/bouroo/goAthena/internal/features/zone/domain/mock"
 	zonehandler "github.com/bouroo/goAthena/internal/features/zone/handler"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
@@ -63,7 +64,7 @@ func TestWSHandler_CZEnter_RealZoneGRPC_Bufconn(t *testing.T) {
 	t.Parallel()
 
 	ctrl := gomock.NewController(t)
-	mockSvc := domainmock.NewMockZoneService(ctrl)
+	mockSvc := znmock.NewMockZoneService(ctrl)
 
 	// Expect exactly one AddEntity call with the Entity shape the real
 	// zone handler constructs from a validated EnterZoneRequest.
@@ -78,9 +79,10 @@ func TestWSHandler_CZEnter_RealZoneGRPC_Bufconn(t *testing.T) {
 		}).
 		Times(1)
 
-	// Real zone gRPC handler wired with the mock ZoneService.
+	// Real zone gRPC handler wired with the mock ZoneService and TradeService.
 	nopLogger := zerolog.Nop()
-	zoneHandler := zonehandler.NewGRPCHandler(mockSvc, "prontera", 150, 200, &nopLogger)
+	mockTradeSvc := tradedomainmock.NewMockTradeService(gomock.NewController(t))
+	zoneHandler := zonehandler.NewGRPCHandler(mockSvc, mockTradeSvc, "prontera", 150, 200, &nopLogger)
 
 	// Real gRPC server on an in-memory bufconn listener.
 	const bufSize = 1024 * 1024
