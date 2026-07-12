@@ -69,6 +69,30 @@ func (f *fakeZoneClient) PickupItem(_ context.Context, _ *zonev1.PickupItemReque
 	}, nil
 }
 
+func (f *fakeZoneClient) RequestTrade(_ context.Context, _ *zonev1.RequestTradeRequest, _ ...grpc.CallOption) (*zonev1.RequestTradeResponse, error) {
+	return &zonev1.RequestTradeResponse{Success: true, TradeId: "fake-trade-id"}, nil
+}
+
+func (f *fakeZoneClient) AddTradeItem(_ context.Context, _ *zonev1.AddTradeItemRequest, _ ...grpc.CallOption) (*zonev1.AddTradeItemResponse, error) {
+	return &zonev1.AddTradeItemResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) AddTradeZeny(_ context.Context, _ *zonev1.AddTradeZenyRequest, _ ...grpc.CallOption) (*zonev1.AddTradeZenyResponse, error) {
+	return &zonev1.AddTradeZenyResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) ConfirmTrade(_ context.Context, _ *zonev1.ConfirmTradeRequest, _ ...grpc.CallOption) (*zonev1.ConfirmTradeResponse, error) {
+	return &zonev1.ConfirmTradeResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) CompleteTrade(_ context.Context, _ *zonev1.CompleteTradeRequest, _ ...grpc.CallOption) (*zonev1.CompleteTradeResponse, error) {
+	return &zonev1.CompleteTradeResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) CancelTrade(_ context.Context, _ *zonev1.CancelTradeRequest, _ ...grpc.CallOption) (*zonev1.CancelTradeResponse, error) {
+	return &zonev1.CancelTradeResponse{Success: true}, nil
+}
+
 // wsMapDispatchAdapter mirrors service.DispatchHandler for the WS path
 // so this test exercises the full real WSHandler → processBytes →
 // domain.PacketHandler → zone client → ZC_ACCEPT_ENTER → WS write

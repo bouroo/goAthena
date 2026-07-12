@@ -241,6 +241,30 @@ func (f *fakeZoneClient) PickupItem(ctx context.Context, req *zonev1.PickupItemR
 	}, nil
 }
 
+func (f *fakeZoneClient) RequestTrade(ctx context.Context, in *zonev1.RequestTradeRequest, opts ...grpc.CallOption) (*zonev1.RequestTradeResponse, error) {
+	return &zonev1.RequestTradeResponse{Success: true, TradeId: "fake-trade-id"}, nil
+}
+
+func (f *fakeZoneClient) AddTradeItem(ctx context.Context, in *zonev1.AddTradeItemRequest, opts ...grpc.CallOption) (*zonev1.AddTradeItemResponse, error) {
+	return &zonev1.AddTradeItemResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) AddTradeZeny(ctx context.Context, in *zonev1.AddTradeZenyRequest, opts ...grpc.CallOption) (*zonev1.AddTradeZenyResponse, error) {
+	return &zonev1.AddTradeZenyResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) ConfirmTrade(ctx context.Context, in *zonev1.ConfirmTradeRequest, opts ...grpc.CallOption) (*zonev1.ConfirmTradeResponse, error) {
+	return &zonev1.ConfirmTradeResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) CompleteTrade(ctx context.Context, in *zonev1.CompleteTradeRequest, opts ...grpc.CallOption) (*zonev1.CompleteTradeResponse, error) {
+	return &zonev1.CompleteTradeResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) CancelTrade(ctx context.Context, in *zonev1.CancelTradeRequest, opts ...grpc.CallOption) (*zonev1.CancelTradeResponse, error) {
+	return &zonev1.CancelTradeResponse{Success: true}, nil
+}
+
 // bufResponder captures every packet HandlePacket sends. Matched in
 // parallel with the in-process dispatch under test.
 type bufResponder struct {

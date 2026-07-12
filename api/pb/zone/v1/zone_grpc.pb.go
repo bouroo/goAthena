@@ -20,10 +20,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ZoneService_EnterZone_FullMethodName    = "/zone.v1.ZoneService/EnterZone"
-	ZoneService_MoveEntity_FullMethodName   = "/zone.v1.ZoneService/MoveEntity"
-	ZoneService_AttackEntity_FullMethodName = "/zone.v1.ZoneService/AttackEntity"
-	ZoneService_PickupItem_FullMethodName   = "/zone.v1.ZoneService/PickupItem"
+	ZoneService_EnterZone_FullMethodName     = "/zone.v1.ZoneService/EnterZone"
+	ZoneService_MoveEntity_FullMethodName    = "/zone.v1.ZoneService/MoveEntity"
+	ZoneService_AttackEntity_FullMethodName  = "/zone.v1.ZoneService/AttackEntity"
+	ZoneService_PickupItem_FullMethodName    = "/zone.v1.ZoneService/PickupItem"
+	ZoneService_RequestTrade_FullMethodName  = "/zone.v1.ZoneService/RequestTrade"
+	ZoneService_AddTradeItem_FullMethodName  = "/zone.v1.ZoneService/AddTradeItem"
+	ZoneService_AddTradeZeny_FullMethodName  = "/zone.v1.ZoneService/AddTradeZeny"
+	ZoneService_ConfirmTrade_FullMethodName  = "/zone.v1.ZoneService/ConfirmTrade"
+	ZoneService_CompleteTrade_FullMethodName = "/zone.v1.ZoneService/CompleteTrade"
+	ZoneService_CancelTrade_FullMethodName   = "/zone.v1.ZoneService/CancelTrade"
 )
 
 // ZoneServiceClient is the client API for ZoneService service.
@@ -54,6 +60,18 @@ type ZoneServiceClient interface {
 	// 0x0092 / ItemPickup). Validates the item exists, is in range, and is
 	// pickable. Returns success or error.
 	PickupItem(ctx context.Context, in *PickupItemRequest, opts ...grpc.CallOption) (*PickupItemResponse, error)
+	// RequestTrade initiates a trade request from one player to another.
+	RequestTrade(ctx context.Context, in *RequestTradeRequest, opts ...grpc.CallOption) (*RequestTradeResponse, error)
+	// AddTradeItem adds an item to the trade window.
+	AddTradeItem(ctx context.Context, in *AddTradeItemRequest, opts ...grpc.CallOption) (*AddTradeItemResponse, error)
+	// AddTradeZeny adds zeny to the trade window.
+	AddTradeZeny(ctx context.Context, in *AddTradeZenyRequest, opts ...grpc.CallOption) (*AddTradeZenyResponse, error)
+	// ConfirmTrade locks the current trade offer (ready state).
+	ConfirmTrade(ctx context.Context, in *ConfirmTradeRequest, opts ...grpc.CallOption) (*ConfirmTradeResponse, error)
+	// CompleteTrade executes the atomic item/zeny transfer (both parties confirmed).
+	CompleteTrade(ctx context.Context, in *CompleteTradeRequest, opts ...grpc.CallOption) (*CompleteTradeResponse, error)
+	// CancelTrade aborts the current trade session.
+	CancelTrade(ctx context.Context, in *CancelTradeRequest, opts ...grpc.CallOption) (*CancelTradeResponse, error)
 }
 
 type zoneServiceClient struct {
@@ -104,6 +122,66 @@ func (c *zoneServiceClient) PickupItem(ctx context.Context, in *PickupItemReques
 	return out, nil
 }
 
+func (c *zoneServiceClient) RequestTrade(ctx context.Context, in *RequestTradeRequest, opts ...grpc.CallOption) (*RequestTradeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequestTradeResponse)
+	err := c.cc.Invoke(ctx, ZoneService_RequestTrade_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) AddTradeItem(ctx context.Context, in *AddTradeItemRequest, opts ...grpc.CallOption) (*AddTradeItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddTradeItemResponse)
+	err := c.cc.Invoke(ctx, ZoneService_AddTradeItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) AddTradeZeny(ctx context.Context, in *AddTradeZenyRequest, opts ...grpc.CallOption) (*AddTradeZenyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddTradeZenyResponse)
+	err := c.cc.Invoke(ctx, ZoneService_AddTradeZeny_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) ConfirmTrade(ctx context.Context, in *ConfirmTradeRequest, opts ...grpc.CallOption) (*ConfirmTradeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfirmTradeResponse)
+	err := c.cc.Invoke(ctx, ZoneService_ConfirmTrade_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) CompleteTrade(ctx context.Context, in *CompleteTradeRequest, opts ...grpc.CallOption) (*CompleteTradeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompleteTradeResponse)
+	err := c.cc.Invoke(ctx, ZoneService_CompleteTrade_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) CancelTrade(ctx context.Context, in *CancelTradeRequest, opts ...grpc.CallOption) (*CancelTradeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelTradeResponse)
+	err := c.cc.Invoke(ctx, ZoneService_CancelTrade_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ZoneServiceServer is the server API for ZoneService service.
 // All implementations must embed UnimplementedZoneServiceServer
 // for forward compatibility.
@@ -132,6 +210,18 @@ type ZoneServiceServer interface {
 	// 0x0092 / ItemPickup). Validates the item exists, is in range, and is
 	// pickable. Returns success or error.
 	PickupItem(context.Context, *PickupItemRequest) (*PickupItemResponse, error)
+	// RequestTrade initiates a trade request from one player to another.
+	RequestTrade(context.Context, *RequestTradeRequest) (*RequestTradeResponse, error)
+	// AddTradeItem adds an item to the trade window.
+	AddTradeItem(context.Context, *AddTradeItemRequest) (*AddTradeItemResponse, error)
+	// AddTradeZeny adds zeny to the trade window.
+	AddTradeZeny(context.Context, *AddTradeZenyRequest) (*AddTradeZenyResponse, error)
+	// ConfirmTrade locks the current trade offer (ready state).
+	ConfirmTrade(context.Context, *ConfirmTradeRequest) (*ConfirmTradeResponse, error)
+	// CompleteTrade executes the atomic item/zeny transfer (both parties confirmed).
+	CompleteTrade(context.Context, *CompleteTradeRequest) (*CompleteTradeResponse, error)
+	// CancelTrade aborts the current trade session.
+	CancelTrade(context.Context, *CancelTradeRequest) (*CancelTradeResponse, error)
 	mustEmbedUnimplementedZoneServiceServer()
 }
 
@@ -153,6 +243,24 @@ func (UnimplementedZoneServiceServer) AttackEntity(context.Context, *AttackEntit
 }
 func (UnimplementedZoneServiceServer) PickupItem(context.Context, *PickupItemRequest) (*PickupItemResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PickupItem not implemented")
+}
+func (UnimplementedZoneServiceServer) RequestTrade(context.Context, *RequestTradeRequest) (*RequestTradeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RequestTrade not implemented")
+}
+func (UnimplementedZoneServiceServer) AddTradeItem(context.Context, *AddTradeItemRequest) (*AddTradeItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddTradeItem not implemented")
+}
+func (UnimplementedZoneServiceServer) AddTradeZeny(context.Context, *AddTradeZenyRequest) (*AddTradeZenyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddTradeZeny not implemented")
+}
+func (UnimplementedZoneServiceServer) ConfirmTrade(context.Context, *ConfirmTradeRequest) (*ConfirmTradeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfirmTrade not implemented")
+}
+func (UnimplementedZoneServiceServer) CompleteTrade(context.Context, *CompleteTradeRequest) (*CompleteTradeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompleteTrade not implemented")
+}
+func (UnimplementedZoneServiceServer) CancelTrade(context.Context, *CancelTradeRequest) (*CancelTradeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelTrade not implemented")
 }
 func (UnimplementedZoneServiceServer) mustEmbedUnimplementedZoneServiceServer() {}
 func (UnimplementedZoneServiceServer) testEmbeddedByValue()                     {}
@@ -247,6 +355,114 @@ func _ZoneService_PickupItem_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ZoneService_RequestTrade_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestTradeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).RequestTrade(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_RequestTrade_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).RequestTrade(ctx, req.(*RequestTradeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_AddTradeItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddTradeItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).AddTradeItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_AddTradeItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).AddTradeItem(ctx, req.(*AddTradeItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_AddTradeZeny_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddTradeZenyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).AddTradeZeny(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_AddTradeZeny_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).AddTradeZeny(ctx, req.(*AddTradeZenyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_ConfirmTrade_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfirmTradeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).ConfirmTrade(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_ConfirmTrade_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).ConfirmTrade(ctx, req.(*ConfirmTradeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_CompleteTrade_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteTradeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).CompleteTrade(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_CompleteTrade_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).CompleteTrade(ctx, req.(*CompleteTradeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_CancelTrade_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelTradeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).CancelTrade(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_CancelTrade_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).CancelTrade(ctx, req.(*CancelTradeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ZoneService_ServiceDesc is the grpc.ServiceDesc for ZoneService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -269,6 +485,30 @@ var ZoneService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PickupItem",
 			Handler:    _ZoneService_PickupItem_Handler,
+		},
+		{
+			MethodName: "RequestTrade",
+			Handler:    _ZoneService_RequestTrade_Handler,
+		},
+		{
+			MethodName: "AddTradeItem",
+			Handler:    _ZoneService_AddTradeItem_Handler,
+		},
+		{
+			MethodName: "AddTradeZeny",
+			Handler:    _ZoneService_AddTradeZeny_Handler,
+		},
+		{
+			MethodName: "ConfirmTrade",
+			Handler:    _ZoneService_ConfirmTrade_Handler,
+		},
+		{
+			MethodName: "CompleteTrade",
+			Handler:    _ZoneService_CompleteTrade_Handler,
+		},
+		{
+			MethodName: "CancelTrade",
+			Handler:    _ZoneService_CancelTrade_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
