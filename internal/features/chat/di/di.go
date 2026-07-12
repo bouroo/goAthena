@@ -71,25 +71,6 @@ func (noopLockStore) Release(_ context.Context, _, _ string) error {
 	return nil
 }
 
-	chatSvc := service.NewChatService(chatRepo, friendRepo, partyRepo, locks, 5*time.Second)
-	do.ProvideValue(c, chatSvc)
-
-	logger.Info().Msg("chat feature registered")
-	return nil
-}
-
-// noopLockStore is a no-op implementation of LockStore that always succeeds.
-// It's used as a fallback when the storage feature is not available.
-type noopLockStore struct{}
-
-func (noopLockStore) Acquire(_ context.Context, _ string, _ time.Duration) (string, error) {
-	return "noop-token", nil
-}
-
-func (noopLockStore) Release(_ context.Context, _, _ string) error {
-	return nil
-}
-
 // ProvideChatService resolves the chat service from the DI container.
 func ProvideChatService(c do.Injector) (domain.ChatService, error) {
 	svc, err := do.Invoke[domain.ChatService](c)
