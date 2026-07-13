@@ -39,6 +39,9 @@ func (r *memoryVendingRepository) GetShop(_ context.Context, shopID string) (dom
 	if !ok {
 		return domain.VendingShop{}, domain.ErrShopNotFound
 	}
+	itemsCopy := make([]domain.VendingItem, len(shop.Items))
+	copy(itemsCopy, shop.Items)
+	shop.Items = itemsCopy
 	return shop, nil
 }
 
@@ -48,6 +51,9 @@ func (r *memoryVendingRepository) GetShopByOwner(_ context.Context, ownerID uint
 	defer r.mu.RUnlock()
 	for _, shop := range r.shops {
 		if shop.OwnerID == ownerID {
+			itemsCopy := make([]domain.VendingItem, len(shop.Items))
+			copy(itemsCopy, shop.Items)
+			shop.Items = itemsCopy
 			return shop, nil
 		}
 	}
@@ -61,6 +67,9 @@ func (r *memoryVendingRepository) ListShopsOnMap(_ context.Context, mapName stri
 	var result []domain.VendingShop
 	for _, shop := range r.shops {
 		if shop.MapName == mapName {
+			itemsCopy := make([]domain.VendingItem, len(shop.Items))
+			copy(itemsCopy, shop.Items)
+			shop.Items = itemsCopy
 			result = append(result, shop)
 		}
 	}

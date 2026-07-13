@@ -268,7 +268,7 @@ func (s *vendingService) processPurchaseWithZeny(
 		return 0, fmt.Errorf("buy item: execute buy tx (char %d): %w", buyerID, err)
 	}
 
-	if err := s.reduceOwnerInventory(ctx, shopItem, amount); err != nil {
+	if err := s.reduceOwnerInventory(ctx, shop.OwnerID, shopItem, amount); err != nil {
 		return newZeny, err
 	}
 
@@ -280,13 +280,32 @@ func (s *vendingService) processPurchaseWithZeny(
 	return newZeny, nil
 }
 
-// reduceOwnerInventory decrements the sold items from the owner's inventory.
-func (s *vendingService) reduceOwnerInventory(ctx context.Context, shopItem domain.VendingItem, amount int32) error {
+// reduceOwnerInventory decrements the sold items from the owner's inventory
+// using the owner's actual stock, not the shop listing amount (CWE-664).
+func (s *vendingService) reduceOwnerInventory(ctx context.Context, ownerID uint32, shopItem domain.VendingItem, amount int32) error {
 	if s.invRepo == nil {
 		return nil
 	}
-	// shopItem.Amount and amount are both validated positive; result is non-negative.
-	newAmount := uint32(shopItem.Amount - amount) //nolint:gosec // G115: validated positive, result non-negative
+	invItems, err := s.invRepo.ListByChar(ctx, ownerID)
+	if err != nil {
+		return fmt.Errorf("buy item: list owner inventory: %w", err)
+	}
+	var currentAmount uint32
+	found := false
+	for _, inv := range invItems {
+		if inv.ID == shopItem.InventoryID {
+			currentAmount = inv.Amount
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("buy item: inventory item %d not found", shopItem.InventoryID)
+	}
+	if currentAmount < uint32(amount) { //nolint:gosec // G115: amount validated positive
+		return fmt.Errorf("buy item: insufficient inventory quantity")
+	}
+	newAmount := currentAmount - uint32(amount) //nolint:gosec // G115: amount validated positive, result non-negative
 	if err := s.invRepo.UpdateAmount(ctx, shopItem.InventoryID, newAmount); err != nil {
 		return fmt.Errorf("buy item: reduce owner inventory: %w", err)
 	}
@@ -334,6 +353,7 @@ func (s *vendingService) BuyItem(ctx context.Context, buyerID uint32, shopID str
 		return 0, fmt.Errorf("buy item: amount must be positive")
 	}
 
+	// Acquire the buyer's lock first.
 	token, res, err := s.acquire(ctx, buyerID)
 	if err != nil {
 		return 0, err
@@ -341,11 +361,31 @@ func (s *vendingService) BuyItem(ctx context.Context, buyerID uint32, shopID str
 	if res == acquireLockBusy {
 		return 0, domain.ErrLockBusy
 	}
-	defer s.release(ctx, buyerID, token)
 
+	// Read the shop to learn the owner. If we can't read the shop,
+	// release the buyer lock immediately instead of deferring.
 	shop, err := s.repo.GetShop(ctx, shopID)
 	if err != nil {
+		s.release(ctx, buyerID, token)
 		return 0, fmt.Errorf("buy item: get shop %q: %w", shopID, err)
+	}
+
+	// Now defer the buyer lock release (shop fetch succeeded, so the deferred
+	// release in the caller's defer stack would fire before this block).
+	defer s.release(ctx, buyerID, token)
+
+	// Acquire the shop owner's lock too to prevent concurrent duplicate buys.
+	// Skip if buying from own shop — the buyer lock is enough.
+	ownerID := shop.OwnerID
+	if ownerID != 0 && ownerID != buyerID {
+		token2, res2, err := s.acquire(ctx, ownerID)
+		if err != nil {
+			return 0, fmt.Errorf("buy item: acquire owner lock (char %d): %w", ownerID, err)
+		}
+		if res2 == acquireLockBusy {
+			return 0, domain.ErrLockBusy
+		}
+		defer s.release(ctx, ownerID, token2)
 	}
 
 	idx, found := findShopItem(shop, inventoryID)
@@ -358,10 +398,11 @@ func (s *vendingService) BuyItem(ctx context.Context, buyerID uint32, shopID str
 		return 0, domain.ErrInsufficientItems
 	}
 
-	totalCost := shopItem.Price * uint32(amount)
-	if totalCost < shopItem.Price {
+	totalCost64 := uint64(shopItem.Price) * uint64(amount) //nolint:gosec // G115: widening to detect overflow
+	if totalCost64 > 0xffffffff {
 		return 0, fmt.Errorf("buy item: total cost overflow")
 	}
+	totalCost := uint32(totalCost64) //nolint:gosec // G115: bounds-checked above
 
 	if s.zenyRepo != nil {
 		return s.processPurchaseWithZeny(ctx, buyerID, shop, idx, amount, totalCost)
