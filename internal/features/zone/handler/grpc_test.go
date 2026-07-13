@@ -117,7 +117,7 @@ func TestEnterZone_NilRequest(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockZoneService(ctrl)
-	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), "prontera", 150, 200, newTestLogger())
+	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), nil, "prontera", 150, 200, newTestLogger())
 
 	resp, err := h.EnterZone(context.Background(), nil)
 	require.Error(t, err)
@@ -131,7 +131,7 @@ func TestEnterZone_InvalidAccountID(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockZoneService(ctrl)
-	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), "prontera", 150, 200, newTestLogger())
+	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), nil, "prontera", 150, 200, newTestLogger())
 
 	resp, err := h.EnterZone(context.Background(), &zonev1.EnterZoneRequest{
 		AccountId: 0,
@@ -149,7 +149,7 @@ func TestEnterZone_InvalidCharID(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockZoneService(ctrl)
-	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), "prontera", 150, 200, newTestLogger())
+	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), nil, "prontera", 150, 200, newTestLogger())
 
 	resp, err := h.EnterZone(context.Background(), &zonev1.EnterZoneRequest{
 		AccountId: 42,
@@ -167,7 +167,7 @@ func TestEnterZone_AddEntityError(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockZoneService(ctrl)
-	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), "prontera", 150, 200, newTestLogger())
+	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), nil, "prontera", 150, 200, newTestLogger())
 
 	svc.EXPECT().
 		AddEntity(gomock.Any(), gomock.Any()).
@@ -194,7 +194,7 @@ func TestEnterZone_Success(t *testing.T) {
 		wantSpawn = 150
 		wantY     = 200
 	)
-	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), wantMap, wantSpawn, wantY, newTestLogger())
+	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), nil, wantMap, wantSpawn, wantY, newTestLogger())
 
 	svc.EXPECT().
 		AddEntity(gomock.Any(), gomock.Any()).
@@ -224,7 +224,7 @@ func TestMoveEntity_NilRequest(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockZoneService(ctrl)
-	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), "prontera", 150, 200, newTestLogger())
+	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), nil, "prontera", 150, 200, newTestLogger())
 
 	resp, err := h.MoveEntity(context.Background(), nil)
 	require.Error(t, err)
@@ -238,7 +238,7 @@ func TestMoveEntity_InvalidAccountID(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockZoneService(ctrl)
-	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), "prontera", 150, 200, newTestLogger())
+	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), nil, "prontera", 150, 200, newTestLogger())
 
 	resp, err := h.MoveEntity(context.Background(), &zonev1.MoveEntityRequest{
 		AccountId: 0,
@@ -257,7 +257,7 @@ func TestMoveEntity_EntityNotFound(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockZoneService(ctrl)
-	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), "prontera", 150, 200, newTestLogger())
+	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), nil, "prontera", 150, 200, newTestLogger())
 
 	svc.EXPECT().
 		GetEntity(gomock.Any(), domain.EntityID(42)).
@@ -279,7 +279,7 @@ func TestMoveEntity_MoveFailed(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockZoneService(ctrl)
-	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), "prontera", 150, 200, newTestLogger())
+	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), nil, "prontera", 150, 200, newTestLogger())
 
 	svc.EXPECT().
 		GetEntity(gomock.Any(), domain.EntityID(42)).
@@ -309,7 +309,7 @@ func TestMoveEntity_Success(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	svc := domainmock.NewMockZoneService(ctrl)
-	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), "prontera", 150, 200, newTestLogger())
+	h := handler.NewGRPCHandler(svc, newMockTradeService(ctrl), nil, "prontera", 150, 200, newTestLogger())
 
 	svc.EXPECT().
 		GetEntity(gomock.Any(), domain.EntityID(42)).
@@ -358,7 +358,7 @@ func TestAttackEntity(t *testing.T) {
 		SkillLevel: 0,
 	}
 
-	resp, err := handler.NewGRPCHandler(zs, newMockTradeService(ctrl), "test", 0, 0, newTestLogger()).AttackEntity(ctx, req)
+	resp, err := handler.NewGRPCHandler(zs, newMockTradeService(ctrl), nil, "test", 0, 0, newTestLogger()).AttackEntity(ctx, req)
 	require.NoError(t, err)
 	assert.True(t, resp.Success)
 	assert.False(t, resp.TargetDied)
@@ -376,7 +376,7 @@ func TestAttackEntity_EntityNotFound(t *testing.T) {
 		EntityId:   999,
 		AttackerId: 1,
 	}
-	_, err := handler.NewGRPCHandler(zs, newMockTradeService(ctrl), "test", 0, 0, newTestLogger()).AttackEntity(ctx, req)
+	_, err := handler.NewGRPCHandler(zs, newMockTradeService(ctrl), nil, "test", 0, 0, newTestLogger()).AttackEntity(ctx, req)
 	if err != nil {
 		t.Logf("Error: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestPickupItem(t *testing.T) {
 	player := &domain.Entity{ID: 1, Type: domain.EntityPlayer, X: 10, Y: 10}
 	require.NoError(t, zs.AddEntity(ctx, player))
 
-	resp, err := handler.NewGRPCHandler(zs, newMockTradeService(ctrl), "test", 0, 0, newTestLogger()).PickupItem(ctx, &zonev1.PickupItemRequest{
+	resp, err := handler.NewGRPCHandler(zs, newMockTradeService(ctrl), nil, "test", 0, 0, newTestLogger()).PickupItem(ctx, &zonev1.PickupItemRequest{
 		GroundItemId: 100,
 		PlayerId:     1,
 	})
@@ -416,7 +416,7 @@ func TestPickupItem_EntityTooFar(t *testing.T) {
 	player := &domain.Entity{ID: 1, Type: domain.EntityPlayer, X: 20, Y: 20}
 	require.NoError(t, zs.AddEntity(ctx, player))
 
-	_, err := handler.NewGRPCHandler(zs, newMockTradeService(ctrl), "test", 0, 0, newTestLogger()).PickupItem(ctx, &zonev1.PickupItemRequest{
+	_, err := handler.NewGRPCHandler(zs, newMockTradeService(ctrl), nil, "test", 0, 0, newTestLogger()).PickupItem(ctx, &zonev1.PickupItemRequest{
 		GroundItemId: 100,
 		PlayerId:     1,
 	})
@@ -431,7 +431,7 @@ func TestPickupItem_ItemNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	req := &zonev1.PickupItemRequest{GroundItemId: 999, PlayerId: 1}
-	_, err := handler.NewGRPCHandler(zs, newMockTradeService(ctrl), "test", 0, 0, newTestLogger()).PickupItem(ctx, req)
+	_, err := handler.NewGRPCHandler(zs, newMockTradeService(ctrl), nil, "test", 0, 0, newTestLogger()).PickupItem(ctx, req)
 	assert.Error(t, err)
 	assert.Equal(t, codes.Internal, status.Code(err))
 }

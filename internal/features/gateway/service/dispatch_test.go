@@ -329,6 +329,28 @@ func (f *fakeZoneClient) GetParty(ctx context.Context, in *zonev1.GetPartyReques
 	return &zonev1.GetPartyResponse{Success: true}, nil
 }
 
+// --- Vending ---
+
+func (f *fakeZoneClient) OpenVendingShop(ctx context.Context, in *zonev1.OpenVendingShopRequest, opts ...grpc.CallOption) (*zonev1.OpenVendingShopResponse, error) {
+	return &zonev1.OpenVendingShopResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) CloseVendingShop(ctx context.Context, in *zonev1.CloseVendingShopRequest, opts ...grpc.CallOption) (*zonev1.CloseVendingShopResponse, error) {
+	return &zonev1.CloseVendingShopResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) BuyVendingItem(ctx context.Context, in *zonev1.BuyVendingItemRequest, opts ...grpc.CallOption) (*zonev1.BuyVendingItemResponse, error) {
+	return &zonev1.BuyVendingItemResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) ListVendingShops(ctx context.Context, in *zonev1.ListVendingShopsRequest, opts ...grpc.CallOption) (*zonev1.ListVendingShopsResponse, error) {
+	return &zonev1.ListVendingShopsResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) GetVendingShop(ctx context.Context, in *zonev1.GetVendingShopRequest, opts ...grpc.CallOption) (*zonev1.GetVendingShopResponse, error) {
+	return &zonev1.GetVendingShopResponse{Success: true}, nil
+}
+
 // bufResponder captures every packet HandlePacket sends. Matched in
 // parallel with the in-process dispatch under test.
 type bufResponder struct {
