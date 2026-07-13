@@ -97,6 +97,21 @@ service ZoneService {
 
   // GetParty returns party info
   rpc GetParty(GetPartyRequest) returns (GetPartyResponse);
+
+  // OpenVendingShop opens a player vending shop at the owner's current location.
+  rpc OpenVendingShop(OpenVendingShopRequest) returns (OpenVendingShopResponse);
+
+  // CloseVendingShop closes the owner's vending shop.
+  rpc CloseVendingShop(CloseVendingShopRequest) returns (CloseVendingShopResponse);
+
+  // BuyVendingItem processes a purchase from a vending shop.
+  rpc BuyVendingItem(BuyVendingItemRequest) returns (BuyVendingItemResponse);
+
+  // ListVendingShops returns all open vending shops on a map.
+  rpc ListVendingShops(ListVendingShopsRequest) returns (ListVendingShopsResponse);
+
+  // GetVendingShop returns the shop owned by a character.
+  rpc GetVendingShop(GetVendingShopRequest) returns (GetVendingShopResponse);
 }
 
 message EnterZoneRequest {
@@ -426,4 +441,80 @@ message PartyMemberInfo {
   uint32 char_id = 1;
   string name = 2;
   bool is_leader = 3;
+}
+
+// --- Vending ---
+
+message VendingItemInfo {
+  uint32 inventory_id = 1;
+  uint32 item_id = 2;
+  int32 amount = 3;
+  uint32 price = 4;
+}
+
+message VendingShopInfo {
+  string shop_id = 1;
+  uint32 owner_char_id = 2;
+  string title = 3;
+  string map_name = 4;
+  int32 x = 5;
+  int32 y = 6;
+  repeated VendingItemInfo items = 7;
+}
+
+message OpenVendingShopRequest {
+  uint32 owner_char_id = 1;
+  string title = 2;
+  string map_name = 3;
+  int32 x = 4;
+  int32 y = 5;
+  repeated VendingItemInfo items = 6;
+}
+
+message OpenVendingShopResponse {
+  bool success = 1;
+  string error_message = 2;
+  VendingShopInfo shop = 3;
+}
+
+message CloseVendingShopRequest {
+  uint32 owner_char_id = 1;
+}
+
+message CloseVendingShopResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message BuyVendingItemRequest {
+  uint32 buyer_char_id = 1;
+  string shop_id = 2;
+  uint32 inventory_id = 3;
+  int32 amount = 4;
+}
+
+message BuyVendingItemResponse {
+  bool success = 1;
+  string error_message = 2;
+  uint32 buyer_zeny = 3;
+}
+
+message ListVendingShopsRequest {
+  string map_name = 1;
+}
+
+message ListVendingShopsResponse {
+  bool success = 1;
+  string error_message = 2;
+  repeated VendingShopInfo shops = 3;
+}
+
+message GetVendingShopRequest {
+  uint32 owner_char_id = 1;
+}
+
+message GetVendingShopResponse {
+  bool success = 1;
+  string error_message = 2;
+  VendingShopInfo shop = 3;
 }

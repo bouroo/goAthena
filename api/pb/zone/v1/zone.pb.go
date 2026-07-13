@@ -3326,6 +3326,742 @@ func (x *PartyMemberInfo) GetIsLeader() bool {
 	return false
 }
 
+type VendingItemInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InventoryId   uint32                 `protobuf:"varint,1,opt,name=inventory_id,json=inventoryId,proto3" json:"inventory_id,omitempty"`
+	ItemId        uint32                 `protobuf:"varint,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	Amount        int32                  `protobuf:"varint,3,opt,name=amount,proto3" json:"amount,omitempty"`
+	Price         uint32                 `protobuf:"varint,4,opt,name=price,proto3" json:"price,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VendingItemInfo) Reset() {
+	*x = VendingItemInfo{}
+	mi := &file_zone_v1_zone_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VendingItemInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VendingItemInfo) ProtoMessage() {}
+
+func (x *VendingItemInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VendingItemInfo.ProtoReflect.Descriptor instead.
+func (*VendingItemInfo) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *VendingItemInfo) GetInventoryId() uint32 {
+	if x != nil {
+		return x.InventoryId
+	}
+	return 0
+}
+
+func (x *VendingItemInfo) GetItemId() uint32 {
+	if x != nil {
+		return x.ItemId
+	}
+	return 0
+}
+
+func (x *VendingItemInfo) GetAmount() int32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+func (x *VendingItemInfo) GetPrice() uint32 {
+	if x != nil {
+		return x.Price
+	}
+	return 0
+}
+
+type VendingShopInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ShopId        string                 `protobuf:"bytes,1,opt,name=shop_id,json=shopId,proto3" json:"shop_id,omitempty"`
+	OwnerCharId   uint32                 `protobuf:"varint,2,opt,name=owner_char_id,json=ownerCharId,proto3" json:"owner_char_id,omitempty"`
+	Title         string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
+	MapName       string                 `protobuf:"bytes,4,opt,name=map_name,json=mapName,proto3" json:"map_name,omitempty"`
+	X             int32                  `protobuf:"varint,5,opt,name=x,proto3" json:"x,omitempty"`
+	Y             int32                  `protobuf:"varint,6,opt,name=y,proto3" json:"y,omitempty"`
+	Items         []*VendingItemInfo     `protobuf:"bytes,7,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VendingShopInfo) Reset() {
+	*x = VendingShopInfo{}
+	mi := &file_zone_v1_zone_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VendingShopInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VendingShopInfo) ProtoMessage() {}
+
+func (x *VendingShopInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VendingShopInfo.ProtoReflect.Descriptor instead.
+func (*VendingShopInfo) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *VendingShopInfo) GetShopId() string {
+	if x != nil {
+		return x.ShopId
+	}
+	return ""
+}
+
+func (x *VendingShopInfo) GetOwnerCharId() uint32 {
+	if x != nil {
+		return x.OwnerCharId
+	}
+	return 0
+}
+
+func (x *VendingShopInfo) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *VendingShopInfo) GetMapName() string {
+	if x != nil {
+		return x.MapName
+	}
+	return ""
+}
+
+func (x *VendingShopInfo) GetX() int32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *VendingShopInfo) GetY() int32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *VendingShopInfo) GetItems() []*VendingItemInfo {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+type OpenVendingShopRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OwnerCharId   uint32                 `protobuf:"varint,1,opt,name=owner_char_id,json=ownerCharId,proto3" json:"owner_char_id,omitempty"`
+	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	MapName       string                 `protobuf:"bytes,3,opt,name=map_name,json=mapName,proto3" json:"map_name,omitempty"`
+	X             int32                  `protobuf:"varint,4,opt,name=x,proto3" json:"x,omitempty"`
+	Y             int32                  `protobuf:"varint,5,opt,name=y,proto3" json:"y,omitempty"`
+	Items         []*VendingItemInfo     `protobuf:"bytes,6,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OpenVendingShopRequest) Reset() {
+	*x = OpenVendingShopRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OpenVendingShopRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OpenVendingShopRequest) ProtoMessage() {}
+
+func (x *OpenVendingShopRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OpenVendingShopRequest.ProtoReflect.Descriptor instead.
+func (*OpenVendingShopRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *OpenVendingShopRequest) GetOwnerCharId() uint32 {
+	if x != nil {
+		return x.OwnerCharId
+	}
+	return 0
+}
+
+func (x *OpenVendingShopRequest) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *OpenVendingShopRequest) GetMapName() string {
+	if x != nil {
+		return x.MapName
+	}
+	return ""
+}
+
+func (x *OpenVendingShopRequest) GetX() int32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *OpenVendingShopRequest) GetY() int32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *OpenVendingShopRequest) GetItems() []*VendingItemInfo {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+type OpenVendingShopResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	Shop          *VendingShopInfo       `protobuf:"bytes,3,opt,name=shop,proto3" json:"shop,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OpenVendingShopResponse) Reset() {
+	*x = OpenVendingShopResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OpenVendingShopResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OpenVendingShopResponse) ProtoMessage() {}
+
+func (x *OpenVendingShopResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OpenVendingShopResponse.ProtoReflect.Descriptor instead.
+func (*OpenVendingShopResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *OpenVendingShopResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *OpenVendingShopResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *OpenVendingShopResponse) GetShop() *VendingShopInfo {
+	if x != nil {
+		return x.Shop
+	}
+	return nil
+}
+
+type CloseVendingShopRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OwnerCharId   uint32                 `protobuf:"varint,1,opt,name=owner_char_id,json=ownerCharId,proto3" json:"owner_char_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CloseVendingShopRequest) Reset() {
+	*x = CloseVendingShopRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CloseVendingShopRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloseVendingShopRequest) ProtoMessage() {}
+
+func (x *CloseVendingShopRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloseVendingShopRequest.ProtoReflect.Descriptor instead.
+func (*CloseVendingShopRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *CloseVendingShopRequest) GetOwnerCharId() uint32 {
+	if x != nil {
+		return x.OwnerCharId
+	}
+	return 0
+}
+
+type CloseVendingShopResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CloseVendingShopResponse) Reset() {
+	*x = CloseVendingShopResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[61]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CloseVendingShopResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloseVendingShopResponse) ProtoMessage() {}
+
+func (x *CloseVendingShopResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[61]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloseVendingShopResponse.ProtoReflect.Descriptor instead.
+func (*CloseVendingShopResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{61}
+}
+
+func (x *CloseVendingShopResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CloseVendingShopResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type BuyVendingItemRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BuyerCharId   uint32                 `protobuf:"varint,1,opt,name=buyer_char_id,json=buyerCharId,proto3" json:"buyer_char_id,omitempty"`
+	ShopId        string                 `protobuf:"bytes,2,opt,name=shop_id,json=shopId,proto3" json:"shop_id,omitempty"`
+	InventoryId   uint32                 `protobuf:"varint,3,opt,name=inventory_id,json=inventoryId,proto3" json:"inventory_id,omitempty"`
+	Amount        int32                  `protobuf:"varint,4,opt,name=amount,proto3" json:"amount,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuyVendingItemRequest) Reset() {
+	*x = BuyVendingItemRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuyVendingItemRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuyVendingItemRequest) ProtoMessage() {}
+
+func (x *BuyVendingItemRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuyVendingItemRequest.ProtoReflect.Descriptor instead.
+func (*BuyVendingItemRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{62}
+}
+
+func (x *BuyVendingItemRequest) GetBuyerCharId() uint32 {
+	if x != nil {
+		return x.BuyerCharId
+	}
+	return 0
+}
+
+func (x *BuyVendingItemRequest) GetShopId() string {
+	if x != nil {
+		return x.ShopId
+	}
+	return ""
+}
+
+func (x *BuyVendingItemRequest) GetInventoryId() uint32 {
+	if x != nil {
+		return x.InventoryId
+	}
+	return 0
+}
+
+func (x *BuyVendingItemRequest) GetAmount() int32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+type BuyVendingItemResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	BuyerZeny     uint32                 `protobuf:"varint,3,opt,name=buyer_zeny,json=buyerZeny,proto3" json:"buyer_zeny,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuyVendingItemResponse) Reset() {
+	*x = BuyVendingItemResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuyVendingItemResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuyVendingItemResponse) ProtoMessage() {}
+
+func (x *BuyVendingItemResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuyVendingItemResponse.ProtoReflect.Descriptor instead.
+func (*BuyVendingItemResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *BuyVendingItemResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *BuyVendingItemResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *BuyVendingItemResponse) GetBuyerZeny() uint32 {
+	if x != nil {
+		return x.BuyerZeny
+	}
+	return 0
+}
+
+type ListVendingShopsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	MapName       string                 `protobuf:"bytes,1,opt,name=map_name,json=mapName,proto3" json:"map_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListVendingShopsRequest) Reset() {
+	*x = ListVendingShopsRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListVendingShopsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVendingShopsRequest) ProtoMessage() {}
+
+func (x *ListVendingShopsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVendingShopsRequest.ProtoReflect.Descriptor instead.
+func (*ListVendingShopsRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *ListVendingShopsRequest) GetMapName() string {
+	if x != nil {
+		return x.MapName
+	}
+	return ""
+}
+
+type ListVendingShopsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	Shops         []*VendingShopInfo     `protobuf:"bytes,3,rep,name=shops,proto3" json:"shops,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListVendingShopsResponse) Reset() {
+	*x = ListVendingShopsResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[65]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListVendingShopsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVendingShopsResponse) ProtoMessage() {}
+
+func (x *ListVendingShopsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[65]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVendingShopsResponse.ProtoReflect.Descriptor instead.
+func (*ListVendingShopsResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *ListVendingShopsResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ListVendingShopsResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *ListVendingShopsResponse) GetShops() []*VendingShopInfo {
+	if x != nil {
+		return x.Shops
+	}
+	return nil
+}
+
+type GetVendingShopRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OwnerCharId   uint32                 `protobuf:"varint,1,opt,name=owner_char_id,json=ownerCharId,proto3" json:"owner_char_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVendingShopRequest) Reset() {
+	*x = GetVendingShopRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVendingShopRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVendingShopRequest) ProtoMessage() {}
+
+func (x *GetVendingShopRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVendingShopRequest.ProtoReflect.Descriptor instead.
+func (*GetVendingShopRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *GetVendingShopRequest) GetOwnerCharId() uint32 {
+	if x != nil {
+		return x.OwnerCharId
+	}
+	return 0
+}
+
+type GetVendingShopResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	Shop          *VendingShopInfo       `protobuf:"bytes,3,opt,name=shop,proto3" json:"shop,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVendingShopResponse) Reset() {
+	*x = GetVendingShopResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVendingShopResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVendingShopResponse) ProtoMessage() {}
+
+func (x *GetVendingShopResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVendingShopResponse.ProtoReflect.Descriptor instead.
+func (*GetVendingShopResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *GetVendingShopResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *GetVendingShopResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *GetVendingShopResponse) GetShop() *VendingShopInfo {
+	if x != nil {
+		return x.Shop
+	}
+	return nil
+}
+
 var File_zone_v1_zone_proto protoreflect.FileDescriptor
 
 const file_zone_v1_zone_proto_rawDesc = "" +
@@ -3564,7 +4300,58 @@ const file_zone_v1_zone_proto_rawDesc = "" +
 	"\x0fPartyMemberInfo\x12\x17\n" +
 	"\achar_id\x18\x01 \x01(\rR\x06charId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
-	"\tis_leader\x18\x03 \x01(\bR\bisLeader2\xcd\x0f\n" +
+	"\tis_leader\x18\x03 \x01(\bR\bisLeader\"{\n" +
+	"\x0fVendingItemInfo\x12!\n" +
+	"\finventory_id\x18\x01 \x01(\rR\vinventoryId\x12\x17\n" +
+	"\aitem_id\x18\x02 \x01(\rR\x06itemId\x12\x16\n" +
+	"\x06amount\x18\x03 \x01(\x05R\x06amount\x12\x14\n" +
+	"\x05price\x18\x04 \x01(\rR\x05price\"\xcb\x01\n" +
+	"\x0fVendingShopInfo\x12\x17\n" +
+	"\ashop_id\x18\x01 \x01(\tR\x06shopId\x12\"\n" +
+	"\rowner_char_id\x18\x02 \x01(\rR\vownerCharId\x12\x14\n" +
+	"\x05title\x18\x03 \x01(\tR\x05title\x12\x19\n" +
+	"\bmap_name\x18\x04 \x01(\tR\amapName\x12\f\n" +
+	"\x01x\x18\x05 \x01(\x05R\x01x\x12\f\n" +
+	"\x01y\x18\x06 \x01(\x05R\x01y\x12.\n" +
+	"\x05items\x18\a \x03(\v2\x18.zone.v1.VendingItemInfoR\x05items\"\xb9\x01\n" +
+	"\x16OpenVendingShopRequest\x12\"\n" +
+	"\rowner_char_id\x18\x01 \x01(\rR\vownerCharId\x12\x14\n" +
+	"\x05title\x18\x02 \x01(\tR\x05title\x12\x19\n" +
+	"\bmap_name\x18\x03 \x01(\tR\amapName\x12\f\n" +
+	"\x01x\x18\x04 \x01(\x05R\x01x\x12\f\n" +
+	"\x01y\x18\x05 \x01(\x05R\x01y\x12.\n" +
+	"\x05items\x18\x06 \x03(\v2\x18.zone.v1.VendingItemInfoR\x05items\"\x86\x01\n" +
+	"\x17OpenVendingShopResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12,\n" +
+	"\x04shop\x18\x03 \x01(\v2\x18.zone.v1.VendingShopInfoR\x04shop\"=\n" +
+	"\x17CloseVendingShopRequest\x12\"\n" +
+	"\rowner_char_id\x18\x01 \x01(\rR\vownerCharId\"Y\n" +
+	"\x18CloseVendingShopResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\x8f\x01\n" +
+	"\x15BuyVendingItemRequest\x12\"\n" +
+	"\rbuyer_char_id\x18\x01 \x01(\rR\vbuyerCharId\x12\x17\n" +
+	"\ashop_id\x18\x02 \x01(\tR\x06shopId\x12!\n" +
+	"\finventory_id\x18\x03 \x01(\rR\vinventoryId\x12\x16\n" +
+	"\x06amount\x18\x04 \x01(\x05R\x06amount\"v\n" +
+	"\x16BuyVendingItemResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12\x1d\n" +
+	"\n" +
+	"buyer_zeny\x18\x03 \x01(\rR\tbuyerZeny\"4\n" +
+	"\x17ListVendingShopsRequest\x12\x19\n" +
+	"\bmap_name\x18\x01 \x01(\tR\amapName\"\x89\x01\n" +
+	"\x18ListVendingShopsResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12.\n" +
+	"\x05shops\x18\x03 \x03(\v2\x18.zone.v1.VendingShopInfoR\x05shops\";\n" +
+	"\x15GetVendingShopRequest\x12\"\n" +
+	"\rowner_char_id\x18\x01 \x01(\rR\vownerCharId\"\x85\x01\n" +
+	"\x16GetVendingShopResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12,\n" +
+	"\x04shop\x18\x03 \x01(\v2\x18.zone.v1.VendingShopInfoR\x04shop2\xfb\x12\n" +
 	"\vZoneService\x12B\n" +
 	"\tEnterZone\x12\x19.zone.v1.EnterZoneRequest\x1a\x1a.zone.v1.EnterZoneResponse\x12E\n" +
 	"\n" +
@@ -3594,7 +4381,12 @@ const file_zone_v1_zone_proto_rawDesc = "" +
 	"\tJoinParty\x12\x19.zone.v1.JoinPartyRequest\x1a\x1a.zone.v1.JoinPartyResponse\x12E\n" +
 	"\n" +
 	"LeaveParty\x12\x1a.zone.v1.LeavePartyRequest\x1a\x1b.zone.v1.LeavePartyResponse\x12?\n" +
-	"\bGetParty\x12\x18.zone.v1.GetPartyRequest\x1a\x19.zone.v1.GetPartyResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
+	"\bGetParty\x12\x18.zone.v1.GetPartyRequest\x1a\x19.zone.v1.GetPartyResponse\x12T\n" +
+	"\x0fOpenVendingShop\x12\x1f.zone.v1.OpenVendingShopRequest\x1a .zone.v1.OpenVendingShopResponse\x12W\n" +
+	"\x10CloseVendingShop\x12 .zone.v1.CloseVendingShopRequest\x1a!.zone.v1.CloseVendingShopResponse\x12Q\n" +
+	"\x0eBuyVendingItem\x12\x1e.zone.v1.BuyVendingItemRequest\x1a\x1f.zone.v1.BuyVendingItemResponse\x12W\n" +
+	"\x10ListVendingShops\x12 .zone.v1.ListVendingShopsRequest\x1a!.zone.v1.ListVendingShopsResponse\x12Q\n" +
+	"\x0eGetVendingShop\x12\x1e.zone.v1.GetVendingShopRequest\x1a\x1f.zone.v1.GetVendingShopResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
 
 var (
 	file_zone_v1_zone_proto_rawDescOnce sync.Once
@@ -3608,7 +4400,7 @@ func file_zone_v1_zone_proto_rawDescGZIP() []byte {
 	return file_zone_v1_zone_proto_rawDescData
 }
 
-var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
+var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 68)
 var file_zone_v1_zone_proto_goTypes = []any{
 	(*EnterZoneRequest)(nil),            // 0: zone.v1.EnterZoneRequest
 	(*EnterZoneResponse)(nil),           // 1: zone.v1.EnterZoneResponse
@@ -3666,69 +4458,96 @@ var file_zone_v1_zone_proto_goTypes = []any{
 	(*GetPartyResponse)(nil),            // 53: zone.v1.GetPartyResponse
 	(*PartyInfo)(nil),                   // 54: zone.v1.PartyInfo
 	(*PartyMemberInfo)(nil),             // 55: zone.v1.PartyMemberInfo
+	(*VendingItemInfo)(nil),             // 56: zone.v1.VendingItemInfo
+	(*VendingShopInfo)(nil),             // 57: zone.v1.VendingShopInfo
+	(*OpenVendingShopRequest)(nil),      // 58: zone.v1.OpenVendingShopRequest
+	(*OpenVendingShopResponse)(nil),     // 59: zone.v1.OpenVendingShopResponse
+	(*CloseVendingShopRequest)(nil),     // 60: zone.v1.CloseVendingShopRequest
+	(*CloseVendingShopResponse)(nil),    // 61: zone.v1.CloseVendingShopResponse
+	(*BuyVendingItemRequest)(nil),       // 62: zone.v1.BuyVendingItemRequest
+	(*BuyVendingItemResponse)(nil),      // 63: zone.v1.BuyVendingItemResponse
+	(*ListVendingShopsRequest)(nil),     // 64: zone.v1.ListVendingShopsRequest
+	(*ListVendingShopsResponse)(nil),    // 65: zone.v1.ListVendingShopsResponse
+	(*GetVendingShopRequest)(nil),       // 66: zone.v1.GetVendingShopRequest
+	(*GetVendingShopResponse)(nil),      // 67: zone.v1.GetVendingShopResponse
 }
 var file_zone_v1_zone_proto_depIdxs = []int32{
 	28, // 0: zone.v1.OpenStorageResponse.items:type_name -> zone.v1.StorageItem
 	45, // 1: zone.v1.ListFriendsResponse.friends:type_name -> zone.v1.FriendInfo
 	54, // 2: zone.v1.GetPartyResponse.party:type_name -> zone.v1.PartyInfo
 	55, // 3: zone.v1.PartyInfo.members:type_name -> zone.v1.PartyMemberInfo
-	0,  // 4: zone.v1.ZoneService.EnterZone:input_type -> zone.v1.EnterZoneRequest
-	2,  // 5: zone.v1.ZoneService.MoveEntity:input_type -> zone.v1.MoveEntityRequest
-	4,  // 6: zone.v1.ZoneService.AttackEntity:input_type -> zone.v1.AttackEntityRequest
-	6,  // 7: zone.v1.ZoneService.PickupItem:input_type -> zone.v1.PickupItemRequest
-	8,  // 8: zone.v1.ZoneService.RequestTrade:input_type -> zone.v1.RequestTradeRequest
-	10, // 9: zone.v1.ZoneService.AddTradeItem:input_type -> zone.v1.AddTradeItemRequest
-	12, // 10: zone.v1.ZoneService.AddTradeZeny:input_type -> zone.v1.AddTradeZenyRequest
-	14, // 11: zone.v1.ZoneService.ConfirmTrade:input_type -> zone.v1.ConfirmTradeRequest
-	16, // 12: zone.v1.ZoneService.CompleteTrade:input_type -> zone.v1.CompleteTradeRequest
-	18, // 13: zone.v1.ZoneService.CancelTrade:input_type -> zone.v1.CancelTradeRequest
-	20, // 14: zone.v1.ZoneService.OpenStorage:input_type -> zone.v1.OpenStorageRequest
-	22, // 15: zone.v1.ZoneService.DepositItem:input_type -> zone.v1.DepositItemRequest
-	24, // 16: zone.v1.ZoneService.WithdrawItem:input_type -> zone.v1.WithdrawItemRequest
-	26, // 17: zone.v1.ZoneService.CloseStorage:input_type -> zone.v1.CloseStorageRequest
-	29, // 18: zone.v1.ZoneService.Whisper:input_type -> zone.v1.WhisperRequest
-	31, // 19: zone.v1.ZoneService.SendPartyChat:input_type -> zone.v1.SendPartyChatRequest
-	33, // 20: zone.v1.ZoneService.SendMapChat:input_type -> zone.v1.SendMapChatRequest
-	35, // 21: zone.v1.ZoneService.SendFriendRequest:input_type -> zone.v1.SendFriendRequestRequest
-	37, // 22: zone.v1.ZoneService.AcceptFriendRequest:input_type -> zone.v1.AcceptFriendRequestRequest
-	39, // 23: zone.v1.ZoneService.RejectFriendRequest:input_type -> zone.v1.RejectFriendRequestRequest
-	41, // 24: zone.v1.ZoneService.RemoveFriend:input_type -> zone.v1.RemoveFriendRequest
-	43, // 25: zone.v1.ZoneService.ListFriends:input_type -> zone.v1.ListFriendsRequest
-	46, // 26: zone.v1.ZoneService.CreateParty:input_type -> zone.v1.CreatePartyRequest
-	48, // 27: zone.v1.ZoneService.JoinParty:input_type -> zone.v1.JoinPartyRequest
-	50, // 28: zone.v1.ZoneService.LeaveParty:input_type -> zone.v1.LeavePartyRequest
-	52, // 29: zone.v1.ZoneService.GetParty:input_type -> zone.v1.GetPartyRequest
-	1,  // 30: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
-	3,  // 31: zone.v1.ZoneService.MoveEntity:output_type -> zone.v1.MoveEntityResponse
-	5,  // 32: zone.v1.ZoneService.AttackEntity:output_type -> zone.v1.AttackEntityResponse
-	7,  // 33: zone.v1.ZoneService.PickupItem:output_type -> zone.v1.PickupItemResponse
-	9,  // 34: zone.v1.ZoneService.RequestTrade:output_type -> zone.v1.RequestTradeResponse
-	11, // 35: zone.v1.ZoneService.AddTradeItem:output_type -> zone.v1.AddTradeItemResponse
-	13, // 36: zone.v1.ZoneService.AddTradeZeny:output_type -> zone.v1.AddTradeZenyResponse
-	15, // 37: zone.v1.ZoneService.ConfirmTrade:output_type -> zone.v1.ConfirmTradeResponse
-	17, // 38: zone.v1.ZoneService.CompleteTrade:output_type -> zone.v1.CompleteTradeResponse
-	19, // 39: zone.v1.ZoneService.CancelTrade:output_type -> zone.v1.CancelTradeResponse
-	21, // 40: zone.v1.ZoneService.OpenStorage:output_type -> zone.v1.OpenStorageResponse
-	23, // 41: zone.v1.ZoneService.DepositItem:output_type -> zone.v1.DepositItemResponse
-	25, // 42: zone.v1.ZoneService.WithdrawItem:output_type -> zone.v1.WithdrawItemResponse
-	27, // 43: zone.v1.ZoneService.CloseStorage:output_type -> zone.v1.CloseStorageResponse
-	30, // 44: zone.v1.ZoneService.Whisper:output_type -> zone.v1.WhisperResponse
-	32, // 45: zone.v1.ZoneService.SendPartyChat:output_type -> zone.v1.SendPartyChatResponse
-	34, // 46: zone.v1.ZoneService.SendMapChat:output_type -> zone.v1.SendMapChatResponse
-	36, // 47: zone.v1.ZoneService.SendFriendRequest:output_type -> zone.v1.SendFriendRequestResponse
-	38, // 48: zone.v1.ZoneService.AcceptFriendRequest:output_type -> zone.v1.AcceptFriendRequestResponse
-	40, // 49: zone.v1.ZoneService.RejectFriendRequest:output_type -> zone.v1.RejectFriendRequestResponse
-	42, // 50: zone.v1.ZoneService.RemoveFriend:output_type -> zone.v1.RemoveFriendResponse
-	44, // 51: zone.v1.ZoneService.ListFriends:output_type -> zone.v1.ListFriendsResponse
-	47, // 52: zone.v1.ZoneService.CreateParty:output_type -> zone.v1.CreatePartyResponse
-	49, // 53: zone.v1.ZoneService.JoinParty:output_type -> zone.v1.JoinPartyResponse
-	51, // 54: zone.v1.ZoneService.LeaveParty:output_type -> zone.v1.LeavePartyResponse
-	53, // 55: zone.v1.ZoneService.GetParty:output_type -> zone.v1.GetPartyResponse
-	30, // [30:56] is the sub-list for method output_type
-	4,  // [4:30] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	56, // 4: zone.v1.VendingShopInfo.items:type_name -> zone.v1.VendingItemInfo
+	56, // 5: zone.v1.OpenVendingShopRequest.items:type_name -> zone.v1.VendingItemInfo
+	57, // 6: zone.v1.OpenVendingShopResponse.shop:type_name -> zone.v1.VendingShopInfo
+	57, // 7: zone.v1.ListVendingShopsResponse.shops:type_name -> zone.v1.VendingShopInfo
+	57, // 8: zone.v1.GetVendingShopResponse.shop:type_name -> zone.v1.VendingShopInfo
+	0,  // 9: zone.v1.ZoneService.EnterZone:input_type -> zone.v1.EnterZoneRequest
+	2,  // 10: zone.v1.ZoneService.MoveEntity:input_type -> zone.v1.MoveEntityRequest
+	4,  // 11: zone.v1.ZoneService.AttackEntity:input_type -> zone.v1.AttackEntityRequest
+	6,  // 12: zone.v1.ZoneService.PickupItem:input_type -> zone.v1.PickupItemRequest
+	8,  // 13: zone.v1.ZoneService.RequestTrade:input_type -> zone.v1.RequestTradeRequest
+	10, // 14: zone.v1.ZoneService.AddTradeItem:input_type -> zone.v1.AddTradeItemRequest
+	12, // 15: zone.v1.ZoneService.AddTradeZeny:input_type -> zone.v1.AddTradeZenyRequest
+	14, // 16: zone.v1.ZoneService.ConfirmTrade:input_type -> zone.v1.ConfirmTradeRequest
+	16, // 17: zone.v1.ZoneService.CompleteTrade:input_type -> zone.v1.CompleteTradeRequest
+	18, // 18: zone.v1.ZoneService.CancelTrade:input_type -> zone.v1.CancelTradeRequest
+	20, // 19: zone.v1.ZoneService.OpenStorage:input_type -> zone.v1.OpenStorageRequest
+	22, // 20: zone.v1.ZoneService.DepositItem:input_type -> zone.v1.DepositItemRequest
+	24, // 21: zone.v1.ZoneService.WithdrawItem:input_type -> zone.v1.WithdrawItemRequest
+	26, // 22: zone.v1.ZoneService.CloseStorage:input_type -> zone.v1.CloseStorageRequest
+	29, // 23: zone.v1.ZoneService.Whisper:input_type -> zone.v1.WhisperRequest
+	31, // 24: zone.v1.ZoneService.SendPartyChat:input_type -> zone.v1.SendPartyChatRequest
+	33, // 25: zone.v1.ZoneService.SendMapChat:input_type -> zone.v1.SendMapChatRequest
+	35, // 26: zone.v1.ZoneService.SendFriendRequest:input_type -> zone.v1.SendFriendRequestRequest
+	37, // 27: zone.v1.ZoneService.AcceptFriendRequest:input_type -> zone.v1.AcceptFriendRequestRequest
+	39, // 28: zone.v1.ZoneService.RejectFriendRequest:input_type -> zone.v1.RejectFriendRequestRequest
+	41, // 29: zone.v1.ZoneService.RemoveFriend:input_type -> zone.v1.RemoveFriendRequest
+	43, // 30: zone.v1.ZoneService.ListFriends:input_type -> zone.v1.ListFriendsRequest
+	46, // 31: zone.v1.ZoneService.CreateParty:input_type -> zone.v1.CreatePartyRequest
+	48, // 32: zone.v1.ZoneService.JoinParty:input_type -> zone.v1.JoinPartyRequest
+	50, // 33: zone.v1.ZoneService.LeaveParty:input_type -> zone.v1.LeavePartyRequest
+	52, // 34: zone.v1.ZoneService.GetParty:input_type -> zone.v1.GetPartyRequest
+	58, // 35: zone.v1.ZoneService.OpenVendingShop:input_type -> zone.v1.OpenVendingShopRequest
+	60, // 36: zone.v1.ZoneService.CloseVendingShop:input_type -> zone.v1.CloseVendingShopRequest
+	62, // 37: zone.v1.ZoneService.BuyVendingItem:input_type -> zone.v1.BuyVendingItemRequest
+	64, // 38: zone.v1.ZoneService.ListVendingShops:input_type -> zone.v1.ListVendingShopsRequest
+	66, // 39: zone.v1.ZoneService.GetVendingShop:input_type -> zone.v1.GetVendingShopRequest
+	1,  // 40: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
+	3,  // 41: zone.v1.ZoneService.MoveEntity:output_type -> zone.v1.MoveEntityResponse
+	5,  // 42: zone.v1.ZoneService.AttackEntity:output_type -> zone.v1.AttackEntityResponse
+	7,  // 43: zone.v1.ZoneService.PickupItem:output_type -> zone.v1.PickupItemResponse
+	9,  // 44: zone.v1.ZoneService.RequestTrade:output_type -> zone.v1.RequestTradeResponse
+	11, // 45: zone.v1.ZoneService.AddTradeItem:output_type -> zone.v1.AddTradeItemResponse
+	13, // 46: zone.v1.ZoneService.AddTradeZeny:output_type -> zone.v1.AddTradeZenyResponse
+	15, // 47: zone.v1.ZoneService.ConfirmTrade:output_type -> zone.v1.ConfirmTradeResponse
+	17, // 48: zone.v1.ZoneService.CompleteTrade:output_type -> zone.v1.CompleteTradeResponse
+	19, // 49: zone.v1.ZoneService.CancelTrade:output_type -> zone.v1.CancelTradeResponse
+	21, // 50: zone.v1.ZoneService.OpenStorage:output_type -> zone.v1.OpenStorageResponse
+	23, // 51: zone.v1.ZoneService.DepositItem:output_type -> zone.v1.DepositItemResponse
+	25, // 52: zone.v1.ZoneService.WithdrawItem:output_type -> zone.v1.WithdrawItemResponse
+	27, // 53: zone.v1.ZoneService.CloseStorage:output_type -> zone.v1.CloseStorageResponse
+	30, // 54: zone.v1.ZoneService.Whisper:output_type -> zone.v1.WhisperResponse
+	32, // 55: zone.v1.ZoneService.SendPartyChat:output_type -> zone.v1.SendPartyChatResponse
+	34, // 56: zone.v1.ZoneService.SendMapChat:output_type -> zone.v1.SendMapChatResponse
+	36, // 57: zone.v1.ZoneService.SendFriendRequest:output_type -> zone.v1.SendFriendRequestResponse
+	38, // 58: zone.v1.ZoneService.AcceptFriendRequest:output_type -> zone.v1.AcceptFriendRequestResponse
+	40, // 59: zone.v1.ZoneService.RejectFriendRequest:output_type -> zone.v1.RejectFriendRequestResponse
+	42, // 60: zone.v1.ZoneService.RemoveFriend:output_type -> zone.v1.RemoveFriendResponse
+	44, // 61: zone.v1.ZoneService.ListFriends:output_type -> zone.v1.ListFriendsResponse
+	47, // 62: zone.v1.ZoneService.CreateParty:output_type -> zone.v1.CreatePartyResponse
+	49, // 63: zone.v1.ZoneService.JoinParty:output_type -> zone.v1.JoinPartyResponse
+	51, // 64: zone.v1.ZoneService.LeaveParty:output_type -> zone.v1.LeavePartyResponse
+	53, // 65: zone.v1.ZoneService.GetParty:output_type -> zone.v1.GetPartyResponse
+	59, // 66: zone.v1.ZoneService.OpenVendingShop:output_type -> zone.v1.OpenVendingShopResponse
+	61, // 67: zone.v1.ZoneService.CloseVendingShop:output_type -> zone.v1.CloseVendingShopResponse
+	63, // 68: zone.v1.ZoneService.BuyVendingItem:output_type -> zone.v1.BuyVendingItemResponse
+	65, // 69: zone.v1.ZoneService.ListVendingShops:output_type -> zone.v1.ListVendingShopsResponse
+	67, // 70: zone.v1.ZoneService.GetVendingShop:output_type -> zone.v1.GetVendingShopResponse
+	40, // [40:71] is the sub-list for method output_type
+	9,  // [9:40] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_zone_v1_zone_proto_init() }
@@ -3742,7 +4561,7 @@ func file_zone_v1_zone_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_zone_v1_zone_proto_rawDesc), len(file_zone_v1_zone_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   56,
+			NumMessages:   68,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

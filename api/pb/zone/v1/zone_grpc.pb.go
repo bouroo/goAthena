@@ -46,6 +46,11 @@ const (
 	ZoneService_JoinParty_FullMethodName           = "/zone.v1.ZoneService/JoinParty"
 	ZoneService_LeaveParty_FullMethodName          = "/zone.v1.ZoneService/LeaveParty"
 	ZoneService_GetParty_FullMethodName            = "/zone.v1.ZoneService/GetParty"
+	ZoneService_OpenVendingShop_FullMethodName     = "/zone.v1.ZoneService/OpenVendingShop"
+	ZoneService_CloseVendingShop_FullMethodName    = "/zone.v1.ZoneService/CloseVendingShop"
+	ZoneService_BuyVendingItem_FullMethodName      = "/zone.v1.ZoneService/BuyVendingItem"
+	ZoneService_ListVendingShops_FullMethodName    = "/zone.v1.ZoneService/ListVendingShops"
+	ZoneService_GetVendingShop_FullMethodName      = "/zone.v1.ZoneService/GetVendingShop"
 )
 
 // ZoneServiceClient is the client API for ZoneService service.
@@ -120,6 +125,16 @@ type ZoneServiceClient interface {
 	LeaveParty(ctx context.Context, in *LeavePartyRequest, opts ...grpc.CallOption) (*LeavePartyResponse, error)
 	// GetParty returns party info
 	GetParty(ctx context.Context, in *GetPartyRequest, opts ...grpc.CallOption) (*GetPartyResponse, error)
+	// OpenVendingShop opens a player vending shop at the owner's current location.
+	OpenVendingShop(ctx context.Context, in *OpenVendingShopRequest, opts ...grpc.CallOption) (*OpenVendingShopResponse, error)
+	// CloseVendingShop closes the owner's vending shop.
+	CloseVendingShop(ctx context.Context, in *CloseVendingShopRequest, opts ...grpc.CallOption) (*CloseVendingShopResponse, error)
+	// BuyVendingItem processes a purchase from a vending shop.
+	BuyVendingItem(ctx context.Context, in *BuyVendingItemRequest, opts ...grpc.CallOption) (*BuyVendingItemResponse, error)
+	// ListVendingShops returns all open vending shops on a map.
+	ListVendingShops(ctx context.Context, in *ListVendingShopsRequest, opts ...grpc.CallOption) (*ListVendingShopsResponse, error)
+	// GetVendingShop returns the shop owned by a character.
+	GetVendingShop(ctx context.Context, in *GetVendingShopRequest, opts ...grpc.CallOption) (*GetVendingShopResponse, error)
 }
 
 type zoneServiceClient struct {
@@ -390,6 +405,56 @@ func (c *zoneServiceClient) GetParty(ctx context.Context, in *GetPartyRequest, o
 	return out, nil
 }
 
+func (c *zoneServiceClient) OpenVendingShop(ctx context.Context, in *OpenVendingShopRequest, opts ...grpc.CallOption) (*OpenVendingShopResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OpenVendingShopResponse)
+	err := c.cc.Invoke(ctx, ZoneService_OpenVendingShop_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) CloseVendingShop(ctx context.Context, in *CloseVendingShopRequest, opts ...grpc.CallOption) (*CloseVendingShopResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CloseVendingShopResponse)
+	err := c.cc.Invoke(ctx, ZoneService_CloseVendingShop_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) BuyVendingItem(ctx context.Context, in *BuyVendingItemRequest, opts ...grpc.CallOption) (*BuyVendingItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BuyVendingItemResponse)
+	err := c.cc.Invoke(ctx, ZoneService_BuyVendingItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) ListVendingShops(ctx context.Context, in *ListVendingShopsRequest, opts ...grpc.CallOption) (*ListVendingShopsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListVendingShopsResponse)
+	err := c.cc.Invoke(ctx, ZoneService_ListVendingShops_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *zoneServiceClient) GetVendingShop(ctx context.Context, in *GetVendingShopRequest, opts ...grpc.CallOption) (*GetVendingShopResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetVendingShopResponse)
+	err := c.cc.Invoke(ctx, ZoneService_GetVendingShop_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ZoneServiceServer is the server API for ZoneService service.
 // All implementations must embed UnimplementedZoneServiceServer
 // for forward compatibility.
@@ -462,6 +527,16 @@ type ZoneServiceServer interface {
 	LeaveParty(context.Context, *LeavePartyRequest) (*LeavePartyResponse, error)
 	// GetParty returns party info
 	GetParty(context.Context, *GetPartyRequest) (*GetPartyResponse, error)
+	// OpenVendingShop opens a player vending shop at the owner's current location.
+	OpenVendingShop(context.Context, *OpenVendingShopRequest) (*OpenVendingShopResponse, error)
+	// CloseVendingShop closes the owner's vending shop.
+	CloseVendingShop(context.Context, *CloseVendingShopRequest) (*CloseVendingShopResponse, error)
+	// BuyVendingItem processes a purchase from a vending shop.
+	BuyVendingItem(context.Context, *BuyVendingItemRequest) (*BuyVendingItemResponse, error)
+	// ListVendingShops returns all open vending shops on a map.
+	ListVendingShops(context.Context, *ListVendingShopsRequest) (*ListVendingShopsResponse, error)
+	// GetVendingShop returns the shop owned by a character.
+	GetVendingShop(context.Context, *GetVendingShopRequest) (*GetVendingShopResponse, error)
 	mustEmbedUnimplementedZoneServiceServer()
 }
 
@@ -549,6 +624,21 @@ func (UnimplementedZoneServiceServer) LeaveParty(context.Context, *LeavePartyReq
 }
 func (UnimplementedZoneServiceServer) GetParty(context.Context, *GetPartyRequest) (*GetPartyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetParty not implemented")
+}
+func (UnimplementedZoneServiceServer) OpenVendingShop(context.Context, *OpenVendingShopRequest) (*OpenVendingShopResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OpenVendingShop not implemented")
+}
+func (UnimplementedZoneServiceServer) CloseVendingShop(context.Context, *CloseVendingShopRequest) (*CloseVendingShopResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CloseVendingShop not implemented")
+}
+func (UnimplementedZoneServiceServer) BuyVendingItem(context.Context, *BuyVendingItemRequest) (*BuyVendingItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BuyVendingItem not implemented")
+}
+func (UnimplementedZoneServiceServer) ListVendingShops(context.Context, *ListVendingShopsRequest) (*ListVendingShopsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListVendingShops not implemented")
+}
+func (UnimplementedZoneServiceServer) GetVendingShop(context.Context, *GetVendingShopRequest) (*GetVendingShopResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetVendingShop not implemented")
 }
 func (UnimplementedZoneServiceServer) mustEmbedUnimplementedZoneServiceServer() {}
 func (UnimplementedZoneServiceServer) testEmbeddedByValue()                     {}
@@ -1039,6 +1129,96 @@ func _ZoneService_GetParty_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ZoneService_OpenVendingShop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OpenVendingShopRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).OpenVendingShop(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_OpenVendingShop_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).OpenVendingShop(ctx, req.(*OpenVendingShopRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_CloseVendingShop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloseVendingShopRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).CloseVendingShop(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_CloseVendingShop_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).CloseVendingShop(ctx, req.(*CloseVendingShopRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_BuyVendingItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BuyVendingItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).BuyVendingItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_BuyVendingItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).BuyVendingItem(ctx, req.(*BuyVendingItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_ListVendingShops_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListVendingShopsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).ListVendingShops(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_ListVendingShops_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).ListVendingShops(ctx, req.(*ListVendingShopsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ZoneService_GetVendingShop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetVendingShopRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).GetVendingShop(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_GetVendingShop_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).GetVendingShop(ctx, req.(*GetVendingShopRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ZoneService_ServiceDesc is the grpc.ServiceDesc for ZoneService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1149,6 +1329,26 @@ var ZoneService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetParty",
 			Handler:    _ZoneService_GetParty_Handler,
+		},
+		{
+			MethodName: "OpenVendingShop",
+			Handler:    _ZoneService_OpenVendingShop_Handler,
+		},
+		{
+			MethodName: "CloseVendingShop",
+			Handler:    _ZoneService_CloseVendingShop_Handler,
+		},
+		{
+			MethodName: "BuyVendingItem",
+			Handler:    _ZoneService_BuyVendingItem_Handler,
+		},
+		{
+			MethodName: "ListVendingShops",
+			Handler:    _ZoneService_ListVendingShops_Handler,
+		},
+		{
+			MethodName: "GetVendingShop",
+			Handler:    _ZoneService_GetVendingShop_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

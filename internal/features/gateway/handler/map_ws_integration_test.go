@@ -82,7 +82,7 @@ func TestWSHandler_CZEnter_RealZoneGRPC_Bufconn(t *testing.T) {
 	// Real zone gRPC handler wired with the mock ZoneService and TradeService.
 	nopLogger := zerolog.Nop()
 	mockTradeSvc := tradedomainmock.NewMockTradeService(gomock.NewController(t))
-	zoneHandler := zonehandler.NewGRPCHandler(mockSvc, mockTradeSvc, "prontera", 150, 200, &nopLogger)
+	zoneHandler := zonehandler.NewGRPCHandler(mockSvc, mockTradeSvc, nil, "prontera", 150, 200, &nopLogger)
 
 	// Real gRPC server on an in-memory bufconn listener.
 	const bufSize = 1024 * 1024

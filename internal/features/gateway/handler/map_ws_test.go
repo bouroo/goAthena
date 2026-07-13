@@ -157,6 +157,26 @@ func (f *fakeZoneClient) GetParty(_ context.Context, _ *zonev1.GetPartyRequest, 
 	return &zonev1.GetPartyResponse{Success: true}, nil
 }
 
+func (f *fakeZoneClient) OpenVendingShop(_ context.Context, _ *zonev1.OpenVendingShopRequest, _ ...grpc.CallOption) (*zonev1.OpenVendingShopResponse, error) {
+	return &zonev1.OpenVendingShopResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) CloseVendingShop(_ context.Context, _ *zonev1.CloseVendingShopRequest, _ ...grpc.CallOption) (*zonev1.CloseVendingShopResponse, error) {
+	return &zonev1.CloseVendingShopResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) BuyVendingItem(_ context.Context, _ *zonev1.BuyVendingItemRequest, _ ...grpc.CallOption) (*zonev1.BuyVendingItemResponse, error) {
+	return &zonev1.BuyVendingItemResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) ListVendingShops(_ context.Context, _ *zonev1.ListVendingShopsRequest, _ ...grpc.CallOption) (*zonev1.ListVendingShopsResponse, error) {
+	return &zonev1.ListVendingShopsResponse{Success: true}, nil
+}
+
+func (f *fakeZoneClient) GetVendingShop(_ context.Context, _ *zonev1.GetVendingShopRequest, _ ...grpc.CallOption) (*zonev1.GetVendingShopResponse, error) {
+	return &zonev1.GetVendingShopResponse{Success: true}, nil
+}
+
 // wsMapDispatchAdapter mirrors service.DispatchHandler for the WS path
 // so this test exercises the full real WSHandler → processBytes →
 // domain.PacketHandler → zone client → ZC_ACCEPT_ENTER → WS write
