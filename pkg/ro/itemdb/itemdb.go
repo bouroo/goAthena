@@ -46,15 +46,12 @@ type Registry struct {
 
 // Load parses a rAthena item_db YAML file from an io.Reader and returns a Registry.
 // It expects the rAthena YAML format with Header.Type=="ITEM_DB" and Header.Version==3.
-// Unknown fields are silently ignored.
+// Unknown fields are silently ignored. The document is streamed through
+// yaml.NewDecoder to avoid buffering the entire (multi-MB) item_db.yml
+// in memory before decoding.
 func Load(r io.Reader) (*Registry, error) {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("read item_db: %w", err)
-	}
-
 	var f fileFormat
-	if err := yaml.Unmarshal(data, &f); err != nil {
+	if err := yaml.NewDecoder(r).Decode(&f); err != nil {
 		return nil, fmt.Errorf("parse item_db yaml: %w", err)
 	}
 

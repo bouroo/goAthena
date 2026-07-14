@@ -48,7 +48,10 @@ func Register(c do.Injector) error {
 	sessionRepo := repository.NewSessionRepository(vk)
 	warehouseLock := repository.NewWarehouseLock(vk)
 	inventoryRepo := inventoryrepo.NewInventoryRepository(db)
-	itemWeight := resolveItemWeight(cfg.Identity.ItemDBPath, logger)
+	itemWeight, err := resolveItemWeight(cfg.Identity.ItemDBPath, logger)
+	if err != nil {
+		return fmt.Errorf("resolve item weight lookup: %w", err)
+	}
 
 	identitySvc := service.NewIdentityService(
 		accountRepo,
@@ -79,20 +82,23 @@ func Register(c do.Injector) error {
 	return nil
 }
 
-func resolveItemWeight(path string, logger *zerolog.Logger) inventorydomain.ItemWeightLookup {
+// resolveItemWeight selects the ItemWeightLookup for the identity
+// service. An unset item_db_path is a valid configuration (weights
+// disabled via ZeroItemWeight), but an explicitly configured path that
+// fails to load is a misconfiguration: silently disabling the weight
+// gate in that case would open a gameplay exploit, so the error is
+// propagated to fail identity boot fast.
+func resolveItemWeight(path string, logger *zerolog.Logger) (inventorydomain.ItemWeightLookup, error) {
 	if path == "" {
 		logger.Warn().Msg("identity: item_db_path unset; item weights disabled")
-		return inventorydomain.ZeroItemWeight{}
+		return inventorydomain.ZeroItemWeight{}, nil
 	}
 
 	registry, err := itemdb.LoadFile(path)
 	if err != nil {
-		logger.Warn().Err(err).
-			Str("path", path).
-			Msg("identity: item_db load failed; item weights disabled")
-		return inventorydomain.ZeroItemWeight{}
+		return nil, fmt.Errorf("load item_db %q: %w", path, err)
 	}
-	return registry
+	return registry, nil
 }
 
 // ProvideIdentityService resolves the wired IdentityService use case.

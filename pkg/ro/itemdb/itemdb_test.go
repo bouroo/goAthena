@@ -169,7 +169,10 @@ func TestLoad_MalformedYAML(t *testing.T) {
 func TestLoad_ReadError(t *testing.T) {
 	_, err := Load(errorReader{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "read item_db")
+	// The streaming decoder surfaces the underlying read failure while
+	// decoding, so it is wrapped under the parse context.
+	assert.Contains(t, err.Error(), "parse item_db yaml")
+	assert.Contains(t, err.Error(), "read failure")
 }
 
 func TestLoadFile(t *testing.T) {
