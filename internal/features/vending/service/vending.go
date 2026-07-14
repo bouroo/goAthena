@@ -353,7 +353,6 @@ func (s *vendingService) updateShopStock(ctx context.Context, shop domain.Vendin
 func (s *vendingService) lockOwnerAndReload(
 	ctx context.Context,
 	shop domain.VendingShop,
-	shopID string,
 	buyerID uint32,
 ) (domain.VendingShop, func(), error) {
 	ownerID := shop.OwnerID
@@ -370,10 +369,10 @@ func (s *vendingService) lockOwnerAndReload(
 	}
 	release := func() { s.release(ctx, ownerID, token) }
 
-	fresh, err := s.repo.GetShop(ctx, shopID)
+	fresh, err := s.repo.GetShop(ctx, shop.ID)
 	if err != nil {
 		release()
-		return domain.VendingShop{}, func() {}, fmt.Errorf("buy item: get shop %q: %w", shopID, err)
+		return domain.VendingShop{}, func() {}, fmt.Errorf("buy item: get shop %q: %w", shop.ID, err)
 	}
 	return fresh, release, nil
 }
@@ -412,7 +411,7 @@ func (s *vendingService) BuyItem(ctx context.Context, buyerID uint32, shopID str
 
 	// Acquire the shop owner's lock too and re-read the shop under it,
 	// serializing concurrent buyers to prevent an oversell TOCTOU.
-	shop, releaseOwner, err := s.lockOwnerAndReload(ctx, shop, shopID, buyerID)
+	shop, releaseOwner, err := s.lockOwnerAndReload(ctx, shop, buyerID)
 	if err != nil {
 		return 0, err
 	}
