@@ -342,6 +342,42 @@ func (s *vendingService) updateShopStock(ctx context.Context, shop domain.Vendin
 
 // BuyItem processes a purchase from a vending shop. The buyer's zeny is
 // deducted, items are transferred, and the shop's stock is reduced.
+// lockOwnerAndReload acquires the shop owner's lock (unless the buyer owns
+// the shop, where the buyer lock already serializes) and re-reads the shop
+// under that lock. The first GetShop in BuyItem runs before the owner lock
+// is held — only to learn the owner — so its stock snapshot is stale: two
+// concurrent buyers could both pass the stock check on that pre-lock read
+// and oversell (TOCTOU). Re-reading under the lock reflects any prior
+// winner's stock decrement or shop deletion. The returned release func is
+// always non-nil and safe to defer.
+func (s *vendingService) lockOwnerAndReload(
+	ctx context.Context,
+	shop domain.VendingShop,
+	shopID string,
+	buyerID uint32,
+) (domain.VendingShop, func(), error) {
+	ownerID := shop.OwnerID
+	if ownerID == 0 || ownerID == buyerID {
+		return shop, func() {}, nil
+	}
+
+	token, res, err := s.acquire(ctx, ownerID)
+	if err != nil {
+		return domain.VendingShop{}, func() {}, fmt.Errorf("buy item: acquire owner lock (char %d): %w", ownerID, err)
+	}
+	if res == acquireLockBusy {
+		return domain.VendingShop{}, func() {}, domain.ErrLockBusy
+	}
+	release := func() { s.release(ctx, ownerID, token) }
+
+	fresh, err := s.repo.GetShop(ctx, shopID)
+	if err != nil {
+		release()
+		return domain.VendingShop{}, func() {}, fmt.Errorf("buy item: get shop %q: %w", shopID, err)
+	}
+	return fresh, release, nil
+}
+
 func (s *vendingService) BuyItem(ctx context.Context, buyerID uint32, shopID string, inventoryID uint32, amount int32) (uint32, error) {
 	if buyerID == 0 {
 		return 0, fmt.Errorf("buy item: buyer_id must be > 0")
@@ -374,19 +410,13 @@ func (s *vendingService) BuyItem(ctx context.Context, buyerID uint32, shopID str
 	// release in the caller's defer stack would fire before this block).
 	defer s.release(ctx, buyerID, token)
 
-	// Acquire the shop owner's lock too to prevent concurrent duplicate buys.
-	// Skip if buying from own shop — the buyer lock is enough.
-	ownerID := shop.OwnerID
-	if ownerID != 0 && ownerID != buyerID {
-		token2, res2, err := s.acquire(ctx, ownerID)
-		if err != nil {
-			return 0, fmt.Errorf("buy item: acquire owner lock (char %d): %w", ownerID, err)
-		}
-		if res2 == acquireLockBusy {
-			return 0, domain.ErrLockBusy
-		}
-		defer s.release(ctx, ownerID, token2)
+	// Acquire the shop owner's lock too and re-read the shop under it,
+	// serializing concurrent buyers to prevent an oversell TOCTOU.
+	shop, releaseOwner, err := s.lockOwnerAndReload(ctx, shop, shopID, buyerID)
+	if err != nil {
+		return 0, err
 	}
+	defer releaseOwner()
 
 	idx, found := findShopItem(shop, inventoryID)
 	if !found {
