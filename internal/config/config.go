@@ -166,10 +166,12 @@ type WSConfig struct {
 // must match the encoding declared on every LoginRequest.Method; the
 // service rejects mismatches with AuthRejected (login.cpp:233).
 // MaxChars caps the character roster (effective = max(account.character_slots,
-// MIN_CHARS)); the default of 15 matches PACKETVER >= 20100413.
+// MIN_CHARS)); the default of 15 matches PACKETVER >= 20100413. ItemDBPath is
+// the optional rAthena item_db YAML file used to resolve inventory weights.
 type IdentityConfig struct {
-	UseMD5Passwords bool `mapstructure:"use_md5_passwords" yaml:"use_md5_passwords" env:"IDENTITY_USE_MD5_PASSWORDS"`
-	MaxChars        int  `mapstructure:"max_chars" yaml:"max_chars" env:"IDENTITY_MAX_CHARS" validate:"min=0,max=15"`
+	UseMD5Passwords bool   `mapstructure:"use_md5_passwords" yaml:"use_md5_passwords" env:"IDENTITY_USE_MD5_PASSWORDS"`
+	MaxChars        int    `mapstructure:"max_chars" yaml:"max_chars" env:"IDENTITY_MAX_CHARS" validate:"min=0,max=15"`
+	ItemDBPath      string `mapstructure:"item_db_path" yaml:"item_db_path" env:"IDENTITY_ITEM_DB_PATH" validate:"omitempty"`
 }
 
 // LogConfig holds the zerolog settings.
@@ -379,6 +381,7 @@ func setDefaults(v *viper.Viper) {
 
 		"identity.use_md5_passwords": false,
 		"identity.max_chars":         15,
+		"identity.item_db_path":      "",
 
 		"zone.tick_rate":      50 * time.Millisecond,
 		"zone.map_dir":        "./data/maps",
@@ -460,6 +463,7 @@ func leafBindings() []leafBinding {
 
 		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},
 		{"identity.max_chars", "IDENTITY_MAX_CHARS"},
+		{"identity.item_db_path", "IDENTITY_ITEM_DB_PATH"},
 
 		{"zone.tick_rate", "ZONE_TICK_RATE"},
 		{"zone.map_dir", "ZONE_MAP_DIR"},

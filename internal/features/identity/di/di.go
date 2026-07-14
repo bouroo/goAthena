@@ -27,6 +27,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/identity/service"
 	inventorydomain "github.com/bouroo/goAthena/internal/features/inventory/domain"
 	inventoryrepo "github.com/bouroo/goAthena/internal/features/inventory/repository"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 )
 
 // Register wires the identity feature (login, char roster, warehouse
@@ -47,6 +48,7 @@ func Register(c do.Injector) error {
 	sessionRepo := repository.NewSessionRepository(vk)
 	warehouseLock := repository.NewWarehouseLock(vk)
 	inventoryRepo := inventoryrepo.NewInventoryRepository(db)
+	itemWeight := resolveItemWeight(cfg.Identity.ItemDBPath, logger)
 
 	identitySvc := service.NewIdentityService(
 		accountRepo,
@@ -56,7 +58,7 @@ func Register(c do.Injector) error {
 		cfg.Identity.UseMD5Passwords,
 		cfg.Identity.MaxChars,
 		inventoryRepo,
-		inventorydomain.ZeroItemWeight{},
+		itemWeight,
 	)
 
 	shopSvc, err := economydi.ProvideShopService(c)
@@ -75,6 +77,22 @@ func Register(c do.Injector) error {
 		Msg("identity feature registered")
 
 	return nil
+}
+
+func resolveItemWeight(path string, logger *zerolog.Logger) inventorydomain.ItemWeightLookup {
+	if path == "" {
+		logger.Warn().Msg("identity: item_db_path unset; item weights disabled")
+		return inventorydomain.ZeroItemWeight{}
+	}
+
+	registry, err := itemdb.LoadFile(path)
+	if err != nil {
+		logger.Warn().Err(err).
+			Str("path", path).
+			Msg("identity: item_db load failed; item weights disabled")
+		return inventorydomain.ZeroItemWeight{}
+	}
+	return registry
 }
 
 // ProvideIdentityService resolves the wired IdentityService use case.
