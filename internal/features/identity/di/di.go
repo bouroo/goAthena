@@ -27,6 +27,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/identity/service"
 	inventorydomain "github.com/bouroo/goAthena/internal/features/inventory/domain"
 	inventoryrepo "github.com/bouroo/goAthena/internal/features/inventory/repository"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 )
 
 // Register wires the identity feature (login, char roster, warehouse
@@ -47,6 +48,10 @@ func Register(c do.Injector) error {
 	sessionRepo := repository.NewSessionRepository(vk)
 	warehouseLock := repository.NewWarehouseLock(vk)
 	inventoryRepo := inventoryrepo.NewInventoryRepository(db)
+	itemWeight, err := resolveItemWeight(cfg.Identity.ItemDBPath, logger)
+	if err != nil {
+		return fmt.Errorf("resolve item weight lookup: %w", err)
+	}
 
 	identitySvc := service.NewIdentityService(
 		accountRepo,
@@ -56,7 +61,7 @@ func Register(c do.Injector) error {
 		cfg.Identity.UseMD5Passwords,
 		cfg.Identity.MaxChars,
 		inventoryRepo,
-		inventorydomain.ZeroItemWeight{},
+		itemWeight,
 	)
 
 	shopSvc, err := economydi.ProvideShopService(c)
@@ -75,6 +80,25 @@ func Register(c do.Injector) error {
 		Msg("identity feature registered")
 
 	return nil
+}
+
+// resolveItemWeight selects the ItemWeightLookup for the identity
+// service. An unset item_db_path is a valid configuration (weights
+// disabled via ZeroItemWeight), but an explicitly configured path that
+// fails to load is a misconfiguration: silently disabling the weight
+// gate in that case would open a gameplay exploit, so the error is
+// propagated to fail identity boot fast.
+func resolveItemWeight(path string, logger *zerolog.Logger) (inventorydomain.ItemWeightLookup, error) {
+	if path == "" {
+		logger.Warn().Msg("identity: item_db_path unset; item weights disabled")
+		return inventorydomain.ZeroItemWeight{}, nil
+	}
+
+	registry, err := itemdb.LoadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("load item_db %q: %w", path, err)
+	}
+	return registry, nil
 }
 
 // ProvideIdentityService resolves the wired IdentityService use case.

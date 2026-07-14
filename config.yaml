@@ -70,6 +70,7 @@ gateway:
 identity:
   use_md5_passwords: false
   max_chars: 15
+  item_db_path: ""
 
 zone:
   tick_rate: 50ms
