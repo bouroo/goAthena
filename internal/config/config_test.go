@@ -231,6 +231,7 @@ otel:
 	require.Equal(t, "false", cfg.DB.SSLMode)
 	require.Equal(t, "nats://localhost:4222", cfg.NATS.URL)
 	require.Equal(t, 5*time.Second, cfg.HTTP.HealthProbeTimeout)
+	require.Equal(t, "utf-8", cfg.Gateway.TextCodepage)
 }
 
 func TestValidate_InvalidEnvironment(t *testing.T) {

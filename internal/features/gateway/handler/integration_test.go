@@ -17,6 +17,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/gateway/handler"
 	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/textenc"
 )
 
 // recordingHandler satisfies domain.PacketHandler and signals each
@@ -69,7 +70,7 @@ func TestIntegration_TCPAcceptsAndDecodesCALogin(t *testing.T) {
 	db := packet.NewLoginServerDB()
 	rec := newRecordingHandler()
 	logger := zerolog.New(zerolog.NewTestWriter(nil)).Level(zerolog.Disabled)
-	tcpHandler := handler.NewTCPHandler(db, rec, service.NewSessionRegistry(), logger)
+	tcpHandler := handler.NewTCPHandler(db, rec, service.NewSessionRegistry(), logger, textenc.UTF8)
 
 	engineErrCh := make(chan error, 1)
 	go func() {

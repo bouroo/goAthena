@@ -15,6 +15,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	netcodec "github.com/bouroo/goAthena/internal/infrastructure/net"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/textenc"
 )
 
 // fakeGnetConn is a minimal gnet.Conn stub. It only implements the
@@ -52,7 +53,7 @@ func TestTCPHandler_OnClose_UnregistersSession(t *testing.T) {
 	})
 	require.Equal(t, 1, registry.Len(), "preconditions: one session installed")
 
-	h := NewTCPHandler(db, &recordingHandler{}, registry, silencedTestLogger(t))
+	h := NewTCPHandler(db, &recordingHandler{}, registry, silencedTestLogger(t), textenc.UTF8)
 
 	conn := &fakeGnetConn{
 		ctx: &connState{
@@ -85,7 +86,7 @@ func TestTCPHandler_OnClose_NoAccountID_NoOp(t *testing.T) {
 	registry := service.NewSessionRegistry()
 	registry.Register(9999, domain.Session{CharID: 1, MapName: "x"})
 
-	h := NewTCPHandler(db, &recordingHandler{}, registry, silencedTestLogger(t))
+	h := NewTCPHandler(db, &recordingHandler{}, registry, silencedTestLogger(t), textenc.UTF8)
 
 	conn := &fakeGnetConn{
 		ctx: &connState{
@@ -115,7 +116,7 @@ func TestTCPHandler_OnClose_NilContext_NoOp(t *testing.T) {
 	registry := service.NewSessionRegistry()
 	registry.Register(4242, domain.Session{CharID: 9001})
 
-	h := NewTCPHandler(db, &recordingHandler{}, registry, silencedTestLogger(t))
+	h := NewTCPHandler(db, &recordingHandler{}, registry, silencedTestLogger(t), textenc.UTF8)
 
 	conn := &fakeGnetConn{ctx: nil} // no state at all
 	action := h.OnClose(conn, nil)

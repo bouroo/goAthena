@@ -21,6 +21,7 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 	scriptpkg "github.com/bouroo/goAthena/pkg/ro/script"
+	"github.com/bouroo/goAthena/pkg/ro/textenc"
 )
 
 // Register wires the gateway feature (packet codec, identity gRPC
@@ -198,7 +199,16 @@ func provideTCPHandler(i do.Injector) (*handler.TCPHandler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return handler.NewTCPHandler(db, pktHandler, registry, *logger), nil
+	cfg, err := do.Invoke[*config.Config](i)
+	if err != nil {
+		return nil, err
+	}
+	cp, err := textenc.ParseCodepage(cfg.Gateway.TextCodepage)
+	if err != nil {
+		return nil, fmt.Errorf("gateway.text_codepage %q: %w", cfg.Gateway.TextCodepage, err)
+	}
+	logger.Info().Str("codepage", cp.String()).Msg("gateway di: tcp text codepage resolved")
+	return handler.NewTCPHandler(db, pktHandler, registry, *logger, cp), nil
 }
 
 // provideWSHandler wires the WebSocket handler from the DI

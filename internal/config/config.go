@@ -135,6 +135,12 @@ type GatewayConfig struct {
 	// a new TCP connection to after CH_SELECT_CHAR. Defaults to "localhost:5121"
 	// (the Thai Classic map port).
 	MapAddr string `mapstructure:"map_addr" yaml:"map_addr" env:"GATEWAY_MAP_ADDR" validate:"required"`
+	// TextCodepage names the wire text encoding for native TCP sessions
+	// (character names, chat, NPC text). One of "utf-8" (default),
+	// "windows-874"/"cp874"/"tis-620" (Thai Classic), or "euc-kr". Parsed
+	// and validated at gateway DI time via textenc.ParseCodepage;
+	// WebSocket/roBrowser sessions always use UTF-8 regardless of this.
+	TextCodepage string `mapstructure:"text_codepage" yaml:"text_codepage" env:"GATEWAY_TEXT_CODEPAGE"`
 }
 
 // TCPConfig holds the gnet TCP listener settings for the kRO ingress port.
@@ -378,6 +384,7 @@ func setDefaults(v *viper.Viper) {
 		"gateway.identity_addr":      "localhost:50051",
 		"gateway.zone_addr":          "localhost:50052",
 		"gateway.map_addr":           "localhost:5121",
+		"gateway.text_codepage":      "utf-8",
 
 		"identity.use_md5_passwords": false,
 		"identity.max_chars":         15,
@@ -460,6 +467,7 @@ func leafBindings() []leafBinding {
 		{"gateway.identity_addr", "GATEWAY_IDENTITY_ADDR"},
 		{"gateway.zone_addr", "GATEWAY_ZONE_ADDR"},
 		{"gateway.map_addr", "GATEWAY_MAP_ADDR"},
+		{"gateway.text_codepage", "GATEWAY_TEXT_CODEPAGE"},
 
 		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},
 		{"identity.max_chars", "IDENTITY_MAX_CHARS"},

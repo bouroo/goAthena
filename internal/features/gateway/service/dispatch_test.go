@@ -28,6 +28,7 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
+	"github.com/bouroo/goAthena/pkg/ro/textenc"
 )
 
 // fakeIdentityClient is a hand-written, in-process stand-in for
@@ -1833,6 +1834,60 @@ func TestDispatchHandler_CZGlobalMessage_Success_EncodesZCNotifyChat(t *testing.
 	// NUL terminator at [19].
 	if out[19] != 0 {
 		t.Errorf("NUL terminator at [19] = 0x%02x, want 0x00", out[19])
+	}
+}
+
+// TestDispatchHandler_CZGlobalMessage_CP874_RoundTrip proves the
+// dispatch handler transcodes both directions for a CP874 (Thai
+// Classic) native-TCP session: the inbound frame body carries the
+// raw CP874 bytes of "สวัสดี" (bytes CA C7 D1 CA B4 D5) and the
+// outbound ZC_NOTIFY_CHAT reply must place those same six bytes at
+// payload offset 8. This proves the connection's per-session
+// Codepage is consulted at the dispatch boundary (not at the
+// packet codec) and that UTF-8 round-tripping is wired correctly.
+func TestDispatchHandler_CZGlobalMessage_CP874_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := zerolog.New(&logBuf).Level(zerolog.DebugLevel)
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604,
+		logger, "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+
+	resp := &bufResponder{}
+	const wantAID uint32 = 4242
+	conn := domain.ConnectionInfo{ID: 1, AccountID: wantAID, Codepage: textenc.CP874}
+
+	thaiBytes := []byte{0xCA, 0xC7, 0xD1, 0xCA, 0xB4, 0xD5}
+	req := packet.CZGlobalMessageRequest{Message: string(thaiBytes)}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_GLOBAL_MESSAGE: %v", err)
+	}
+	if _, err := reqBuf.Write([]byte{0x00}); err != nil { // explicit NUL terminator
+		t.Fatalf("append NUL: %v", err)
+	}
+
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZGLOBALMESSAGE, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) < 14 {
+		t.Fatalf("ZC_NOTIFY_CHAT too short = %d (buf=% x)", len(out), out)
+	}
+	// Message bytes at [8:14] must round-trip to the original CP874 payload.
+	if !bytes.Equal(out[8:14], thaiBytes) {
+		t.Fatalf("CP874 round-trip mismatch: got % x, want % x", out[8:14], thaiBytes)
+	}
+	// The handler logs the intermediate UTF-8 form of the chat message.
+	// If transcode ran, that string is "สวัสดี" (the Thai greeting).
+	// If transcode was bypassed (e.g. UTF-8 passthrough), the log will
+	// contain mojibake — the raw CP874 bytes misinterpreted as Latin-1.
+	const wantUTF8 = "สวัสดี"
+	if !strings.Contains(logBuf.String(), wantUTF8) {
+		t.Fatalf("debug log does not contain UTF-8 %q; transcode likely bypassed. log=%s", wantUTF8, logBuf.String())
 	}
 }
 
