@@ -16,6 +16,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	netcodec "github.com/bouroo/goAthena/internal/infrastructure/net"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/textenc"
 )
 
 // TCPHandler implements gnet.EventHandler for the gateway's kRO TCP ingress.
@@ -34,6 +35,7 @@ type TCPHandler struct {
 	logger   zerolog.Logger
 	nextID   atomic.Uint64 // monotonic connection id; safe under gnet's concurrent event loops
 	engine   gnet.Engine
+	codepage textenc.Codepage
 }
 
 // NewTCPHandler constructs a gnet TCP event handler. The packet DB and
@@ -41,12 +43,17 @@ type TCPHandler struct {
 // lifecycle. registry is consulted in OnClose to remove any session
 // previously installed by the dispatch handler's handleCZEnter; pass
 // the same instance the dispatch handler was constructed with.
-func NewTCPHandler(db *packet.DB, handler domain.PacketHandler, registry service.SessionRegistry, logger zerolog.Logger) *TCPHandler {
+// codepage selects the wire text encoding used for character names,
+// chat, and NPC text on connections accepted by this handler. The
+// zero value textenc.UTF8 keeps behavior identical to single-byte
+// UTF-8 passthrough.
+func NewTCPHandler(db *packet.DB, handler domain.PacketHandler, registry service.SessionRegistry, logger zerolog.Logger, codepage textenc.Codepage) *TCPHandler {
 	return &TCPHandler{
 		db:       db,
 		handler:  handler,
 		registry: registry,
 		logger:   logger.With().Str("component", "gateway.tcp").Logger(),
+		codepage: codepage,
 	}
 }
 
@@ -84,6 +91,7 @@ func (h *TCPHandler) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 			ID:       id,
 			RemoteIP: c.RemoteAddr().String(),
 			OpenedAt: time.Now().UnixNano(),
+			Codepage: h.codepage,
 		},
 		decoder: decoder,
 	})

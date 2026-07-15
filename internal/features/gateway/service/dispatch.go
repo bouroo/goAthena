@@ -2108,6 +2108,23 @@ func (h *DispatchHandler) handleCZGlobalMessage(_ context.Context, conn *domain.
 		return nil
 	}
 
+	msgUTF8, err := conn.Codepage.Decode([]byte(req.Message))
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Int("msg_len", len(req.Message)).
+			Msg("transcode CZ_GLOBAL_MESSAGE inbound failed; dropping packet")
+		return nil
+	}
+
+	// Echo uses the raw sender-codepage bytes from req.Message directly.
+	// Re-encoding msgUTF8 to the same codepage is redundant and risks a
+	// round-trip mismatch; the Decode above is kept solely to validate the
+	// inbound payload is transcodable and to expose msgUTF8 for the Debug
+	// log below. Encode will return in Phase 12b when broadcasting to
+	// other clients that may sit on a different codepage.
 	notify := packet.NotifyChatResponse{
 		GID:     conn.AccountID,
 		Message: req.Message,
@@ -2130,7 +2147,7 @@ func (h *DispatchHandler) handleCZGlobalMessage(_ context.Context, conn *domain.
 	h.logger.Debug().
 		Uint64("conn", conn.ID).
 		Uint32("aid", conn.AccountID).
-		Str("message", req.Message).
+		Str("message", msgUTF8).
 		Msg("chat echo")
 
 	if err := resp.SendPacket(buf.Bytes()); err != nil {

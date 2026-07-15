@@ -5,6 +5,8 @@ package domain
 import (
 	"context"
 	"sync"
+
+	"github.com/bouroo/goAthena/pkg/ro/textenc"
 )
 
 // MonsterSpawn defines the minimal fields the domain layer needs to track
@@ -64,6 +66,12 @@ type ConnectionInfo struct {
 	// the next CZ_PC_PURCHASE_ITEMLIST / CZ_PC_SELL_ITEMLIST request
 	// must re-anchor to a fresh deal-type selection.
 	shopNPCID uint32
+	// Codepage selects the wire text encoding for this connection's
+	// character names / chat / NPC text. Set once at connection open from
+	// the transport default (native TCP → configured gateway codepage;
+	// WebSocket/roBrowser → UTF-8 passthrough). The zero value textenc.UTF8
+	// is passthrough, so a connection that never sets it stays UTF-8.
+	Codepage textenc.Codepage
 }
 
 // SetCombatStats updates the character's base combat stats.
