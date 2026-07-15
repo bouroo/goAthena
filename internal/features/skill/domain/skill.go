@@ -5,6 +5,12 @@
 // All data is sourced from rAthena's pre-re skill_db.yml and skill.hpp.
 package domain
 
+import (
+	"sync"
+
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
+)
+
 // Skill Inf flag bitmask. Values verified against
 // third_party/rathena/src/map/skill.hpp lines 79-85.
 const (
@@ -15,6 +21,27 @@ const (
 	InfSupport uint16 = 0x10
 	InfTrap    uint16 = 0x20
 )
+
+// InfFromTargetType maps a rAthena skill_db.yml TargetType string to the
+// Inf bitmask, mirroring rAthena's skill.cpp:14865-14879 mapping
+// (INF_<TargetType>_SKILL constant lookup). An empty or unknown
+// TargetType yields InfNone (passive).
+func InfFromTargetType(targetType string) uint16 {
+	switch targetType {
+	case "Attack":
+		return InfAttack
+	case "Ground":
+		return InfGround
+	case "Self":
+		return InfSelf
+	case "Support":
+		return InfSupport
+	case "Trap":
+		return InfTrap
+	default:
+		return InfNone
+	}
+}
 
 // Exported skill-ID handles. Callers should use these (not bare literals)
 // when looking skills up via Lookup and reading SP via Skill.SpAt. Values
@@ -44,6 +71,88 @@ func (s Skill) SpAt(level uint8) uint16 {
 	return s.spCost[level-1]
 }
 
+// Registry is the active skill lookup, optionally backed by a loaded
+// skill_db.yml. When nil/unset, the hardcoded defaultRegistry is used.
+type Registry struct {
+	entries map[uint16]Skill
+}
+
+// NewRegistry builds a domain Registry from a loaded skilldb.Registry,
+// converting each skilldb.SkillEntry into a domain Skill with the Inf
+// bitmask derived from TargetType. Returns nil if db is nil or empty.
+func NewRegistry(db *skilldb.Registry) *Registry {
+	if db == nil || db.Len() == 0 {
+		return nil
+	}
+
+	r := &Registry{entries: make(map[uint16]Skill, db.Len())}
+	for _, entry := range db.All() {
+		skill, ok := convertSkillEntry(entry)
+		if ok {
+			r.entries[skill.ID] = skill
+		}
+	}
+	if len(r.entries) == 0 {
+		return nil
+	}
+	return r
+}
+
+func convertSkillEntry(entry *skilldb.SkillEntry) (Skill, bool) {
+	if entry == nil || entry.ID < 0 || entry.ID > int32(^uint16(0)) || entry.MaxLevel < 0 || entry.MaxLevel > int32(^uint8(0)) {
+		return Skill{}, false
+	}
+	id := uint16(entry.ID)            //nolint:gosec // rAthena skill IDs are bounded below 2^16
+	maxLevel := uint8(entry.MaxLevel) //nolint:gosec // skill_db MaxLevel fits in uint8
+	return Skill{
+		ID:       id,
+		Name:     entry.Name,
+		MaxLevel: maxLevel,
+		Inf:      InfFromTargetType(entry.TargetType),
+		Range:    entry.Range.At(1),
+		spCost:   convertSpCost(entry.Requires.SpCost, maxLevel),
+	}, true
+}
+
+func convertSpCost(cost skilldb.SpCost, maxLevel uint8) []uint16 {
+	if maxLevel == 0 {
+		return nil
+	}
+	spCost := make([]uint16, 0, int(maxLevel))
+	allZero := true
+	for level := 1; level <= int(maxLevel); level++ {
+		amount := cost.At(level)
+		if amount < 0 || amount > int32(^uint16(0)) {
+			spCost = append(spCost, 0)
+			continue
+		}
+		value := uint16(amount) //nolint:gosec // validated against uint16 bounds
+		spCost = append(spCost, value)
+		if value != 0 {
+			allZero = false
+		}
+	}
+	if allZero {
+		return nil
+	}
+	return spCost
+}
+
+// activeRegistry is the DB-backed registry set by DI at boot. When nil,
+// Lookup and BuildSkillList fall back to defaultRegistry.
+var (
+	activeRegistryMu sync.RWMutex
+	activeRegistry   *Registry
+)
+
+// SetRegistry installs the DB-backed skill registry. Passing nil resets to
+// the hardcoded default.
+func SetRegistry(r *Registry) {
+	activeRegistryMu.Lock()
+	activeRegistry = r
+	activeRegistryMu.Unlock()
+}
+
 // LearnedSkill is a player's currently-learned skill reference.
 type LearnedSkill struct {
 	ID    uint16
@@ -71,7 +180,7 @@ type SkillEntry struct {
 func BuildSkillList(learned []LearnedSkill) []SkillEntry {
 	out := make([]SkillEntry, 0, len(learned))
 	for _, ls := range learned {
-		s, ok := registry[ls.ID]
+		s, ok := Lookup(ls.ID)
 		if !ok {
 			continue
 		}
@@ -104,18 +213,25 @@ func BuildSkillList(learned []LearnedSkill) []SkillEntry {
 
 // Lookup returns the registry entry for the given skill ID.
 func Lookup(id uint16) (Skill, bool) {
-	s, ok := registry[id]
+	activeRegistryMu.RLock()
+	registry := activeRegistry
+	activeRegistryMu.RUnlock()
+	if registry != nil {
+		s, ok := registry.entries[id]
+		return s, ok
+	}
+	s, ok := defaultRegistry[id]
 	return s, ok
 }
 
-// registry is the pre-Renewal Novice starter tree. Values sourced from
+// defaultRegistry is the pre-Renewal Novice starter tree. Values sourced from
 // third_party/rathena/db/pre-re/skill_db.yml.
 //
 // NV_BASIC — pre-re/skill_db.yml:146-149 (passive, no SP).
 // NV_FIRSTAID — pre-re/skill_db.yml:5063-5075 (InfSelf, SP=3).
 // NV_TRICKDEAD — pre-re/skill_db.yml:5076-5091 (InfSelf, SP=5).
 // SM_BASH — pre-re/skill_db.yml:164-200 (InfAttack, MaxLevel=10, SP=8/15).
-var registry = map[uint16]Skill{
+var defaultRegistry = map[uint16]Skill{
 	1: {
 		ID:       1,
 		Name:     "NV_BASIC",

@@ -208,6 +208,7 @@ type ZoneConfig struct {
 	MoveSpeed            int           `mapstructure:"move_speed" yaml:"move_speed" env:"ZONE_MOVE_SPEED" validate:"min=50,max=1000"`
 	ShutdownGrace        time.Duration `mapstructure:"shutdown_grace" yaml:"shutdown_grace" env:"ZONE_SHUTDOWN_GRACE" validate:"min=0"`
 	MobDBPath            string        `mapstructure:"mob_db_path" yaml:"mob_db_path" env:"ZONE_MOB_DB_PATH" validate:"omitempty"`
+	SkillDBPath          string        `mapstructure:"skill_db_path" yaml:"skill_db_path" env:"ZONE_SKILL_DB_PATH" validate:"omitempty"`
 	MobSpawnsPath        string        `mapstructure:"mob_spawns_path" yaml:"mob_spawns_path" env:"ZONE_MOB_SPAWNS_PATH" validate:"omitempty"`
 	ScriptDir            string        `mapstructure:"script_dir" yaml:"script_dir" env:"ZONE_SCRIPT_DIR" validate:"omitempty"`
 	ScriptReloadInterval time.Duration `mapstructure:"script_reload_interval" yaml:"script_reload_interval" env:"ZONE_SCRIPT_RELOAD_INTERVAL" validate:"omitempty,min=0"`
@@ -479,6 +480,7 @@ func leafBindings() []leafBinding {
 		{"zone.move_speed", "ZONE_MOVE_SPEED"},
 		{"zone.shutdown_grace", "ZONE_SHUTDOWN_GRACE"},
 		{"zone.mob_db_path", "ZONE_MOB_DB_PATH"},
+		{"zone.skill_db_path", "ZONE_SKILL_DB_PATH"},
 		{"zone.mob_spawns_path", "ZONE_MOB_SPAWNS_PATH"},
 
 		{"assets.enabled", "ASSETS_ENABLED"},

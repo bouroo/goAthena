@@ -17,10 +17,12 @@ import (
 	"github.com/bouroo/goAthena/internal/features/gateway/handler"
 	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	scriptengine "github.com/bouroo/goAthena/internal/features/script"
+	skilldomain "github.com/bouroo/goAthena/internal/features/skill/domain"
 	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 	scriptpkg "github.com/bouroo/goAthena/pkg/ro/script"
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 	"github.com/bouroo/goAthena/pkg/ro/textenc"
 )
 
@@ -162,6 +164,13 @@ func provideDispatchHandler(i do.Injector) (domain.PacketHandler, error) {
 	if err != nil {
 		return nil, err
 	}
+	skillReg, err := loadSkillRegistry(cfg, *logger)
+	if err != nil {
+		return nil, err
+	}
+	if skillReg != nil {
+		skilldomain.SetRegistry(skillReg)
+	}
 	h, err := buildDispatchHandler(identityClient, zoneClient, cfg, *logger, registry)
 	if err != nil {
 		return nil, err
@@ -299,7 +308,25 @@ func loadMobRegistry(cfg *config.Config, logger zerolog.Logger) (*mobdb.Registry
 	return mobs, nil
 }
 
-// loadScriptSet constructs an in-process script engine bound to
+// loadSkillRegistry loads the rAthena skill_db.yml from cfg.Zone.SkillDBPath
+// when configured, builds a domain skill registry, and returns it. When
+// the path is empty, returns (nil, nil) and the domain package uses its
+// hardcoded default registry. An explicit path that fails to load is a hard
+// error because the skill list would silently be wrong.
+func loadSkillRegistry(cfg *config.Config, logger zerolog.Logger) (*skilldomain.Registry, error) {
+	if cfg == nil || cfg.Zone.SkillDBPath == "" {
+		logger.Info().Msg("gateway di: skill_db_path unset; using hardcoded default skill registry")
+		return nil, nil
+	}
+	db, err := skilldb.LoadFile(cfg.Zone.SkillDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("load skill_db %q: %w", cfg.Zone.SkillDBPath, err)
+	}
+	reg := skilldomain.NewRegistry(db)
+	logger.Info().Int("entries", db.Len()).Str("path", cfg.Zone.SkillDBPath).Msg("gateway di: skill_db loaded")
+	return reg, nil
+}
+
 // cfg.Zone.ScriptDir and returns its current compiled snapshot for
 // the dispatch handler to resolve per-NPC scripts against. When
 // ScriptDir is empty, returns (nil, nil) so the dispatcher can keep
