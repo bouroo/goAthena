@@ -13,7 +13,6 @@ import (
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/korean"
-	"golang.org/x/text/transform"
 )
 
 // errUnknownCodepage is the sentinel returned (wrapped) for any unrecognized
@@ -81,11 +80,14 @@ func (c Codepage) Decode(b []byte) (string, error) {
 	case UTF8:
 		return string(b), nil
 	case CP874, EUCKR:
-		out, _, err := transform.String(encodingFor(c).NewDecoder(), string(b))
+		if len(b) == 0 {
+			return "", nil
+		}
+		out, err := encodingFor(c).NewDecoder().Bytes(b)
 		if err != nil {
 			return "", fmt.Errorf("textenc: decode %s: %w", c, err)
 		}
-		return out, nil
+		return string(out), nil
 	default:
 		return "", fmt.Errorf("textenc: decode %w: %d", errUnknownCodepage, uint8(c))
 	}
@@ -99,7 +101,10 @@ func (c Codepage) Encode(s string) ([]byte, error) {
 	case UTF8:
 		return []byte(s), nil
 	case CP874, EUCKR:
-		out, _, err := transform.Bytes(encodingFor(c).NewEncoder(), []byte(s))
+		if len(s) == 0 {
+			return []byte{}, nil
+		}
+		out, err := encodingFor(c).NewEncoder().Bytes([]byte(s))
 		if err != nil {
 			return nil, fmt.Errorf("textenc: encode %s: %w", c, err)
 		}

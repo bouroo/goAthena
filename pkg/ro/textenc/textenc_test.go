@@ -278,3 +278,28 @@ func TestEncodingFor(t *testing.T) {
 	assert.Nil(t, encodingFor(UTF8))
 	assert.Nil(t, encodingFor(Codepage(250)))
 }
+
+// TestEmptyInput asserts the empty-input fast-paths round-trip to empty for
+// every codepage without touching the underlying transformer.
+func TestEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []Codepage{UTF8, CP874, EUCKR} {
+		c := c
+		t.Run(c.String(), func(t *testing.T) {
+			t.Parallel()
+
+			decoded, err := c.Decode(nil)
+			require.NoError(t, err)
+			assert.Empty(t, decoded)
+
+			decoded, err = c.Decode([]byte{})
+			require.NoError(t, err)
+			assert.Empty(t, decoded)
+
+			encoded, err := c.Encode("")
+			require.NoError(t, err)
+			assert.Empty(t, encoded)
+		})
+	}
+}
