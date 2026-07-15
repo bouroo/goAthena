@@ -15,7 +15,7 @@ import (
 // them. The Range field has a polymorphic scalar-or-list shape and is handled
 // via a custom UnmarshalYAML on the Range type.
 type SkillEntry struct {
-	Id          int32    `yaml:"Id"` //nolint:revive // yaml tag is "Id" to match rAthena skill_db.yml
+	ID          int32    `yaml:"Id"`
 	Name        string   `yaml:"Name"`
 	Description string   `yaml:"Description"`
 	MaxLevel    int32    `yaml:"MaxLevel"`
@@ -79,7 +79,7 @@ func (r Range) At(level int) int16 {
 
 // LevelAmount pairs a (1-based) skill level with an amount (SP, HP, Zeny, ...).
 type LevelAmount struct {
-	Level  int32 `yaml:"Level"`
+	Level  int16 `yaml:"Level"`
 	Amount int32 `yaml:"Amount"`
 }
 
@@ -224,7 +224,7 @@ func Load(r io.Reader) (*Registry, error) {
 		if entry.TargetType == "" {
 			entry.TargetType = "Passive"
 		}
-		entries[entry.Id] = entry
+		entries[entry.ID] = entry
 	}
 	return &Registry{entries: entries}, nil
 }

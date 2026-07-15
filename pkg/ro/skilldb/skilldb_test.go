@@ -61,7 +61,7 @@ func TestLoad_ParsesCoreFields(t *testing.T) {
 
 	nv := reg.Get(1)
 	require.NotNil(t, nv)
-	assert.Equal(t, int32(1), nv.Id)
+	assert.Equal(t, int32(1), nv.ID)
 	assert.Equal(t, "NV_BASIC", nv.Name)
 	assert.Equal(t, "Basic Skill", nv.Description)
 	assert.Equal(t, int32(9), nv.MaxLevel)
@@ -72,7 +72,7 @@ func TestLoad_ParsesCoreFields(t *testing.T) {
 
 	bash := reg.Get(5)
 	require.NotNil(t, bash)
-	assert.Equal(t, int32(5), bash.Id)
+	assert.Equal(t, int32(5), bash.ID)
 	assert.Equal(t, "SM_BASH", bash.Name)
 	assert.Equal(t, "Bash", bash.Description)
 	assert.Equal(t, int32(10), bash.MaxLevel)
