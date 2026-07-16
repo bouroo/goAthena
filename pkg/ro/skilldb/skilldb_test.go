@@ -198,6 +198,14 @@ Body:
 	assert.Equal(t, int32(99), entry.MaxLevel)
 }
 
+func TestRegistry_All(t *testing.T) {
+	reg := loadFixture(t)
+	all := reg.All()
+	require.Len(t, all, 3)
+	assert.Equal(t, "SM_BASH", all[5].Name)
+	assert.Equal(t, "NV_BASIC", all[1].Name)
+}
+
 func TestLoad_SkipsNullBodyEntries(t *testing.T) {
 	reg, err := Load(strings.NewReader(`Header:
   Type: SKILL_DB

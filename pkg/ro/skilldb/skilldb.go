@@ -4,6 +4,7 @@ package skilldb
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -255,8 +256,17 @@ func (reg *Registry) Len() int {
 	return len(reg.entries)
 }
 
+// All returns all loaded skill entries keyed by their rAthena ID.
+func (reg *Registry) All() map[int32]*SkillEntry {
+	if reg == nil {
+		return nil
+	}
+	entries := make(map[int32]*SkillEntry, len(reg.entries))
+	maps.Copy(entries, reg.entries)
+	return entries
+}
+
 // SpCostAt returns the SP cost for the given skill at the given (1-based)
-// level, or 0 if the skill or level is not found.
 //
 // TODO: rAthena falls back to the highest level <= requested level when the
 // exact level is not listed in Requires.SpCost (skill.cpp::skill_get_sp_cost).

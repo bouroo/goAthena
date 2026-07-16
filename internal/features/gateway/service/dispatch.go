@@ -133,7 +133,6 @@ type DispatchHandler struct {
 	// drops, use struct Def/Vit).
 	mobRegistry *mobdb.Registry
 
-	// groundItemCounter is the per-handler monotonic counter used to
 	// assign ground item object IDs in ZC_ITEM_FALL_ENTRY. rAthena
 	// uses a global counter but a per-handler value is sufficient for
 	// the single-player echo path (mobs and items do not cross

@@ -3,8 +3,97 @@
 package domain
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
+	"github.com/stretchr/testify/require"
 )
+
+func TestInfFromTargetType(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want uint16
+	}{
+		{name: "Attack", in: "Attack", want: InfAttack},
+		{name: "Ground", in: "Ground", want: InfGround},
+		{name: "Self", in: "Self", want: InfSelf},
+		{name: "Support", in: "Support", want: InfSupport},
+		{name: "Trap", in: "Trap", want: InfTrap},
+		{name: "unknown", in: "Other", want: InfNone},
+		{name: "empty", in: "", want: InfNone},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := InfFromTargetType(tt.in); got != tt.want {
+				t.Errorf("InfFromTargetType(%q) = %#x, want %#x", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewRegistry_FromSkillDB(t *testing.T) {
+	db, err := skilldb.Load(strings.NewReader(`Header:
+  Type: SKILL_DB
+  Version: 4
+Body:
+  - Id: 5
+    Name: SM_BASH
+    MaxLevel: 10
+    TargetType: Attack
+    Range: 3
+    Requires:
+      SpCost:
+        - {Level: 1, Amount: 8}
+        - {Level: 10, Amount: 15}
+  - Id: 1
+    Name: NV_BASIC
+    MaxLevel: 9
+`))
+	require.NoError(t, err)
+
+	reg := NewRegistry(db)
+	require.NotNil(t, reg)
+	bash, ok := reg.entries[5]
+	require.True(t, ok)
+	if bash.Inf != InfAttack || bash.Range != 3 || bash.SpAt(1) != 8 || bash.SpAt(10) != 15 {
+		t.Fatalf("converted SM_BASH = %+v, want attack/range/SP conversion", bash)
+	}
+	basic, ok := reg.entries[1]
+	require.True(t, ok)
+	if basic.Inf != InfNone || basic.spCost != nil {
+		t.Fatalf("converted NV_BASIC = %+v, want passive with nil SP costs", basic)
+	}
+}
+
+func TestSetRegistryLookupFallback(t *testing.T) {
+	db, err := skilldb.Load(strings.NewReader(`Header:
+  Type: SKILL_DB
+  Version: 4
+Body:
+  - Id: 999
+    Name: TEST_SKILL
+    MaxLevel: 1
+    TargetType: Support
+`))
+	require.NoError(t, err)
+
+	SetRegistry(NewRegistry(db))
+	t.Cleanup(func() { SetRegistry(nil) })
+	got, ok := Lookup(999)
+	if !ok || got.Name != "TEST_SKILL" || got.Inf != InfSupport {
+		t.Fatalf("Lookup(999) = %+v, %t, want DB-backed skill", got, ok)
+	}
+
+	SetRegistry(nil)
+	if _, ok := Lookup(999); ok {
+		t.Fatal("Lookup(999) found a skill after resetting to fallback")
+	}
+	if _, ok := Lookup(SM_BASH); !ok {
+		t.Fatal("Lookup(SM_BASH) missed hardcoded fallback")
+	}
+}
 
 func TestInfConstants(t *testing.T) {
 	cases := []struct {
