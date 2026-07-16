@@ -88,6 +88,43 @@ Body:
 	}
 }
 
+func TestLoad_PointerIsolation(t *testing.T) {
+	input := `Header:
+  Type: JOB_DB
+  Version: 1
+Body:
+  - Jobs:
+      JobA: true
+      JobB: true
+    MaxBaseLevel: 2
+    BaseExp:
+      - {Level: 1, Exp: 10}
+      - {Level: 2, Exp: 20}
+  - Jobs:
+      JobA: true
+    MaxJobLevel: 2
+    JobExp:
+      - {Level: 1, Exp: 5}
+      - {Level: 2, Exp: 15}
+`
+	reg, err := Load(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := reg.BaseExpForLevel("JobA", 1); got != 10 {
+		t.Errorf("JobA BaseExp(1) = %d, want 10", got)
+	}
+	if got := reg.JobExpForLevel("JobA", 1); got != 5 {
+		t.Errorf("JobA JobExp(1) = %d, want 5", got)
+	}
+	if got := reg.BaseExpForLevel("JobB", 1); got != 10 {
+		t.Errorf("JobB BaseExp(1) = %d, want 10", got)
+	}
+	if got := reg.JobExpForLevel("JobB", 1); got != 0 {
+		t.Errorf("JobB JobExp(1) = %d, want 0 (pointer isolation bug)", got)
+	}
+}
+
 func TestLoad_MinimalYAML(t *testing.T) {
 	input := `Header:
   Type: JOB_DB

@@ -15,7 +15,9 @@ type ExpLevel struct {
 	Exp   uint64 `yaml:"Exp"`
 }
 
-// JobEntry holds the EXP data for a group of jobs sharing the same curve.
+// JobEntry holds the EXP curve for a single job. Built by merging data
+// from multiple Body entries in job_exp.yml (BaseExp and JobExp may come
+// from different groups).
 type JobEntry struct {
 	Jobs         []string
 	MaxBaseLevel uint16
@@ -49,52 +51,48 @@ func Load(r io.Reader) (*Registry, error) {
 	if err := yaml.NewDecoder(r).Decode(&f); err != nil {
 		return nil, fmt.Errorf("parse job_exp yaml: %w", err)
 	}
-	if f.Header.Type != "JOB_STATS" && f.Header.Type != "JOB_DB" {
-		return nil, fmt.Errorf("job_exp: unexpected Header.Type %q (want %q)", f.Header.Type, "JOB_DB")
-	}
-	if f.Header.Type == "JOB_STATS" && f.Header.Version != 4 {
-		return nil, fmt.Errorf("job_exp: unsupported Header.Version %d (want 4)", f.Header.Version)
-	}
-	if f.Header.Type == "JOB_DB" && f.Header.Version != 1 {
-		return nil, fmt.Errorf("job_exp: unsupported Header.Version %d (want 1)", f.Header.Version)
+	if err := validateHeader(f.Header.Type, f.Header.Version); err != nil {
+		return nil, err
 	}
 
 	jobs := make(map[string]*JobEntry)
 	for _, group := range f.Body {
-		jobNames := make([]string, 0, len(group.Jobs))
 		for jobName, enabled := range group.Jobs {
 			if !enabled {
 				continue
 			}
-			if existing := jobs[jobName]; existing != nil {
-				mergeEntry(existing, group.MaxBaseLevel, group.BaseExp, group.MaxJobLevel, group.JobExp)
-				continue
+			entry := jobs[jobName]
+			if entry == nil {
+				entry = &JobEntry{Jobs: []string{jobName}}
+				jobs[jobName] = entry
 			}
-			jobNames = append(jobNames, jobName)
-		}
-		entry := &JobEntry{
-			Jobs:         jobNames,
-			MaxBaseLevel: group.MaxBaseLevel,
-			BaseExp:      group.BaseExp,
-			MaxJobLevel:  group.MaxJobLevel,
-			JobExp:       group.JobExp,
-		}
-		for _, jobName := range jobNames {
-			jobs[jobName] = entry
+			if entry.MaxBaseLevel == 0 && len(group.BaseExp) > 0 {
+				entry.MaxBaseLevel = group.MaxBaseLevel
+				entry.BaseExp = group.BaseExp
+			}
+			if entry.MaxJobLevel == 0 && len(group.JobExp) > 0 {
+				entry.MaxJobLevel = group.MaxJobLevel
+				entry.JobExp = group.JobExp
+			}
 		}
 	}
 	return &Registry{jobs: jobs}, nil
 }
 
-func mergeEntry(entry *JobEntry, maxBaseLevel uint16, baseExp []ExpLevel, maxJobLevel uint16, jobExp []ExpLevel) {
-	if len(entry.JobExp) == 0 && len(jobExp) > 0 {
-		entry.MaxJobLevel = maxJobLevel
-		entry.JobExp = jobExp
+func validateHeader(headerType string, version uint32) error {
+	switch headerType {
+	case "JOB_STATS":
+		if version != 4 {
+			return fmt.Errorf("job_exp: unsupported Header.Version %d for JOB_STATS (want 4)", version)
+		}
+	case "JOB_DB":
+		if version != 1 {
+			return fmt.Errorf("job_exp: unsupported Header.Version %d for JOB_DB (want 1)", version)
+		}
+	default:
+		return fmt.Errorf("job_exp: unexpected Header.Type %q (want %q or %q)", headerType, "JOB_STATS", "JOB_DB")
 	}
-	if len(entry.BaseExp) == 0 && len(baseExp) > 0 {
-		entry.MaxBaseLevel = maxBaseLevel
-		entry.BaseExp = baseExp
-	}
+	return nil
 }
 
 // LoadFile opens path and calls Load.
