@@ -6,7 +6,7 @@
 package domain
 
 import (
-	"sync"
+	"sync/atomic"
 
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
@@ -140,17 +140,12 @@ func convertSpCost(cost skilldb.SpCost, maxLevel uint8) []uint16 {
 
 // activeRegistry is the DB-backed registry set by DI at boot. When nil,
 // Lookup and BuildSkillList fall back to defaultRegistry.
-var (
-	activeRegistryMu sync.RWMutex
-	activeRegistry   *Registry
-)
+var activeRegistry atomic.Pointer[Registry]
 
 // SetRegistry installs the DB-backed skill registry. Passing nil resets to
 // the hardcoded default.
 func SetRegistry(r *Registry) {
-	activeRegistryMu.Lock()
-	activeRegistry = r
-	activeRegistryMu.Unlock()
+	activeRegistry.Store(r)
 }
 
 // LearnedSkill is a player's currently-learned skill reference.
@@ -213,10 +208,7 @@ func BuildSkillList(learned []LearnedSkill) []SkillEntry {
 
 // Lookup returns the registry entry for the given skill ID.
 func Lookup(id uint16) (Skill, bool) {
-	activeRegistryMu.RLock()
-	registry := activeRegistry
-	activeRegistryMu.RUnlock()
-	if registry != nil {
+	if registry := activeRegistry.Load(); registry != nil {
 		s, ok := registry.entries[id]
 		return s, ok
 	}

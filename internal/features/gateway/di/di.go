@@ -323,6 +323,9 @@ func loadSkillRegistry(cfg *config.Config, logger zerolog.Logger) (*skilldomain.
 		return nil, fmt.Errorf("load skill_db %q: %w", cfg.Zone.SkillDBPath, err)
 	}
 	reg := skilldomain.NewRegistry(db)
+	if reg == nil {
+		return nil, fmt.Errorf("skill_db %q loaded %d entries but none converted to valid domain skills", cfg.Zone.SkillDBPath, db.Len())
+	}
 	logger.Info().Int("entries", db.Len()).Str("path", cfg.Zone.SkillDBPath).Msg("gateway di: skill_db loaded")
 	return reg, nil
 }
