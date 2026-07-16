@@ -3,12 +3,18 @@
 package jobdb
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestLoad_RealFile(t *testing.T) {
-	reg, err := LoadFile("../../../third_party/rathena/db/pre-re/job_exp.yml")
+	path := filepath.Join("..", "..", "..", "third_party", "rathena", "db", "pre-re", "job_exp.yml")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("rAthena submodule not available at %s: %v", path, err)
+	}
+	reg, err := LoadFile(path)
 	if err != nil {
 		t.Fatalf("LoadFile() error = %v", err)
 	}
