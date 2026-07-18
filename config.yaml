@@ -81,6 +81,8 @@ zone:
   mob_db_path: ./data/mob_db/mob_db.yml
   # Optional rAthena skill database used by gateway skill dispatch.
   skill_db_path: ""
+  # Optional rAthena job EXP database used by stats domain; empty falls back to the hardcoded BaseExp table.
+  job_exp_db_path: ""
   mob_spawns_path: ./data/mob_spawns/prontera.yml
   script_dir: ./data/npc
   script_reload_interval: 0s

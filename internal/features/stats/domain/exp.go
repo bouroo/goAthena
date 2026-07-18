@@ -1,5 +1,11 @@
 package domain
 
+import (
+	"sync/atomic"
+
+	"github.com/bouroo/goAthena/pkg/ro/jobdb"
+)
+
 // MaxBaseLevel is the pre-Renewal maximum base level for standard classes.
 const MaxBaseLevel uint32 = 99
 
@@ -93,6 +99,166 @@ func ApplyBaseExpGain(baseLevel uint32, baseExp uint64, gain uint64) ExpGain {
 	// Cap carry-over at max level (rathena clamps base_exp to
 	// MAX_LEVEL_BASE_EXP once MaxBaseLevel is reached).
 	if newLevel >= MaxBaseLevel && newExp > MaxLevelExp {
+		newExp = MaxLevelExp
+	}
+
+	return ExpGain{
+		NewLevel:            newLevel,
+		NewExp:              newExp,
+		GrantedStatusPoints: granted,
+		LeveledUp:           newLevel > baseLevel,
+	}
+}
+
+// ExpRegistry is a per-job base-EXP lookup backed by a loaded job_exp.yml.
+// jobName is the rAthena job name as it appears in `Body[].Jobs` of
+// rathena/db/pre-re/job_exp.yml (e.g. "Novice", "Swordman"). Level is
+// 1-based.
+type ExpRegistry struct {
+	db *jobdb.Registry
+}
+
+// NewExpRegistryFromJobDB adapts a loaded jobdb.Registry into the domain
+// ExpRegistry. Returns nil when db is nil so DI callers can collapse the
+// nil-empty and missing-input cases.
+func NewExpRegistryFromJobDB(db *jobdb.Registry) *ExpRegistry {
+	if db == nil {
+		return nil
+	}
+	return &ExpRegistry{db: db}
+}
+
+// BaseExpForLevel returns the configured base EXP threshold for the given
+// job and 1-based level, or 0 when the job is unknown, the level is out of
+// range, or the registry has no entry for that point. The bound check uses
+// MaxBaseLevel so callers cannot drift above the rAthena cap.
+func (r *ExpRegistry) BaseExpForLevel(jobName string, level uint32) uint64 {
+	if r == nil || r.db == nil {
+		return 0
+	}
+	if level < 1 || level >= MaxBaseLevel {
+		return 0
+	}
+	return r.db.BaseExpForLevel(jobName, int(level))
+}
+
+// maxBaseLevelFor returns the job-specific max base level when the
+// registry is loaded and the job is known, otherwise the global
+// MaxBaseLevel constant (fallback path: tests/dev without the YAML).
+func (r *ExpRegistry) maxBaseLevelFor(jobName string) uint32 {
+	if r == nil || r.db == nil {
+		return MaxBaseLevel
+	}
+	entry := r.db.Get(jobName)
+	if entry == nil || entry.MaxBaseLevel == 0 {
+		return MaxBaseLevel
+	}
+	return uint32(entry.MaxBaseLevel) //nolint:gosec // G115: uint16→uint32 widening, safe
+}
+
+// expRegistryPtr is the active DB-backed registry set by DI at boot. When
+// nil, BaseExpForJobLevel and ApplyBaseExpGainForJob fall back to
+// baseExpTable via BaseExpForLevel. Mirrors skilldomain.activeRegistry
+// (D-PH14).
+var expRegistryPtr atomic.Pointer[ExpRegistry]
+
+// SetExpRegistry installs the DB-backed job-exp registry. Passing nil
+// resets to the hardcoded baseExpTable fallback.
+func SetExpRegistry(r *ExpRegistry) {
+	expRegistryPtr.Store(r)
+}
+
+// GetExpRegistry returns the currently active ExpRegistry, or nil when
+// none is configured (fallback to baseExpTable).
+func GetExpRegistry() *ExpRegistry {
+	return expRegistryPtr.Load()
+}
+
+// jobMaxBaseLevel returns the effective max base level for jobName: the
+// per-job value from the loaded registry when known, else the global
+// MaxBaseLevel constant. Centralizes the per-job cap lookup so callers
+// (BaseExpForJobLevel, ApplyBaseExpGainForJob) cannot drift back to the
+// hardcoded 99-element table once a job has a tighter cap.
+func jobMaxBaseLevel(jobName string) uint32 {
+	reg := expRegistryPtr.Load()
+	if reg == nil {
+		return MaxBaseLevel
+	}
+	return reg.maxBaseLevelFor(jobName)
+}
+
+// BaseExpForJobLevel returns the base EXP required to advance from level
+// to level+1 for the given job. When no registry has been installed via
+// SetExpRegistry (e.g. tests, dev mode), it falls back to BaseExpForLevel
+// and the hardcoded baseExpTable.
+//
+// For a known job (the registry is loaded and the job exists) the
+// per-job MaxBaseLevel cap is enforced — once level reaches the cap the
+// threshold is reported as 0 and the character cannot level further via
+// this path. An unknown job falls back to the hardcoded table (current
+// behavior, kept for dev/test forward-compat). Mirrors rAthena
+// pc_nextbaseexp(job, level) (rathena/src/map/pc.cpp:8640).
+func BaseExpForJobLevel(jobName string, level uint32) uint64 {
+	if level < 1 {
+		return 0
+	}
+	reg := expRegistryPtr.Load()
+	if reg == nil {
+		// No registry: hardcoded table, global cap.
+		return BaseExpForLevel(level)
+	}
+	entry := reg.db.Get(jobName)
+	if entry == nil {
+		// Unknown job in a loaded registry: fall back to the
+		// hardcoded table to keep dev/test forward-compat.
+		return BaseExpForLevel(level)
+	}
+	// Known job: enforce the per-job MaxBaseLevel cap, NOT the global
+	// one. The jobdb.BaseExpForLevel lookup bounds against the same
+	// cap and returns 0 once level >= entry.MaxBaseLevel, which we
+	// re-check here for clarity.
+	maxLvl := uint32(entry.MaxBaseLevel) //nolint:gosec // G115: uint16→uint32 widening, safe
+	if level >= maxLvl {
+		return 0
+	}
+	return reg.db.BaseExpForLevel(jobName, int(level))
+}
+
+// ApplyBaseExpGainForJob computes the effect of adding gain base EXP to a
+// character of the given job, using the per-job BaseExpForJobLevel
+// threshold for each level boundary. When no registry is configured it
+// behaves exactly like ApplyBaseExpGain (the gateway's existing call-site
+// continues to compile unchanged this phase).
+//
+// The level-up loop terminates at the job's per-job MaxBaseLevel (e.g.
+// 60 for Novice), not the global MaxBaseLevel=99. At that cap the EXP is
+// clamped to MaxLevelExp and no further level-up occurs.
+func ApplyBaseExpGainForJob(jobName string, baseLevel uint32, baseExp uint64, gain uint64) ExpGain {
+	newLevel, newExp := baseLevel, baseExp+gain
+	maxLvl := jobMaxBaseLevel(jobName)
+
+	// Already maxed: cap and stop.
+	if newLevel >= maxLvl {
+		if newExp > MaxLevelExp {
+			newExp = MaxLevelExp
+		}
+		return ExpGain{NewLevel: newLevel, NewExp: newExp}
+	}
+
+	var granted uint32
+	for newLevel < maxLvl {
+		next := BaseExpForJobLevel(jobName, newLevel)
+		if next == 0 || newExp < next {
+			break
+		}
+		newExp -= next
+		granted += StatusPointGrant(newLevel)
+		newLevel++
+	}
+
+	// Cap carry-over at max level (rathena clamps base_exp to
+	// MAX_LEVEL_BASE_EXP once the per-job MaxBaseLevel is reached).
+	if newLevel >= maxLvl && newExp > MaxLevelExp {
 		newExp = MaxLevelExp
 	}
 
