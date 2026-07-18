@@ -17,6 +17,7 @@ package jobbasepoints
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -199,9 +200,7 @@ func cloneJobEntry(src *JobEntry) *JobEntry {
 	clone.BonusStats = append([]BonusStat(nil), src.BonusStats...)
 	if src.BaseASPD != nil {
 		clone.BaseASPD = make(map[string]uint16, len(src.BaseASPD))
-		for weapon, aspd := range src.BaseASPD {
-			clone.BaseASPD[weapon] = aspd
-		}
+		maps.Copy(clone.BaseASPD, src.BaseASPD)
 	}
 	return &clone
 }
