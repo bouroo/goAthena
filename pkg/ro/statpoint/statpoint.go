@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -120,20 +121,8 @@ func (r *Registry) Levels() []uint32 {
 	for lvl := range r.points {
 		out = append(out, lvl)
 	}
-	sortUint32Asc(out)
+	slices.Sort(out)
 	return out
-}
-
-func sortUint32Asc(s []uint32) {
-	for i := 1; i < len(s); i++ {
-		v := s[i]
-		j := i - 1
-		for j >= 0 && s[j] > v {
-			s[j+1] = s[j]
-			j--
-		}
-		s[j+1] = v
-	}
 }
 
 // loadFile reads a single statpoint.yml, merges its Body, and recurses into
@@ -146,6 +135,7 @@ func (r *Registry) loadFile(path string, visited map[string]bool) error {
 		return fmt.Errorf("circular statpoint_db import detected: %q", clean)
 	}
 	visited[clean] = true
+	defer func() { delete(visited, clean) }()
 
 	f, err := os.Open(clean) // #nosec G304 -- path is operator-configured statpoint.yml, not user input
 	if err != nil {
@@ -296,9 +286,31 @@ func parseDoc(data []byte) (header, []*yaml.Node, error) {
 }
 
 func parseImports(data []byte) ([]string, error) {
+	root, err := decodeRootDoc(data, "imports")
+	if err != nil {
+		return nil, err
+	}
+	if root == nil {
+		return nil, nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "Footer" {
+			continue
+		}
+		return footerImports(root.Content[i+1])
+	}
+	return nil, nil
+}
+
+// decodeRootDoc unmarshals data and validates it's a top-level mapping.
+// Returns (nil, nil) for empty/comment-only input (root.Kind == 0).
+func decodeRootDoc(data []byte, label string) (*yaml.Node, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal(data, &root); err != nil {
-		return nil, fmt.Errorf("parse imports: %w", err)
+		return nil, fmt.Errorf("parse %s: %w", label, err)
+	}
+	if root.Kind == 0 {
+		return nil, nil
 	}
 	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
 		return nil, fmt.Errorf("expected document node, got kind %d", root.Kind)
@@ -307,38 +319,39 @@ func parseImports(data []byte) ([]string, error) {
 	if doc.Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("expected top-level mapping, got kind %d", doc.Kind)
 	}
-	for i := 0; i+1 < len(doc.Content); i += 2 {
-		if doc.Content[i].Value != "Footer" {
+	return doc, nil
+}
+
+func footerImports(footer *yaml.Node) ([]string, error) {
+	if footer.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("footer mapping: expected mapping node, got kind %d", footer.Kind)
+	}
+	for j := 0; j+1 < len(footer.Content); j += 2 {
+		if footer.Content[j].Value != "Imports" {
 			continue
 		}
-		footer := doc.Content[i+1]
-		if footer.Kind != yaml.MappingNode {
-			return nil, fmt.Errorf("footer mapping: expected mapping node, got kind %d", footer.Kind)
-		}
-		for j := 0; j+1 < len(footer.Content); j += 2 {
-			if footer.Content[j].Value != "Imports" {
-				continue
-			}
-			imp := footer.Content[j+1]
-			if imp.Kind != yaml.SequenceNode {
-				return nil, nil
-			}
-			out := make([]string, 0, len(imp.Content))
-			for _, item := range imp.Content {
-				if item.Kind != yaml.MappingNode {
-					continue
-				}
-				for k := 0; k+1 < len(item.Content); k += 2 {
-					if item.Content[k].Value == "Path" {
-						out = append(out, item.Content[k+1].Value)
-						break
-					}
-				}
-			}
-			return out, nil
-		}
+		return importPaths(footer.Content[j+1])
 	}
 	return nil, nil
+}
+
+func importPaths(imp *yaml.Node) ([]string, error) {
+	if imp.Kind != yaml.SequenceNode {
+		return nil, nil
+	}
+	out := make([]string, 0, len(imp.Content))
+	for _, item := range imp.Content {
+		if item.Kind != yaml.MappingNode {
+			continue
+		}
+		for k := 0; k+1 < len(item.Content); k += 2 {
+			if item.Content[k].Value == "Path" {
+				out = append(out, item.Content[k+1].Value)
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 func parseBodyRow(row *yaml.Node) (Entry, error) {

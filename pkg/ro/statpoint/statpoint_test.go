@@ -4,6 +4,7 @@ package statpoint
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -599,6 +600,159 @@ Footer:
 	if v, ok := reg.Points(1); !ok || v != 1 {
 		t.Errorf("Points(1) = (%d, %v), want (1, true)", v, ok)
 	}
+}
+
+func TestLoadFile_DiamondImports(t *testing.T) {
+	dir := t.TempDir()
+	cPath := filepath.Join(dir, "c.yml")
+	aPath := filepath.Join(dir, "a.yml")
+	bPath := filepath.Join(dir, "b.yml")
+	a := validHeader + `Body:
+  - {Level: 1, Points: 10}
+Footer:
+  Imports:
+    - Path: b.yml
+    - Path: c.yml
+`
+	b := validHeader + `Body:
+  - {Level: 2, Points: 20}
+Footer:
+  Imports:
+    - Path: c.yml
+`
+	cBody := validHeader + `Body:
+  - {Level: 3, Points: 30}
+`
+	if err := os.WriteFile(aPath, []byte(a), 0o600); err != nil {
+		t.Fatalf("WriteFile a: %v", err)
+	}
+	if err := os.WriteFile(bPath, []byte(b), 0o600); err != nil {
+		t.Fatalf("WriteFile b: %v", err)
+	}
+	if err := os.WriteFile(cPath, []byte(cBody), 0o600); err != nil {
+		t.Fatalf("WriteFile c: %v", err)
+	}
+	reg, err := LoadFile(aPath)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v (diamond import should succeed with recursion-stack tracking)", err)
+	}
+	for _, tc := range []struct {
+		level uint32
+		want  int32
+	}{
+		{1, 10},
+		{2, 20},
+		{3, 30},
+	} {
+		got, ok := reg.Points(tc.level)
+		if !ok {
+			t.Errorf("Points(%d) not registered after diamond load", tc.level)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("Points(%d) = %d, want %d", tc.level, got, tc.want)
+		}
+	}
+	if reg.Size() != 3 {
+		t.Errorf("Size() = %d, want 3 (all three distinct levels)", reg.Size())
+	}
+	if got, want := reg.Levels(), []uint32{1, 2, 3}; !slicesEqual32(got, want) {
+		t.Errorf("Levels() = %v, want %v", got, want)
+	}
+}
+
+func TestLoad_EmptyYAMLStream(t *testing.T) {
+	cases := []struct {
+		name, in string
+	}{
+		{"empty", ""},
+		{"comment-only", "# only a comment\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := NewRegistry()
+			if err := reg.Load(strings.NewReader(tc.in)); err != nil {
+				t.Fatalf("Load(%q) error = %v, want nil", tc.in, err)
+			}
+			if reg.Size() != 0 {
+				t.Errorf("Size() = %d, want 0", reg.Size())
+			}
+			if got := reg.MaxLevel(); got != 0 {
+				t.Errorf("MaxLevel() = %d, want 0", got)
+			}
+			if got := reg.Levels(); len(got) != 0 {
+				t.Errorf("Levels() len = %d, want 0", len(got))
+			}
+		})
+	}
+}
+
+func TestLoadFile_EmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.yml")
+	if err := os.WriteFile(path, []byte{}, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	reg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile(empty) error = %v, want nil", err)
+	}
+	if reg.Size() != 0 {
+		t.Errorf("Size() = %d, want 0", reg.Size())
+	}
+	if got := reg.MaxLevel(); got != 0 {
+		t.Errorf("MaxLevel() = %d, want 0", got)
+	}
+}
+
+func TestLoadFile_CommentOnlyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "comments.yml")
+	if err := os.WriteFile(path, []byte("# only a comment\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	reg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile(comments) error = %v, want nil", err)
+	}
+	if reg.Size() != 0 {
+		t.Errorf("Size() = %d, want 0", reg.Size())
+	}
+	if got := reg.MaxLevel(); got != 0 {
+		t.Errorf("MaxLevel() = %d, want 0", got)
+	}
+}
+
+func TestLevels_Sorted(t *testing.T) {
+	reg := NewRegistry()
+	for _, lvl := range []uint32{5, 2, 9, 1} {
+		in := validHeader + fmt.Sprintf("Body:\n  - {Level: %d, Points: %d}\n", lvl, int32(lvl)*10)
+		if err := reg.Load(strings.NewReader(in)); err != nil {
+			t.Fatalf("Load(level %d): %v", lvl, err)
+		}
+	}
+	got := reg.Levels()
+	want := []uint32{1, 2, 5, 9}
+	if len(got) != len(want) {
+		t.Fatalf("Levels() len = %d (%v), want %d (%v)", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Levels()[%d] = %d, want %d (full slice %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func slicesEqual32(a, b []uint32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // failReader returns an error on every Read.
