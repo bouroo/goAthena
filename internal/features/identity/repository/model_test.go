@@ -105,7 +105,10 @@ func toSnakeCase(s string) string {
 	var b strings.Builder
 	for i, r := range s {
 		if i > 0 && r >= 'A' && r <= 'Z' {
-			b.WriteByte('_')
+			prev := s[i-1]
+			if !(prev >= 'A' && prev <= 'Z') {
+				b.WriteByte('_')
+			}
 		}
 		if r >= 'A' && r <= 'Z' {
 			b.WriteRune(r + ('a' - 'A'))

@@ -7,6 +7,11 @@
 -- main.sql:758-764). This file converges goAthena onto the rAthena
 -- canonical. No future ALTER/MODIFY/CHANGE/DROP against any rAthena
 -- column is permitted.
+-- The redundant single-column `KEY list (list)` index from 000002 is also
+-- dropped here: the composite PRIMARY KEY (list, btime) covers `list` as
+-- its leftmost prefix, so any lookup or range scan on `list` alone is
+-- already served by the PK.
 
+ALTER TABLE `ipbanlist` DROP INDEX `list`;
 ALTER TABLE `ipbanlist` MODIFY `list` varchar(15) NOT NULL default '';
 ALTER TABLE `ipbanlist` ADD PRIMARY KEY (`list`, `btime`);
