@@ -69,7 +69,7 @@ func runOnInitWithScope(
 		if _, ok := cs.LookupLabel(onInitLabel); !ok {
 			continue
 		}
-		machine, ok := vm.NewAtLabel(cs, onInitLabel, scopes, builtins)
+		machine, ok := vm.NewAtLabelWithFuncs(cs, set.Funcs, onInitLabel, scopes, builtins)
 		if !ok {
 			continue
 		}

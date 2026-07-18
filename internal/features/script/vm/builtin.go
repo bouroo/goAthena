@@ -60,6 +60,8 @@ func (r *BuiltinRegistry) RegisterDefaults() {
 	r.Register("gettimetick", builtinGettimetick)
 	r.Register("rand", builtinRand)
 	r.Register("sleep", builtinSleep)
+	r.Register("getarg", builtinGetarg)
+	r.Register("setarg", builtinSetarg)
 }
 
 // minArgs returns an error if len(args) is less than n.
@@ -134,8 +136,59 @@ func builtinSet(_ context.Context, vm *VM, args []Value) (Value, error) {
 	return IntValue(0), nil
 }
 
-// builtinCallfunc calls a function script (stub: returns 0).
+// builtinCallfunc is the registry fallback for the callfunc builtin.
+// In normal operation callfunc is handled directly by VM.execCallfunc
+// (dispatched from VM.execFunc before reaching the builtin registry),
+// because callfunc is a VM-level jump-based operation that switches
+// vm.script and pc. Reaching this function means the VM dispatch has
+// regressed and forgot to intercept "callfunc"; return an error so
+// the regression surfaces loudly instead of silently returning 0.
 func builtinCallfunc(_ context.Context, _ *VM, _ []Value) (Value, error) {
+	return IntValue(0), fmt.Errorf("callfunc: handled by VM dispatch, registry fallback should be unreachable")
+}
+
+// builtinGetarg returns an argument passed to the current callfunc
+// invocation. Signature: getarg(idx [, default]).
+//
+// Out-of-range indices return the supplied default (or 0 when no
+// default is given). Negative indices are treated as out of range
+// (rAthena treats negative as 0 / out of range).
+func builtinGetarg(_ context.Context, vm *VM, args []Value) (Value, error) {
+	if err := minArgs("getarg", 1, args); err != nil {
+		return IntValue(0), err
+	}
+	frame := vm.currentArgs()
+	if frame == nil {
+		return IntValue(0), nil
+	}
+	i := args[0].AsInt()
+	if i < 0 || i >= int64(len(frame)) {
+		if len(args) >= 2 {
+			return args[1], nil
+		}
+		return IntValue(0), nil
+	}
+	return frame[i], nil
+}
+
+// builtinSetarg mutates the current callfunc argument frame in place.
+// Signature: setarg(idx, value). Out-of-range indices return an error.
+// Because argFrames stores []Value slices (not deep-copies), writing to
+// frame[i] makes the change visible to subsequent getarg calls within
+// the same function invocation.
+func builtinSetarg(_ context.Context, vm *VM, args []Value) (Value, error) {
+	if err := minArgs("setarg", 2, args); err != nil {
+		return IntValue(0), err
+	}
+	frame := vm.currentArgs()
+	if frame == nil {
+		return IntValue(0), fmt.Errorf("setarg: no active function frame")
+	}
+	i := args[0].AsInt()
+	if i < 0 || i >= int64(len(frame)) {
+		return IntValue(0), fmt.Errorf("setarg: index out of range")
+	}
+	frame[i] = args[1]
 	return IntValue(0), nil
 }
 
@@ -161,7 +214,7 @@ func builtinGetitem(_ context.Context, _ *VM, args []Value) (Value, error) {
 	return IntValue(0), nil
 }
 
-// builtinDelitem removes an item from the player (stub: returns 0).
+// builtinDelitem removes an item from the player (stub).
 func builtinDelitem(_ context.Context, _ *VM, args []Value) (Value, error) {
 	_ = minArgs("delitem", 2, args)
 	return IntValue(0), nil

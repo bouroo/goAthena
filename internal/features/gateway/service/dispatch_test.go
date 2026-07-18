@@ -5842,7 +5842,7 @@ func TestDispatchHandler_CZCloseDialog_DropsSession(t *testing.T) {
 
 	// close() already evicted the session for a mes+close script,
 	// so seed a parked session manually for the assertion below.
-	h.dialogSessions.Store(conn.ID, NewDialogSession(compileForTest(t, `mes "Hi"; next;`), 1, "X", &bytes.Buffer{}))
+	h.dialogSessions.Store(conn.ID, NewDialogSession(compileForTest(t, `mes "Hi"; next;`), nil, 1, "X", &bytes.Buffer{}))
 	if _, ok := h.dialogSessions.Load(conn.ID); !ok {
 		t.Fatal("setup: failed to seed dialog session")
 	}

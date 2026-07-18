@@ -51,7 +51,11 @@ type DialogSession struct {
 // ZC_WAIT_DIALOG2, ZC_CLOSE_DIALOG, and ZC_MENU_LIST packets as the
 // script executes; it is normally a domain.Responder adapter but any
 // io.Writer works (tests use *bytes.Buffer).
-func NewDialogSession(code *script.CompiledScript, npcID uint32, npcName string, pktWriter io.Writer) *DialogSession {
+//
+// The optional funcs map, when non-nil, lets the VM resolve callfunc
+// names against named function scripts from the compiled script set.
+// Pass nil to keep the legacy behavior where callfunc is a stub.
+func NewDialogSession(code *script.CompiledScript, funcs map[string]*script.CompiledScript, npcID uint32, npcName string, pktWriter io.Writer) *DialogSession {
 	scopes := vm.NewScopeStore()
 	session := &DialogSession{
 		Scopes:  scopes,
@@ -59,7 +63,7 @@ func NewDialogSession(code *script.CompiledScript, npcID uint32, npcName string,
 		NpcID:   npcID,
 	}
 	registry := dialogBuiltins(session, npcID, pktWriter)
-	session.VM = vm.New(code, scopes, registry)
+	session.VM = vm.NewWithFuncs(code, funcs, scopes, registry)
 	return session
 }
 
@@ -70,9 +74,9 @@ func NewDialogSession(code *script.CompiledScript, npcID uint32, npcName string,
 // triggered the most recent packet. Builtins still receive an
 // io.Writer (the responderWriter), so the dialogBuiltins contract is
 // unchanged.
-func NewDialogSessionForResponder(code *script.CompiledScript, npcID uint32, npcName string, resp domain.Responder) *DialogSession {
+func NewDialogSessionForResponder(code *script.CompiledScript, funcs map[string]*script.CompiledScript, npcID uint32, npcName string, resp domain.Responder) *DialogSession {
 	w := &responderWriter{resp: resp}
-	session := NewDialogSession(code, npcID, npcName, w)
+	session := NewDialogSession(code, funcs, npcID, npcName, w)
 	session.writer = w
 	return session
 }

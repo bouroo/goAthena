@@ -129,6 +129,13 @@ const (
 
 	// OpBinary marks a binary op boundary for argument-list emission
 	// (`C_ARG` analogue in rAthena). Operand = none.
+	//
+	// Phase R0 (S1) also reuses OpBinary as the array-READ operator:
+	// when the compiler emits an IndexExpr over an IdentExpr target, it
+	// pushes the array name as a string and the index as an int, then
+	// OpBinary pops both and resolves to the stored value via
+	// ScopeStore.GetArray. The Str field of the instruction itself is
+	// not used by this path.
 	OpBinary
 
 	// OpPush pushes a constant value onto the stack. The constant's
@@ -162,6 +169,22 @@ const (
 	// OpLine is a line-number marker for stack-trace diagnostics.
 	// Operand int32 field = 1-indexed source line.
 	OpLine
+
+	// OpIndexGet is the array-READ operator. Reserved for parity with
+	// rAthena's C_GETINDEX / OpIndexGet split; the current compiler
+	// emits OpBinary for reads and the VM handles both opcodes the
+	// same way.
+	//
+	// Stack contract: pops idx (top) then name (string), pushes the
+	// stored array element (zero Value when the array or index is
+	// absent).
+	OpIndexGet
+
+	// OpIndexSet is the array-WRITE operator. Operand Str field = name.
+	//
+	// Stack contract: pops name (top), idx (second), value (third),
+	// then stores value into ScopeStore.SetArray(name, idx).
+	OpIndexSet
 )
 
 // String returns a mnemonic for debug disassembly.
@@ -229,4 +252,6 @@ var opcodeNames = [...]string{
 	OpInt:          "INT",
 	OpStr:          "STR",
 	OpLine:         "LINE",
+	OpIndexGet:     "INDEX_GET",
+	OpIndexSet:     "INDEX_SET",
 }

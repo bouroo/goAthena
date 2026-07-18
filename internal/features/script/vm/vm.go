@@ -23,6 +23,17 @@ const (
 	StateEnd
 )
 
+// funcFrame is the saved state needed to return from a callfunc'd
+// function script back to its caller. It captures the previous script
+// pointer (for switching back), the resume pc within the caller, and
+// the length of argFrames so the function's arguments can be popped
+// on return.
+type funcFrame struct {
+	priorScript       *script.CompiledScript
+	priorPC           int
+	priorArgFramesLen int
+}
+
 // VM executes compiled script bytecode.
 type VM struct {
 	stack      []Value
@@ -30,13 +41,22 @@ type VM struct {
 	script     *script.CompiledScript
 	scopes     *ScopeStore
 	builtins   *BuiltinRegistry
+	funcs      map[string]*script.CompiledScript
 	maxInstr   int
 	instrCount int
 	state      State
 	callStack  []int
+	funcFrames []funcFrame
+	// argFrames is a stack of argument slices, one entry per active
+	// callfunc invocation. The top of the stack is the current
+	// function's argument frame; getarg/setarg read and mutate it.
+	argFrames [][]Value
 }
 
-// New creates a VM for executing the given compiled script.
+// New creates a VM for executing the given compiled script. Callfunc
+// lookups against the script set's Funcs map will fail because no funcs
+// map is wired in; use NewWithFuncs when the VM should be able to
+// resolve function-script calls.
 func New(code *script.CompiledScript, scopes *ScopeStore, builtins *BuiltinRegistry) *VM {
 	if scopes == nil {
 		scopes = NewScopeStore()
@@ -54,6 +74,14 @@ func New(code *script.CompiledScript, scopes *ScopeStore, builtins *BuiltinRegis
 		state:     StateRun,
 		callStack: make([]int, 0, 16),
 	}
+}
+
+// NewWithFuncs creates a VM with access to the named function-script
+// map. callfunc lookups will resolve against funcs.
+func NewWithFuncs(code *script.CompiledScript, funcs map[string]*script.CompiledScript, scopes *ScopeStore, builtins *BuiltinRegistry) *VM {
+	vm := New(code, scopes, builtins)
+	vm.funcs = funcs
+	return vm
 }
 
 // SetMaxInstr sets the instruction execution limit. A value <= 0 disables the
@@ -171,13 +199,18 @@ func (vm *VM) dispatchTable() map[script.Opcode]func(context.Context, script.Ins
 		script.OpLine:         vm.execNoop,
 		script.OpExpr:         vm.execNoop,
 		script.OpExpr2:        vm.execNoop,
-		script.OpBinary:       vm.execNoop,
+		script.OpBinary:       vm.execIndexGet,
+		script.OpIndexGet:     vm.execIndexGet,
+		script.OpIndexSet:     vm.execIndexSet,
 		script.OpName:         vm.execNoop,
 		script.OpEOF:          vm.execEnd,
 	}
 }
 
 func (vm *VM) execFunc(ctx context.Context, instr script.Instruction) error {
+	if instr.Str == "callfunc" {
+		return vm.execCallfunc(ctx)
+	}
 	return vm.callBuiltin(ctx, instr.Str)
 }
 
@@ -356,6 +389,28 @@ func (vm *VM) execGoto(_ context.Context, instr script.Instruction) error {
 	return nil
 }
 
+// execIndexGet implements both OpBinary (in its Phase R0 S1 array-read
+// role) and OpIndexGet. Stack contract (top → bottom): idx, name.
+// The compiler emits the array name as a string, so name.AsStr() is
+// used. Uninitialized elements resolve to zero Value.
+func (vm *VM) execIndexGet(_ context.Context, _ script.Instruction) error {
+	idx := vm.pop()
+	name := vm.pop()
+	val, _ := vm.scopes.GetArray(name.AsStr(), idx.AsInt())
+	vm.push(val)
+	return nil
+}
+
+// execIndexSet implements OpIndexSet. Stack contract (top → bottom):
+// name, idx, value. Stores value into ScopeStore.SetArray(name, idx).
+func (vm *VM) execIndexSet(_ context.Context, _ script.Instruction) error {
+	name := vm.pop()
+	idx := vm.pop()
+	val := vm.pop()
+	vm.scopes.SetArray(name.AsStr(), idx.AsInt(), val)
+	return nil
+}
+
 func (vm *VM) execCallSub(_ context.Context, instr script.Instruction) error {
 	target := vm.resolveLabel(instr.Str)
 	vm.callStack = append(vm.callStack, vm.pc)
@@ -363,7 +418,26 @@ func (vm *VM) execCallSub(_ context.Context, instr script.Instruction) error {
 	return nil
 }
 
+// execReturn unwinds the callsub/callfunc stack. If a funcFrame is on
+// top (callfunc-return), the VM restores the caller's script pointer
+// and pc, truncates argFrames back to its saved length, and leaves
+// the value placed on the operand stack by `return <expr>;` in place
+// as the callfunc result for the caller's next instruction to
+// consume. If only the callsub stack has frames, it pops that and
+// resumes the caller. With no frames at all the script ends.
 func (vm *VM) execReturn(context.Context, script.Instruction) error {
+	// callfunc return takes priority: it restores the caller's
+	// script pointer and pc and pops the function's argFrame.
+	if len(vm.funcFrames) > 0 {
+		frame := vm.funcFrames[len(vm.funcFrames)-1]
+		vm.funcFrames = vm.funcFrames[:len(vm.funcFrames)-1]
+		vm.script = frame.priorScript
+		vm.pc = frame.priorPC
+		if len(vm.argFrames) > frame.priorArgFramesLen {
+			vm.argFrames = vm.argFrames[:frame.priorArgFramesLen]
+		}
+		return nil
+	}
 	if len(vm.callStack) == 0 {
 		vm.state = StateEnd
 		return nil
@@ -391,6 +465,24 @@ func NewAtLabel(code *script.CompiledScript, label string, scopes *ScopeStore, b
 	return vm, true
 }
 
+// NewAtLabelWithFuncs mirrors NewAtLabel but wires the named function
+// script map so callfunc can resolve cross-script calls.
+func NewAtLabelWithFuncs(
+	code *script.CompiledScript,
+	funcs map[string]*script.CompiledScript,
+	label string,
+	scopes *ScopeStore,
+	builtins *BuiltinRegistry,
+) (*VM, bool) {
+	idx, ok := code.LookupLabel(label)
+	if !ok {
+		return nil, false
+	}
+	vm := NewWithFuncs(code, funcs, scopes, builtins)
+	vm.pc = idx
+	return vm, true
+}
+
 // resolveLabel returns the instruction index for a label, defaulting to the
 // current pc if the label is missing.
 func (vm *VM) resolveLabel(name string) int {
@@ -413,24 +505,98 @@ func (vm *VM) doAssign(name string, op func(cur, rhs Value) Value) error {
 	return nil
 }
 
+// noResultBuiltins is the set of builtins whose return value is a
+// statement-only signal (always 0 / ""). They must not push a result
+// onto the operand stack, otherwise subsequent expressions like a
+// follow-up callfunc would mistake the leftover IntValue(0) for the
+// function-name argument. Builtins whose value IS consumed by the
+// caller (rand, getarg, etc.) are not in this set.
+var noResultBuiltins = map[string]bool{
+	"mes":       true,
+	"next":      true,
+	"close":     true,
+	"close2":    true,
+	"end":       true,
+	"menu":      true,
+	"select":    true,
+	"input":     true,
+	"set":       true,
+	"sleep":     true,
+	"warp":      true,
+	"savepoint": true,
+	"cutin":     true,
+	"getitem":   true,
+	"delitem":   true,
+	"zeny":      true,
+	"heal":      true,
+	"getmapxy":  true,
+}
+
 // callBuiltin invokes a registered builtin with the arguments currently on
-// the stack. The builtin's result is pushed back onto the stack.
+// the stack. Builtins in noResultBuiltins consume their arguments and
+// return no value (the operand stack is left as it was before the
+// arguments were pushed, minus the arguments). Other builtins push
+// their result back onto the stack.
 func (vm *VM) callBuiltin(ctx context.Context, name string) error {
 	fn, ok := vm.builtins.Lookup(name)
 	if !ok {
 		return fmt.Errorf("unknown builtin %q", name)
 	}
-	// Count stack arguments by scanning back to the nearest OpBinary or stack
-	// bottom. In the current compiler builtins emit each argument as a value and
-	// never emit OpBinary between them, so we treat all values on the stack
-	// above the last OpBinary boundary (or entire stack) as arguments.
 	args := vm.collectArgs()
 	res, err := fn(ctx, vm, args)
 	if err != nil {
 		return err
 	}
-	vm.push(res)
+	if !noResultBuiltins[name] {
+		vm.push(res)
+	}
 	return nil
+}
+
+// execCallfunc implements the `callfunc("name", args...)` builtin.
+// It is a jump-based VM-level operation (not a normal builtin): it
+// pushes a funcFrame saving the caller's script pointer, pc, and the
+// length of argFrames, swaps vm.script to the named function's
+// CompiledScript, resets pc to 0, and pushes args[1:] onto argFrames
+// so getarg/setarg can read/mutate them. The main Run loop then drives
+// the function directly, so any pause/resume boundary (next, menu,
+// select, sleep) inside the function is handled by the same state
+// machine that pauses the caller — no nested execution loop is used.
+//
+// execReturn restores the caller's script pointer, pc, and argFrames
+// length when a funcFrame is on top, leaving the value placed on the
+// operand stack by `return <expr>;` as the callfunc result for the
+// caller's `OpAssign` to consume.
+//
+// args[0] is the function name; args[1:] are forwarded to the function.
+func (vm *VM) execCallfunc(ctx context.Context) error {
+	args := vm.collectArgs()
+	if len(args) < 1 {
+		return fmt.Errorf("callfunc: expected at least 1 arg, got %d", len(args))
+	}
+	name := args[0].AsStr()
+	fn, ok := vm.funcs[name]
+	if !ok {
+		return fmt.Errorf("callfunc: unknown function %q", name)
+	}
+	vm.funcFrames = append(vm.funcFrames, funcFrame{
+		priorScript:       vm.script,
+		priorPC:           vm.pc,
+		priorArgFramesLen: len(vm.argFrames),
+	})
+	vm.argFrames = append(vm.argFrames, args[1:])
+	vm.script = fn
+	vm.pc = 0
+	return nil
+}
+
+// currentArgs returns the argument slice for the active callfunc
+// invocation, or nil if no function is running.
+func (vm *VM) currentArgs() []Value {
+	if len(vm.argFrames) == 0 {
+		return nil
+	}
+	return vm.argFrames[len(vm.argFrames)-1]
 }
 
 // collectArgs returns all values currently on the stack as arguments and

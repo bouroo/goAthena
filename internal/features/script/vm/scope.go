@@ -9,6 +9,12 @@ type ScopeStore struct {
 	mapVars      map[string]Value // $var (map-local permanent)
 	mapTempVars  map[string]Value // $@var (map-local temporary)
 	instanceVars map[string]Value // 'var (instance scope)
+
+	// arrays stores named arrays by their full name (including the scope
+	// prefix, e.g. ".@arr"). Arrays are not split per scope because the
+	// name is already scope-disambiguated; this mirrors the way the
+	// scalar maps route by name prefix while keeping struct size flat.
+	arrays map[string]map[int64]Value
 }
 
 // NewScopeStore creates an empty in-memory scope store.
@@ -20,6 +26,7 @@ func NewScopeStore() *ScopeStore {
 		mapVars:      make(map[string]Value),
 		mapTempVars:  make(map[string]Value),
 		instanceVars: make(map[string]Value),
+		arrays:       make(map[string]map[int64]Value),
 	}
 }
 
@@ -42,6 +49,33 @@ func (s *ScopeStore) Get(name string) (Value, bool) {
 func (s *ScopeStore) Set(name string, val Value) {
 	m := s.selectMap(name)
 	m[name] = val
+}
+
+// GetArray returns the value stored at name[idx] and whether it exists.
+// The returned Value is the zero Value (IsString=false, Int=0) when the
+// array or the index has never been written, mirroring rAthena's
+// "uninitialized array element is 0" semantics.
+func (s *ScopeStore) GetArray(name string, idx int64) (Value, bool) {
+	arr, ok := s.arrays[name]
+	if !ok {
+		return IntValue(0), false
+	}
+	v, ok := arr[idx]
+	if !ok {
+		return IntValue(0), false
+	}
+	return v, true
+}
+
+// SetArray stores val at name[idx], lazily creating the inner map the
+// first time the array is written to.
+func (s *ScopeStore) SetArray(name string, idx int64, val Value) {
+	arr, ok := s.arrays[name]
+	if !ok {
+		arr = make(map[int64]Value)
+		s.arrays[name] = arr
+	}
+	arr[idx] = val
 }
 
 // selectMap returns the underlying map for a variable name based on its prefix.
