@@ -212,12 +212,12 @@ func parseOwnSkills(jobName string, entries []*skillEntryInner) (map[string]*Ski
 		if _, dup := out[e.Name]; dup {
 			return nil, fmt.Errorf("skill_tree: job %q has duplicate skill %q", jobName, e.Name)
 		}
-		reqs := make([]SkillRequirement, len(e.Requires))
-		for j, r := range e.Requires {
+		reqs := make([]SkillRequirement, 0, len(e.Requires))
+		for _, r := range e.Requires {
 			if r == nil {
 				continue
 			}
-			reqs[j] = SkillRequirement{Name: r.Name, Level: r.Level}
+			reqs = append(reqs, SkillRequirement{Name: r.Name, Level: r.Level})
 		}
 		out[e.Name] = &SkillEntry{
 			Name:      e.Name,

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -419,3 +420,58 @@ func TestLoadFile_RealFile(t *testing.T) {
 	_, has = lk.Skills["NV_BASIC"]
 	assert.True(t, has, "Lord_Knight inherits NV_BASIC from Novice")
 }
+
+func TestLoad_NilRequirementIsSkipped(t *testing.T) {
+	t.Parallel()
+	// Approach: call the unexported parseOwnSkills directly with a hand-built
+	// []*skillEntryInner that contains a nil pointer in Requires. This is the
+	// reliable way to reproduce a nil-hole: yaml.v3's typed decode rejects `- `
+	// (empty list element) inside a []*requirementInner, so a YAML-stream test
+	// would fail at decode before ever reaching parseOwnSkills. By constructing
+	// the inner slice in code, we exercise the exact branch the fix targets.
+	entries := []*skillEntryInner{
+		{
+			Name:     "SKILL_WITH_NIL_REQ",
+			MaxLevel: 3,
+			Requires: []*requirementInner{
+				nil,
+				{Name: "X", Level: 1},
+			},
+		},
+	}
+	out, err := parseOwnSkills("J", entries)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	got, ok := out["SKILL_WITH_NIL_REQ"]
+	require.True(t, ok)
+	require.NotNil(t, got)
+	// Regression guard: nil entries must not leave zero-valued holes in the
+	// pre-allocated slice. The slice must contain exactly one real prereq.
+	require.Len(t, got.Requires, 1, "nil requirement must be skipped, not zero-padded")
+	assert.Equal(t, SkillRequirement{Name: "X", Level: 1}, got.Requires[0])
+
+	// Also confirm the YAML-stream path (no nil case) still works, so this
+	// test does not silently mask a regression in the decode + parse pipeline.
+	const streamOK = `Header:
+  Type: SKILL_TREE_DB
+  Version: 1
+Body:
+  - Job: J
+    Tree:
+      - Name: SKILL_OK
+        MaxLevel: 1
+        Requires:
+          - Name: X
+            Level: 1
+`
+	reg, err := Load(strings.NewReader(streamOK))
+	require.NoError(t, err)
+	require.Equal(t, 1, reg.Len())
+	j, ok := reg.Get("J")
+	require.True(t, ok)
+	okSkill, has := j.Skills["SKILL_OK"]
+	require.True(t, has)
+	require.Len(t, okSkill.Requires, 1)
+	assert.Equal(t, SkillRequirement{Name: "X", Level: 1}, okSkill.Requires[0])
+}
+
