@@ -28,6 +28,7 @@ func rathenaCharTableSQL(t *testing.T) string {
 	base := filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "third_party", "rathena", "sql-files", "main.sql")
 	abs, err := filepath.Abs(base)
 	require.NoError(t, err)
+	//nolint:gosec // path is hardcoded for the test, not user input
 	raw, err := os.ReadFile(abs)
 	require.NoError(t, err, "read rAthena main.sql at %s", abs)
 	return extractCharTableDDL(string(raw))
@@ -74,10 +75,9 @@ func rathenaCharColumns(t *testing.T) []string {
 var columnTagPattern = regexp.MustCompile(`column:([A-Za-z0-9_]+)`)
 
 func charModelColumns() []string {
-	t := reflect.TypeOf(repository.CharModel{})
+	t := reflect.TypeFor[repository.CharModel]()
 	cols := make([]string, 0, t.NumField())
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		tag := f.Tag.Get("gorm")
 		m := columnTagPattern.FindStringSubmatch(tag)
 		if len(m) >= 2 {
@@ -160,7 +160,7 @@ func TestCharModel_ColumnParityWithRAthena(t *testing.T) {
 	want := sortedCopy(rathenaCharColumns(t))
 	got := sortedCopy(charModelColumns())
 
-	if !assert.Equal(t, len(want), len(got), "column count mismatch (rAthena=%d, CharModel=%d)", len(want), len(got)) {
+	if !assert.Len(t, got, len(want), "column count mismatch (rAthena=%d, CharModel=%d)", len(want), len(got)) {
 		t.Logf("rAthena `char` columns (%d): %v", len(want), want)
 		t.Logf("CharModel columns      (%d): %v", len(got), got)
 		t.Logf("diff: %s", diffStrings(want, got))
