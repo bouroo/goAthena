@@ -474,4 +474,3 @@ Body:
 	require.Len(t, okSkill.Requires, 1)
 	assert.Equal(t, SkillRequirement{Name: "X", Level: 1}, okSkill.Requires[0])
 }
-
