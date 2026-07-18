@@ -201,6 +201,11 @@ type LogConfig struct {
 // that corpus; 0 disables scheduled reloads. Like MobDBPath, ScriptDir is
 // optional: an empty or unreadable directory logs a warning and leaves the
 // engine holding an empty compiled set rather than failing zone boot.
+// JobExpDBPath points at the rAthena db/pre-re/job_exp.yml (Header
+// JOB_STATS, Version 4) used to resolve per-job base-level EXP thresholds
+// at gateway runtime via statsdomain.ExpRegistry. Optional -- when unset,
+// stats/domain falls back to its hardcoded pre-Renewal BaseExp table so dev
+// and CI boots succeed without the YAML.
 type ZoneConfig struct {
 	TickRate             time.Duration `mapstructure:"tick_rate" yaml:"tick_rate" env:"ZONE_TICK_RATE" validate:"required,min=10ms"`
 	MapDir               string        `mapstructure:"map_dir" yaml:"map_dir" env:"ZONE_MAP_DIR" validate:"required"`
@@ -209,6 +214,7 @@ type ZoneConfig struct {
 	ShutdownGrace        time.Duration `mapstructure:"shutdown_grace" yaml:"shutdown_grace" env:"ZONE_SHUTDOWN_GRACE" validate:"min=0"`
 	MobDBPath            string        `mapstructure:"mob_db_path" yaml:"mob_db_path" env:"ZONE_MOB_DB_PATH" validate:"omitempty"`
 	SkillDBPath          string        `mapstructure:"skill_db_path" yaml:"skill_db_path" env:"ZONE_SKILL_DB_PATH" validate:"omitempty"`
+	JobExpDBPath         string        `mapstructure:"job_exp_db_path" yaml:"job_exp_db_path" env:"ZONE_JOB_EXP_DB_PATH" validate:"omitempty"`
 	MobSpawnsPath        string        `mapstructure:"mob_spawns_path" yaml:"mob_spawns_path" env:"ZONE_MOB_SPAWNS_PATH" validate:"omitempty"`
 	ScriptDir            string        `mapstructure:"script_dir" yaml:"script_dir" env:"ZONE_SCRIPT_DIR" validate:"omitempty"`
 	ScriptReloadInterval time.Duration `mapstructure:"script_reload_interval" yaml:"script_reload_interval" env:"ZONE_SCRIPT_RELOAD_INTERVAL" validate:"omitempty,min=0"`
@@ -481,6 +487,7 @@ func leafBindings() []leafBinding {
 		{"zone.shutdown_grace", "ZONE_SHUTDOWN_GRACE"},
 		{"zone.mob_db_path", "ZONE_MOB_DB_PATH"},
 		{"zone.skill_db_path", "ZONE_SKILL_DB_PATH"},
+		{"zone.job_exp_db_path", "ZONE_JOB_EXP_DB_PATH"},
 		{"zone.mob_spawns_path", "ZONE_MOB_SPAWNS_PATH"},
 
 		{"assets.enabled", "ASSETS_ENABLED"},

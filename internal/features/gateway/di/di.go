@@ -18,7 +18,9 @@ import (
 	"github.com/bouroo/goAthena/internal/features/gateway/service"
 	scriptengine "github.com/bouroo/goAthena/internal/features/script"
 	skilldomain "github.com/bouroo/goAthena/internal/features/skill/domain"
+	statsdomain "github.com/bouroo/goAthena/internal/features/stats/domain"
 	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
+	"github.com/bouroo/goAthena/pkg/ro/jobdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 	scriptpkg "github.com/bouroo/goAthena/pkg/ro/script"
@@ -170,6 +172,13 @@ func provideDispatchHandler(i do.Injector) (domain.PacketHandler, error) {
 	}
 	if skillReg != nil {
 		skilldomain.SetRegistry(skillReg)
+	}
+	jobExpReg, err := loadJobExpRegistry(cfg, *logger)
+	if err != nil {
+		return nil, err
+	}
+	if jobExpReg != nil {
+		statsdomain.SetExpRegistry(jobExpReg)
 	}
 	h, err := buildDispatchHandler(identityClient, zoneClient, cfg, *logger, registry)
 	if err != nil {
@@ -327,6 +336,34 @@ func loadSkillRegistry(cfg *config.Config, logger zerolog.Logger) (*skilldomain.
 		return nil, fmt.Errorf("skill_db %q loaded %d entries but none converted to valid domain skills", cfg.Zone.SkillDBPath, db.Len())
 	}
 	logger.Info().Int("entries", db.Len()).Str("path", cfg.Zone.SkillDBPath).Msg("gateway di: skill_db loaded")
+	return reg, nil
+}
+
+// loadJobExpRegistry loads the rAthena job_exp.yml from cfg.Zone.JobExpDBPath
+// when configured, builds a domain ExpRegistry, and returns it. When the path
+// is empty, returns (nil, nil) and statsdomain falls back to the hardcoded
+// pre-Renewal BaseExp table. An explicit path that fails to load, or that
+// loads zero jobs, is a hard error — same fail-fast policy as loadSkillRegistry
+// (skill_db HIGH finding). The gateway's existing dispatch call-site continues
+// to use the hardcoded ApplyBaseExpGain until Phase 22, but the registry is
+// still wired so future call-sites pick up per-job thresholds automatically.
+func loadJobExpRegistry(cfg *config.Config, logger zerolog.Logger) (*statsdomain.ExpRegistry, error) {
+	if cfg == nil || cfg.Zone.JobExpDBPath == "" {
+		logger.Info().Msg("gateway di: job_exp_db_path unset; using hardcoded BaseExp table fallback")
+		return nil, nil
+	}
+	db, err := jobdb.LoadFile(cfg.Zone.JobExpDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("load job_exp %q: %w", cfg.Zone.JobExpDBPath, err)
+	}
+	if db.Len() == 0 {
+		return nil, fmt.Errorf("job_exp %q loaded 0 entries", cfg.Zone.JobExpDBPath)
+	}
+	reg := statsdomain.NewExpRegistryFromJobDB(db)
+	if reg == nil {
+		return nil, fmt.Errorf("job_exp %q loaded %d entries but none mapped to a domain ExpRegistry", cfg.Zone.JobExpDBPath, db.Len())
+	}
+	logger.Info().Int("entries", db.Len()).Str("path", cfg.Zone.JobExpDBPath).Msg("gateway di: job_exp loaded")
 	return reg, nil
 }
 
