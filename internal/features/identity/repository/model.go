@@ -43,9 +43,10 @@ type LoginModel struct {
 // any future schema introspection use the rAthena-canonical name.
 func (LoginModel) TableName() string { return "login" }
 
-// CharModel maps to the rAthena `char` table. Only the columns used by the
-// lobby roster (HC_ACCEPT_ENTER) are declared here; the full table is wide
-// (~80 columns) and is loaded lazily by the zone service on map enter.
+// CharModel maps to the rAthena `char` table. All rAthena `char` columns
+// (sql-files/main.sql:209-296) are declared here so GORM can read them
+// 1:1 instead of silently zeroing missing fields. The domain layer reads
+// only the subset it needs; the repository may expose more.
 type CharModel struct {
 	CharID        uint32     `gorm:"column:char_id;primaryKey;autoIncrement"`
 	AccountID     uint32     `gorm:"column:account_id"`
@@ -57,13 +58,39 @@ type CharModel struct {
 	BaseExp       uint64     `gorm:"column:base_exp"`
 	JobExp        uint64     `gorm:"column:job_exp"`
 	Zeny          uint32     `gorm:"column:zeny"`
+	Str           uint16     `gorm:"column:str"`
+	Agi           uint16     `gorm:"column:agi"`
+	Vit           uint16     `gorm:"column:vit"`
+	Int           uint16     `gorm:"column:int"`
+	Dex           uint16     `gorm:"column:dex"`
+	Luk           uint16     `gorm:"column:luk"`
+	Pow           uint16     `gorm:"column:pow"` // smallint(4) unsigned
+	Sta           uint16     `gorm:"column:sta"`
+	Wis           uint16     `gorm:"column:wis"`
+	Spl           uint16     `gorm:"column:spl"`
+	Con           uint16     `gorm:"column:con"`
+	Crt           uint16     `gorm:"column:crt"`
 	MaxHP         uint32     `gorm:"column:max_hp"`
 	HP            uint32     `gorm:"column:hp"`
 	MaxSP         uint32     `gorm:"column:max_sp"`
 	SP            uint32     `gorm:"column:sp"`
+	MaxAP         uint32     `gorm:"column:max_ap"` // int(11) unsigned
+	AP            uint32     `gorm:"column:ap"`
+	StatusPoint   uint32     `gorm:"column:status_point"`
+	SkillPoint    uint32     `gorm:"column:skill_point"`
+	TraitPoint    uint32     `gorm:"column:trait_point"`
+	Option        int32      `gorm:"column:option"` // int(11) NOT NULL signed
+	Karma         int8       `gorm:"column:karma"`  // tinyint(3) NOT NULL signed
+	Manner        int16      `gorm:"column:manner"` // smallint(6) NOT NULL signed
+	PartyID       uint32     `gorm:"column:party_id"`
+	GuildID       uint32     `gorm:"column:guild_id"`
+	PetID         uint32     `gorm:"column:pet_id"`
+	HomunID       uint32     `gorm:"column:homun_id"`
+	ElementalID   uint32     `gorm:"column:elemental_id"`
 	Hair          uint8      `gorm:"column:hair"`
 	HairColor     uint16     `gorm:"column:hair_color"`
 	ClothesColor  uint16     `gorm:"column:clothes_color"`
+	Body          uint16     `gorm:"column:body"` // smallint(5) unsigned
 	Weapon        uint16     `gorm:"column:weapon"`
 	Shield        uint16     `gorm:"column:shield"`
 	HeadTop       uint16     `gorm:"column:head_top"`
@@ -71,26 +98,36 @@ type CharModel struct {
 	HeadBottom    uint16     `gorm:"column:head_bottom"`
 	Robe          uint16     `gorm:"column:robe"`
 	LastMap       string     `gorm:"column:last_map"`
-	DeleteDate    int64      `gorm:"column:delete_date"` // unix seconds, 0 = active
-	UnbanTime     int64      `gorm:"column:unban_time"`  // unix seconds, 0 = ok
-	Sex           domain.Sex `gorm:"column:sex"`         // ENUM('M','F')
-	Online        int8       `gorm:"column:online"`
-	LastLogin     *time.Time `gorm:"column:last_login"` // nullable
-	ShowEquip     int8       `gorm:"column:show_equip"`
-	DisableCall   int8       `gorm:"column:disable_call"`
-	TitleID       uint32     `gorm:"column:title_id"`
+	LastX         uint16     `gorm:"column:last_x"` // smallint(4) unsigned
+	LastY         uint16     `gorm:"column:last_y"`
+	LastInstance  uint32     `gorm:"column:last_instanceid"`
+	SaveMap       string     `gorm:"column:save_map"`
+	SaveX         uint16     `gorm:"column:save_x"`
+	SaveY         uint16     `gorm:"column:save_y"`
 	PartnerID     uint32     `gorm:"column:partner_id"`
+	Online        int8       `gorm:"column:online"`
+	Father        uint32     `gorm:"column:father"`
+	Mother        uint32     `gorm:"column:mother"`
+	Child         uint32     `gorm:"column:child"`
+	Fame          uint32     `gorm:"column:fame"`
+	Rename        uint16     `gorm:"column:rename"` // smallint(3) unsigned
+	DeleteDate    int64      `gorm:"column:delete_date"` // unix seconds, 0 = active
+	Moves         uint32     `gorm:"column:moves"`
+	UnbanTime     int64      `gorm:"column:unban_time"` // unix seconds, 0 = ok
+	Font          uint8      `gorm:"column:font"`        // tinyint(3) unsigned
+	UniqueItemCnt uint32     `gorm:"column:uniqueitem_counter"`
+	Sex           domain.Sex `gorm:"column:sex"` // ENUM('M','F')
+	HotkeyShift   uint8      `gorm:"column:hotkey_rowshift"`
+	HotkeyShift2  uint8      `gorm:"column:hotkey_rowshift2"`
+	ClanID        uint32     `gorm:"column:clan_id"`
+	LastLogin     *time.Time `gorm:"column:last_login"` // nullable
+	TitleID       uint32     `gorm:"column:title_id"`
+	ShowEquip     uint8      `gorm:"column:show_equip"` // tinyint(3) unsigned
 	InventorySize int16      `gorm:"column:inventory_slots"`
-	Fame          int32      `gorm:"column:fame"`
-	Manner        int16      `gorm:"column:manner"`
-	Str           uint16     `gorm:"column:str"`
-	Agi           uint16     `gorm:"column:agi"`
-	Vit           uint16     `gorm:"column:vit"`
-	Int           uint16     `gorm:"column:int"`
-	Dex           uint16     `gorm:"column:dex"`
-	Luk           uint16     `gorm:"column:luk"`
-	StatusPoint   uint32     `gorm:"column:status_point"`
-	SkillPoint    uint32     `gorm:"column:skill_point"`
+	BodyDirection uint8      `gorm:"column:body_direction"`   // tinyint(1) unsigned
+	DisableCall   uint8      `gorm:"column:disable_call"`      // tinyint(3) unsigned
+	DisableParty  uint8      `gorm:"column:disable_partyinvite"` // tinyint(1) unsigned
+	DisableCostume uint8     `gorm:"column:disable_showcostumes"` // tinyint(1) unsigned
 }
 
 // TableName pins the rAthena-canonical table name.
