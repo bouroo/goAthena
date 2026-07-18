@@ -132,6 +132,7 @@ otel:
 	t.Setenv("DB_DRIVER", "postgres")
 	t.Setenv("NATS_URL", "nats://env-host:4222")
 	t.Setenv("OTEL_SERVICE_NAME", "env-service")
+	t.Setenv("ZONE_RENEWAL", "true")
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
@@ -143,6 +144,8 @@ otel:
 	require.Equal(t, "postgres", cfg.DB.Driver)
 	require.Equal(t, "nats://env-host:4222", cfg.NATS.URL)
 	require.Equal(t, "env-service", cfg.OTel.ServiceName)
+	require.True(t, cfg.Zone.Renewal)
+	require.Equal(t, "db/re", cfg.Zone.DBRoot())
 }
 
 func TestLoad_SliceEnvVariable(t *testing.T) {
@@ -232,6 +235,8 @@ otel:
 	require.Equal(t, "nats://localhost:4222", cfg.NATS.URL)
 	require.Equal(t, 5*time.Second, cfg.HTTP.HealthProbeTimeout)
 	require.Equal(t, "utf-8", cfg.Gateway.TextCodepage)
+	require.False(t, cfg.Zone.Renewal)
+	require.Equal(t, "db", cfg.Zone.DBRoot())
 }
 
 func TestValidate_InvalidEnvironment(t *testing.T) {

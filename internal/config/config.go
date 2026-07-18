@@ -218,6 +218,25 @@ type ZoneConfig struct {
 	MobSpawnsPath        string        `mapstructure:"mob_spawns_path" yaml:"mob_spawns_path" env:"ZONE_MOB_SPAWNS_PATH" validate:"omitempty"`
 	ScriptDir            string        `mapstructure:"script_dir" yaml:"script_dir" env:"ZONE_SCRIPT_DIR" validate:"omitempty"`
 	ScriptReloadInterval time.Duration `mapstructure:"script_reload_interval" yaml:"script_reload_interval" env:"ZONE_SCRIPT_RELOAD_INTERVAL" validate:"omitempty,min=0"`
+	// Renewal toggles the rAthena Renewal game-mode data set. When true,
+	// loaders that read versioned game data should pull files from db/re/
+	// under the rAthena checkout; when false (the pre-Renewal default) they
+	// use db/. Existing *_db_path fields are unchanged; per-loader
+	// renewal-aware resolution is layered on top in subsequent roadmap phases.
+	Renewal bool `mapstructure:"renewal" yaml:"renewal" env:"ZONE_RENEWAL"`
+}
+
+// DBRoot returns the rAthena db/ subdirectory operators should load
+// versioned data files from — "db/re" when Renewal is enabled, "db"
+// (pre-renewal) otherwise. Loaders that read files present in both
+// trees should prepend DBRoot() to the relative path. The value is
+// relative to the rAthena checkout root (third_party/rathena); callers
+// join it with their checkout path.
+func (z ZoneConfig) DBRoot() string {
+	if z.Renewal {
+		return "db/re"
+	}
+	return "db"
 }
 
 // AssetsConfig configures the GRF-backed HTTP asset server that serves
@@ -398,6 +417,7 @@ func setDefaults(v *viper.Viper) {
 		"identity.item_db_path":      "",
 
 		"zone.tick_rate":      50 * time.Millisecond,
+		"zone.renewal":        false,
 		"zone.map_dir":        "./data/maps",
 		"zone.default_map":    "prontera",
 		"zone.move_speed":     150,
@@ -489,6 +509,7 @@ func leafBindings() []leafBinding {
 		{"zone.skill_db_path", "ZONE_SKILL_DB_PATH"},
 		{"zone.job_exp_db_path", "ZONE_JOB_EXP_DB_PATH"},
 		{"zone.mob_spawns_path", "ZONE_MOB_SPAWNS_PATH"},
+		{"zone.renewal", "ZONE_RENEWAL"},
 
 		{"assets.enabled", "ASSETS_ENABLED"},
 		{"assets.grf_dir", "ASSETS_GRF_DIR"},

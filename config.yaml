@@ -86,6 +86,7 @@ zone:
   mob_spawns_path: ./data/mob_spawns/prontera.yml
   script_dir: ./data/npc
   script_reload_interval: 0s
+  renewal: false
 
 assets:
   enabled: false
