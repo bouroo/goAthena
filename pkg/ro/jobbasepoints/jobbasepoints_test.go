@@ -261,6 +261,62 @@ func TestMerge_AccumulatesAcrossFiles(t *testing.T) {
 	}
 }
 
+func TestMerge_NoMutationOfSource(t *testing.T) {
+	basepoints := validHeader + `Body:
+  - Jobs:
+      TestJob: true
+    BaseHp:
+      - {Level: 1, Hp: 100}
+    HpFactor: 60
+`
+	stats := validHeader + `Body:
+  - Jobs:
+      TestJob: true
+    SpFactor: 20
+`
+	reg2, err := Load(strings.NewReader(basepoints))
+	if err != nil {
+		t.Fatalf("Load(basepoints) error = %v", err)
+	}
+	reg3, err := Load(strings.NewReader(stats))
+	if err != nil {
+		t.Fatalf("Load(stats) error = %v", err)
+	}
+	reg1 := &Registry{}
+	if err := reg1.Merge(reg2); err != nil {
+		t.Fatalf("reg1.Merge(reg2) error = %v", err)
+	}
+	if err := reg1.Merge(reg3); err != nil {
+		t.Fatalf("reg1.Merge(reg3) error = %v", err)
+	}
+
+	source := reg2.Get("TestJob")
+	if source == nil {
+		t.Fatal("reg2 TestJob entry missing")
+	}
+	if source.SpFactor != 0 {
+		t.Errorf("reg2 SpFactor = %d, want 0", source.SpFactor)
+	}
+	if len(source.BaseHp) != 1 || source.BaseHp[0] != (HpSpRow{Level: 1, Hp: 100}) {
+		t.Errorf("reg2 BaseHp = %+v, want [{Level:1 Hp:100}]", source.BaseHp)
+	}
+
+	merged := reg1.Get("TestJob")
+	if merged == nil {
+		t.Fatal("reg1 TestJob entry missing")
+	}
+	if merged.HpFactor != 60 || merged.SpFactor != 20 {
+		t.Errorf("reg1 factors = HpFactor:%d SpFactor:%d, want 60 and 20", merged.HpFactor, merged.SpFactor)
+	}
+	if len(merged.BaseHp) != 1 || merged.BaseHp[0] != (HpSpRow{Level: 1, Hp: 100}) {
+		t.Errorf("reg1 BaseHp = %+v, want [{Level:1 Hp:100}]", merged.BaseHp)
+	}
+	merged.BaseHp[0].Hp = 999
+	if got := source.BaseHp[0].Hp; got != 100 {
+		t.Errorf("reg2 BaseHp[0].Hp = %d after mutating reg1, want 100", got)
+	}
+}
+
 func TestMerge_NilReceiver(t *testing.T) {
 	var reg *Registry
 	src, err := Load(strings.NewReader(validHeader + `Body:

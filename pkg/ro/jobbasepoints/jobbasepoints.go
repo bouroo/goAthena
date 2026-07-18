@@ -134,7 +134,7 @@ func (dst *JobEntry) applyGroup(g *bodyGroup) {
 
 func takeSlice[T any](dst *[]T, src []T) {
 	if len(*dst) == 0 && len(src) > 0 {
-		*dst = src
+		*dst = append([]T(nil), src...)
 	}
 }
 
@@ -180,12 +180,30 @@ func (reg *Registry) Merge(src *Registry) error {
 	for jobName, srcEntry := range src.jobs {
 		dst, exists := reg.jobs[jobName]
 		if !exists {
-			reg.jobs[jobName] = srcEntry
+			reg.jobs[jobName] = cloneJobEntry(srcEntry)
 			continue
 		}
 		dst.mergeFrom(srcEntry)
 	}
 	return nil
+}
+
+func cloneJobEntry(src *JobEntry) *JobEntry {
+	if src == nil {
+		return &JobEntry{}
+	}
+	clone := *src
+	clone.Jobs = append([]string(nil), src.Jobs...)
+	clone.BaseHp = append([]HpSpRow(nil), src.BaseHp...)
+	clone.BaseSp = append([]HpSpRow(nil), src.BaseSp...)
+	clone.BonusStats = append([]BonusStat(nil), src.BonusStats...)
+	if src.BaseASPD != nil {
+		clone.BaseASPD = make(map[string]uint16, len(src.BaseASPD))
+		for weapon, aspd := range src.BaseASPD {
+			clone.BaseASPD[weapon] = aspd
+		}
+	}
+	return &clone
 }
 
 // mergeFrom copies fields from src into dst using "first wins" semantics.
