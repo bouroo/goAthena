@@ -3155,7 +3155,7 @@ func (h *DispatchHandler) startScriptDialog(ctx context.Context, conn *domain.Co
 		return false
 	}
 
-	session := NewDialogSessionForResponder(cs, npc.GID, npc.Name, resp)
+	session := NewDialogSessionForResponder(cs, h.scriptSet.Funcs, npc.GID, npc.Name, resp)
 	h.dialogSessions.Store(conn.ID, session)
 
 	if _, err := session.VM.Run(ctx); err != nil {

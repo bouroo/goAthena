@@ -398,3 +398,110 @@ func TestNewAtLabel_StartsAtLabelNotTop(t *testing.T) {
 		"expected OnInit body to run (.@x == 222); got %d (top-of-script code was skipped)",
 		v.AsInt())
 }
+
+func TestArrayGetSetScalar(t *testing.T) {
+	cs := mustCompile(t, `
+		.@arr[0] = 10;
+		.@arr[1] = 20;
+		.@r = .@arr[0] + .@arr[1];
+	`)
+	vm := newVM(t, cs)
+	run(t, vm)
+	v, ok := vm.scopes.Get(".@r")
+	require.True(t, ok)
+	assert.Equal(t, int64(30), v.AsInt())
+}
+
+func TestArrayIndexFromVariable(t *testing.T) {
+	cs := mustCompile(t, `
+		.@i = 2;
+		.@arr[.@i] = 99;
+		.@r = .@arr[.@i];
+	`)
+	vm := newVM(t, cs)
+	run(t, vm)
+	v, ok := vm.scopes.Get(".@r")
+	require.True(t, ok)
+	assert.Equal(t, int64(99), v.AsInt())
+}
+
+func TestArrayUninitializedRead(t *testing.T) {
+	cs := mustCompile(t, `.@r = .@missing[5];`)
+	vm := newVM(t, cs)
+	run(t, vm)
+	v, ok := vm.scopes.Get(".@r")
+	require.True(t, ok)
+	assert.Equal(t, int64(0), v.AsInt())
+}
+
+// newVMWithFuncs mirrors newVM but wires the supplied function-script
+// map so callfunc can resolve cross-script calls.
+func newVMWithFuncs(t *testing.T, code *script.CompiledScript, funcs map[string]*script.CompiledScript) *VM {
+	t.Helper()
+	return NewWithFuncs(code, funcs, NewScopeStore(), defaultBuiltins(t))
+}
+
+func mustCompileFunc(t *testing.T, name string, src string) *script.CompiledScript {
+	t.Helper()
+	cs := mustCompile(t, src)
+	cs.Name = name
+	return cs
+}
+
+func TestCallfuncBasic(t *testing.T) {
+	main := mustCompile(t, `.@r = callfunc("F");`)
+	fn := mustCompileFunc(t, "F", `return 42;`)
+	funcs := map[string]*script.CompiledScript{"F": fn}
+	vm := newVMWithFuncs(t, main, funcs)
+	run(t, vm)
+	v, ok := vm.scopes.Get(".@r")
+	require.True(t, ok)
+	assert.Equal(t, int64(42), v.AsInt())
+}
+
+func TestCallfuncWithArgs(t *testing.T) {
+	main := mustCompile(t, `.@r = callfunc("Add", 3, 4);`)
+	// getarg returns a single value that the VM pushes back onto
+	// the stack; without an OpBinary argument separator, a single
+	// expression like `getarg(0) + getarg(1)` would consume the
+	// first call's return value as the second call's argument. Use
+	// an intermediate variable to keep the stack clean, which
+	// matches rAthena NPC idioms for arithmetic on getarg results.
+	fn := mustCompileFunc(t, "Add", `.@a = getarg(0); .@b = getarg(1); return .@a + .@b;`)
+	funcs := map[string]*script.CompiledScript{"Add": fn}
+	vm := newVMWithFuncs(t, main, funcs)
+	run(t, vm)
+	v, ok := vm.scopes.Get(".@r")
+	require.True(t, ok)
+	assert.Equal(t, int64(7), v.AsInt())
+}
+
+func TestGetargOutOfRange(t *testing.T) {
+	main := mustCompile(t, `.@r = callfunc("G", 1);`)
+	fn := mustCompileFunc(t, "G", `return getarg(5, 99);`)
+	funcs := map[string]*script.CompiledScript{"G": fn}
+	vm := newVMWithFuncs(t, main, funcs)
+	run(t, vm)
+	v, ok := vm.scopes.Get(".@r")
+	require.True(t, ok)
+	assert.Equal(t, int64(99), v.AsInt())
+}
+
+func TestSetarg(t *testing.T) {
+	main := mustCompile(t, `.@r = callfunc("M", 1);`)
+	fn := mustCompileFunc(t, "M", `setarg(0, 99); return getarg(0);`)
+	funcs := map[string]*script.CompiledScript{"M": fn}
+	vm := newVMWithFuncs(t, main, funcs)
+	run(t, vm)
+	v, ok := vm.scopes.Get(".@r")
+	require.True(t, ok)
+	assert.Equal(t, int64(99), v.AsInt())
+}
+
+func TestCallfuncMissing(t *testing.T) {
+	main := mustCompile(t, `.@r = callfunc("Nope");`)
+	vm := newVMWithFuncs(t, main, nil)
+	_, err := vm.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "callfunc: unknown function")
+}

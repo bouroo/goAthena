@@ -218,6 +218,24 @@ func (c *Compiler) compileCallSubStmt(cs *script.CallSubStmt) error {
 }
 
 func (c *Compiler) compileAssignStmt(a *script.AssignStmt) error {
+	// Array-element assignment: the VM's OpIndexSet pops name (top),
+	// idx, then value. Compile the RHS first (its value is at the
+	// bottom of the stack), then push the index, then push the name,
+	// then emit OpIndexSet. Only plain `=` is supported on array
+	// elements in Phase R0 (S1); compound assignment to arrays is
+	// not part of the rAthena-canonical NPC corpus.
+	if ix, ident, isArrayAssign := arrayAssignTarget(a.Lhs, a.Op); isArrayAssign {
+		if err := c.compileExpr(a.Rhs); err != nil {
+			return err
+		}
+		if err := c.compileExpr(ix.Index); err != nil {
+			return err
+		}
+		c.emit(script.OpStr, 0, ident.Name)
+		c.emit(script.OpIndexSet, 0, "")
+		return nil
+	}
+
 	if err := c.compileExpr(a.Rhs); err != nil {
 		return err
 	}
@@ -238,6 +256,24 @@ func (c *Compiler) compileAssignStmt(a *script.AssignStmt) error {
 	}
 	c.emit(op, 0, name)
 	return nil
+}
+
+// arrayAssignTarget returns (ix, ident, true) when the assignment LHS
+// is a plain `=` to an IdentExpr-indexed array. Anything else falls
+// through to the scalar assignment path.
+func arrayAssignTarget(lhs script.Expr, op string) (*script.IndexExpr, *script.IdentExpr, bool) {
+	if op != "=" {
+		return nil, nil, false
+	}
+	ix, ok := lhs.(*script.IndexExpr)
+	if !ok {
+		return nil, nil, false
+	}
+	ident, ok := ix.Target.(*script.IdentExpr)
+	if !ok {
+		return nil, nil, false
+	}
+	return ix, ident, true
 }
 
 // assignmentTargetName extracts the variable/array name used as the target

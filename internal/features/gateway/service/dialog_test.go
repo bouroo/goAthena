@@ -86,7 +86,7 @@ func TestDialogSession_MesAccumulatesAndNextFlushes(t *testing.T) {
 	const npcID uint32 = 0x1234abcd
 	buf := &bytes.Buffer{}
 	src := compileScript(t, `mes "Hello"; mes "World"; next;`)
-	session := NewDialogSession(src, npcID, "Test NPC", buf)
+	session := NewDialogSession(src, nil, npcID, "Test NPC", buf)
 
 	_, err := session.VM.Run(context.Background())
 	require.NoError(t, err)
@@ -110,7 +110,7 @@ func TestDialogSession_CloseFlushesAndEnds(t *testing.T) {
 	const npcID uint32 = 0xdeadbeef
 	buf := &bytes.Buffer{}
 	src := compileScript(t, `mes "Bye"; close;`)
-	session := NewDialogSession(src, npcID, "Test NPC", buf)
+	session := NewDialogSession(src, nil, npcID, "Test NPC", buf)
 	_, err := session.VM.Run(context.Background())
 	require.NoError(t, err)
 
@@ -131,7 +131,7 @@ func TestDialogSession_CloseWithoutPendingText(t *testing.T) {
 	const npcID uint32 = 7
 	buf := &bytes.Buffer{}
 	src := compileScript(t, `close;`)
-	session := NewDialogSession(src, npcID, "Test NPC", buf)
+	session := NewDialogSession(src, nil, npcID, "Test NPC", buf)
 	_, err := session.VM.Run(context.Background())
 	require.NoError(t, err)
 
@@ -148,7 +148,7 @@ func TestDialogSession_Close2OmitsFlush(t *testing.T) {
 	const npcID uint32 = 42
 	buf := &bytes.Buffer{}
 	src := compileScript(t, `mes "ignored"; close2;`)
-	session := NewDialogSession(src, npcID, "Test NPC", buf)
+	session := NewDialogSession(src, nil, npcID, "Test NPC", buf)
 	_, err := session.VM.Run(context.Background())
 	require.NoError(t, err)
 
@@ -166,7 +166,7 @@ func TestDialogSession_EndMarksDoneWithoutClosePacket(t *testing.T) {
 	const npcID uint32 = 99
 	buf := &bytes.Buffer{}
 	src := compileScript(t, `end;`)
-	session := NewDialogSession(src, npcID, "Test NPC", buf)
+	session := NewDialogSession(src, nil, npcID, "Test NPC", buf)
 	_, err := session.VM.Run(context.Background())
 	require.NoError(t, err)
 
@@ -181,7 +181,7 @@ func TestDialogSession_MenuEmitsColonSeparated(t *testing.T) {
 	const npcID uint32 = 0xabcd1234
 	buf := &bytes.Buffer{}
 	src := compileScript(t, `menu "Buy", L_Buy, "Sell", L_Sell, "Cancel", L_Cancel;`)
-	session := NewDialogSession(src, npcID, "Shop NPC", buf)
+	session := NewDialogSession(src, nil, npcID, "Shop NPC", buf)
 	_, err := session.VM.Run(context.Background())
 	require.NoError(t, err)
 
@@ -200,7 +200,7 @@ func TestDialogSession_SelectEmitsColonSeparated(t *testing.T) {
 	const npcID uint32 = 1
 	buf := &bytes.Buffer{}
 	src := compileScript(t, `select "Foo", L_Foo, "Bar", L_Bar, "Baz", L_Baz;`)
-	session := NewDialogSession(src, npcID, "Test NPC", buf)
+	session := NewDialogSession(src, nil, npcID, "Test NPC", buf)
 	_, err := session.VM.Run(context.Background())
 	require.NoError(t, err)
 
@@ -217,7 +217,7 @@ func TestDialogSession_NonDialogBuiltinsStillWork(t *testing.T) {
 	const npcID uint32 = 1
 	buf := &bytes.Buffer{}
 	src := compileScript(t, `.@x = 7;`)
-	session := NewDialogSession(src, npcID, "Test NPC", buf)
+	session := NewDialogSession(src, nil, npcID, "Test NPC", buf)
 	_, err := session.VM.Run(context.Background())
 	require.NoError(t, err)
 	got, ok := session.Scopes.Get(".@x")
@@ -231,7 +231,7 @@ func TestDialogSession_ResumeAfterNext(t *testing.T) {
 	const npcID uint32 = 0xfeedbeef
 	buf := &bytes.Buffer{}
 	src := compileScript(t, `mes "First"; next; mes "Second"; close;`)
-	session := NewDialogSession(src, npcID, "Test NPC", buf)
+	session := NewDialogSession(src, nil, npcID, "Test NPC", buf)
 
 	state, err := session.VM.Run(context.Background())
 	require.NoError(t, err)

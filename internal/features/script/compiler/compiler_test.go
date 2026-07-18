@@ -226,11 +226,14 @@ func TestCompileBlockStmt(t *testing.T) {
 
 func TestCompileArrayAssignment(t *testing.T) {
 	cs := mustCompile(t, `.@arr[0] = 42;`)
-	require.GreaterOrEqual(t, len(cs.Instructions), 3)
+	require.GreaterOrEqual(t, len(cs.Instructions), 4)
 	assert.Equal(t, script.OpInt, cs.Instructions[0].Op)
 	assert.Equal(t, int32(42), cs.Instructions[0].Operand)
-	assert.Equal(t, script.OpAssign, cs.Instructions[1].Op)
-	assert.Equal(t, ".@arr", cs.Instructions[1].Str)
+	assert.Equal(t, script.OpInt, cs.Instructions[1].Op)
+	assert.Equal(t, int32(0), cs.Instructions[1].Operand)
+	assert.Equal(t, script.OpStr, cs.Instructions[2].Op)
+	assert.Equal(t, ".@arr", cs.Instructions[2].Str)
+	assert.Equal(t, script.OpIndexSet, cs.Instructions[3].Op)
 }
 
 func TestCompileCompoundAssignment(t *testing.T) {

@@ -159,14 +159,31 @@ func (c *Compiler) compileCallExpr(e *script.CallExpr) error {
 }
 
 func (c *Compiler) compileIndexExpr(e *script.IndexExpr) error {
+	// Phase R0 (S1) array reads: when the array base is a simple
+	// IdentExpr, emit the array name as a string literal, compile
+	// the index, then emit OpBinary — which the VM interprets as
+	// the array-read opcode (pops name, pops idx, pushes the
+	// stored element). For non-identifier targets (nested array
+	// expressions, computed bases, etc.) fall back to the old
+	// target-on-stack behavior, which is a no-op on the VM today.
+	if ident, ok := e.Target.(*script.IdentExpr); ok {
+		c.emit(script.OpStr, 0, ident.Name)
+		if err := c.compileExpr(e.Index); err != nil {
+			return err
+		}
+		c.emit(script.OpBinary, 0, "")
+		return nil
+	}
+	// TODO(phase-r0-script-vm): handle non-IdentExpr IndexExpr targets
+	// (e.g. nested indexing, computed bases). For now emit the old
+	// target-then-index pattern, which leaves the operands on the
+	// stack and matches the previous no-op VM behavior.
 	if err := c.compileExpr(e.Target); err != nil {
 		return err
 	}
 	if err := c.compileExpr(e.Index); err != nil {
 		return err
 	}
-	// Array access is represented by OpBinary in this first cut; the VM
-	// will combine the variable reference and the index on the stack.
 	c.emit(script.OpBinary, 0, "")
 	return nil
 }
