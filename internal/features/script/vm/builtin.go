@@ -136,17 +136,15 @@ func builtinSet(_ context.Context, vm *VM, args []Value) (Value, error) {
 	return IntValue(0), nil
 }
 
-// builtinCallfunc is the placeholder for the callfunc builtin. The real
-// callfunc handling lives in VM.execCallfunc (called via the special
-// case in VM.callBuiltin) because it needs to switch the VM's script
-// pointer and run a nested execution loop, which the standard
-// collect-args / push-result contract cannot express.
-//
-// Keeping this registration here (so that BuiltinRegistry.Lookup finds
-// "callfunc") preserves backward compatibility for any external code
-// that introspects the registry.
+// builtinCallfunc is the registry fallback for the callfunc builtin.
+// In normal operation callfunc is handled directly by VM.execCallfunc
+// (dispatched from VM.execFunc before reaching the builtin registry),
+// because callfunc is a VM-level jump-based operation that switches
+// vm.script and pc. Reaching this function means the VM dispatch has
+// regressed and forgot to intercept "callfunc"; return an error so
+// the regression surfaces loudly instead of silently returning 0.
 func builtinCallfunc(_ context.Context, _ *VM, _ []Value) (Value, error) {
-	return IntValue(0), nil
+	return IntValue(0), fmt.Errorf("callfunc: handled by VM dispatch, registry fallback should be unreachable")
 }
 
 // builtinGetarg returns an argument passed to the current callfunc

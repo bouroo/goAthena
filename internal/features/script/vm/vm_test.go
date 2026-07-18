@@ -505,3 +505,49 @@ func TestCallfuncMissing(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "callfunc: unknown function")
 }
+
+func TestCallfuncPreservesPauseResume(t *testing.T) {
+	// Regression test for the Phase R0 callfunc stack-corruption bug:
+	// a callfunc'd function script that hits a pause (next, menu,
+	// select, sleep) must hand its return value back to the caller
+	// cleanly across the pause/resume boundary. The pre-fix
+	// implementation ran the function via a nested Step loop, which
+	// terminated on StateStop, captured a garbage value as the
+	// function's return value, and left the real return value on top
+	// of it once the caller resumed. This test exercises the exact
+	// scenario the bug corrupted.
+	mainSrc := `mes "A"; .@r = callfunc("F"); mes "B";`
+	fnSrc := `mes "X"; next; mes "Y"; return 42;`
+	main := mustCompile(t, mainSrc)
+	fn := mustCompileFunc(t, "F", fnSrc)
+	funcs := map[string]*script.CompiledScript{"F": fn}
+	vm := newVMWithFuncs(t, main, funcs)
+
+	// First Run: the caller's "A" message runs, then callfunc jumps
+	// into F where "X" runs and `next` pauses the VM. The script
+	// pointer must now point at F (proving the callfunc jump
+	// happened and the main loop is driving the function directly).
+	state, err := vm.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, StateStop, state)
+	assert.Equal(t, "F", vm.script.Name,
+		"after callfunc+next the VM should be executing inside F, got %q", vm.script.Name)
+
+	// Resume: F's "Y" runs, return 42 pushes 42 onto the operand
+	// stack, execReturn restores the caller's script pointer and pc.
+	// Back in the caller, .@r = callfunc("F") consumes the 42, "B"
+	// runs, and the script ends.
+	state, err = vm.Resume(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, StateEnd, state)
+
+	v, ok := vm.scopes.Get(".@r")
+	require.True(t, ok, ".@r must be set after resume")
+	assert.Equal(t, int64(42), v.AsInt(),
+		"callfunc return value must survive pause/resume; got %d", v.AsInt())
+
+	// The operand stack must be clean: no leftover garbage value from
+	// the pre-fix nested-loop implementation.
+	assert.Equal(t, 0, len(vm.stack),
+		"operand stack must be empty after script end; got len=%d", len(vm.stack))
+}

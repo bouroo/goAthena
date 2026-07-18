@@ -159,28 +159,20 @@ func (c *Compiler) compileCallExpr(e *script.CallExpr) error {
 }
 
 func (c *Compiler) compileIndexExpr(e *script.IndexExpr) error {
-	// Phase R0 (S1) array reads: when the array base is a simple
-	// IdentExpr, emit the array name as a string literal, compile
-	// the index, then emit OpBinary — which the VM interprets as
-	// the array-read opcode (pops name, pops idx, pushes the
-	// stored element). For non-identifier targets (nested array
-	// expressions, computed bases, etc.) fall back to the old
-	// target-on-stack behavior, which is a no-op on the VM today.
-	if ident, ok := e.Target.(*script.IdentExpr); ok {
-		c.emit(script.OpStr, 0, ident.Name)
-		if err := c.compileExpr(e.Index); err != nil {
-			return err
-		}
-		c.emit(script.OpBinary, 0, "")
-		return nil
+	// Phase R0 (S1) array reads: only a simple identifier is a valid
+	// array base. When the array base is a *script.IdentExpr, emit the
+	// array name as a string literal, compile the index, then emit
+	// OpBinary — which the VM interprets as the array-read opcode
+	// (pops name, pops idx, pushes the stored element). Nested or
+	// computed array bases are not supported: fail at compile time
+	// rather than emitting bytecode that the VM would misinterpret
+	// (the earlier OpBinary fallback left operands on the stack and
+	// corrupted subsequent expression evaluation).
+	ident, ok := e.Target.(*script.IdentExpr)
+	if !ok {
+		return fmt.Errorf("compile error: unsupported non-identifier array target %T", e.Target)
 	}
-	// TODO(phase-r0-script-vm): handle non-IdentExpr IndexExpr targets
-	// (e.g. nested indexing, computed bases). For now emit the old
-	// target-then-index pattern, which leaves the operands on the
-	// stack and matches the previous no-op VM behavior.
-	if err := c.compileExpr(e.Target); err != nil {
-		return err
-	}
+	c.emit(script.OpStr, 0, ident.Name)
 	if err := c.compileExpr(e.Index); err != nil {
 		return err
 	}

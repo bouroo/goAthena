@@ -208,6 +208,9 @@ func (vm *VM) dispatchTable() map[script.Opcode]func(context.Context, script.Ins
 }
 
 func (vm *VM) execFunc(ctx context.Context, instr script.Instruction) error {
+	if instr.Str == "callfunc" {
+		return vm.execCallfunc(ctx)
+	}
 	return vm.callBuiltin(ctx, instr.Str)
 }
 
@@ -417,16 +420,14 @@ func (vm *VM) execCallSub(_ context.Context, instr script.Instruction) error {
 
 // execReturn unwinds the callsub/callfunc stack. If a funcFrame is on
 // top (callfunc-return), the VM restores the caller's script pointer
-// and pc and captures the value on top of the operand stack as the
-// function's return value. If only the callsub stack has frames, it
-// pops that and resumes the caller. With no frames at all the script
-// ends. Any value left on the operand stack by `return <expr>;` is
-// preserved across the return so the caller can consume it.
+// and pc, truncates argFrames back to its saved length, and leaves
+// the value placed on the operand stack by `return <expr>;` in place
+// as the callfunc result for the caller's next instruction to
+// consume. If only the callsub stack has frames, it pops that and
+// resumes the caller. With no frames at all the script ends.
 func (vm *VM) execReturn(context.Context, script.Instruction) error {
 	// callfunc return takes priority: it restores the caller's
-	// script pointer and pc, pops the function's argFrame, and
-	// leaves the function's return value on the stack for the
-	// caller's runFunction to capture.
+	// script pointer and pc and pops the function's argFrame.
 	if len(vm.funcFrames) > 0 {
 		frame := vm.funcFrames[len(vm.funcFrames)-1]
 		vm.funcFrames = vm.funcFrames[:len(vm.funcFrames)-1]
@@ -504,12 +505,39 @@ func (vm *VM) doAssign(name string, op func(cur, rhs Value) Value) error {
 	return nil
 }
 
+// noResultBuiltins is the set of builtins whose return value is a
+// statement-only signal (always 0 / ""). They must not push a result
+// onto the operand stack, otherwise subsequent expressions like a
+// follow-up callfunc would mistake the leftover IntValue(0) for the
+// function-name argument. Builtins whose value IS consumed by the
+// caller (rand, getarg, etc.) are not in this set.
+var noResultBuiltins = map[string]bool{
+	"mes":       true,
+	"next":      true,
+	"close":     true,
+	"close2":    true,
+	"end":       true,
+	"menu":      true,
+	"select":    true,
+	"input":     true,
+	"set":       true,
+	"sleep":     true,
+	"warp":      true,
+	"savepoint": true,
+	"cutin":     true,
+	"getitem":   true,
+	"delitem":   true,
+	"zeny":      true,
+	"heal":      true,
+	"getmapxy":  true,
+}
+
 // callBuiltin invokes a registered builtin with the arguments currently on
-// the stack. The builtin's result is pushed back onto the stack.
+// the stack. Builtins in noResultBuiltins consume their arguments and
+// return no value (the operand stack is left as it was before the
+// arguments were pushed, minus the arguments). Other builtins push
+// their result back onto the stack.
 func (vm *VM) callBuiltin(ctx context.Context, name string) error {
-	if name == "callfunc" {
-		return vm.execCallfunc(ctx)
-	}
 	fn, ok := vm.builtins.Lookup(name)
 	if !ok {
 		return fmt.Errorf("unknown builtin %q", name)
@@ -519,19 +547,28 @@ func (vm *VM) callBuiltin(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	vm.push(res)
+	if !noResultBuiltins[name] {
+		vm.push(res)
+	}
 	return nil
 }
 
-// execCallfunc is a special-cased builtin because the callfunc result
-// is the value returned by the named function, which requires a
-// nested execution loop on a different CompiledScript — the standard
-// collect-args / call / push-result contract for builtins cannot
-// express it cleanly.
+// execCallfunc implements the `callfunc("name", args...)` builtin.
+// It is a jump-based VM-level operation (not a normal builtin): it
+// pushes a funcFrame saving the caller's script pointer, pc, and the
+// length of argFrames, swaps vm.script to the named function's
+// CompiledScript, resets pc to 0, and pushes args[1:] onto argFrames
+// so getarg/setarg can read/mutate them. The main Run loop then drives
+// the function directly, so any pause/resume boundary (next, menu,
+// select, sleep) inside the function is handled by the same state
+// machine that pauses the caller — no nested execution loop is used.
 //
-// args[0] is the function name (it was pushed onto the stack before
-// the callfunc opcode, matching how the compiler emits a callfunc
-// call); args[1:] are the arguments passed to the function.
+// execReturn restores the caller's script pointer, pc, and argFrames
+// length when a funcFrame is on top, leaving the value placed on the
+// operand stack by `return <expr>;` as the callfunc result for the
+// caller's `OpAssign` to consume.
+//
+// args[0] is the function name; args[1:] are forwarded to the function.
 func (vm *VM) execCallfunc(ctx context.Context) error {
 	args := vm.collectArgs()
 	if len(args) < 1 {
@@ -542,50 +579,15 @@ func (vm *VM) execCallfunc(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("callfunc: unknown function %q", name)
 	}
-	val, err := vm.runFunction(ctx, fn, args[1:])
-	if err != nil {
-		return err
-	}
-	vm.push(val)
-	return nil
-}
-
-// runFunction synchronously executes fn and returns its return value.
-// It pushes a funcFrame so that OpReturn can restore the caller's
-// script pointer/pc and pop the function's arg frame. The operand
-// stack is shared with the caller; the function's `return <expr>;`
-// leaves its value on the stack and runFunction captures it on
-// return. The args slice is pushed onto argFrames so getarg/setarg
-// can read/mutate it.
-func (vm *VM) runFunction(ctx context.Context, fn *script.CompiledScript, args []Value) (Value, error) {
-	priorArgFramesLen := len(vm.argFrames)
-	frame := funcFrame{
+	vm.funcFrames = append(vm.funcFrames, funcFrame{
 		priorScript:       vm.script,
 		priorPC:           vm.pc,
-		priorArgFramesLen: priorArgFramesLen,
-	}
-	vm.funcFrames = append(vm.funcFrames, frame)
-	vm.argFrames = append(vm.argFrames, args)
+		priorArgFramesLen: len(vm.argFrames),
+	})
+	vm.argFrames = append(vm.argFrames, args[1:])
 	vm.script = fn
 	vm.pc = 0
-
-	// While the function is running, argFrames has priorArgFramesLen+1
-	// entries (the function's args are on top). OpReturn inside the
-	// function pops that frame back down to priorArgFramesLen, which
-	// is how we detect "our return fired" without an extra flag.
-	for vm.state == StateRun && len(vm.argFrames) > priorArgFramesLen {
-		if _, err := vm.Step(ctx); err != nil {
-			return IntValue(0), err
-		}
-	}
-
-	// Capture (without popping) the function's return value left on
-	// the operand stack. execCallfunc pushes it after we return.
-	var rv Value
-	if len(vm.stack) > 0 {
-		rv = vm.stack[len(vm.stack)-1]
-	}
-	return rv, nil
+	return nil
 }
 
 // currentArgs returns the argument slice for the active callfunc
