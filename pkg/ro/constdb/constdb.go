@@ -61,7 +61,20 @@ func (r *Registry) Load(rd io.Reader) error {
 // non-existent import target is skipped silently (matching rAthena's
 // import-tmpl workflow); other I/O or parse errors are wrapped.
 func (r *Registry) LoadFile(path string) error {
+	return r.loadFile(path, map[string]bool{})
+}
+
+// loadFile reads a single const.yml, merges its Body, and recurses into
+// Footer.Imports. visited tracks files already loaded on this code path so a
+// cycle (A imports B imports A, or a file importing itself) is rejected with a
+// clear error instead of looping forever.
+func (r *Registry) loadFile(path string, visited map[string]bool) error {
 	clean := filepath.Clean(path)
+	if visited[clean] {
+		return fmt.Errorf("circular const_db import detected: %q", clean)
+	}
+	visited[clean] = true
+
 	f, err := os.Open(clean) // #nosec G304 -- path is operator-configured const.yml, not user input
 	if err != nil {
 		return fmt.Errorf("open const_db %q: %w", clean, err)
@@ -83,7 +96,7 @@ func (r *Registry) LoadFile(path string) error {
 	base := filepath.Dir(clean)
 	for _, ref := range imports {
 		target := resolveImportPath(base, ref)
-		if err := r.loadFileRecursive(target); err != nil {
+		if err := r.loadFileRecursive(target, visited); err != nil {
 			return err
 		}
 	}
@@ -106,13 +119,13 @@ func (r *Registry) loadBytes(data []byte, source string) error {
 	return r.mergeBody(body, source)
 }
 
-func (r *Registry) loadFileRecursive(path string) error {
+func (r *Registry) loadFileRecursive(path string, visited map[string]bool) error {
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	} else if err != nil {
 		return fmt.Errorf("stat const_db import %q: %w", path, err)
 	}
-	if err := r.LoadFile(path); err != nil {
+	if err := r.loadFile(path, visited); err != nil {
 		return fmt.Errorf("load const_db import %q: %w", path, err)
 	}
 	return nil
@@ -287,8 +300,8 @@ type errDuplicate string
 
 func (e errDuplicate) Error() string { return fmt.Sprintf("duplicate constant %q", string(e)) }
 func (e errDuplicate) Is(target error) bool {
-	_, ok := target.(errDuplicate)
-	return ok
+	t, ok := target.(errDuplicate)
+	return ok && (t == "" || e == t)
 }
 
 var errEmptyName = errors.New("constant entry with empty name")
@@ -358,6 +371,9 @@ func decodeInt64Value(node *yaml.Node) (int64, error) {
 	}
 	v, err := strconv.ParseInt(node.Value, 10, 64)
 	if err != nil {
+		if v2, err2 := strconv.ParseInt(node.Value, 0, 64); err2 == nil {
+			return v2, nil
+		}
 		return 0, fmt.Errorf("parse int %q: %w", node.Value, err)
 	}
 	return v, nil

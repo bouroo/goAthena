@@ -349,7 +349,6 @@ func TestErrInvalidValue_Unwrap(t *testing.T) {
 	if typed.name != "BAD" {
 		t.Errorf("typed.name = %q, want BAD", typed.name)
 	}
-
 }
 
 func TestLoad_HeaderKindWrong(t *testing.T) {
@@ -573,3 +572,124 @@ func LoadFileFromString(t *testing.T, in string) (*Registry, error) {
 
 // drainReader returns an io.Reader whose Read always returns io.EOF. Used to
 // verify Load surfaces decoder-side errors as wrapped parse errors.
+
+func TestLoadFile_SelfImport(t *testing.T) {
+	dir := t.TempDir()
+	main := validHeader + `Body:
+  - {Name: X, Value: 1}
+Footer:
+  Imports:
+    - Path: main.yml
+`
+	mainPath := filepath.Join(dir, "main.yml")
+	if err := os.WriteFile(mainPath, []byte(main), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := LoadFile(mainPath)
+	if err == nil {
+		t.Fatal("LoadFile() error = nil, want circular-import error")
+	}
+	if !strings.Contains(err.Error(), "circular const_db import detected") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "circular const_db import detected")
+	}
+}
+
+func TestLoadFile_CircularImport(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.yml")
+	bPath := filepath.Join(dir, "b.yml")
+
+	a := validHeader + `Body:
+  - {Name: FROM_A, Value: 1}
+Footer:
+  Imports:
+    - Path: b.yml
+`
+	b := validHeader + `Body:
+  - {Name: FROM_B, Value: 2}
+Footer:
+  Imports:
+    - Path: a.yml
+`
+	if err := os.WriteFile(aPath, []byte(a), 0o600); err != nil {
+		t.Fatalf("WriteFile a: %v", err)
+	}
+	if err := os.WriteFile(bPath, []byte(b), 0o600); err != nil {
+		t.Fatalf("WriteFile b: %v", err)
+	}
+	_, err := LoadFile(aPath)
+	if err == nil {
+		t.Fatal("LoadFile() error = nil, want circular-import error")
+	}
+	if !strings.Contains(err.Error(), "circular const_db import detected") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "circular const_db import detected")
+	}
+}
+
+func TestErrDuplicate_PreciseIs(t *testing.T) {
+	errA := errDuplicate("A")
+	errB := errDuplicate("B")
+	if errors.Is(errA, errB) {
+		t.Error(`errors.Is(errA, errB) = true, want false (precise matching)`)
+	}
+	if !errors.Is(errA, errA) {
+		t.Error("errors.Is(errA, errA) = false, want true")
+	}
+	if !errors.Is(errA, errDuplicate("")) {
+		t.Error(`errors.Is(errA, errDuplicate("")) = false, want true (wildcard)`)
+	}
+	if !errors.Is(errDuplicate("A"), errDuplicate("")) {
+		t.Error(`errors.Is(errDuplicate("A"), errDuplicate("")) = false, want true (wildcard)`)
+	}
+}
+
+func TestDecode_HexValue(t *testing.T) {
+	in := validHeader + `Body:
+  - {Name: HEX_FLAG, Value: 0x100}
+`
+	reg, err := LoadFileFromString(t, in)
+	if err != nil {
+		t.Fatalf("LoadFileFromString() error = %v", err)
+	}
+	got, ok := reg.Value("HEX_FLAG")
+	if !ok {
+		t.Fatal("Lookup(HEX_FLAG) not registered")
+	}
+	if got != 256 {
+		t.Errorf("Value(HEX_FLAG) = %d, want 256", got)
+	}
+}
+
+func TestDecode_BinaryValue(t *testing.T) {
+	in := validHeader + `Body:
+  - {Name: BIN_VAL, Value: 0b1010}
+`
+	reg, err := LoadFileFromString(t, in)
+	if err != nil {
+		t.Fatalf("LoadFileFromString() error = %v", err)
+	}
+	got, ok := reg.Value("BIN_VAL")
+	if !ok {
+		t.Fatal("Lookup(BIN_VAL) not registered")
+	}
+	if got != 10 {
+		t.Errorf("Value(BIN_VAL) = %d, want 10", got)
+	}
+}
+
+func TestDecode_OctalValue(t *testing.T) {
+	in := validHeader + `Body:
+  - {Name: OCT_VAL, Value: 0o17}
+`
+	reg, err := LoadFileFromString(t, in)
+	if err != nil {
+		t.Fatalf("LoadFileFromString() error = %v", err)
+	}
+	got, ok := reg.Value("OCT_VAL")
+	if !ok {
+		t.Fatal("Lookup(OCT_VAL) not registered")
+	}
+	if got != 15 {
+		t.Errorf("Value(OCT_VAL) = %d, want 15", got)
+	}
+}
