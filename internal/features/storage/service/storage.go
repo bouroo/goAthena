@@ -161,7 +161,7 @@ func (s *storageService) addOrUpdateStorageItem(ctx context.Context, charID uint
 	}
 
 	newItem := domain.StorageItem{
-		CharID:    charID,
+		AccountID: charID,
 		NameID:    nameID,
 		Amount:    amount,
 		Identify:  1,
@@ -190,7 +190,7 @@ func (s *storageService) depositItemWithoutValidation(ctx context.Context, charI
 	}
 
 	newItem := domain.StorageItem{
-		CharID:    charID,
+		AccountID: charID,
 		NameID:    uint32(inventoryItemID),
 		Amount:    amount,
 		Identify:  1,
@@ -233,7 +233,7 @@ func (s *storageService) WithdrawItem(ctx context.Context, charID uint32, storag
 		return fmt.Errorf("get storage item (id %d): %w", storageItemID, err)
 	}
 
-	if item.CharID != charID {
+	if item.AccountID != charID {
 		return fmt.Errorf("storage item %d does not belong to char %d", storageItemID, charID)
 	}
 

@@ -8,7 +8,7 @@ import (
 // One row of the rAthena `storage` table with fields matching the SQL schema.
 type StorageItem struct {
 	ID        uint64    // `id` — primary key
-	CharID    uint32    // `char_id` — owning character
+	AccountID uint32    // `account_id` — owning account (storage is account-scoped per rAthena)
 	NameID    uint32    // `nameid` — item_db.yml id
 	Amount    int32     // `amount` — stack count (must be positive)
 	Identify  byte      // `identify` — 1 = identified, 0 = unidentified

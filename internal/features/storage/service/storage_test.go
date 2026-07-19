@@ -182,10 +182,10 @@ func TestDepositItem_UpdateExisting(t *testing.T) {
 	}
 
 	existingStorageItem := storagedomain.StorageItem{
-		ID:     1,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        1,
+		AccountID: charID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
@@ -235,10 +235,10 @@ func TestWithdrawItem_Success(t *testing.T) {
 	lockKey := storagedomain.StorageLockKey(charID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: charID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	invItems := []storagedomain.InventoryItem{}
@@ -285,10 +285,10 @@ func TestWithdrawItem_InsufficientAmount(t *testing.T) {
 	lockKey := storagedomain.StorageLockKey(charID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: charID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
@@ -338,10 +338,10 @@ func TestWithdrawItem_InventoryFull(t *testing.T) {
 	lockKey := storagedomain.StorageLockKey(charID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: charID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	invItems := make([]storagedomain.InventoryItem, 100)
@@ -368,10 +368,10 @@ func TestWithdrawItem_DeleteFullAmount(t *testing.T) {
 	lockKey := storagedomain.StorageLockKey(charID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: charID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
@@ -396,10 +396,10 @@ func TestWithdrawItem_ItemExistsInInventory(t *testing.T) {
 	lockKey := storagedomain.StorageLockKey(charID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: charID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	invItems := make([]storagedomain.InventoryItem, 100)
@@ -491,10 +491,10 @@ func TestWithdrawItem_WrongOwner(t *testing.T) {
 	lockKey := storagedomain.StorageLockKey(charID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: 1002,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: 1002,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
@@ -564,10 +564,10 @@ func TestWithdrawItem_WithoutInventoryRepo(t *testing.T) {
 	lockKey := storagedomain.StorageLockKey(charID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: charID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)

@@ -35,13 +35,15 @@ func (h *grpcHandler) OpenStorage(ctx context.Context, req *zonev1.OpenStorageRe
 		return nil, status.Error(codes.InvalidArgument, "char_id must be > 0")
 	}
 
+	accountID := req.GetCharId()
+
 	h.logger.Debug().
-		Uint32("char_id", req.GetCharId()).
+		Uint32("account_id", accountID).
 		Msg("storage: OpenStorage called")
 
-	if err := h.svc.OpenStorage(ctx, req.GetCharId()); err != nil {
+	if err := h.svc.OpenStorage(ctx, accountID); err != nil {
 		h.logger.Error().Stack().Err(err).
-			Uint32("char_id", req.GetCharId()).
+			Uint32("account_id", accountID).
 			Msg("storage: OpenStorage failed")
 
 		return &zonev1.OpenStorageResponse{
@@ -51,7 +53,7 @@ func (h *grpcHandler) OpenStorage(ctx context.Context, req *zonev1.OpenStorageRe
 	}
 
 	h.logger.Debug().
-		Uint32("char_id", req.GetCharId()).
+		Uint32("account_id", accountID).
 		Msg("storage: OpenStorage processed")
 
 	return &zonev1.OpenStorageResponse{
@@ -75,15 +77,17 @@ func (h *grpcHandler) DepositItem(ctx context.Context, req *zonev1.DepositItemRe
 		return nil, status.Error(codes.InvalidArgument, "amount must be > 0")
 	}
 
+	accountID := req.GetCharId()
+
 	h.logger.Debug().
-		Uint32("char_id", req.GetCharId()).
+		Uint32("account_id", accountID).
 		Uint64("inventory_item_id", req.GetInventoryItemId()).
 		Int32("amount", req.GetAmount()).
 		Msg("storage: DepositItem called")
 
-	if err := h.svc.DepositItem(ctx, req.GetCharId(), req.GetInventoryItemId(), req.GetAmount()); err != nil {
+	if err := h.svc.DepositItem(ctx, accountID, req.GetInventoryItemId(), req.GetAmount()); err != nil {
 		h.logger.Error().Stack().Err(err).
-			Uint32("char_id", req.GetCharId()).
+			Uint32("account_id", accountID).
 			Uint64("inventory_item_id", req.GetInventoryItemId()).
 			Int32("amount", req.GetAmount()).
 			Msg("storage: DepositItem failed")
@@ -95,7 +99,7 @@ func (h *grpcHandler) DepositItem(ctx context.Context, req *zonev1.DepositItemRe
 	}
 
 	h.logger.Debug().
-		Uint32("char_id", req.GetCharId()).
+		Uint32("account_id", accountID).
 		Uint64("inventory_item_id", req.GetInventoryItemId()).
 		Int32("amount", req.GetAmount()).
 		Msg("storage: DepositItem processed")
@@ -121,15 +125,17 @@ func (h *grpcHandler) WithdrawItem(ctx context.Context, req *zonev1.WithdrawItem
 		return nil, status.Error(codes.InvalidArgument, "amount must be > 0")
 	}
 
+	accountID := req.GetCharId()
+
 	h.logger.Debug().
-		Uint32("char_id", req.GetCharId()).
+		Uint32("account_id", accountID).
 		Uint64("storage_item_id", req.GetStorageItemId()).
 		Int32("amount", req.GetAmount()).
 		Msg("storage: WithdrawItem called")
 
-	if err := h.svc.WithdrawItem(ctx, req.GetCharId(), req.GetStorageItemId(), req.GetAmount()); err != nil {
+	if err := h.svc.WithdrawItem(ctx, accountID, req.GetStorageItemId(), req.GetAmount()); err != nil {
 		h.logger.Error().Stack().Err(err).
-			Uint32("char_id", req.GetCharId()).
+			Uint32("account_id", accountID).
 			Uint64("storage_item_id", req.GetStorageItemId()).
 			Int32("amount", req.GetAmount()).
 			Msg("storage: WithdrawItem failed")
@@ -141,7 +147,7 @@ func (h *grpcHandler) WithdrawItem(ctx context.Context, req *zonev1.WithdrawItem
 	}
 
 	h.logger.Debug().
-		Uint32("char_id", req.GetCharId()).
+		Uint32("account_id", accountID).
 		Uint64("storage_item_id", req.GetStorageItemId()).
 		Int32("amount", req.GetAmount()).
 		Msg("storage: WithdrawItem processed")
@@ -161,13 +167,15 @@ func (h *grpcHandler) CloseStorage(ctx context.Context, req *zonev1.CloseStorage
 		return nil, status.Error(codes.InvalidArgument, "char_id must be > 0")
 	}
 
+	accountID := req.GetCharId()
+
 	h.logger.Debug().
-		Uint32("char_id", req.GetCharId()).
+		Uint32("account_id", accountID).
 		Msg("storage: CloseStorage called")
 
-	if err := h.svc.CloseStorage(ctx, req.GetCharId()); err != nil {
+	if err := h.svc.CloseStorage(ctx, accountID); err != nil {
 		h.logger.Error().Stack().Err(err).
-			Uint32("char_id", req.GetCharId()).
+			Uint32("account_id", accountID).
 			Msg("storage: CloseStorage failed")
 
 		return &zonev1.CloseStorageResponse{
@@ -177,7 +185,7 @@ func (h *grpcHandler) CloseStorage(ctx context.Context, req *zonev1.CloseStorage
 	}
 
 	h.logger.Debug().
-		Uint32("char_id", req.GetCharId()).
+		Uint32("account_id", accountID).
 		Msg("storage: CloseStorage processed")
 
 	return &zonev1.CloseStorageResponse{
