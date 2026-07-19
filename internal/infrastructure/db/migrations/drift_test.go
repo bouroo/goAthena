@@ -154,7 +154,7 @@ func TestDrift_RAthenaMainSQLVsGoAthenaMigrations(t *testing.T) {
 	// in rAthena's logs.sql, not main.sql) and is reported in
 	// ExtraTables. Bumps as D3 backfills more tables.
 	assert.GreaterOrEqual(t, report.TotalTablesImplemented, 37,
-		"goAthena implemented-table count fell below the Wave 3 baseline (33); D3 regression?")
+		"goAthena implemented-table count fell below the Wave 4 baseline (37); D3 regression?")
 
 	// THE GATE — any column drift on a shared table is a real
 	// regression. Log the offending details for diagnosis.
