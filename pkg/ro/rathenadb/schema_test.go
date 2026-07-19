@@ -110,3 +110,35 @@ CREATE TABLE IF NOT EXISTS ` + "`fresh`" + ` (
 	require.Len(t, tables, 1)
 	assert.Equal(t, "fresh", tables[0].Name)
 }
+
+func TestIndexKeywordCI_SucceedingBoundary(t *testing.T) {
+	t.Parallel()
+
+	// DEFAULT inside DEFAULT_VAL must NOT match — without the
+	// succeeding-boundary check the buggy implementation would
+	// return the position of DEFAULT inside DEFAULT_VAL.
+	assert.Equal(t, -1, indexKeywordCI("DEFAULT_VAL foo", "DEFAULT"),
+		"indexKeywordCI must not match a keyword that is a strict prefix of an identifier")
+
+	// Smoke test: a real DEFAULT with a following space still matches.
+	assert.Equal(t, 0, indexKeywordCI("DEFAULT '0'", "DEFAULT"))
+
+	// Succeeding boundary via end-of-string: a trailing keyword with
+	// nothing after it still matches.
+	assert.Equal(t, 4, indexKeywordCI("foo DEFAULT", "DEFAULT"))
+}
+
+func TestParseMainSQL_TableWithoutEngineClause(t *testing.T) {
+	t.Parallel()
+	src := `
+CREATE TABLE IF NOT EXISTS ` + "`legacy`" + ` (
+  ` + "`k`" + ` int(11) NOT NULL default '0'
+) DEFAULT CHARSET=utf8mb4;
+`
+	tables, err := ParseMainSQL(src)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	assert.Equal(t, "legacy", tables[0].Name)
+	require.Len(t, tables[0].Columns, 1)
+	assert.Equal(t, Column{Name: "k", Type: "int(11)", Nullable: false, Default: "'0'"}, tables[0].Columns[0])
+}

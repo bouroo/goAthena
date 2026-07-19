@@ -20,11 +20,14 @@ type Column struct {
 	Default  string // raw DEFAULT clause (quotes preserved), "" if absent
 }
 
-// createTablePattern matches a CREATE TABLE [IF NOT EXISTS] `name` ( ... ) ENGINE=...;
-// block. Non-greedy so the first closing ") ENGINE=" pair wins. Allows the
-// IF NOT EXISTS modifier; flags the case-insensitive flag for the keyword
-// (table name itself is always backticked).
-var createTablePattern = regexp.MustCompile(`(?is)create\s+table\s+(?:if\s+not\s+exists\s+)?` + "`([A-Za-z0-9_]+)`" + `\s*\((.*?)\)\s*engine\s*=`)
+// createTablePattern matches a CREATE TABLE [IF NOT EXISTS] `name` ( ... ) ...;
+// block. Anchors on the closing ")" of the column list followed by an
+// arbitrary table-options suffix (ENGINE=, DEFAULT CHARSET=, etc.) and a
+// terminating semicolon, so it is robust to DDL that omits ENGINE or uses
+// other table options. Non-greedy so the first ") ... ;" pair wins.
+// Flags (?is) enable case-insensitive matching for the keyword; table
+// and column names are always backticked.
+var createTablePattern = regexp.MustCompile(`(?is)create\s+table\s+(?:if\s+not\s+exists\s+)?` + "`([A-Za-z0-9_]+)`" + `\s*\((.*?)\)\s*[^)]*?;`)
 
 // ParseMainSQL parses a rAthena main.sql document and returns the tables
 // declared via CREATE TABLE IF NOT EXISTS. Comments, INSERT statements,
@@ -81,9 +84,9 @@ func stripLineComments(src string) string {
 var constraintKeywordRe = regexp.MustCompile(`(?i)^\s*(primary\s+key|key|unique\s+key|fulltext\s+key|fulltext|spatial\s+key|spatial|constraint|foreign\s+key|index)\b`)
 
 // parseColumns extracts column definitions from the body of a CREATE
-// TABLE block (the text between the opening "(" and the closing
-// ") ENGINE="). Each column occupies one logical line; constraint
-// directives (PRIMARY KEY, KEY, etc.) are skipped.
+// TABLE block (the text between the opening "(" and the closing ")").
+// Each column occupies one logical line; constraint directives
+// (PRIMARY KEY, KEY, etc.) are skipped.
 func parseColumns(body string) []Column {
 	out := make([]Column, 0, 16)
 	for raw := range strings.SplitSeq(body, "\n") {
@@ -193,14 +196,14 @@ func peelNullability(rest string) (string, bool) {
 	}
 	if strings.HasSuffix(upper, "NULL") && !strings.HasSuffix(upper, "NOT NULL") {
 		cut := len(rest) - len("NULL")
-		// Make sure we are not chopping a keyword like "int(11) unsigned null"
-		// where the "null" is actually the column nullability marker.
-		// Verify the preceding character is whitespace.
-		before := strings.TrimRight(rest[:cut], " ")
-		if before != "" {
-			last := before[len(before)-1]
-			if last == ' ' || last == '\t' {
-				return before, true
+		if cut > 0 {
+			// Check the character immediately preceding the NULL
+			// keyword in the ORIGINAL rest string — do not trim first,
+			// because trimming trailing spaces would always make the
+			// boundary check fail.
+			prev := rest[cut-1]
+			if prev == ' ' || prev == '\t' {
+				return strings.TrimRight(rest[:cut], " \t"), true
 			}
 		}
 	}
@@ -208,8 +211,12 @@ func peelNullability(rest string) (string, bool) {
 }
 
 // indexKeywordCI returns the index of kw inside s (case-insensitive) at
-// a word boundary (preceded by whitespace, beginning of string, or
-// opening paren). Returns -1 if not found.
+// a word boundary — preceded by whitespace, beginning of string, or
+// opening paren, AND succeeded by whitespace, end of string, closing
+// paren, comma, semicolon, or any non-identifier character. The
+// succeeding-boundary check prevents false-positive matches inside
+// identifiers that contain a keyword as a prefix substring (e.g.,
+// DEFAULT inside DEFAULT_VAL). Returns -1 if not found.
 func indexKeywordCI(s, kw string) int {
 	upper := strings.ToUpper(s)
 	kwU := strings.ToUpper(kw)
@@ -220,14 +227,31 @@ func indexKeywordCI(s, kw string) int {
 			return -1
 		}
 		i += from
-		if i == 0 {
-			return i
+
+		// Preceding boundary: at start of string, or after
+		// whitespace/paren.
+		if i > 0 {
+			prev := s[i-1]
+			if prev != ' ' && prev != '\t' && prev != '(' {
+				from = i + 1
+				continue
+			}
 		}
-		prev := s[i-1]
-		if prev == ' ' || prev == '\t' || prev == '(' {
-			return i
+
+		// Succeeding boundary: at end of string, or before any
+		// character that cannot continue an identifier.
+		if i+len(kw) < len(s) {
+			next := s[i+len(kw)]
+			if (next >= 'A' && next <= 'Z') ||
+				(next >= 'a' && next <= 'z') ||
+				(next >= '0' && next <= '9') ||
+				next == '_' {
+				from = i + 1
+				continue
+			}
 		}
-		from = i + 1
+
+		return i
 	}
 }
 

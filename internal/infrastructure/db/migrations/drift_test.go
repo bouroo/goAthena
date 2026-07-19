@@ -187,8 +187,12 @@ func TestDrift_RAthenaMainSQLVsGoAthenaMigrations(t *testing.T) {
 // ALTER TABLE ... MODIFY captures along with the type. Mirrors
 // pkg/ro/rathenadb.parseColumnLine's keyword-peeling order so the
 // resulting Type matches what ParseMainSQL produces for the same column.
+// Keyword order matters: DEFAULT must be checked BEFORE NULL / NOT NULL
+// because a DEFAULT value can itself contain the word NULL in quotes
+// (e.g., DEFAULT 'NULL'); checking NULL first would mis-strip the
+// DEFAULT clause at the inner 'NULL' boundary.
 func stripModifiers(s string) string {
-	for _, kw := range []string{"NOT NULL", "NULL", "DEFAULT"} {
+	for _, kw := range []string{"DEFAULT", "NOT NULL", "NULL"} {
 		if i := strings.Index(strings.ToUpper(s), " "+kw); i >= 0 {
 			s = strings.TrimSpace(s[:i])
 		}
