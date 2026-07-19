@@ -291,6 +291,31 @@ func TestValidate_AcceptsValidConfig(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 }
 
+// TestValidate_GatewayPacketverMinGreaterThanMax verifies the gtefield
+// cross-field tag added in response to Gemini PR #88 review comment 1:
+// PacketverMax must be >= PacketverMin.
+func TestValidate_GatewayPacketverMinGreaterThanMax(t *testing.T) {
+	cfg := validConfig()
+	cfg.Gateway.PacketverMin = 20200000
+	cfg.Gateway.PacketverMax = 20150000 // strictly < min → validator must reject
+
+	err := cfg.Validate()
+	require.Error(t, err, "PacketverMax < PacketverMin must fail validation")
+	require.Contains(t, err.Error(), "PacketverMax",
+		"error should mention the offending field, got: %v", err)
+}
+
+// TestValidate_GatewayPacketverMinEqualMax documents that the boundary case
+// (Min == Max, single allowed version) is accepted by the gtefield
+// comparison.
+func TestValidate_GatewayPacketverMinEqualMax(t *testing.T) {
+	cfg := validConfig()
+	cfg.Gateway.PacketverMin = 20250604
+	cfg.Gateway.PacketverMax = 20250604
+
+	require.NoError(t, cfg.Validate())
+}
+
 func TestDBConnString_MariaDB(t *testing.T) {
 	cfg := validConfig()
 	cfg.DB.Driver = "mariadb"

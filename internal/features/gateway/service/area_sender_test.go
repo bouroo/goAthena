@@ -66,7 +66,7 @@ func TestDispatchHandler_OnEnter_FiresAreaSender(t *testing.T) {
 		},
 	}
 
-	h := NewDispatchHandler(identity, zone, 20250604,
+	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
 		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
 	area := &fakeAreaSender{}
 	h.SetAreaSender(area)
@@ -116,7 +116,7 @@ func TestDispatchHandler_OnEnter_NoAreaSender_NoPanic(t *testing.T) {
 			return nil, status.Error(codes.Unavailable, "identity down")
 		},
 	}
-	h := NewDispatchHandler(identity, zone, 20250604,
+	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
 		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
 	// Deliberately do NOT call SetAreaSender — the field stays at the
 	// zero value (nil interface).

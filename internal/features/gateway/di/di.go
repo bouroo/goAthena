@@ -289,6 +289,8 @@ func buildDispatchHandler(
 		identityClient,
 		zoneClient,
 		cfg.Gateway.Packetver,
+		cfg.Gateway.PacketverMin,
+		cfg.Gateway.PacketverMax,
 		logger,
 		cfg.Zone.DefaultMap,
 		zoneIP,
