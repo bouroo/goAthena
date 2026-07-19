@@ -139,7 +139,7 @@ type GatewayConfig struct {
 	// PacketverMax is the maximum client version the gateway accepts for
 	// per-session PACKETVER selection. A CA_LOGIN reporting a higher version
 	// falls back to Packetver. See PacketverMin for the omitempty rationale.
-	PacketverMax int    `mapstructure:"packetver_max" yaml:"packetver_max" env:"GATEWAY_PACKETVER_MAX" validate:"omitempty,min=20000000,max=20260000"`
+	PacketverMax int    `mapstructure:"packetver_max" yaml:"packetver_max" env:"GATEWAY_PACKETVER_MAX" validate:"omitempty,min=20000000,max=20260000,gtefield=PacketverMin"`
 	IdentityAddr string `mapstructure:"identity_addr" yaml:"identity_addr" env:"GATEWAY_IDENTITY_ADDR" validate:"required"`
 	// ZoneAddr is the gRPC endpoint of the zone service (DEL-03). The
 	// gateway forwards decoded map-server packets (CZ_ENTER,

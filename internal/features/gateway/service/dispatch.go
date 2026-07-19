@@ -409,11 +409,19 @@ func (h *DispatchHandler) handleCALogin(ctx context.Context, conn *domain.Connec
 	// (the config default remains authoritative until N2.1 lands the
 	// proper exe-version → PACKETVER translation table).
 	clientVer := req.Version
+	// N2 followup: handle the degenerate (min > max) window explicitly. The
+	// config-time gtefield validator prevents the typo case in production,
+	// but this handler must remain safe if loaded from a path that bypasses
+	// validation (unit tests, embed.FS partial configs, etc.). When the
+	// window is inverted we always fall back to the default — both skip the
+	// heuristic AND suppress the (now-Debug) warning, since neither
+	// path carries useful operator information in that case.
+	windowValid := h.packetverMin <= h.packetverMax
 	switch {
-	case clientVer != 0 && clientVer >= h.packetverMin && clientVer <= h.packetverMax:
+	case windowValid && clientVer != 0 && clientVer >= h.packetverMin && clientVer <= h.packetverMax:
 		conn.Packetver = clientVer
 		if conn.Packetver != h.defaultPacketver {
-			h.logger.Warn().
+			h.logger.Debug().
 				Uint64("conn", conn.ID).
 				Str("user", req.Username).
 				Uint32("client_version", clientVer).
@@ -422,11 +430,11 @@ func (h *DispatchHandler) handleCALogin(ctx context.Context, conn *domain.Connec
 		}
 	default:
 		conn.Packetver = h.defaultPacketver
-		if clientVer != 0 {
+		if windowValid && clientVer != 0 {
 			// Outside-window case: client sent a version but it's out
-			// of range. Warn so an operator chasing a misconfigured
-			// min/max can spot it in the logs.
-			h.logger.Warn().
+			// of range. Demoted to Debug so steady-state traffic is not
+			// noisy — operators can opt into observing via log level.
+			h.logger.Debug().
 				Uint64("conn", conn.ID).
 				Str("user", req.Username).
 				Uint32("client_version", clientVer).

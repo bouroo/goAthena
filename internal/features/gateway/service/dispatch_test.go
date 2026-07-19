@@ -813,7 +813,7 @@ func TestDispatchHandler_CALogin_ClientVersionZero_FallsBackToDefault(t *testing
 // zerolog.TestWriter (which only captures the level above Disabled for the
 // caller-supplied writer — Warn is level 4 above Trace, so Disabled+TestWriter
 // would suppress it).
-func TestDispatchHandler_CALogin_ClientVersionOutsideWindow_FallsBackAndWarns(t *testing.T) {
+func TestDispatchHandler_CALogin_ClientVersionOutsideWindow_FallsBackAndDebugLogs(t *testing.T) {
 	const defaultPacketver = 20250604
 	const outOfWindow uint32 = 1 // < packetverMin (20000000)
 
@@ -831,7 +831,10 @@ func TestDispatchHandler_CALogin_ClientVersionOutsideWindow_FallsBackAndWarns(t 
 		},
 	}
 	var logBuf bytes.Buffer
-	logger := zerolog.New(&logBuf).Level(zerolog.WarnLevel)
+	// N2 followup: the out-of-window notice was demoted from Warn to Debug
+	// (Gemini PR #88 review). Capture at DebugLevel so the line is visible
+	// to this test while still proving steady-state traffic stays quiet.
+	logger := zerolog.New(&logBuf).Level(zerolog.DebugLevel)
 	h := NewDispatchHandler(fake, nil, defaultPacketver, 20000000, 20260000,
 		logger, "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
 
@@ -846,11 +849,64 @@ func TestDispatchHandler_CALogin_ClientVersionOutsideWindow_FallsBackAndWarns(t 
 		t.Errorf("AuthenticateRequest.Packetver = %v, want %d", captured, defaultPacketver)
 	}
 	logLine := logBuf.String()
-	if !strings.Contains(logLine, `"level":"warn"`) {
-		t.Errorf("expected a warn-level log, got %q", logLine)
+	if !strings.Contains(logLine, `"level":"debug"`) {
+		t.Errorf("expected a debug-level log, got %q", logLine)
 	}
 	if !strings.Contains(logLine, "outside supported window") {
 		t.Errorf("expected 'outside supported window' message, got %q", logLine)
+	}
+	if strings.Contains(logLine, `"level":"warn"`) {
+		t.Errorf("steady-state WARN log is pollutiing; expected only debug, got %q", logLine)
+	}
+}
+
+// TestDispatchHandler_CALogin_InvertedWindow_AlwaysFallsBack covers Gemini
+// PR #88 review comment 3: when packetverMin > packetverMax (degenerate
+// window), the dispatch handler must fall back to the default for every
+// connection AND skip the heuristic-mismatch log line entirely — no warn
+// per successful connection.
+func TestDispatchHandler_CALogin_InvertedWindow_AlwaysFallsBack(t *testing.T) {
+	const defaultPacketver = 20250604
+	const inWindow uint32 = 20180000 // would have matched under a valid window
+
+	var captured *identityv1.AuthenticateRequest
+	conn := &domain.ConnectionInfo{ID: 1, RemoteIP: "203.0.113.7:54321"}
+	fake := &fakeIdentityClient{
+		authenticateFn: func(_ context.Context, req *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error) {
+			captured = req
+			return &identityv1.AuthenticateResponse{
+				Result:    identityv1.AuthResult_AUTH_RESULT_OK,
+				AccountId: 1,
+				LoginId1:  1,
+				LoginId2:  1,
+			}, nil
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := zerolog.New(&logBuf).Level(zerolog.DebugLevel)
+	// Deliberately inverted window (min > max). The config-time
+	// gtefield validator prevents this from production, but the handler
+	// must remain robust if config is loaded via a path that bypasses
+	// validation.
+	h := NewDispatchHandler(fake, nil, defaultPacketver, 20260000, 20000000,
+		logger, "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+
+	frame := buildCALogin(t, "alice", "pw", inWindow)
+	if err := h.HandlePacket(context.Background(), conn, &bufResponder{}, packet.HeaderCALOGIN, frame); err != nil {
+		t.Fatalf("HandlePacket err = %v", err)
+	}
+	if conn.Packetver != defaultPacketver {
+		t.Errorf("conn.Packetver = %d, want %d (inverted window must always fall back)", conn.Packetver, defaultPacketver)
+	}
+	if captured == nil || captured.Packetver != defaultPacketver {
+		t.Errorf("AuthenticateRequest.Packetver = %v, want %d", captured, defaultPacketver)
+	}
+	logLine := logBuf.String()
+	if strings.Contains(logLine, "outside supported window") {
+		t.Errorf("inverted-window case must skip the out-of-window log, got %q", logLine)
+	}
+	if strings.Contains(logLine, "heuristic (N2)") {
+		t.Errorf("inverted-window case must skip the heuristic-mismatch log, got %q", logLine)
 	}
 }
 
