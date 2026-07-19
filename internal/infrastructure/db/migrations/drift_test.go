@@ -139,7 +139,7 @@ func TestDrift_RAthenaMainSQLVsGoAthenaMigrations(t *testing.T) {
 	assert.Equal(t, 56, report.TotalTablesExpected,
 		"rAthena main.sql table count drifted from the R0 baseline (56); re-baseline the drift gate")
 
-	// goAthena implements 33 rAthena tables today. R0 Wave 1 set the
+	// goAthena implements 37 rAthena tables today. R0 Wave 1 set the
 	// baseline at 13: acc_reg_num, acc_reg_str, cart_inventory, char,
 	// char_reg_num, char_reg_str, global_acc_reg_num, global_acc_reg_str,
 	// inventory, ipbanlist, login, mapreg, storage. R0 Wave 2 (D3
@@ -149,11 +149,12 @@ func TestDrift_RAthenaMainSQLVsGoAthenaMigrations(t *testing.T) {
 	// 13 more: friends, guild, guild_alliance, guild_castle,
 	// guild_expulsion, guild_member, guild_position, guild_skill,
 	// guild_storage, guild_storage_log, memo, party, party_bookings.
-	// loginlog is goAthena-specific (lives in rAthena's logs.sql, not
-	// main.sql) and is reported in ExtraTables. Bumps as D3 backfills
-	// more tables.
-	assert.GreaterOrEqual(t, report.TotalTablesImplemented, 33,
-		"goAthena implemented-table count fell below the Wave 3 baseline (33); D3 regression?")
+	// R0 Wave 4 (D3 migration 000008) added 4 more: auction, mail,
+	// mail_attachments, quest. loginlog is goAthena-specific (lives
+	// in rAthena's logs.sql, not main.sql) and is reported in
+	// ExtraTables. Bumps as D3 backfills more tables.
+	assert.GreaterOrEqual(t, report.TotalTablesImplemented, 37,
+		"goAthena implemented-table count fell below the Wave 4 baseline (37); D3 regression?")
 
 	// THE GATE — any column drift on a shared table is a real
 	// regression. Log the offending details for diagnosis.
