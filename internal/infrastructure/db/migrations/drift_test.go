@@ -139,12 +139,13 @@ func TestDrift_RAthenaMainSQLVsGoAthenaMigrations(t *testing.T) {
 	assert.Equal(t, 56, report.TotalTablesExpected,
 		"rAthena main.sql table count drifted from the R0 baseline (56); re-baseline the drift gate")
 
-	// goAthena implements 6 rAthena tables today (cart_inventory, char,
-	// inventory, ipbanlist, login, storage). loginlog is goAthena-specific
-	// (lives in rAthena's logs.sql, not main.sql) and is reported in
-	// ExtraTables. Bumps as D3 backfills more tables.
-	assert.GreaterOrEqual(t, report.TotalTablesImplemented, 6,
-		"goAthena implemented-table count fell below the R0 baseline (6); D3 regression?")
+	// goAthena implements 13 rAthena tables today (acc_reg_num, acc_reg_str,
+	// cart_inventory, char, char_reg_num, char_reg_str, global_acc_reg_num,
+	// global_acc_reg_str, inventory, ipbanlist, login, mapreg, storage).
+	// loginlog is goAthena-specific (lives in rAthena's logs.sql, not main.sql)
+	// and is reported in ExtraTables. Bumps as D3 backfills more tables.
+	assert.GreaterOrEqual(t, report.TotalTablesImplemented, 13,
+		"goAthena implemented-table count fell below the R0 baseline (13); D3 regression?")
 
 	// THE GATE — any column drift on a shared table is a real
 	// regression. Log the offending details for diagnosis.
