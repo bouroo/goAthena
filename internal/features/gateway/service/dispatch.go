@@ -79,10 +79,20 @@ const maxCharListCount = 255
 // CZ_REQUEST_MOVE log-only stub that the zone Move RPC will consume in
 // M4+.
 type DispatchHandler struct {
-	identity  identityv1.IdentityServiceClient
-	zone      zonev1.ZoneServiceClient
-	packetver uint32
-	logger    zerolog.Logger
+	identity identityv1.IdentityServiceClient
+	zone     zonev1.ZoneServiceClient
+	// defaultPacketver is the operator-chosen PACKETVER fallback used
+	// when a CA_LOGIN does not supply a usable client version (zero or
+	// outside [packetverMin, packetverMax]). See the N2 plan.
+	defaultPacketver uint32
+	// packetverMin and packetverMax define the supported client-version
+	// window. A version outside the window still triggers a Warn but is
+	// treated as "fall back to defaultPacketver". Operators who set
+	// packetverMin > packetverMax get the safe degenerate behavior
+	// (every client → default).
+	packetverMin uint32
+	packetverMax uint32
+	logger       zerolog.Logger
 	// registry is the gateway-wide map-scoped session index. It is
 	// populated by handleCZEnter on a successful map enter and read
 	// by the future NATS broadcast subscriber (a later workstream
@@ -179,6 +189,8 @@ func NewDispatchHandler(
 	identity identityv1.IdentityServiceClient,
 	zone zonev1.ZoneServiceClient,
 	packetver int,
+	packetverMin int,
+	packetverMax int,
 	logger zerolog.Logger,
 	defaultMap string,
 	zoneIP uint32,
@@ -188,17 +200,20 @@ func NewDispatchHandler(
 	scriptSet *scriptpkg.CompiledScriptSet,
 ) *DispatchHandler {
 	return &DispatchHandler{
-		identity:     identity,
-		zone:         zone,
-		packetver:    uint32(packetver), //nolint:gosec // validated upstream by config.min/max=20260000
-		logger:       logger.With().Str("component", "gateway.dispatch").Logger(),
-		defaultMap:   defaultMap,
-		zoneIP:       zoneIP,
-		zonePort:     zonePort,
-		registry:     registry,
-		mobRegistry:  mobs,
-		scriptSet:    scriptSet,
-		respawnDelay: 5 * time.Second,
+		identity: identity,
+		zone:     zone,
+		//nolint:gosec // validated upstream by config.min/max=20260000
+		defaultPacketver: uint32(packetver),
+		packetverMin:     uint32(packetverMin), //nolint:gosec // validated upstream by config.min/max=20260000
+		packetverMax:     uint32(packetverMax), //nolint:gosec // validated upstream by config.min/max=20260000
+		logger:           logger.With().Str("component", "gateway.dispatch").Logger(),
+		defaultMap:       defaultMap,
+		zoneIP:           zoneIP,
+		zonePort:         zonePort,
+		registry:         registry,
+		mobRegistry:      mobs,
+		scriptSet:        scriptSet,
+		respawnDelay:     5 * time.Second,
 		damageRoll: func(low, high int32) int32 {
 			if low >= high {
 				return low
@@ -386,11 +401,47 @@ func (h *DispatchHandler) handleCALogin(ctx context.Context, conn *domain.Connec
 		return nil
 	}
 
+	// N2: select per-session PACKETVER. The CA_LOGIN Version field is
+	// the client exe version (see N2 plan §1) — for N2 we treat it as a
+	// heuristic and fall back to defaultPacketver whenever it is zero or
+	// outside the [packetverMin, packetverMax] window. A heuristic
+	// mismatch against the operator default is warned but not rejected
+	// (the config default remains authoritative until N2.1 lands the
+	// proper exe-version → PACKETVER translation table).
+	clientVer := req.Version
+	switch {
+	case clientVer != 0 && clientVer >= h.packetverMin && clientVer <= h.packetverMax:
+		conn.Packetver = clientVer
+		if conn.Packetver != h.defaultPacketver {
+			h.logger.Warn().
+				Uint64("conn", conn.ID).
+				Str("user", req.Username).
+				Uint32("client_version", clientVer).
+				Uint32("default_packetver", h.defaultPacketver).
+				Msg("CA_LOGIN client version != configured PACKETVER; using client version as a heuristic (N2)")
+		}
+	default:
+		conn.Packetver = h.defaultPacketver
+		if clientVer != 0 {
+			// Outside-window case: client sent a version but it's out
+			// of range. Warn so an operator chasing a misconfigured
+			// min/max can spot it in the logs.
+			h.logger.Warn().
+				Uint64("conn", conn.ID).
+				Str("user", req.Username).
+				Uint32("client_version", clientVer).
+				Uint32("min", h.packetverMin).
+				Uint32("max", h.packetverMax).
+				Uint32("default_packetver", h.defaultPacketver).
+				Msg("CA_LOGIN client version outside supported window; falling back to default PACKETVER")
+		}
+	}
+
 	authReq := &identityv1.AuthenticateRequest{
 		Username:   req.Username,
 		Password:   []byte(req.Password),
 		ClientType: uint32(req.ClientType),
-		Packetver:  h.packetver,
+		Packetver:  conn.Packetver,
 		ClientIp:   splitHost(conn.RemoteIP),
 		Method:     identityv1.AuthMethod_AUTH_METHOD_PASSWORD,
 	}
@@ -705,7 +756,7 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn *domain.Connec
 		LoginId1:   uint64(req.AuthCode),
 		ClientTick: req.ClientTime,
 		Sex:        sexString(req.Sex),
-		Packetver:  h.packetver,
+		Packetver:  conn.Packetver,
 		ClientIp:   splitHost(conn.RemoteIP),
 	}
 

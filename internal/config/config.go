@@ -121,10 +121,26 @@ type OTelConfig struct {
 // a new TCP connection to after CH_SELECT_CHAR. Defaults to "localhost:5121"
 // (the Thai Classic map port).
 type GatewayConfig struct {
-	TCP          TCPConfig `mapstructure:"tcp" yaml:"tcp" validate:"required"`
-	WS           WSConfig  `mapstructure:"ws" yaml:"ws" validate:"required"`
-	Packetver    int       `mapstructure:"packetver" yaml:"packetver" env:"GATEWAY_PACKETVER" validate:"min=20000000,max=20260000"`
-	IdentityAddr string    `mapstructure:"identity_addr" yaml:"identity_addr" env:"GATEWAY_IDENTITY_ADDR" validate:"required"`
+	TCP TCPConfig `mapstructure:"tcp" yaml:"tcp" validate:"required"`
+	WS  WSConfig  `mapstructure:"ws" yaml:"ws" validate:"required"`
+	// Packetver is the operator-chosen default PACKETVER. It is used as the
+	// fallback when a CA_LOGIN does not supply a usable client version (zero
+	// or outside [PacketverMin, PacketverMax]); see the N2 plan in
+	// .agents/plans/rathena-compat-roadmap/subplans/n2-per-session-packetver.md.
+	Packetver int `mapstructure:"packetver" yaml:"packetver" env:"GATEWAY_PACKETVER" validate:"min=20000000,max=20260000"`
+	// PacketverMin is the minimum client version the gateway accepts for
+	// per-session PACKETVER selection. A CA_LOGIN reporting a lower version
+	// falls back to Packetver.
+	//
+	// `omitempty` lets partial Config values used by unit tests (which
+	// bypass Load and so never receive viper defaults) skip range checks
+	// when unset. viper's setDefaults() still seeds 20000000 in production.
+	PacketverMin int `mapstructure:"packetver_min" yaml:"packetver_min" env:"GATEWAY_PACKETVER_MIN" validate:"omitempty,min=20000000,max=20260000"`
+	// PacketverMax is the maximum client version the gateway accepts for
+	// per-session PACKETVER selection. A CA_LOGIN reporting a higher version
+	// falls back to Packetver. See PacketverMin for the omitempty rationale.
+	PacketverMax int    `mapstructure:"packetver_max" yaml:"packetver_max" env:"GATEWAY_PACKETVER_MAX" validate:"omitempty,min=20000000,max=20260000"`
+	IdentityAddr string `mapstructure:"identity_addr" yaml:"identity_addr" env:"GATEWAY_IDENTITY_ADDR" validate:"required"`
 	// ZoneAddr is the gRPC endpoint of the zone service (DEL-03). The
 	// gateway forwards decoded map-server packets (CZ_ENTER,
 	// CZ_REQUEST_MOVE) here.
@@ -407,6 +423,8 @@ func setDefaults(v *viper.Viper) {
 		"gateway.ws.path":            "/ws/",
 		"gateway.ws.allowed_origins": []string{},
 		"gateway.packetver":          20250604,
+		"gateway.packetver_min":      20000000,
+		"gateway.packetver_max":      20260000,
 		"gateway.identity_addr":      "localhost:50051",
 		"gateway.zone_addr":          "localhost:50052",
 		"gateway.map_addr":           "localhost:5121",
@@ -491,6 +509,8 @@ func leafBindings() []leafBinding {
 		{"gateway.ws.path", "GATEWAY_WS_PATH"},
 		{"gateway.ws.allowed_origins", "GATEWAY_WS_ALLOWED_ORIGINS"},
 		{"gateway.packetver", "GATEWAY_PACKETVER"},
+		{"gateway.packetver_min", "GATEWAY_PACKETVER_MIN"},
+		{"gateway.packetver_max", "GATEWAY_PACKETVER_MAX"},
 		{"gateway.identity_addr", "GATEWAY_IDENTITY_ADDR"},
 		{"gateway.zone_addr", "GATEWAY_ZONE_ADDR"},
 		{"gateway.map_addr", "GATEWAY_MAP_ADDR"},

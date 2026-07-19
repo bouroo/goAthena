@@ -72,6 +72,14 @@ type ConnectionInfo struct {
 	// WebSocket/roBrowser → UTF-8 passthrough). The zero value textenc.UTF8
 	// is passthrough, so a connection that never sets it stays UTF-8.
 	Codepage textenc.Codepage
+	// Packetver is the per-connection PACKETVER selected at CA_LOGIN time.
+	// It is set by handleCALogin from the client-supplied Version field
+	// (with config fallback) and is immutable for the connection's
+	// lifetime — both handleCALogin and handleCZEnter read it instead of
+	// the global dispatch handler's defaultPacketver. N2 wires this
+	// field; the codec still consumes a static *packet.DB, so per-shape
+	// selection is deferred to N2.1.
+	Packetver uint32
 }
 
 // SetCombatStats updates the character's base combat stats.
