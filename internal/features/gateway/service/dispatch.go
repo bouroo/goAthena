@@ -416,34 +416,7 @@ func (h *DispatchHandler) handleCALogin(ctx context.Context, conn *domain.Connec
 	// window is inverted we always fall back to the default — both skip the
 	// heuristic AND suppress the (now-Debug) warning, since neither
 	// path carries useful operator information in that case.
-	windowValid := h.packetverMin <= h.packetverMax
-	switch {
-	case windowValid && clientVer != 0 && clientVer >= h.packetverMin && clientVer <= h.packetverMax:
-		conn.Packetver = clientVer
-		if conn.Packetver != h.defaultPacketver {
-			h.logger.Debug().
-				Uint64("conn", conn.ID).
-				Str("user", req.Username).
-				Uint32("client_version", clientVer).
-				Uint32("default_packetver", h.defaultPacketver).
-				Msg("CA_LOGIN client version != configured PACKETVER; using client version as a heuristic (N2)")
-		}
-	default:
-		conn.Packetver = h.defaultPacketver
-		if windowValid && clientVer != 0 {
-			// Outside-window case: client sent a version but it's out
-			// of range. Demoted to Debug so steady-state traffic is not
-			// noisy — operators can opt into observing via log level.
-			h.logger.Debug().
-				Uint64("conn", conn.ID).
-				Str("user", req.Username).
-				Uint32("client_version", clientVer).
-				Uint32("min", h.packetverMin).
-				Uint32("max", h.packetverMax).
-				Uint32("default_packetver", h.defaultPacketver).
-				Msg("CA_LOGIN client version outside supported window; falling back to default PACKETVER")
-		}
-	}
+	h.selectPacketver(conn, req.Username, clientVer)
 
 	authReq := &identityv1.AuthenticateRequest{
 		Username:   req.Username,
@@ -541,6 +514,48 @@ func (h *DispatchHandler) handleCALogin(ctx context.Context, conn *domain.Connec
 		return fmt.Errorf("send AC_ACCEPT_LOGIN: %w", err)
 	}
 	return nil
+}
+
+// selectPacketver implements the N2 per-session PACKETVER heuristic.
+// Extracted from handleCALogin to keep that function's cyclomatic
+// complexity within budget (gocyclo gate). The decision matrix:
+//
+//	window valid?       clientVer in [min,max]?   conn.Packetver       log
+//	----------------    -----------------------   ------------------   -----------------------
+//	true                true                      clientVer            Debug if != default
+//	true                false                     default              Debug if clientVer != 0
+//	false               (any)                     default              (none — degenerate)
+//
+// The Debug-level logs are deliberately permissive; production operators
+// who do NOT want even Debug noise can set the global log level above
+// Debug. The Debug noise exists for unit tests and operators chasing a
+// real misconfiguration.
+func (h *DispatchHandler) selectPacketver(conn *domain.ConnectionInfo, username string, clientVer uint32) {
+	windowValid := h.packetverMin <= h.packetverMax
+	switch {
+	case windowValid && clientVer != 0 && clientVer >= h.packetverMin && clientVer <= h.packetverMax:
+		conn.Packetver = clientVer
+		if conn.Packetver != h.defaultPacketver {
+			h.logger.Debug().
+				Uint64("conn", conn.ID).
+				Str("user", username).
+				Uint32("client_version", clientVer).
+				Uint32("default_packetver", h.defaultPacketver).
+				Msg("CA_LOGIN client version != configured PACKETVER; using client version as a heuristic (N2)")
+		}
+	default:
+		conn.Packetver = h.defaultPacketver
+		if windowValid && clientVer != 0 {
+			h.logger.Debug().
+				Uint64("conn", conn.ID).
+				Str("user", username).
+				Uint32("client_version", clientVer).
+				Uint32("min", h.packetverMin).
+				Uint32("max", h.packetverMax).
+				Uint32("default_packetver", h.defaultPacketver).
+				Msg("CA_LOGIN client version outside supported window; falling back to default PACKETVER")
+		}
+	}
 }
 
 // handleCHEnter forwards CH_ENTER to identity.GetCharacterList and
