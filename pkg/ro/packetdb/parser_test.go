@@ -55,6 +55,46 @@ func TestValidatePredicate(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestEvalPredicate_Negation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		predicate string
+		version   int
+		want      bool
+	}{
+		{"neg-gte-below", "!(PACKETVER >= 20040705)", 20040704, true},
+		{"neg-gte-equal", "!(PACKETVER >= 20040705)", 20040705, false},
+		{"neg-gte-above", "!(PACKETVER >= 20040705)", 20040706, false},
+		{"neg-defined-zero", "!defined(PACKETVER_ZERO)", 20250604, false},
+		{"neg-defined-far", "!defined(PACKETVER_ZERO)", 19990000, false},
+		{"double-neg-gte", "!!(PACKETVER >= 20040705)", 20040705, true},
+		{"neg-disjunction", "!(PACKETVER >= 20300101 || PACKETVER_RE_NUM >= 20300101)", 20250604, true},
+		{"neg-disjunction-met", "!(PACKETVER >= 20300101 || PACKETVER_RE_NUM >= 20300101)", 20990101, false},
+		{"neg-paren-no-space", "!(PACKETVER >= 20040705)", 20040101, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := EvalPredicate(tc.predicate, tc.version)
+			assert.Equal(t, tc.want, got, "predicate=%q version=%d", tc.predicate, tc.version)
+		})
+	}
+}
+
+func TestValidatePredicate_AcceptsNegationAndParens(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, ValidatePredicate("!PACKETVER >= 20040705"))
+	require.NoError(t, ValidatePredicate("!(PACKETVER >= 20040705)"))
+	require.NoError(t, ValidatePredicate("!(PACKETVER_MAIN_NUM >= 20230802 || PACKETVER_RE_NUM >= 20230802)"))
+	require.NoError(t, ValidatePredicate("!(defined(PACKETVER_ZERO))"))
+	require.NoError(t, ValidatePredicate("!defined(PACKETVER_ZERO)"))
+	require.NoError(t, ValidatePredicate("!!PACKETVER >= 20040705"))
+	// Still rejects truly unsupported forms even when negated.
+	assert.Error(t, ValidatePredicate("!(PACKETVER == 20040705)"), "negation of == is still unsupported")
+	assert.Error(t, ValidatePredicate("!!(PACKETVER == 20040705)"))
+}
+
 func TestParse_DirectNumericForms(t *testing.T) {
 	t.Parallel()
 	src := `
@@ -219,11 +259,96 @@ func TestParse_UnclosedIfFails(t *testing.T) {
 func TestParse_ElifWithoutIfFails(t *testing.T) {
 	t.Parallel()
 	src := `
-#elif PACKETVER >= 20040705
-	packet(0x020e,24);
-#endif
+		#elif PACKETVER >= 20040705
+			packet(0x020e,24);
+		#endif
 	`
 	_, _, err := parseString(src)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "#elif")
+}
+
+func TestParse_ElifElseNumericBranches(t *testing.T) {
+	t.Parallel()
+	// Numeric (non-symbolic) bodies in each branch so we can assert the
+	// effective predicate string and the per-branch MinVersion. The
+	// effective predicate for the #elif body must be
+	// "!(<if-predicate>) && <elif-predicate>"; for the #else body it
+	// must be "!(<if-predicate>) && !(<elif-predicate>) && true".
+	src := `
+		#if PACKETVER >= 20300101
+			packet(0xAAAA,1);
+		#elif PACKETVER >= 20041108
+			packet(0xBBBB,2);
+		#else
+			packet(0xCCCC,3);
+		#endif
+	`
+	entries, st, err := parseString(src)
+	require.NoError(t, err)
+	assert.Equal(t, 1, st.IfBlocks, "single #if block regardless of #elif/#else count")
+	require.Len(t, entries, 3)
+
+	// #if branch: no history, predicate is the raw #if head.
+	assert.Equal(t, "PACKETVER >= 20300101", entries[0].Predicate)
+	assert.Equal(t, 20300101, entries[0].MinVersion)
+
+	// #elif branch: history = [raw #if head]; effective predicate is
+	// the negated history AND the elif predicate.
+	assert.Equal(t,
+		"!(PACKETVER >= 20300101) && PACKETVER >= 20041108",
+		entries[1].Predicate)
+	assert.Equal(t, 20041108, entries[1].MinVersion)
+
+	// #else branch: history = [raw #if head, raw elif head]; effective
+	// predicate negates both and ANDs the always-true sentinel.
+	assert.Equal(t,
+		"!(PACKETVER >= 20300101) && !(PACKETVER >= 20041108) && true /*else*/",
+		entries[2].Predicate)
+}
+
+func TestRegistry_ForPacketVer_ElifElseNumericSelection(t *testing.T) {
+	t.Parallel()
+	// Same source as TestParse_ElifElseNumericBranches; this test
+	// drives PacketRegistry.ForPacketVer to confirm the flattener picks
+	// the right branch in each PACKETVER region.
+	src := `
+		#if PACKETVER >= 20300101
+			packet(0xAAAA,1);
+		#elif PACKETVER >= 20041108
+			packet(0xBBBB,2);
+		#else
+			packet(0xCCCC,3);
+		#endif
+	`
+	entries, st, err := parseString(src)
+	require.NoError(t, err)
+	reg := NewRegistry(entries, st)
+
+	// Far future: #if branch selected.
+	db := reg.ForPacketVer(20990101)
+	_, ok := db.Lookup(0xAAAA)
+	assert.True(t, ok, "future PACKETVER should select the #if branch")
+	_, ok = db.Lookup(0xBBBB)
+	assert.False(t, ok)
+	_, ok = db.Lookup(0xCCCC)
+	assert.False(t, ok)
+
+	// Mid range: #elif branch selected (and only that one).
+	db = reg.ForPacketVer(20041108)
+	_, ok = db.Lookup(0xAAAA)
+	assert.False(t, ok, "mid PACKETVER must not select the #if branch")
+	_, ok = db.Lookup(0xBBBB)
+	assert.True(t, ok, "mid PACKETVER should select the #elif branch")
+	_, ok = db.Lookup(0xCCCC)
+	assert.False(t, ok, "mid PACKETVER must not select the #else branch")
+
+	// Old range: only #else branch selected.
+	db = reg.ForPacketVer(20000101)
+	_, ok = db.Lookup(0xAAAA)
+	assert.False(t, ok)
+	_, ok = db.Lookup(0xBBBB)
+	assert.False(t, ok)
+	_, ok = db.Lookup(0xCCCC)
+	assert.True(t, ok, "old PACKETVER should select the #else branch")
 }

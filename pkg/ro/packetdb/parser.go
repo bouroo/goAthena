@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -29,12 +30,17 @@ type Entry struct {
 }
 
 // frame is one level of the parse-time #if/#elif/#else/#endif branch
-// stack. We only need to remember the predicate string for the currently
-// selected branch so the registry flattener can evaluate it later; the
-// rule that a later #elif replaces the active predicate is captured by
-// the parser overwriting stack[len-1].predicate.
+// stack. The predicate field is the raw predicate for the currently
+// active branch of this #if block (the latest #if/#elif head, or the
+// sentinel "true" if the active branch is #else). The history field
+// accumulates the raw predicates of all preceding branches in this
+// #if block; activePredicate combines them as
+// (!history[0]) && (!history[1]) && ... && predicate, matching the
+// C-preprocessor semantics that an #elif branch is selected only if
+// every earlier branch in the block was false.
 type frame struct {
 	predicate string
+	history   []string
 }
 
 // ParseStats counts entries and skip decisions encountered while parsing.
@@ -203,6 +209,13 @@ func isBranchKeyword(trimmed string) bool {
 
 // applyBranchKeyword applies an #elif / #else / #endif to the branch
 // stack, returning an error if the keyword is not well-nested.
+//
+// For #elif and #else the active branch becomes the new candidate, but
+// the previously-active branch predicate is appended to the frame's
+// history so the effective predicate recorded on subsequent entries is
+// (!history[0]) && (!history[1]) && ... && <current>. That matches the
+// C-preprocessor rule that an #elif branch is selected only when every
+// preceding branch in the same #if block evaluated to false.
 func applyBranchKeyword(trimmed string, stack *[]frame) error {
 	switch {
 	case strings.HasPrefix(trimmed, "#elif"):
@@ -213,16 +226,20 @@ func applyBranchKeyword(trimmed string, stack *[]frame) error {
 		if err := ValidatePredicate(tail); err != nil {
 			return fmt.Errorf("packetdb: #elif %q: %w", tail, err)
 		}
-		// Record the elif predicate as the active candidate on the top
-		// frame. The flattener evaluates it at ForPacketVer time. We
-		// keep the LAST #elif predicate seen on the top frame because
-		// it is the latest candidate branch.
-		(*stack)[len(*stack)-1].predicate = tail
+		top := &(*stack)[len(*stack)-1]
+		// Record the previously-active branch in history; the elif
+		// predicate becomes the new active candidate.
+		top.history = append(top.history, top.predicate)
+		top.predicate = tail
 	case strings.HasPrefix(trimmed, "#else"):
 		if len(*stack) == 0 {
 			return errors.New("packetdb: #else without matching #if")
 		}
-		(*stack)[len(*stack)-1].predicate = "true /*else*/"
+		top := &(*stack)[len(*stack)-1]
+		// #else: everything else. Append the previous branch to
+		// history; the new active branch is the always-true sentinel.
+		top.history = append(top.history, top.predicate)
+		top.predicate = "true /*else*/"
 	case strings.HasPrefix(trimmed, "#endif"):
 		if len(*stack) == 0 {
 			return errors.New("packetdb: #endif without matching #if")
@@ -301,13 +318,21 @@ func parsePacketLine(line string) (Entry, packetKind, bool) {
 }
 
 // activePredicate returns the conjunction of predicates on the current
-// branch stack. It is the predicate string we record on each entry — it
-// is the AND of every enclosing gate's currently selected branch. If
-// the stack is empty (entry is outside any #if), the result is ""
-// meaning "always active".
+// branch stack. It is the predicate string we record on each entry —
+// the AND of every enclosing gate's effective branch. For a frame
+// inside an #elif/#else, the effective branch is
+// (!history[0]) && (!history[1]) && ... && predicate, matching the
+// C-preprocessor semantics. If the stack is empty (entry is outside any
+// #if), the result is "" meaning "always active".
 func activePredicate(stack []frame) string {
 	var parts []string
 	for _, f := range stack {
+		for _, h := range f.history {
+			if h == "" {
+				continue
+			}
+			parts = append(parts, "!("+h+")")
+		}
 		if f.predicate != "" {
 			parts = append(parts, f.predicate)
 		}
@@ -325,7 +350,7 @@ func minVersionFor(predicate string) int {
 	if predicate == "" {
 		return 0
 	}
-	threshold := 1 << 31
+	threshold := math.MaxInt
 	first := true
 	gte := regexp.MustCompile(`>=\s*(-?[0-9]+)`)
 	for _, m := range gte.FindAllStringSubmatch(predicate, -1) {
