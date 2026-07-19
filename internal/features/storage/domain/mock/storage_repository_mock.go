@@ -42,18 +42,18 @@ func (m *MockStorageRepository) EXPECT() *MockStorageRepositoryMockRecorder {
 }
 
 // CountStorageItems mocks base method.
-func (m *MockStorageRepository) CountStorageItems(ctx context.Context, charID uint32) (int, error) {
+func (m *MockStorageRepository) CountStorageItems(ctx context.Context, accountID uint32) (int, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CountStorageItems", ctx, charID)
+	ret := m.ctrl.Call(m, "CountStorageItems", ctx, accountID)
 	ret0, _ := ret[0].(int)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CountStorageItems indicates an expected call of CountStorageItems.
-func (mr *MockStorageRepositoryMockRecorder) CountStorageItems(ctx, charID any) *gomock.Call {
+func (mr *MockStorageRepositoryMockRecorder) CountStorageItems(ctx, accountID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountStorageItems", reflect.TypeOf((*MockStorageRepository)(nil).CountStorageItems), ctx, charID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountStorageItems", reflect.TypeOf((*MockStorageRepository)(nil).CountStorageItems), ctx, accountID)
 }
 
 // CreateStorageItem mocks base method.
@@ -99,19 +99,19 @@ func (mr *MockStorageRepositoryMockRecorder) GetStorageItem(ctx, itemID any) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStorageItem", reflect.TypeOf((*MockStorageRepository)(nil).GetStorageItem), ctx, itemID)
 }
 
-// ListStorageByChar mocks base method.
-func (m *MockStorageRepository) ListStorageByChar(ctx context.Context, charID uint32) ([]domain.StorageItem, error) {
+// ListStorageByAccount mocks base method.
+func (m *MockStorageRepository) ListStorageByAccount(ctx context.Context, accountID uint32) ([]domain.StorageItem, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListStorageByChar", ctx, charID)
+	ret := m.ctrl.Call(m, "ListStorageByAccount", ctx, accountID)
 	ret0, _ := ret[0].([]domain.StorageItem)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// ListStorageByChar indicates an expected call of ListStorageByChar.
-func (mr *MockStorageRepositoryMockRecorder) ListStorageByChar(ctx, charID any) *gomock.Call {
+// ListStorageByAccount indicates an expected call of ListStorageByAccount.
+func (mr *MockStorageRepositoryMockRecorder) ListStorageByAccount(ctx, accountID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStorageByChar", reflect.TypeOf((*MockStorageRepository)(nil).ListStorageByChar), ctx, charID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStorageByAccount", reflect.TypeOf((*MockStorageRepository)(nil).ListStorageByAccount), ctx, accountID)
 }
 
 // UpdateStorageItem mocks base method.

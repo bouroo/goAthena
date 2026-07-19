@@ -35,16 +35,16 @@ func setupTestServiceWithInventory(t *testing.T) (*storageService, *storagedomai
 func TestOpenStorage_Success(t *testing.T) {
 	svc, repo, locks := setupTestService(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
-	repo.EXPECT().ListStorageByChar(ctx, charID).Return([]storagedomain.StorageItem{}, nil)
+	repo.EXPECT().ListStorageByAccount(ctx, accountID).Return([]storagedomain.StorageItem{}, nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.OpenStorage(ctx, charID)
+	err := svc.OpenStorage(ctx, accountID)
 
 	require.NoError(t, err)
 }
@@ -52,13 +52,13 @@ func TestOpenStorage_Success(t *testing.T) {
 func TestOpenStorage_LockBusy(t *testing.T) {
 	svc, _, locks := setupTestService(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return("", storagedomain.ErrStorageLocked)
 
-	err := svc.OpenStorage(ctx, charID)
+	err := svc.OpenStorage(ctx, accountID)
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, storagedomain.ErrStorageLocked)
@@ -67,27 +67,27 @@ func TestOpenStorage_LockBusy(t *testing.T) {
 func TestDepositItem_Success(t *testing.T) {
 	svc, repo, locks, invRepo := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	inventoryItemID := uint64(501)
 	amount := int32(5)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	invItems := []storagedomain.InventoryItem{
-		{ID: inventoryItemID, CharID: charID, NameID: 501, Amount: 10},
+		{ID: inventoryItemID, CharID: accountID, NameID: 501, Amount: 10},
 	}
 
 	storageItems := []storagedomain.StorageItem{}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
-	invRepo.EXPECT().ListByChar(ctx, charID).Return(invItems, nil)
-	repo.EXPECT().CountStorageItems(ctx, charID).Return(0, nil)
-	repo.EXPECT().ListStorageByChar(ctx, charID).Return(storageItems, nil)
+	invRepo.EXPECT().ListByChar(ctx, accountID).Return(invItems, nil)
+	repo.EXPECT().CountStorageItems(ctx, accountID).Return(0, nil)
+	repo.EXPECT().ListStorageByAccount(ctx, accountID).Return(storageItems, nil)
 	repo.EXPECT().CreateStorageItem(ctx, gomock.Any()).Return(nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.DepositItem(ctx, charID, inventoryItemID, amount)
+	err := svc.DepositItem(ctx, accountID, inventoryItemID, amount)
 
 	require.NoError(t, err)
 }
@@ -95,47 +95,47 @@ func TestDepositItem_Success(t *testing.T) {
 func TestDepositItem_InventoryItemNotFound(t *testing.T) {
 	svc, _, locks, invRepo := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	inventoryItemID := uint64(999)
 	amount := int32(5)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	invItems := []storagedomain.InventoryItem{
-		{ID: 501, CharID: charID, NameID: 501, Amount: 10},
-		{ID: 502, CharID: charID, NameID: 502, Amount: 5},
+		{ID: 501, CharID: accountID, NameID: 501, Amount: 10},
+		{ID: 502, CharID: accountID, NameID: 502, Amount: 5},
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
-	invRepo.EXPECT().ListByChar(ctx, charID).Return(invItems, nil)
+	invRepo.EXPECT().ListByChar(ctx, accountID).Return(invItems, nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.DepositItem(ctx, charID, inventoryItemID, amount)
+	err := svc.DepositItem(ctx, accountID, inventoryItemID, amount)
 	require.Error(t, err)
 }
 
 func TestDepositItem_StorageFull(t *testing.T) {
 	svc, repo, locks, invRepo := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	inventoryItemID := uint64(501)
 	amount := int32(5)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	invItems := []storagedomain.InventoryItem{
-		{ID: inventoryItemID, CharID: charID, NameID: 501, Amount: 10},
+		{ID: inventoryItemID, CharID: accountID, NameID: 501, Amount: 10},
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
-	invRepo.EXPECT().ListByChar(ctx, charID).Return(invItems, nil)
-	repo.EXPECT().CountStorageItems(ctx, charID).Return(300, nil)
-	repo.EXPECT().ListStorageByChar(ctx, charID).Return([]storagedomain.StorageItem{}, nil)
+	invRepo.EXPECT().ListByChar(ctx, accountID).Return(invItems, nil)
+	repo.EXPECT().CountStorageItems(ctx, accountID).Return(300, nil)
+	repo.EXPECT().ListStorageByAccount(ctx, accountID).Return([]storagedomain.StorageItem{}, nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.DepositItem(ctx, charID, inventoryItemID, amount)
+	err := svc.DepositItem(ctx, accountID, inventoryItemID, amount)
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, storagedomain.ErrStorageFull)
@@ -144,11 +144,11 @@ func TestDepositItem_StorageFull(t *testing.T) {
 func TestDepositItem_InvalidAmount(t *testing.T) {
 	svc, _, _, _ := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	inventoryItemID := uint64(501)
 	amount := int32(0)
 
-	err := svc.DepositItem(ctx, charID, inventoryItemID, amount)
+	err := svc.DepositItem(ctx, accountID, inventoryItemID, amount)
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, storagedomain.ErrInvalidItemAmount)
@@ -157,11 +157,11 @@ func TestDepositItem_InvalidAmount(t *testing.T) {
 func TestDepositItem_NegativeAmount(t *testing.T) {
 	svc, _, _, _ := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	inventoryItemID := uint64(501)
 	amount := int32(-5)
 
-	err := svc.DepositItem(ctx, charID, inventoryItemID, amount)
+	err := svc.DepositItem(ctx, accountID, inventoryItemID, amount)
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, storagedomain.ErrInvalidItemAmount)
@@ -170,32 +170,32 @@ func TestDepositItem_NegativeAmount(t *testing.T) {
 func TestDepositItem_UpdateExisting(t *testing.T) {
 	svc, repo, locks, invRepo := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	inventoryItemID := uint64(501)
 	amount := int32(5)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	invItems := []storagedomain.InventoryItem{
-		{ID: inventoryItemID, CharID: charID, NameID: 501, Amount: 10},
+		{ID: inventoryItemID, CharID: accountID, NameID: 501, Amount: 10},
 	}
 
 	existingStorageItem := storagedomain.StorageItem{
-		ID:     1,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        1,
+		AccountID: accountID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
-	invRepo.EXPECT().ListByChar(ctx, charID).Return(invItems, nil)
-	repo.EXPECT().CountStorageItems(ctx, charID).Return(1, nil)
-	repo.EXPECT().ListStorageByChar(ctx, charID).Return([]storagedomain.StorageItem{existingStorageItem}, nil)
+	invRepo.EXPECT().ListByChar(ctx, accountID).Return(invItems, nil)
+	repo.EXPECT().CountStorageItems(ctx, accountID).Return(1, nil)
+	repo.EXPECT().ListStorageByAccount(ctx, accountID).Return([]storagedomain.StorageItem{existingStorageItem}, nil)
 	repo.EXPECT().UpdateStorageItem(ctx, gomock.Any()).Return(nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.DepositItem(ctx, charID, inventoryItemID, amount)
+	err := svc.DepositItem(ctx, accountID, inventoryItemID, amount)
 
 	require.NoError(t, err)
 }
@@ -203,22 +203,22 @@ func TestDepositItem_UpdateExisting(t *testing.T) {
 func TestDepositItem_InsufficientInventory(t *testing.T) {
 	svc, _, locks, invRepo := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	inventoryItemID := uint64(501)
 	amount := int32(15)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	invItems := []storagedomain.InventoryItem{
-		{ID: inventoryItemID, CharID: charID, NameID: 501, Amount: 10},
+		{ID: inventoryItemID, CharID: accountID, NameID: 501, Amount: 10},
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
-	invRepo.EXPECT().ListByChar(ctx, charID).Return(invItems, nil)
+	invRepo.EXPECT().ListByChar(ctx, accountID).Return(invItems, nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.DepositItem(ctx, charID, inventoryItemID, amount)
+	err := svc.DepositItem(ctx, accountID, inventoryItemID, amount)
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, storagedomain.ErrInsufficientStorageItem)
@@ -227,29 +227,29 @@ func TestDepositItem_InsufficientInventory(t *testing.T) {
 func TestWithdrawItem_Success(t *testing.T) {
 	svc, repo, locks, invRepo := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	storageItemID := uint64(1)
 	amount := int32(5)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: accountID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	invItems := []storagedomain.InventoryItem{}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
 	repo.EXPECT().GetStorageItem(ctx, storageItemID).Return(storageItem, nil)
-	invRepo.EXPECT().ListByChar(ctx, charID).Return(invItems, nil)
+	invRepo.EXPECT().ListByChar(ctx, accountID).Return(invItems, nil)
 	repo.EXPECT().UpdateStorageItem(ctx, gomock.Any()).Return(nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.WithdrawItem(ctx, charID, storageItemID, amount)
+	err := svc.WithdrawItem(ctx, accountID, storageItemID, amount)
 
 	require.NoError(t, err)
 }
@@ -257,18 +257,18 @@ func TestWithdrawItem_Success(t *testing.T) {
 func TestWithdrawItem_StorageItemNotFound(t *testing.T) {
 	svc, repo, locks, _ := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	storageItemID := uint64(1)
 	amount := int32(5)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
 	repo.EXPECT().GetStorageItem(ctx, storageItemID).Return(storagedomain.StorageItem{}, storagedomain.ErrStorageNotFound)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.WithdrawItem(ctx, charID, storageItemID, amount)
+	err := svc.WithdrawItem(ctx, accountID, storageItemID, amount)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "storage item 1 not found")
@@ -277,25 +277,25 @@ func TestWithdrawItem_StorageItemNotFound(t *testing.T) {
 func TestWithdrawItem_InsufficientAmount(t *testing.T) {
 	svc, repo, locks, _ := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	storageItemID := uint64(1)
 	amount := int32(15)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: accountID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
 	repo.EXPECT().GetStorageItem(ctx, storageItemID).Return(storageItem, nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.WithdrawItem(ctx, charID, storageItemID, amount)
+	err := svc.WithdrawItem(ctx, accountID, storageItemID, amount)
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, storagedomain.ErrInsufficientStorageItem)
@@ -304,11 +304,11 @@ func TestWithdrawItem_InsufficientAmount(t *testing.T) {
 func TestWithdrawItem_InvalidAmount(t *testing.T) {
 	svc, _, _, _ := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	storageItemID := uint64(1)
 	amount := int32(0)
 
-	err := svc.WithdrawItem(ctx, charID, storageItemID, amount)
+	err := svc.WithdrawItem(ctx, accountID, storageItemID, amount)
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, storagedomain.ErrInvalidItemAmount)
@@ -317,11 +317,11 @@ func TestWithdrawItem_InvalidAmount(t *testing.T) {
 func TestWithdrawItem_NegativeAmount(t *testing.T) {
 	svc, _, _, _ := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	storageItemID := uint64(1)
 	amount := int32(-5)
 
-	err := svc.WithdrawItem(ctx, charID, storageItemID, amount)
+	err := svc.WithdrawItem(ctx, accountID, storageItemID, amount)
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, storagedomain.ErrInvalidItemAmount)
@@ -330,28 +330,28 @@ func TestWithdrawItem_NegativeAmount(t *testing.T) {
 func TestWithdrawItem_InventoryFull(t *testing.T) {
 	svc, repo, locks, invRepo := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	storageItemID := uint64(1)
 	amount := int32(5)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: accountID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	invItems := make([]storagedomain.InventoryItem, 100)
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
 	repo.EXPECT().GetStorageItem(ctx, storageItemID).Return(storageItem, nil)
-	invRepo.EXPECT().ListByChar(ctx, charID).Return(invItems, nil)
+	invRepo.EXPECT().ListByChar(ctx, accountID).Return(invItems, nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.WithdrawItem(ctx, charID, storageItemID, amount)
+	err := svc.WithdrawItem(ctx, accountID, storageItemID, amount)
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, storagedomain.ErrInventoryFull)
@@ -360,27 +360,27 @@ func TestWithdrawItem_InventoryFull(t *testing.T) {
 func TestWithdrawItem_DeleteFullAmount(t *testing.T) {
 	svc, repo, locks, invRepo := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	storageItemID := uint64(1)
 	amount := int32(10)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: accountID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
 	repo.EXPECT().GetStorageItem(ctx, storageItemID).Return(storageItem, nil)
-	invRepo.EXPECT().ListByChar(ctx, charID).Return([]storagedomain.InventoryItem{}, nil)
+	invRepo.EXPECT().ListByChar(ctx, accountID).Return([]storagedomain.InventoryItem{}, nil)
 	repo.EXPECT().DeleteStorageItem(ctx, storageItemID).Return(nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.WithdrawItem(ctx, charID, storageItemID, amount)
+	err := svc.WithdrawItem(ctx, accountID, storageItemID, amount)
 
 	require.NoError(t, err)
 }
@@ -388,30 +388,30 @@ func TestWithdrawItem_DeleteFullAmount(t *testing.T) {
 func TestWithdrawItem_ItemExistsInInventory(t *testing.T) {
 	svc, repo, locks, invRepo := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	storageItemID := uint64(1)
 	amount := int32(5)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: accountID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	invItems := make([]storagedomain.InventoryItem, 100)
-	invItems[0] = storagedomain.InventoryItem{CharID: charID, NameID: 501, Amount: 5}
+	invItems[0] = storagedomain.InventoryItem{CharID: accountID, NameID: 501, Amount: 5}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
 	repo.EXPECT().GetStorageItem(ctx, storageItemID).Return(storageItem, nil)
-	invRepo.EXPECT().ListByChar(ctx, charID).Return(invItems, nil)
+	invRepo.EXPECT().ListByChar(ctx, accountID).Return(invItems, nil)
 	repo.EXPECT().UpdateStorageItem(ctx, gomock.Any()).Return(nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.WithdrawItem(ctx, charID, storageItemID, amount)
+	err := svc.WithdrawItem(ctx, accountID, storageItemID, amount)
 
 	require.NoError(t, err)
 }
@@ -419,14 +419,14 @@ func TestWithdrawItem_ItemExistsInInventory(t *testing.T) {
 func TestCloseStorage_Success(t *testing.T) {
 	svc, _, locks := setupTestService(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 	token := "close-1001"
 
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.CloseStorage(ctx, charID)
+	err := svc.CloseStorage(ctx, accountID)
 
 	require.NoError(t, err)
 }
@@ -434,14 +434,14 @@ func TestCloseStorage_Success(t *testing.T) {
 func TestCloseStorage_ReleaseError(t *testing.T) {
 	svc, _, locks := setupTestService(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 	token := "close-1001"
 
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(assert.AnError)
 
-	err := svc.CloseStorage(ctx, charID)
+	err := svc.CloseStorage(ctx, accountID)
 
 	assert.Error(t, err)
 }
@@ -449,15 +449,15 @@ func TestCloseStorage_ReleaseError(t *testing.T) {
 func TestDepositItem_LockBusy(t *testing.T) {
 	svc, _, locks, _ := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	inventoryItemID := uint64(501)
 	amount := int32(5)
 
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return("", storagedomain.ErrStorageLocked)
 
-	err := svc.DepositItem(ctx, charID, inventoryItemID, amount)
+	err := svc.DepositItem(ctx, accountID, inventoryItemID, amount)
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, storagedomain.ErrStorageLocked)
@@ -466,15 +466,15 @@ func TestDepositItem_LockBusy(t *testing.T) {
 func TestWithdrawItem_LockBusy(t *testing.T) {
 	svc, _, locks, _ := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	storageItemID := uint64(1)
 	amount := int32(5)
 
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return("", storagedomain.ErrStorageLocked)
 
-	err := svc.WithdrawItem(ctx, charID, storageItemID, amount)
+	err := svc.WithdrawItem(ctx, accountID, storageItemID, amount)
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, storagedomain.ErrStorageLocked)
@@ -483,28 +483,28 @@ func TestWithdrawItem_LockBusy(t *testing.T) {
 func TestWithdrawItem_WrongOwner(t *testing.T) {
 	svc, repo, locks, _ := setupTestServiceWithInventory(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	storageItemID := uint64(1)
 	amount := int32(5)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: 1002,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: 1002,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
 	repo.EXPECT().GetStorageItem(ctx, storageItemID).Return(storageItem, nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.WithdrawItem(ctx, charID, storageItemID, amount)
+	err := svc.WithdrawItem(ctx, accountID, storageItemID, amount)
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "does not belong to char")
+	assert.Contains(t, err.Error(), "does not belong to account")
 }
 
 func TestDefaultLockTTL(t *testing.T) {
@@ -537,18 +537,18 @@ func TestNewStorageService_ZeroTTL(t *testing.T) {
 func TestDepositItem_WithoutInventoryRepo(t *testing.T) {
 	svc, repo, locks := setupTestService(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	inventoryItemID := uint64(501)
 	amount := int32(5)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
 	repo.EXPECT().CreateStorageItem(ctx, gomock.Any()).Return(nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.DepositItem(ctx, charID, inventoryItemID, amount)
+	err := svc.DepositItem(ctx, accountID, inventoryItemID, amount)
 
 	require.NoError(t, err)
 }
@@ -556,18 +556,18 @@ func TestDepositItem_WithoutInventoryRepo(t *testing.T) {
 func TestWithdrawItem_WithoutInventoryRepo(t *testing.T) {
 	svc, repo, locks := setupTestService(t)
 	ctx := context.Background()
-	charID := uint32(1001)
+	accountID := uint32(1001)
 	storageItemID := uint64(1)
 	amount := int32(5)
 
 	token := "test-lock-token"
-	lockKey := storagedomain.StorageLockKey(charID)
+	lockKey := storagedomain.StorageLockKey(accountID)
 
 	storageItem := storagedomain.StorageItem{
-		ID:     storageItemID,
-		CharID: charID,
-		NameID: 501,
-		Amount: 10,
+		ID:        storageItemID,
+		AccountID: accountID,
+		NameID:    501,
+		Amount:    10,
 	}
 
 	locks.EXPECT().Acquire(ctx, lockKey, svc.lockTTL).Return(token, nil)
@@ -575,7 +575,7 @@ func TestWithdrawItem_WithoutInventoryRepo(t *testing.T) {
 	repo.EXPECT().UpdateStorageItem(ctx, gomock.Any()).Return(nil)
 	locks.EXPECT().Release(gomock.Any(), lockKey, token).Return(nil)
 
-	err := svc.WithdrawItem(ctx, charID, storageItemID, amount)
+	err := svc.WithdrawItem(ctx, accountID, storageItemID, amount)
 
 	require.NoError(t, err)
 }

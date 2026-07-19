@@ -10,18 +10,18 @@ import (
 )
 
 type memoryStorageRepository struct {
-	mu      sync.RWMutex
-	items   map[uint64]domain.StorageItem
-	charIdx map[uint32][]uint64
-	nextID  uint64
+	mu         sync.RWMutex
+	items      map[uint64]domain.StorageItem
+	accountIdx map[uint32][]uint64
+	nextID     uint64
 }
 
 // NewMemoryStorageRepository creates a new in-memory storage repository for testing.
 func NewMemoryStorageRepository() domain.StorageRepository {
 	return &memoryStorageRepository{
-		items:   make(map[uint64]domain.StorageItem),
-		charIdx: make(map[uint32][]uint64),
-		nextID:  1,
+		items:      make(map[uint64]domain.StorageItem),
+		accountIdx: make(map[uint32][]uint64),
+		nextID:     1,
 	}
 }
 
@@ -41,16 +41,16 @@ func (r *memoryStorageRepository) CreateStorageItem(ctx context.Context, item do
 	}
 
 	r.items[newID] = item
-	r.charIdx[item.CharID] = append(r.charIdx[item.CharID], newID)
+	r.accountIdx[item.AccountID] = append(r.accountIdx[item.AccountID], newID)
 
 	return nil
 }
 
-func (r *memoryStorageRepository) ListStorageByChar(ctx context.Context, charID uint32) ([]domain.StorageItem, error) {
+func (r *memoryStorageRepository) ListStorageByAccount(ctx context.Context, accountID uint32) ([]domain.StorageItem, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	ids, exists := r.charIdx[charID]
+	ids, exists := r.accountIdx[accountID]
 	if !exists {
 		return []domain.StorageItem{}, nil
 	}
@@ -102,23 +102,23 @@ func (r *memoryStorageRepository) DeleteStorageItem(ctx context.Context, itemID 
 
 	delete(r.items, itemID)
 
-	charIDs := r.charIdx[item.CharID]
-	filtered := make([]uint64, 0, len(charIDs))
-	for _, id := range charIDs {
+	accountIDs := r.accountIdx[item.AccountID]
+	filtered := make([]uint64, 0, len(accountIDs))
+	for _, id := range accountIDs {
 		if id != itemID {
 			filtered = append(filtered, id)
 		}
 	}
-	r.charIdx[item.CharID] = filtered
+	r.accountIdx[item.AccountID] = filtered
 
 	return nil
 }
 
-func (r *memoryStorageRepository) CountStorageItems(ctx context.Context, charID uint32) (int, error) {
+func (r *memoryStorageRepository) CountStorageItems(ctx context.Context, accountID uint32) (int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	ids, exists := r.charIdx[charID]
+	ids, exists := r.accountIdx[accountID]
 	if !exists {
 		return 0, nil
 	}

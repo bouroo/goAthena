@@ -59,7 +59,7 @@ func TestOpenStorage_ServiceError(t *testing.T) {
 	assert.NotEmpty(t, resp.ErrorMessage)
 }
 
-func TestOpenStorage_InvalidCharID(t *testing.T) {
+func TestOpenStorage_InvalidAccountID(t *testing.T) {
 	handler, _ := setupTestHandler(t)
 	ctx := context.Background()
 
@@ -124,7 +124,7 @@ func TestDepositItem_ServiceError(t *testing.T) {
 	assert.Contains(t, resp.ErrorMessage, "full")
 }
 
-func TestDepositItem_InvalidCharID(t *testing.T) {
+func TestDepositItem_InvalidAccountID(t *testing.T) {
 	handler, _ := setupTestHandler(t)
 	ctx := context.Background()
 
@@ -242,7 +242,7 @@ func TestWithdrawItem_ServiceError(t *testing.T) {
 	assert.Contains(t, resp.ErrorMessage, "Insufficient")
 }
 
-func TestWithdrawItem_InvalidCharID(t *testing.T) {
+func TestWithdrawItem_InvalidAccountID(t *testing.T) {
 	handler, _ := setupTestHandler(t)
 	ctx := context.Background()
 
@@ -355,7 +355,7 @@ func TestCloseStorage_ServiceError(t *testing.T) {
 	assert.NotEmpty(t, resp.ErrorMessage)
 }
 
-func TestCloseStorage_InvalidCharID(t *testing.T) {
+func TestCloseStorage_InvalidAccountID(t *testing.T) {
 	handler, _ := setupTestHandler(t)
 	ctx := context.Background()
 

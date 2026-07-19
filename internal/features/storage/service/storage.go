@@ -35,63 +35,63 @@ func NewStorageService(repo domain.StorageRepository, locks domain.LockStore, in
 	}
 }
 
-func (s *storageService) OpenStorage(ctx context.Context, charID uint32) error {
-	token, res, err := s.acquire(ctx, charID)
+func (s *storageService) OpenStorage(ctx context.Context, accountID uint32) error {
+	token, res, err := s.acquire(ctx, accountID)
 	if err != nil {
 		return err
 	}
 	if res == acquireLockBusy {
 		return domain.ErrStorageLocked
 	}
-	defer s.release(ctx, charID, token)
+	defer s.release(ctx, accountID, token)
 
-	_, err = s.repo.ListStorageByChar(ctx, charID)
+	_, err = s.repo.ListStorageByAccount(ctx, accountID)
 	if err != nil {
-		return fmt.Errorf("list storage (char %d): %w", charID, err)
+		return fmt.Errorf("list storage (account %d): %w", accountID, err)
 	}
 
 	return nil
 }
 
-func (s *storageService) DepositItem(ctx context.Context, charID uint32, inventoryItemID uint64, amount int32) error {
+func (s *storageService) DepositItem(ctx context.Context, accountID uint32, inventoryItemID uint64, amount int32) error {
 	if amount <= 0 {
 		return domain.ErrInvalidItemAmount
 	}
 
-	token, res, err := s.acquire(ctx, charID)
+	token, res, err := s.acquire(ctx, accountID)
 	if err != nil {
 		return err
 	}
 	if res == acquireLockBusy {
 		return domain.ErrStorageLocked
 	}
-	defer s.release(ctx, charID, token)
+	defer s.release(ctx, accountID, token)
 
 	if s.invRepo == nil {
-		return s.depositItemWithoutValidation(ctx, charID, inventoryItemID, amount)
+		return s.depositItemWithoutValidation(ctx, accountID, inventoryItemID, amount)
 	}
 
-	return s.depositItemWithValidation(ctx, charID, inventoryItemID, amount)
+	return s.depositItemWithValidation(ctx, accountID, inventoryItemID, amount)
 }
 
-func (s *storageService) depositItemWithValidation(ctx context.Context, charID uint32, inventoryItemID uint64, amount int32) error {
-	targetItem, invItems, err := s.findInventoryItem(ctx, charID, inventoryItemID)
+func (s *storageService) depositItemWithValidation(ctx context.Context, accountID uint32, inventoryItemID uint64, amount int32) error {
+	targetItem, invItems, err := s.findInventoryItem(ctx, accountID, inventoryItemID)
 	if err != nil {
 		return err
 	}
 
-	if err := s.validateItemAmount(ctx, charID, inventoryItemID, amount, targetItem, invItems); err != nil {
+	if err := s.validateItemAmount(ctx, accountID, inventoryItemID, amount, targetItem, invItems); err != nil {
 		return err
 	}
 
-	existingItems, err := s.repo.ListStorageByChar(ctx, charID)
+	existingItems, err := s.repo.ListStorageByAccount(ctx, accountID)
 	if err != nil {
-		return fmt.Errorf("list storage (char %d): %w", charID, err)
+		return fmt.Errorf("list storage (account %d): %w", accountID, err)
 	}
 
-	count, err := s.repo.CountStorageItems(ctx, charID)
+	count, err := s.repo.CountStorageItems(ctx, accountID)
 	if err != nil {
-		return fmt.Errorf("count storage items (char %d): %w", charID, err)
+		return fmt.Errorf("count storage items (account %d): %w", accountID, err)
 	}
 
 	itemExists := s.findItemByNameID(existingItems, targetItem.NameID)
@@ -103,13 +103,13 @@ func (s *storageService) depositItemWithValidation(ctx context.Context, charID u
 		}
 	}
 
-	return s.addOrUpdateStorageItem(ctx, charID, targetItem.NameID, amount, existingItems, itemExists)
+	return s.addOrUpdateStorageItem(ctx, accountID, targetItem.NameID, amount, existingItems, itemExists)
 }
 
-func (s *storageService) findInventoryItem(ctx context.Context, charID uint32, inventoryItemID uint64) (*domain.InventoryItem, []domain.InventoryItem, error) {
-	invItems, err := s.invRepo.ListByChar(ctx, charID)
+func (s *storageService) findInventoryItem(ctx context.Context, accountID uint32, inventoryItemID uint64) (*domain.InventoryItem, []domain.InventoryItem, error) {
+	invItems, err := s.invRepo.ListByChar(ctx, accountID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list inventory (char %d): %w", charID, err)
+		return nil, nil, fmt.Errorf("list inventory (account %d): %w", accountID, err)
 	}
 
 	for i := range invItems {
@@ -118,10 +118,10 @@ func (s *storageService) findInventoryItem(ctx context.Context, charID uint32, i
 		}
 	}
 
-	return nil, nil, fmt.Errorf("inventory item %d not found for char %d: %w", inventoryItemID, charID, domain.ErrInsufficientStorageItem)
+	return nil, nil, fmt.Errorf("inventory item %d not found for char %d: %w", inventoryItemID, accountID, domain.ErrInsufficientStorageItem)
 }
 
-func (s *storageService) validateItemAmount(ctx context.Context, charID uint32, inventoryItemID uint64, amount int32, targetItem *domain.InventoryItem, invItems []domain.InventoryItem) error {
+func (s *storageService) validateItemAmount(ctx context.Context, accountID uint32, inventoryItemID uint64, amount int32, targetItem *domain.InventoryItem, invItems []domain.InventoryItem) error {
 	var totalAvailable int64
 	for _, item := range invItems {
 		if item.NameID == targetItem.NameID {
@@ -144,7 +144,7 @@ func (s *storageService) findItemByNameID(items []domain.StorageItem, nameID uin
 	return false
 }
 
-func (s *storageService) addOrUpdateStorageItem(ctx context.Context, charID uint32, nameID uint32, amount int32, existingItems []domain.StorageItem, itemExists bool) error {
+func (s *storageService) addOrUpdateStorageItem(ctx context.Context, accountID uint32, nameID uint32, amount int32, existingItems []domain.StorageItem, itemExists bool) error {
 	now := time.Now()
 
 	if itemExists {
@@ -161,7 +161,7 @@ func (s *storageService) addOrUpdateStorageItem(ctx context.Context, charID uint
 	}
 
 	newItem := domain.StorageItem{
-		CharID:    charID,
+		AccountID: accountID,
 		NameID:    nameID,
 		Amount:    amount,
 		Identify:  1,
@@ -176,13 +176,13 @@ func (s *storageService) addOrUpdateStorageItem(ctx context.Context, charID uint
 	}
 
 	if err := s.repo.CreateStorageItem(ctx, newItem); err != nil {
-		return fmt.Errorf("create storage item (char %d, nameid %d): %w", charID, nameID, err)
+		return fmt.Errorf("create storage item (account %d, nameid %d): %w", accountID, nameID, err)
 	}
 
 	return nil
 }
 
-func (s *storageService) depositItemWithoutValidation(ctx context.Context, charID uint32, inventoryItemID uint64, amount int32) error {
+func (s *storageService) depositItemWithoutValidation(ctx context.Context, accountID uint32, inventoryItemID uint64, amount int32) error {
 	now := time.Now()
 
 	if inventoryItemID > uint64(^uint32(0)) {
@@ -190,7 +190,7 @@ func (s *storageService) depositItemWithoutValidation(ctx context.Context, charI
 	}
 
 	newItem := domain.StorageItem{
-		CharID:    charID,
+		AccountID: accountID,
 		NameID:    uint32(inventoryItemID),
 		Amount:    amount,
 		Identify:  1,
@@ -205,57 +205,57 @@ func (s *storageService) depositItemWithoutValidation(ctx context.Context, charI
 	}
 
 	if err := s.repo.CreateStorageItem(ctx, newItem); err != nil {
-		return fmt.Errorf("create storage item (char %d, nameid %d): %w", charID, uint32(inventoryItemID), err)
+		return fmt.Errorf("create storage item (account %d, nameid %d): %w", accountID, uint32(inventoryItemID), err)
 	}
 
 	return nil
 }
 
-func (s *storageService) WithdrawItem(ctx context.Context, charID uint32, storageItemID uint64, amount int32) error {
+func (s *storageService) WithdrawItem(ctx context.Context, accountID uint32, storageItemID uint64, amount int32) error {
 	if amount <= 0 {
 		return domain.ErrInvalidItemAmount
 	}
 
-	token, res, err := s.acquire(ctx, charID)
+	token, res, err := s.acquire(ctx, accountID)
 	if err != nil {
 		return err
 	}
 	if res == acquireLockBusy {
 		return domain.ErrStorageLocked
 	}
-	defer s.release(ctx, charID, token)
+	defer s.release(ctx, accountID, token)
 
 	item, err := s.repo.GetStorageItem(ctx, storageItemID)
 	if err != nil {
 		if errors.Is(err, domain.ErrStorageNotFound) {
-			return fmt.Errorf("storage item %d not found for char %d", storageItemID, charID)
+			return fmt.Errorf("storage item %d not found for account %d", storageItemID, accountID)
 		}
 		return fmt.Errorf("get storage item (id %d): %w", storageItemID, err)
 	}
 
-	if item.CharID != charID {
-		return fmt.Errorf("storage item %d does not belong to char %d", storageItemID, charID)
+	if item.AccountID != accountID {
+		return fmt.Errorf("storage item %d does not belong to account %d", storageItemID, accountID)
 	}
 
 	if amount > item.Amount {
 		return domain.ErrInsufficientStorageItem
 	}
 
-	if err := s.checkInventoryCapacity(ctx, charID, item); err != nil {
+	if err := s.checkInventoryCapacity(ctx, accountID, item); err != nil {
 		return err
 	}
 
 	return s.updateOrDeleteStorageItem(ctx, storageItemID, item, amount)
 }
 
-func (s *storageService) checkInventoryCapacity(ctx context.Context, charID uint32, item domain.StorageItem) error {
+func (s *storageService) checkInventoryCapacity(ctx context.Context, accountID uint32, item domain.StorageItem) error {
 	if s.invRepo == nil {
 		return nil
 	}
 
-	invItems, err := s.invRepo.ListByChar(ctx, charID)
+	invItems, err := s.invRepo.ListByChar(ctx, accountID)
 	if err != nil {
-		return fmt.Errorf("list inventory (char %d): %w", charID, err)
+		return fmt.Errorf("list inventory (account %d): %w", accountID, err)
 	}
 
 	const maxInventorySlots = 100
@@ -298,13 +298,13 @@ func (s *storageService) updateOrDeleteStorageItem(ctx context.Context, storageI
 	return nil
 }
 
-func (s *storageService) CloseStorage(ctx context.Context, charID uint32) error {
+func (s *storageService) CloseStorage(ctx context.Context, accountID uint32) error {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 	defer cancel()
 
-	token := fmt.Sprintf("close-%d", charID)
-	if err := s.locks.Release(releaseCtx, domain.StorageLockKey(charID), token); err != nil {
-		return fmt.Errorf("release storage lock (char %d): %w", charID, err)
+	token := fmt.Sprintf("close-%d", accountID)
+	if err := s.locks.Release(releaseCtx, domain.StorageLockKey(accountID), token); err != nil {
+		return fmt.Errorf("release storage lock (account %d): %w", accountID, err)
 	}
 
 	return nil
@@ -317,20 +317,20 @@ const (
 	acquireLockBusy
 )
 
-func (s *storageService) acquire(ctx context.Context, charID uint32) (string, acquireResult, error) {
-	token, err := s.locks.Acquire(ctx, domain.StorageLockKey(charID), s.lockTTL)
+func (s *storageService) acquire(ctx context.Context, accountID uint32) (string, acquireResult, error) {
+	token, err := s.locks.Acquire(ctx, domain.StorageLockKey(accountID), s.lockTTL)
 	switch {
 	case err == nil:
 		return token, acquireOK, nil
 	case errors.Is(err, domain.ErrStorageLocked):
 		return "", acquireLockBusy, nil
 	default:
-		return "", 0, fmt.Errorf("storage lock acquire (char %d): %w", charID, err)
+		return "", 0, fmt.Errorf("storage lock acquire (account %d): %w", accountID, err)
 	}
 }
 
-func (s *storageService) release(ctx context.Context, charID uint32, token string) {
+func (s *storageService) release(ctx context.Context, accountID uint32, token string) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 	defer cancel()
-	_ = s.locks.Release(releaseCtx, domain.StorageLockKey(charID), token)
+	_ = s.locks.Release(releaseCtx, domain.StorageLockKey(accountID), token)
 }
