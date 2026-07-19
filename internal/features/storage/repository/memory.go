@@ -46,11 +46,11 @@ func (r *memoryStorageRepository) CreateStorageItem(ctx context.Context, item do
 	return nil
 }
 
-func (r *memoryStorageRepository) ListStorageByChar(ctx context.Context, charID uint32) ([]domain.StorageItem, error) {
+func (r *memoryStorageRepository) ListStorageByAccount(ctx context.Context, accountID uint32) ([]domain.StorageItem, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	ids, exists := r.accountIdx[charID]
+	ids, exists := r.accountIdx[accountID]
 	if !exists {
 		return []domain.StorageItem{}, nil
 	}
@@ -114,11 +114,11 @@ func (r *memoryStorageRepository) DeleteStorageItem(ctx context.Context, itemID 
 	return nil
 }
 
-func (r *memoryStorageRepository) CountStorageItems(ctx context.Context, charID uint32) (int, error) {
+func (r *memoryStorageRepository) CountStorageItems(ctx context.Context, accountID uint32) (int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	ids, exists := r.accountIdx[charID]
+	ids, exists := r.accountIdx[accountID]
 	if !exists {
 		return 0, nil
 	}

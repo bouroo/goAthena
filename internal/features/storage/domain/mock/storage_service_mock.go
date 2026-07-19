@@ -41,57 +41,57 @@ func (m *MockStorageService) EXPECT() *MockStorageServiceMockRecorder {
 }
 
 // CloseStorage mocks base method.
-func (m *MockStorageService) CloseStorage(ctx context.Context, charID uint32) error {
+func (m *MockStorageService) CloseStorage(ctx context.Context, accountID uint32) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CloseStorage", ctx, charID)
+	ret := m.ctrl.Call(m, "CloseStorage", ctx, accountID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // CloseStorage indicates an expected call of CloseStorage.
-func (mr *MockStorageServiceMockRecorder) CloseStorage(ctx, charID any) *gomock.Call {
+func (mr *MockStorageServiceMockRecorder) CloseStorage(ctx, accountID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CloseStorage", reflect.TypeOf((*MockStorageService)(nil).CloseStorage), ctx, charID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CloseStorage", reflect.TypeOf((*MockStorageService)(nil).CloseStorage), ctx, accountID)
 }
 
 // DepositItem mocks base method.
-func (m *MockStorageService) DepositItem(ctx context.Context, charID uint32, inventoryItemID uint64, amount int32) error {
+func (m *MockStorageService) DepositItem(ctx context.Context, accountID uint32, inventoryItemID uint64, amount int32) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DepositItem", ctx, charID, inventoryItemID, amount)
+	ret := m.ctrl.Call(m, "DepositItem", ctx, accountID, inventoryItemID, amount)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DepositItem indicates an expected call of DepositItem.
-func (mr *MockStorageServiceMockRecorder) DepositItem(ctx, charID, inventoryItemID, amount any) *gomock.Call {
+func (mr *MockStorageServiceMockRecorder) DepositItem(ctx, accountID, inventoryItemID, amount any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DepositItem", reflect.TypeOf((*MockStorageService)(nil).DepositItem), ctx, charID, inventoryItemID, amount)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DepositItem", reflect.TypeOf((*MockStorageService)(nil).DepositItem), ctx, accountID, inventoryItemID, amount)
 }
 
 // OpenStorage mocks base method.
-func (m *MockStorageService) OpenStorage(ctx context.Context, charID uint32) error {
+func (m *MockStorageService) OpenStorage(ctx context.Context, accountID uint32) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "OpenStorage", ctx, charID)
+	ret := m.ctrl.Call(m, "OpenStorage", ctx, accountID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // OpenStorage indicates an expected call of OpenStorage.
-func (mr *MockStorageServiceMockRecorder) OpenStorage(ctx, charID any) *gomock.Call {
+func (mr *MockStorageServiceMockRecorder) OpenStorage(ctx, accountID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "OpenStorage", reflect.TypeOf((*MockStorageService)(nil).OpenStorage), ctx, charID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "OpenStorage", reflect.TypeOf((*MockStorageService)(nil).OpenStorage), ctx, accountID)
 }
 
 // WithdrawItem mocks base method.
-func (m *MockStorageService) WithdrawItem(ctx context.Context, charID uint32, storageItemID uint64, amount int32) error {
+func (m *MockStorageService) WithdrawItem(ctx context.Context, accountID uint32, storageItemID uint64, amount int32) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WithdrawItem", ctx, charID, storageItemID, amount)
+	ret := m.ctrl.Call(m, "WithdrawItem", ctx, accountID, storageItemID, amount)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // WithdrawItem indicates an expected call of WithdrawItem.
-func (mr *MockStorageServiceMockRecorder) WithdrawItem(ctx, charID, storageItemID, amount any) *gomock.Call {
+func (mr *MockStorageServiceMockRecorder) WithdrawItem(ctx, accountID, storageItemID, amount any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WithdrawItem", reflect.TypeOf((*MockStorageService)(nil).WithdrawItem), ctx, charID, storageItemID, amount)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WithdrawItem", reflect.TypeOf((*MockStorageService)(nil).WithdrawItem), ctx, accountID, storageItemID, amount)
 }

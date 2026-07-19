@@ -21,7 +21,7 @@ var (
 	// ErrStorageNotFound is returned when a storage item does not exist.
 	ErrStorageNotFound = errors.New("storage not found")
 
-	// ErrStorageLocked is returned when a character's storage is locked by another operation.
+	// ErrStorageLocked is returned when an account's storage is locked by another operation.
 	ErrStorageLocked = errors.New("storage locked")
 
 	// ErrStorageFull is returned when storage cannot accept more items (limit reached).
@@ -38,26 +38,26 @@ var (
 )
 
 // StorageService is the inbound port for storage use-cases. It manages
-// a character's personal storage, handling item deposits and withdrawals
+// an account's personal storage, handling item deposits and withdrawals
 // while enforcing capacity limits and inventory space constraints.
 //
-// Storage operations acquire per-character locks (key pattern: "storage:{char_id}")
-// to serialize concurrent storage attempts for the same character.
+// Storage operations acquire per-account locks (key pattern: "storage:{account_id}")
+// to serialize concurrent storage attempts for the same account.
 type StorageService interface {
-	// OpenStorage locks the character's storage for subsequent operations.
+	// OpenStorage locks the account's storage for subsequent operations.
 	// Returns ErrStorageLocked if already held by another operation.
-	OpenStorage(ctx context.Context, charID uint32) error
+	OpenStorage(ctx context.Context, accountID uint32) error
 
 	// DepositItem moves an item from character inventory to storage.
 	// Fails if inventory item is not owned, amount is invalid, or storage is full.
-	DepositItem(ctx context.Context, charID uint32, inventoryItemID uint64, amount int32) error
+	DepositItem(ctx context.Context, accountID uint32, inventoryItemID uint64, amount int32) error
 
 	// WithdrawItem moves an item from storage to character inventory.
 	// Fails if storage item is not owned, amount is invalid, or inventory is full.
-	WithdrawItem(ctx context.Context, charID uint32, storageItemID uint64, amount int32) error
+	WithdrawItem(ctx context.Context, accountID uint32, storageItemID uint64, amount int32) error
 
-	// CloseStorage unlocks the character's storage, allowing other operations.
-	CloseStorage(ctx context.Context, charID uint32) error
+	// CloseStorage unlocks the account's storage, allowing other operations.
+	CloseStorage(ctx context.Context, accountID uint32) error
 }
 
 // StorageRepository is the outbound port for storage persistence.
@@ -66,8 +66,8 @@ type StorageRepository interface {
 	// CreateStorageItem adds a new item to storage.
 	CreateStorageItem(ctx context.Context, item StorageItem) error
 
-	// ListStorageByChar returns all storage items for a character.
-	ListStorageByChar(ctx context.Context, charID uint32) ([]StorageItem, error)
+	// ListStorageByAccount returns all storage items for an account.
+	ListStorageByAccount(ctx context.Context, accountID uint32) ([]StorageItem, error)
 
 	// GetStorageItem retrieves a specific storage item by ID.
 	// Returns ErrStorageNotFound if missing.
@@ -79,12 +79,12 @@ type StorageRepository interface {
 	// DeleteStorageItem removes an item from storage.
 	DeleteStorageItem(ctx context.Context, itemID uint64) error
 
-	// CountStorageItems returns the total number of items in storage for a character.
-	CountStorageItems(ctx context.Context, charID uint32) (int, error)
+	// CountStorageItems returns the total number of items in storage for an account.
+	CountStorageItems(ctx context.Context, accountID uint32) (int, error)
 }
 
-// LockStore is the outbound port for per-character distributed locks.
-// It serializes concurrent storage operations for the same character.
+// LockStore is the outbound port for per-account distributed locks.
+// It serializes concurrent storage operations for the same account.
 //
 // Implementations must make Release idempotent: releasing an absent or
 // expired lock, or a lock owned by a different token, is a no-op (nil error).
@@ -99,8 +99,8 @@ type LockStore interface {
 	Release(ctx context.Context, key string, token string) error
 }
 
-// StorageLockKey returns the lock key for a character's storage mutex.
+// StorageLockKey returns the lock key for an account's storage mutex.
 // The prefix namespaces storage locks away from other locks.
-func StorageLockKey(charID uint32) string {
-	return fmt.Sprintf("storage:char:%d", charID)
+func StorageLockKey(accountID uint32) string {
+	return fmt.Sprintf("storage:account:%d", accountID)
 }
