@@ -200,8 +200,7 @@ func classifyError(msg string, report *CorpusReport) string {
 	switch {
 	case strings.Contains(msg, "instruction limit exceeded"):
 		return ReasonInstrLimit
-	case strings.HasPrefix(msg, "callfunc: unknown function") ||
-		strings.Contains(msg, "callfunc: unknown function"):
+	case strings.Contains(msg, "callfunc: unknown function"):
 		if name := extractQuotedName(msg); name != "" {
 			report.FuncGaps[name]++
 		}
