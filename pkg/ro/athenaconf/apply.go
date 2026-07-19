@@ -1,8 +1,8 @@
 package athenaconf
 
 import (
+	"errors"
 	"fmt"
-	"slices"
 	"sort"
 
 	"github.com/bouroo/goAthena/internal/config"
@@ -15,9 +15,13 @@ import (
 // round-trip test can assert it is non-empty.
 //
 // Adding a new mapping is a one-line table entry.
+// keyMapEntry binds a primary rAthena key to a setter closure. aliases
+// lists every other rAthena spelling the entry also accepts (kept for
+// documentation; the map itself is keyed by the primary key only, so
+// lookup is O(1)).
 type keyMapEntry struct {
-	rathenaKeys []string
-	apply       func(cfg *config.Config, v Value) error
+	aliases []string
+	apply   func(cfg *config.Config, v Value) error
 }
 
 // initialKeyMap returns a fresh C1 mapping table each call so callers
@@ -27,7 +31,7 @@ func initialKeyMap() map[string]keyMapEntry {
 	out := map[string]keyMapEntry{}
 
 	out["use_MD5_passwords"] = keyMapEntry{
-		rathenaKeys: []string{"use_MD5_passwords", "use_md5_passwds"},
+		aliases: []string{"use_MD5_passwords", "use_md5_passwds"},
 		apply: func(cfg *config.Config, v Value) error {
 			if v.Kind != KindBool {
 				return fmt.Errorf("use_MD5_passwords: expected bool, got %s", v.Kind)
@@ -38,7 +42,7 @@ func initialKeyMap() map[string]keyMapEntry {
 	}
 
 	out["chars_per_account"] = keyMapEntry{
-		rathenaKeys: []string{"chars_per_account", "max_char"},
+		aliases: []string{"chars_per_account", "max_char"},
 		apply: func(cfg *config.Config, v Value) error {
 			if v.Kind != KindInt {
 				return fmt.Errorf("chars_per_account: expected int, got %s", v.Kind)
@@ -66,21 +70,33 @@ func ApplyToConfig(cfg *config.Config, f *File, manifest *Manifest) error {
 
 	mappings := initialKeyMap()
 
-	var firstErr error
+	// Flatten aliases into the same map so both the primary key and every
+	// alias resolve in O(1). Aliases share the primary entry's apply fn.
+	aliasMap := make(map[string]keyMapEntry, len(mappings)*2)
+	for primary, entry := range mappings {
+		aliasMap[primary] = entry
+		for _, alias := range entry.aliases {
+			if alias != primary {
+				aliasMap[alias] = entry
+			}
+		}
+	}
+
+	var errs []error
 	for _, rathenaKey := range sortedKeys(f.Keys) {
 		v := f.Keys[rathenaKey]
-		entry, known := lookupMapped(mappings, rathenaKey)
+		entry, known := aliasMap[rathenaKey]
 		if !known {
 			manifest.Unmapped = append(manifest.Unmapped, rathenaKey)
 			continue
 		}
-		if err := entry.apply(cfg, v); err != nil && firstErr == nil {
-			firstErr = err
+		if err := entry.apply(cfg, v); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
 	sort.Strings(manifest.Unmapped)
-	return firstErr
+	return errors.Join(errs...)
 }
 
 // sortedKeys returns f.Keys' keys in stable order (f.Order if present,
@@ -92,16 +108,4 @@ func sortedKeys(m map[string]Value) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// lookupMapped scans the Initial key map for an entry whose rathenaKeys
-// slice contains key. Returns the entry and true on hit, zero-value and
-// false otherwise.
-func lookupMapped(mappings map[string]keyMapEntry, key string) (keyMapEntry, bool) {
-	for _, e := range mappings {
-		if slices.Contains(e.rathenaKeys, key) {
-			return e, true
-		}
-	}
-	return keyMapEntry{}, false
 }

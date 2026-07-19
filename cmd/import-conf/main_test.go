@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,20 @@ func TestRun_BadSrc(t *testing.T) {
 		"--out", filepath.Join(t.TempDir(), "out.yaml"),
 	})
 	assert.NotEqual(t, 0, exit)
+}
+
+func TestRun_HelpFlag(t *testing.T) {
+	// Both -h and --help must return exit code 0 via errHelp without
+	// calling os.Exit (which would terminate the test process).
+	assert.Equal(t, 0, Run([]string{"-h"}))
+	assert.Equal(t, 0, Run([]string{"--help"}))
+}
+
+func TestParseFlags_HelpReturnsErrHelp(t *testing.T) {
+	_, _, _, err := parseFlags([]string{"-h"})
+	assert.True(t, errors.Is(err, errHelp), "expected errHelp, got %v", err)
+	_, _, _, err = parseFlags([]string{"--help"})
+	assert.True(t, errors.Is(err, errHelp), "expected errHelp, got %v", err)
 }
 
 func min(a, b int) int {

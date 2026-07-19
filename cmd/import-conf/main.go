@@ -12,6 +12,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,6 +24,11 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/athenaconf"
 )
 
+// errHelp is returned by parseFlags when the user requested help. Run
+// translates it to exit code 0 (after printing usage) so tests can drive
+// the help path without terminating the test process.
+var errHelp = errors.New("help requested")
+
 const (
 	defaultSrc = "third_party/rathena/conf"
 	defaultOut = "config.rathena.yaml"
@@ -32,6 +38,10 @@ const (
 // can drive it without spawning a subprocess.
 func Run(args []string) int {
 	src, out, root, err := parseFlags(args)
+	if errors.Is(err, errHelp) {
+		printUsage()
+		return 0
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		printUsage()
@@ -94,8 +104,7 @@ func parseFlags(args []string) (src, out, root string, err error) {
 			}
 			root = args[i]
 		case "-h", "--help":
-			printUsage()
-			os.Exit(0)
+			return "", "", "", errHelp
 		default:
 			return "", "", "", fmt.Errorf("unknown flag: %s", arg)
 		}

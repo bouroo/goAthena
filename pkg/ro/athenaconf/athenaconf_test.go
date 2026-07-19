@@ -349,3 +349,88 @@ func TestApplyToConfig_MappedKeysAndAliases(t *testing.T) {
 		})
 	}
 }
+
+func TestStripBlockComments(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		line      string
+		startIn   bool
+		want      string
+		wantInBlk bool
+	}{
+		{
+			name:      "trailing comment after value",
+			line:      "key: value /* comment */",
+			want:      "key: value ",
+			wantInBlk: false,
+		},
+		{
+			name:      "leading comment before key",
+			line:      "/* comment */ key: value",
+			want:      " key: value",
+			wantInBlk: false,
+		},
+		{
+			name:      "inline comment between key and value",
+			line:      "key: /* comment */ value",
+			want:      "key:  value",
+			wantInBlk: false,
+		},
+		{
+			name:      "opening only sets inBlock",
+			line:      "/* opening only",
+			want:      "",
+			wantInBlk: true,
+		},
+		{
+			name:      "closing while already inside",
+			line:      "still in block */ key: value",
+			startIn:   true,
+			want:      " key: value",
+			wantInBlk: false,
+		},
+		{
+			name:      "entirely inside leaves state untouched",
+			line:      "entirely inside block comment",
+			startIn:   true,
+			want:      "",
+			wantInBlk: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inBlk := tc.startIn
+			got := stripBlockComments(tc.line, &inBlk)
+			assert.Equal(t, tc.want, got, "cleaned line")
+			assert.Equal(t, tc.wantInBlk, inBlk, "inBlock state")
+		})
+	}
+}
+
+func TestStripBlockComments_MultilineSplit(t *testing.T) {
+	t.Parallel()
+	inBlk := false
+	first := stripBlockComments("multiline /* part one", &inBlk)
+	assert.Equal(t, "multiline ", first, "first line keeps text before unterminated /*")
+	assert.True(t, inBlk, "first line must leave us inside the block")
+
+	second := stripBlockComments("part two */ key: 1", &inBlk)
+	assert.Equal(t, " key: 1", second, "second line should keep post-*/ text")
+	assert.False(t, inBlk, "second line must close the block")
+}
+
+func TestParse_PreservesConfigAfterBlockComment(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.conf",
+		"key_before: 1 /* trailing comment */\n"+
+			"/* only comment */\n"+
+			"key_after: 2\n")
+
+	f, err := NewParser(dir).Parse(path)
+	require.NoError(t, err)
+	require.Contains(t, f.Keys, "key_before")
+	require.Contains(t, f.Keys, "key_after")
+	assert.Equal(t, int64(1), f.Keys["key_before"].Int)
+	assert.Equal(t, int64(2), f.Keys["key_after"].Int)
+}

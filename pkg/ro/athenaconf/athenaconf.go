@@ -242,25 +242,18 @@ func readLines(r io.Reader, out *File) error {
 		if trimmed == "" {
 			continue
 		}
-		if inBlockComment {
-			if strings.Contains(trimmed, "*/") {
-				inBlockComment = false
-			}
+		cleaned := stripBlockComments(trimmed, &inBlockComment)
+		cleaned = strings.TrimSpace(cleaned)
+		if cleaned == "" {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "/*") || (strings.Contains(trimmed, "/*") && strings.Contains(trimmed, "*/")) {
-			if !strings.Contains(trimmed, "*/") {
-				inBlockComment = true
-			}
+		if strings.HasPrefix(cleaned, "//") {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "//") {
+		if strings.ContainsAny(cleaned, "{}()") {
 			continue
 		}
-		if strings.ContainsAny(trimmed, "{}()") {
-			continue
-		}
-		key, value, hasValue, err := splitKeyValue(trimmed)
+		key, value, hasValue, err := splitKeyValue(cleaned)
 		if err != nil {
 			return fmt.Errorf("%s:%d: %w", out.Path, lineNo, err)
 		}
@@ -283,6 +276,46 @@ func readLines(r io.Reader, out *File) error {
 		return fmt.Errorf("%s: scan: %w", out.Path, err)
 	}
 	return nil
+}
+
+// stripBlockComments removes /* ... */ sequences from line, handling the
+// case where the comment spans multiple lines via the inBlock pointer.
+// On return, *inBlock is true iff the line ended inside an unterminated
+// block comment (i.e. the caller must pass the next line in too).
+//
+// Semantics mirror libconfig: anything between /* and the matching */ is
+// dropped; whitespace is preserved around the dropped span so a trailing
+// space is acceptable (TrimSpace later normalises it).
+func stripBlockComments(line string, inBlock *bool) string {
+	out := ""
+	rest := line
+	if *inBlock {
+		// Currently inside a multi-line block comment; look for the
+		// closing */ on this line.
+		if _, after, ok := strings.Cut(rest, "*/"); ok {
+			rest = after
+			*inBlock = false
+		} else {
+			return ""
+		}
+	}
+	for {
+		start := strings.Index(rest, "/*")
+		if start < 0 {
+			out += rest
+			return out
+		}
+		out += rest[:start]
+		after := rest[start+2:]
+		if _, tail, ok := strings.Cut(after, "*/"); ok {
+			rest = tail
+			continue
+		}
+		// Unterminated comment opens here; drop the rest of the line
+		// and remember we are inside a block.
+		*inBlock = true
+		return out
+	}
 }
 
 // splitKeyValue splits a single non-comment line into (key, value,
