@@ -10,7 +10,7 @@ require (
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/uuid v1.6.0
-	github.com/labstack/echo/v5 v5.2.1
+	github.com/labstack/echo/v5 v5.3.0
 	github.com/nats-io/nats.go v1.52.0
 	github.com/panjf2000/gnet/v2 v2.10.0
 	github.com/prometheus/client_golang v1.23.2
