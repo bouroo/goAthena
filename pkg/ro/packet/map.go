@@ -233,6 +233,18 @@ const (
 	// ZC_NOTIFY_VANISH (0x0080) — entity vanish notification. rathena/src/map/
 	// packets.hpp:609. Fixed 7 bytes.
 	HeaderZCNOTIFYVANISH uint16 = 0x0080
+	// A4: CZ drop-item opcodes. rAthena registers seven modern DropItem
+	// aliases (clif_packetdb.hpp:1385-1606), all sharing the 6-byte
+	// <index>.W <amount>.W layout; which one a given client sends is
+	// build-specific. The gateway accepts all six FREE aliases below.
+	// 0x0438 is excluded — it collides with CZ_USE_SKILL2 (HeaderCZUSESKILL).
+	// 0x0094 is the pre-2004 layout and is CZ_GET_CHAR_NAME_REQUEST here.
+	HeaderCZDROPITEM0363 uint16 = 0x0363 // >=20110706
+	HeaderCZDROPITEM0885 uint16 = 0x0885 // >=20111005
+	HeaderCZDROPITEM02C4 uint16 = 0x02C4 // >=20120307
+	HeaderCZDROPITEM0891 uint16 = 0x0891 // >=20120410
+	HeaderCZDROPITEM0362 uint16 = 0x0362 // >=20120418
+	HeaderCZDROPITEM089E uint16 = 0x089e // >=20120702
 )
 
 // SP_* status parameter IDs from rathena/src/map/map.hpp:498-505.
@@ -509,6 +521,9 @@ const (
 	// sizeCZUseItem2 = int16 packetType + uint16 index + uint32 AID = 2+2+4 = 8
 	// (rathena/src/map/clif_packetdb.hpp:1151).
 	sizeCZUseItem2 = 8
+	// sizeCZDropItem = int16 packetType + uint16 index + uint16 amount = 2+2+2 = 6.
+	// Shared by every modern DropItem opcode band (clif_packetdb.hpp:1385-1606).
+	sizeCZDropItem = 6
 	// sizeCZReqWearEquipV5 = int16 packetType + uint16 index + uint32 position = 2+2+4 = 8
 	// (rathena/src/map/packets.hpp:1504-1509).
 	sizeCZReqWearEquipV5 = 8
@@ -1026,6 +1041,47 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCItemFallEntry,
 		Name:      "ZC_ITEM_FALL_ENTRY",
 		Length:    sizeZCItemFallEntry,
+		Direction: DirectionServerToClient,
+	})
+	// A4: item drop + pickup. Six C→S drop aliases share one 6-byte
+	// <index>.W <amount>.W layout (clif_packetdb.hpp:1385-1606); which one a
+	// client sends is build-specific, so the gateway accepts all six. The
+	// seventh alias 0x0438 collides with CZ_USE_SKILL2 and is excluded.
+	for _, op := range []uint16{
+		HeaderCZDROPITEM0363, HeaderCZDROPITEM0885, HeaderCZDROPITEM02C4,
+		HeaderCZDROPITEM0891, HeaderCZDROPITEM0362, HeaderCZDROPITEM089E,
+	} {
+		db.Register(Definition{
+			ID:        op,
+			Name:      "CZ_ITEM_DROP",
+			Length:    sizeCZDropItem,
+			Direction: DirectionClientToServer,
+		})
+	}
+	// A4: server→client floor-item and ack frames. Sizes + opcodes verified
+	// in map_item_drop.go.
+	db.Register(Definition{
+		ID:        HeaderZCItemEntry,
+		Name:      "ZC_ITEM_ENTRY",
+		Length:    sizeZCItemEntry,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCItemDisappear,
+		Name:      "ZC_ITEM_DISAPPEAR",
+		Length:    sizeZCItemDisappear,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCItemThrowAck,
+		Name:      "ZC_ITEM_THROW_ACK",
+		Length:    sizeZCItemThrowAck,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCItemPickupAck,
+		Name:      "ZC_ITEM_PICKUP_ACK",
+		Length:    sizeZCItemPickupAck,
 		Direction: DirectionServerToClient,
 	})
 

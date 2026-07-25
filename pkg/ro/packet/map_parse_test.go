@@ -1636,3 +1636,42 @@ func TestParseCZCloseDialog_AcceptsTrailingBytes(t *testing.T) {
 		t.Errorf("ParseCZCloseDialog() = %+v, want %+v", got, want)
 	}
 }
+
+// TestParseCZDropItem verifies the 6-byte drop-item frame decodes index +
+// amount. Any of the six registered CZ drop aliases routes here; the parser
+// is opcode-agnostic by design (dispatch selected it), so this exercises
+// the canonical alias 0x0363.
+func TestParseCZDropItem(t *testing.T) {
+	t.Parallel()
+
+	frame := make([]byte, sizeCZDropItem)
+	writeLE16(frame[0:], HeaderCZDROPITEM0363)
+	writeLE16(frame[2:], 17)  // inventory index
+	writeLE16(frame[4:], 200) // amount
+
+	got, err := ParseCZDropItem(frame)
+	if err != nil {
+		t.Fatalf("ParseCZDropItem() unexpected error: %v", err)
+	}
+	want := CZDropItemRequest{InventoryIndex: 17, Amount: 200}
+	if got != want {
+		t.Errorf("ParseCZDropItem() = %+v, want %+v", got, want)
+	}
+}
+
+// TestParseCZDropItem_RejectsBadLength pins the exact-size contract: the
+// parser rejects anything that is not 6 bytes, including the legacy 4-byte
+// pre-2010 layout and a 7-byte over-long frame.
+func TestParseCZDropItem_RejectsBadLength(t *testing.T) {
+	t.Parallel()
+
+	for _, n := range []int{0, 1, 4, 5, 7, 8} {
+		frame := make([]byte, n)
+		if n >= 2 {
+			writeLE16(frame[0:], HeaderCZDROPITEM0363)
+		}
+		if _, err := ParseCZDropItem(frame); err == nil {
+			t.Errorf("ParseCZDropItem(%d bytes) err = nil, want error", n)
+		}
+	}
+}

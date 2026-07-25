@@ -515,3 +515,130 @@ func TestInventoryRepository_ModelMapping(t *testing.T) {
 		assert.Equal(t, int8(9), m.OptionParm0)
 	})
 }
+
+// consumeInventoryRow builds a single-row SELECT result carrying the
+// given amount (and otherwise-zero attrs) so the Consume FOR UPDATE read
+// yields a deterministic stack size without re-listing every column
+// inline. Order MUST match inventoryColumns.
+func consumeInventoryRow(amount uint32) *sqlmock.Rows {
+	return sqlmock.NewRows(inventoryColumns).AddRow(
+		uint32(42), uint32(150001), uint32(501), amount, uint32(0), int16(1),
+		uint8(0), uint8(0),
+		uint32(0), uint32(0), uint32(0), uint32(0),
+		int16(0), int16(0), int8(0),
+		int16(0), int16(0), int8(0),
+		int16(0), int16(0), int8(0),
+		int16(0), int16(0), int8(0),
+		int16(0), int16(0), int8(0),
+		uint32(0), uint8(0), uint8(0), uint64(0), uint32(0),
+		uint8(0),
+	)
+}
+
+func TestInventoryRepository_Consume(t *testing.T) {
+	t.Parallel()
+
+	t.Run("partial consume updates the row and returns the remainder", func(t *testing.T) {
+		t.Parallel()
+		gormDB, mock := newInventoryMockGormDB(t)
+		repo := repository.NewInventoryRepository(gormDB)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT .* FROM "inventory" WHERE id = \$1 .* FOR UPDATE`).
+			WithArgs(uint32(42), sqlmock.AnyArg()).
+			WillReturnRows(consumeInventoryRow(5))
+		mock.ExpectExec(`UPDATE "inventory" SET "amount"=\$1 WHERE id = \$2`).
+			WithArgs(uint32(3), uint32(42)).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+
+		remaining, err := repo.Consume(context.Background(), 42, 2)
+		require.NoError(t, err)
+		assert.Equal(t, uint32(3), remaining)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("full consume deletes the drained row and returns 0", func(t *testing.T) {
+		t.Parallel()
+		gormDB, mock := newInventoryMockGormDB(t)
+		repo := repository.NewInventoryRepository(gormDB)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT .* FROM "inventory" WHERE id = \$1 .* FOR UPDATE`).
+			WithArgs(uint32(42), sqlmock.AnyArg()).
+			WillReturnRows(consumeInventoryRow(5))
+		mock.ExpectExec(`DELETE FROM "inventory" WHERE id = \$1`).
+			WithArgs(uint32(42)).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+
+		remaining, err := repo.Consume(context.Background(), 42, 5)
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), remaining)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("over-amount rolls back with ErrInsufficientStack and commits nothing", func(t *testing.T) {
+		t.Parallel()
+		gormDB, mock := newInventoryMockGormDB(t)
+		repo := repository.NewInventoryRepository(gormDB)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT .* FROM "inventory" WHERE id = \$1 .* FOR UPDATE`).
+			WithArgs(uint32(42), sqlmock.AnyArg()).
+			WillReturnRows(consumeInventoryRow(3))
+		mock.ExpectRollback()
+
+		remaining, err := repo.Consume(context.Background(), 42, 5)
+		require.Error(t, err)
+		assert.Equal(t, uint32(0), remaining)
+		assert.ErrorIs(t, err, domain.ErrInsufficientStack)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("zero id returns ErrItemNotFound without opening a transaction", func(t *testing.T) {
+		t.Parallel()
+		gormDB, mock := newInventoryMockGormDB(t)
+		repo := repository.NewInventoryRepository(gormDB)
+
+		_, err := repo.Consume(context.Background(), 0, 2)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, domain.ErrItemNotFound)
+		assert.NoError(t, mock.ExpectationsWereMet(), "no SQL should have been issued")
+	})
+
+	t.Run("zero amount is rejected without opening a transaction", func(t *testing.T) {
+		t.Parallel()
+		gormDB, mock := newInventoryMockGormDB(t)
+		repo := repository.NewInventoryRepository(gormDB)
+
+		_, err := repo.Consume(context.Background(), 42, 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "amount must be > 0")
+		assert.NoError(t, mock.ExpectationsWereMet(), "no SQL should have been issued")
+	})
+}
+
+// TestInventoryRepository_ConsumeOne_DelegatesToConsume pins that
+// ConsumeOne is the amount=1 specialization of Consume: it drives the
+// same transaction (one unit consumed, remainder = stack-1) rather than
+// a separate code path.
+func TestInventoryRepository_ConsumeOne_DelegatesToConsume(t *testing.T) {
+	t.Parallel()
+	gormDB, mock := newInventoryMockGormDB(t)
+	repo := repository.NewInventoryRepository(gormDB)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT .* FROM "inventory" WHERE id = \$1 .* FOR UPDATE`).
+		WithArgs(uint32(42), sqlmock.AnyArg()).
+		WillReturnRows(consumeInventoryRow(5))
+	mock.ExpectExec(`UPDATE "inventory" SET "amount"=\$1 WHERE id = \$2`).
+		WithArgs(uint32(4), uint32(42)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	remaining, err := repo.ConsumeOne(context.Background(), 42)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(4), remaining, "ConsumeOne must consume exactly one unit")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

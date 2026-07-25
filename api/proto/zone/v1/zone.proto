@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package zone.v1;
 
+import "zone/v1/event.proto";
+
 option go_package = "github.com/bouroo/goAthena/api/pb/zone/v1;zonev1";
 
 // ZoneService manages map instances, entity state, and cross-zone transit.
@@ -112,6 +114,12 @@ service ZoneService {
 
   // GetVendingShop returns the shop owned by a character.
   rpc GetVendingShop(GetVendingShopRequest) returns (GetVendingShopResponse);
+
+  // ListEntities returns a snapshot of entities currently in a map. The
+  // gateway calls this on map-enter to seed its per-map mob-view cache,
+  // closing the bootstrapping race where the zone spawns mobs before the
+  // gateway subscribes to EntitySpawned events.
+  rpc ListEntities(ListEntitiesRequest) returns (ListEntitiesResponse);
 }
 
 message EnterZoneRequest {
@@ -517,4 +525,14 @@ message GetVendingShopResponse {
   bool success = 1;
   string error_message = 2;
   VendingShopInfo shop = 3;
+}
+
+message ListEntitiesRequest {
+  string map_name = 1;          // map whose entities to snapshot
+  uint32 entity_type_filter = 2; // 0 = all; else domain.EntityType (2 = mob)
+}
+
+message ListEntitiesResponse {
+  bool success = 1;
+  repeated EntitySpawned entities = 2; // reuses the broadcast spawn shape
 }

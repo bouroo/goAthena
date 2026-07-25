@@ -69,6 +69,19 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		// P3c: ground item drop — see NewMapServerDB for the rAthena
 		// packetdb citation (clif_packetdb.hpp:1921, opcode 0x0ADD).
 		{HeaderZCItemFallEntry, "ZC_ITEM_FALL_ENTRY", sizeZCItemFallEntry, DirectionServerToClient},
+		// A4: six C→S drop aliases share one CZ_ITEM_DROP layout (the
+		// seventh, 0x0438, collides with CZ_USE_SKILL2 and is excluded).
+		{HeaderCZDROPITEM0363, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
+		{HeaderCZDROPITEM0885, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
+		{HeaderCZDROPITEM02C4, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
+		{HeaderCZDROPITEM0891, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
+		{HeaderCZDROPITEM0362, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
+		{HeaderCZDROPITEM089E, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
+		// A4: server→client floor-item + ack frames.
+		{HeaderZCItemEntry, "ZC_ITEM_ENTRY", sizeZCItemEntry, DirectionServerToClient},
+		{HeaderZCItemDisappear, "ZC_ITEM_DISAPPEAR", sizeZCItemDisappear, DirectionServerToClient},
+		{HeaderZCItemThrowAck, "ZC_ITEM_THROW_ACK", sizeZCItemThrowAck, DirectionServerToClient},
+		{HeaderZCItemPickupAck, "ZC_ITEM_PICKUP_ACK", sizeZCItemPickupAck, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -104,7 +117,9 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// ZC_ITEM_FALL_ENTRY (0x0ADD) for a grand total of 59.
 	// P4b adds 2 menu entries (CZ_CHOOSE_MENU, ZC_MENU_LIST) → 61.
 	// A3 adds the inventory bracket (ZC_INVENTORY_START, ZC_INVENTORY_END) → 63.
-	const want = 63
+	// A4 adds 6 C→S drop aliases (CZ_ITEM_DROP) + 4 S→C floor-item/ack
+	// frames (ZC_ITEM_ENTRY/DISAPPEAR/THROW_ACK/PICKUP_ACK) → 73.
+	const want = 73
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -164,6 +179,19 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderCZSTATUSCHANGE, sizeCZStatusChange},
 		{HeaderZCSTATUSCHANGEACK, sizeZCStatusChangeAck},
 		{HeaderZCNOTIFYEFFECT, sizeZCNotifyEffect},
+		// P3c: ground item drop.
+		{HeaderZCItemFallEntry, sizeZCItemFallEntry},
+		// A4: six C→S drop aliases + four S→C floor-item/ack frames.
+		{HeaderCZDROPITEM0363, sizeCZDropItem},
+		{HeaderCZDROPITEM0885, sizeCZDropItem},
+		{HeaderCZDROPITEM02C4, sizeCZDropItem},
+		{HeaderCZDROPITEM0891, sizeCZDropItem},
+		{HeaderCZDROPITEM0362, sizeCZDropItem},
+		{HeaderCZDROPITEM089E, sizeCZDropItem},
+		{HeaderZCItemEntry, sizeZCItemEntry},
+		{HeaderZCItemDisappear, sizeZCItemDisappear},
+		{HeaderZCItemThrowAck, sizeZCItemThrowAck},
+		{HeaderZCItemPickupAck, sizeZCItemPickupAck},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

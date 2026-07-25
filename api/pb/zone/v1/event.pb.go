@@ -442,6 +442,12 @@ type EntitySpawned struct {
 	X             uint32                 `protobuf:"varint,3,opt,name=x,proto3" json:"x,omitempty"`
 	Y             uint32                 `protobuf:"varint,4,opt,name=y,proto3" json:"y,omitempty"`
 	Name          string                 `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
+	ObjectType    uint32                 `protobuf:"varint,6,opt,name=object_type,json=objectType,proto3" json:"object_type,omitempty"` // clif_bl_type: 0=PC, 5=BL_MOB, 6=BL_NPC (clif.cpp)
+	Job           uint32                 `protobuf:"varint,7,opt,name=job,proto3" json:"job,omitempty"`                                 // view sprite: mob_db SpriteID / NPC class / PC class
+	Hp            int32                  `protobuf:"varint,8,opt,name=hp,proto3" json:"hp,omitempty"`                                   // current HP at spawn (0 for NPC)
+	MaxHp         int32                  `protobuf:"varint,9,opt,name=max_hp,json=maxHp,proto3" json:"max_hp,omitempty"`                // max HP (0 for NPC)
+	Speed         int32                  `protobuf:"varint,10,opt,name=speed,proto3" json:"speed,omitempty"`                            // walk speed in kRO units (0 for static NPC)
+	MobId         uint32                 `protobuf:"varint,11,opt,name=mob_id,json=mobId,proto3" json:"mob_id,omitempty"`               // mob_db ID; gateway resolves exp/drops (mob only)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -511,6 +517,48 @@ func (x *EntitySpawned) GetName() string {
 	return ""
 }
 
+func (x *EntitySpawned) GetObjectType() uint32 {
+	if x != nil {
+		return x.ObjectType
+	}
+	return 0
+}
+
+func (x *EntitySpawned) GetJob() uint32 {
+	if x != nil {
+		return x.Job
+	}
+	return 0
+}
+
+func (x *EntitySpawned) GetHp() int32 {
+	if x != nil {
+		return x.Hp
+	}
+	return 0
+}
+
+func (x *EntitySpawned) GetMaxHp() int32 {
+	if x != nil {
+		return x.MaxHp
+	}
+	return 0
+}
+
+func (x *EntitySpawned) GetSpeed() int32 {
+	if x != nil {
+		return x.Speed
+	}
+	return 0
+}
+
+func (x *EntitySpawned) GetMobId() uint32 {
+	if x != nil {
+		return x.MobId
+	}
+	return 0
+}
+
 // EntityVanished indicates an entity disappeared from the map.
 type EntityVanished struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -571,6 +619,7 @@ type EntityDamaged struct {
 	Damage        int32                  `protobuf:"varint,2,opt,name=damage,proto3" json:"damage,omitempty"`
 	NewHp         int32                  `protobuf:"varint,3,opt,name=new_hp,json=newHp,proto3" json:"new_hp,omitempty"`
 	MaxHp         int32                  `protobuf:"varint,4,opt,name=max_hp,json=maxHp,proto3" json:"max_hp,omitempty"`
+	AttackerId    uint32                 `protobuf:"varint,5,opt,name=attacker_id,json=attackerId,proto3" json:"attacker_id,omitempty"` // source entity; ZC_NOTIFY_ACT srcID slot
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -629,6 +678,13 @@ func (x *EntityDamaged) GetNewHp() int32 {
 func (x *EntityDamaged) GetMaxHp() int32 {
 	if x != nil {
 		return x.MaxHp
+	}
+	return 0
+}
+
+func (x *EntityDamaged) GetAttackerId() uint32 {
+	if x != nil {
+		return x.AttackerId
 	}
 	return 0
 }
@@ -1337,22 +1393,32 @@ const file_zone_v1_event_proto_rawDesc = "" +
 	"\x06dest_y\x18\x03 \x01(\rR\x05destY\x12\x13\n" +
 	"\x05src_x\x18\x04 \x01(\rR\x04srcX\x12\x13\n" +
 	"\x05src_y\x18\x05 \x01(\rR\x04srcY\x12&\n" +
-	"\x0fmove_start_time\x18\x06 \x01(\x04R\rmoveStartTime\"}\n" +
+	"\x0fmove_start_time\x18\x06 \x01(\x04R\rmoveStartTime\"\x84\x02\n" +
 	"\rEntitySpawned\x12\x1b\n" +
 	"\tentity_id\x18\x01 \x01(\rR\bentityId\x12\x1f\n" +
 	"\ventity_type\x18\x02 \x01(\rR\n" +
 	"entityType\x12\f\n" +
 	"\x01x\x18\x03 \x01(\rR\x01x\x12\f\n" +
 	"\x01y\x18\x04 \x01(\rR\x01y\x12\x12\n" +
-	"\x04name\x18\x05 \x01(\tR\x04name\"A\n" +
+	"\x04name\x18\x05 \x01(\tR\x04name\x12\x1f\n" +
+	"\vobject_type\x18\x06 \x01(\rR\n" +
+	"objectType\x12\x10\n" +
+	"\x03job\x18\a \x01(\rR\x03job\x12\x0e\n" +
+	"\x02hp\x18\b \x01(\x05R\x02hp\x12\x15\n" +
+	"\x06max_hp\x18\t \x01(\x05R\x05maxHp\x12\x14\n" +
+	"\x05speed\x18\n" +
+	" \x01(\x05R\x05speed\x12\x15\n" +
+	"\x06mob_id\x18\v \x01(\rR\x05mobId\"A\n" +
 	"\x0eEntityVanished\x12\x1b\n" +
 	"\tentity_id\x18\x01 \x01(\rR\bentityId\x12\x12\n" +
-	"\x04type\x18\x02 \x01(\rR\x04type\"r\n" +
+	"\x04type\x18\x02 \x01(\rR\x04type\"\x93\x01\n" +
 	"\rEntityDamaged\x12\x1b\n" +
 	"\tentity_id\x18\x01 \x01(\rR\bentityId\x12\x16\n" +
 	"\x06damage\x18\x02 \x01(\x05R\x06damage\x12\x15\n" +
 	"\x06new_hp\x18\x03 \x01(\x05R\x05newHp\x12\x15\n" +
-	"\x06max_hp\x18\x04 \x01(\x05R\x05maxHp\"N\n" +
+	"\x06max_hp\x18\x04 \x01(\x05R\x05maxHp\x12\x1f\n" +
+	"\vattacker_id\x18\x05 \x01(\rR\n" +
+	"attackerId\"N\n" +
 	"\fEntityKilled\x12\x1b\n" +
 	"\tentity_id\x18\x01 \x01(\rR\bentityId\x12!\n" +
 	"\fdamage_dealt\x18\x02 \x01(\x05R\vdamageDealt\"\x9b\x01\n" +

@@ -215,3 +215,93 @@ func (s *identityService) CheckWeight(
 	}
 	return nil
 }
+
+// AddItem acquires amount units of nameid for charID, persisting the gain
+// immediately. Weight is enforced first (CheckWeight); on
+// ErrWeightExceeded nothing is written. When an existing plain stack
+// matches the rAthena merge predicate (pc.cpp:6019) the amount merges into
+// it; otherwise a new identified row is inserted. The returned id is the
+// inventory row id callers store in the session invIndex.
+func (s *identityService) AddItem(
+	ctx context.Context,
+	accountID, charID, nameid, amount uint32,
+) (uint32, error) {
+	if accountID == 0 || charID == 0 || nameid == 0 || amount == 0 {
+		return 0, fmt.Errorf("add item (account=%d, char=%d, nameid=%d, amount=%d): %w",
+			accountID, charID, nameid, amount, inventorydomain.ErrItemNotFound)
+	}
+
+	if err := s.CheckWeight(ctx, accountID, charID, nameid, amount); err != nil {
+		return 0, fmt.Errorf("add item (char=%d, nameid=%d, amount=%d): %w", charID, nameid, amount, err)
+	}
+
+	items, err := s.inventory.ListByChar(ctx, charID)
+	if err != nil {
+		return 0, fmt.Errorf("add item, list inventory (char=%d): %w", charID, err)
+	}
+
+	// rAthena only merges stackable types and only into a plain stack whose
+	// (nameid, bound, expire_time, unique_id, cards) all match a freshly
+	// acquired zero-attr item (pc.cpp:6019). A non-stackable type or any
+	// bound/expire/unique/card distinguishes the row — it never merges.
+	if s.inventoryWeight.IsStackable(nameid) {
+		for i := range items {
+			if mergeableStack(items[i], nameid) {
+				target := items[i]
+				// TODO(A5-MAXAMOUNT): clamp at rAthena MAX_AMOUNT before the
+				// add to avoid a uint32 overflow on an oversized merge.
+				newAmount := target.Amount + amount
+				if err := s.inventory.UpdateAmount(ctx, target.ID, newAmount); err != nil {
+					return 0, fmt.Errorf("add item, merge (char=%d, id=%d, nameid=%d): %w",
+						charID, target.ID, nameid, err)
+				}
+				return target.ID, nil
+			}
+		}
+	}
+
+	id, err := s.inventory.Add(ctx, charID, inventorydomain.InventoryItem{
+		NameID:   nameid,
+		Amount:   amount,
+		Identify: 1, // floor pickups are identified at MVP (cards/options out of scope)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("add item (char=%d, nameid=%d, amount=%d): %w", charID, nameid, amount, err)
+	}
+	return id, nil
+}
+
+// mergeableStack reports whether the existing row is a plain stack of
+// nameID that rAthena would merge a fresh acquisition into (pc.cpp:6019):
+// same nameid, no bound, no expiry, no unique_id, and no forged cards.
+// Options are deliberately NOT part of the classic predicate.
+func mergeableStack(item inventorydomain.InventoryItem, nameID uint32) bool {
+	return item.NameID == nameID &&
+		item.Bound == 0 &&
+		item.ExpireTime == 0 &&
+		item.UniqueID == 0 &&
+		item.Card0 == 0 && item.Card1 == 0 && item.Card2 == 0 && item.Card3 == 0
+}
+
+// ConsumeItem decrements the stack at itemID by amount, deleting the row
+// when it hits zero. Ownership is verified first; the decrement is atomic
+// and never commits a partial over-consume.
+func (s *identityService) ConsumeItem(
+	ctx context.Context,
+	accountID, charID, itemID, amount uint32,
+) (uint32, error) {
+	if accountID == 0 || charID == 0 || itemID == 0 || amount == 0 {
+		return 0, fmt.Errorf("consume item (account=%d, char=%d, item=%d, amount=%d): %w",
+			accountID, charID, itemID, amount, inventorydomain.ErrItemNotFound)
+	}
+
+	if err := s.assertItemOwnedByChar(ctx, charID, itemID); err != nil {
+		return 0, fmt.Errorf("consume item (char=%d, item=%d): %w", charID, itemID, err)
+	}
+
+	remaining, err := s.inventory.Consume(ctx, itemID, amount)
+	if err != nil {
+		return 0, fmt.Errorf("consume item (char=%d, item=%d, amount=%d): %w", charID, itemID, amount, err)
+	}
+	return remaining, nil
+}

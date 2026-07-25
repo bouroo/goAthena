@@ -25,11 +25,16 @@ func MaxWeight(jobMaxWeightBase uint32, str uint16) uint32 {
 	return jobMaxWeightBase + uint32(str)*StrWeightStep
 }
 
-// ItemWeightLookup resolves the item_db weight for a nameid. Until
-// item_db.yml loading lands, the production implementation
-// (ZeroItemWeight) returns 0 for every item, which keeps the weight
-// gate trivially satisfied and lets acquire paths land without a hard
-// dependency on the itemdb parser.
+// ItemWeightLookup resolves item_db-derived profile facts for a nameid.
+// It is broader than its name suggests: it began as the weight lookup the
+// service-layer weight gate consumes, and gained IsStackable when the
+// real-time AddItem path needed the rAthena stack-merge predicate. Both
+// facts come from the same item_db row, so one lookup type is the right
+// seam. Until item_db.yml loading lands, the production implementation
+// (ZeroItemWeight) reports 0 weight and "always stackable" for every item,
+// which keeps the weight gate trivially satisfied and lets the merge path
+// proceed conservatively (a merge only succeeds when a matching plain
+// stack already exists).
 //
 // Once the asset loader is wired, swap ZeroItemWeight for a YAML-backed
 // implementation — the interface stays the same and the service-layer
@@ -42,6 +47,14 @@ type ItemWeightLookup interface {
 	// "weightless", since the gate is short-circuited when every item
 	// reports 0 weight.
 	Weight(nameID uint32) uint32
+
+	// IsStackable reports whether nameID's item type stacks in rAthena's
+	// inventory model (itemdb.cpp:4932 item_data::isStackable). Returns
+	// false for Weapon/Armor/PetEgg/PetArmor/ShadowGear; true otherwise.
+	// Unknown nameids return true — the merge only commits when a matching
+	// plain stack already exists, so a false positive cannot corrupt a
+	// distinct item.
+	IsStackable(nameID uint32) bool
 }
 
 // ZeroItemWeight is the production-default ItemWeightLookup. It reports
@@ -55,3 +68,10 @@ type ZeroItemWeight struct{}
 // method exists to satisfy ItemWeightLookup so it can be wired into DI
 // without nil checks downstream.
 func (ZeroItemWeight) Weight(_ uint32) uint32 { return 0 }
+
+// IsStackable returns true for every nameID. With no itemdb loaded the
+// merge path is permissive: it still only commits when a matching plain
+// stack (same nameid + zero bound/expire/unique/cards) already exists, so
+// the permissive default cannot merge two distinct items. A real itemdb
+// narrows this to the rAthena type set.
+func (ZeroItemWeight) IsStackable(_ uint32) bool { return true }

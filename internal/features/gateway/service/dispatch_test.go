@@ -26,6 +26,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/script/parser"
 	skilldomain "github.com/bouroo/goAthena/internal/features/skill/domain"
 	statsdomain "github.com/bouroo/goAthena/internal/features/stats/domain"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
@@ -39,16 +40,16 @@ import (
 // here to keep the service tests self-contained and trivially diffable
 // against the gRPC interface.
 type fakeIdentityClient struct {
-	mu              sync.Mutex
-	authenticateFn  func(context.Context, *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error)
-	characterListFn    func(context.Context, *identityv1.GetCharacterListRequest) (*identityv1.GetCharacterListResponse, error)
-	getCharacterFn     func(context.Context, *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error)
+	mu                   sync.Mutex
+	authenticateFn       func(context.Context, *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error)
+	characterListFn      func(context.Context, *identityv1.GetCharacterListRequest) (*identityv1.GetCharacterListResponse, error)
+	getCharacterFn       func(context.Context, *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error)
 	getCharacterBySlotFn func(context.Context, *identityv1.GetCharacterBySlotRequest) (*identityv1.GetCharacterBySlotResponse, error)
 	verifySessionFn      func(context.Context, *identityv1.VerifySessionRequest) (*identityv1.VerifySessionResponse, error)
-	getInventoryFn  func(context.Context, *identityv1.GetInventoryRequest) (*identityv1.GetInventoryResponse, error)
-	equipItemFn     func(context.Context, *identityv1.EquipItemRequest) (*identityv1.EquipItemResponse, error)
-	unequipItemFn   func(context.Context, *identityv1.UnequipItemRequest) (*identityv1.UnequipItemResponse, error)
-	useItemFn       func(context.Context, *identityv1.UseItemRequest) (*identityv1.UseItemResponse, error)
+	getInventoryFn       func(context.Context, *identityv1.GetInventoryRequest) (*identityv1.GetInventoryResponse, error)
+	equipItemFn          func(context.Context, *identityv1.EquipItemRequest) (*identityv1.EquipItemResponse, error)
+	unequipItemFn        func(context.Context, *identityv1.UnequipItemRequest) (*identityv1.UnequipItemResponse, error)
+	useItemFn            func(context.Context, *identityv1.UseItemRequest) (*identityv1.UseItemResponse, error)
 	// P2B: shop economy. buyFromShopFn / sellToShopFn drive the
 	// handleCZPCPurchaseItemList + handleCZPCSellItemList happy and
 	// edge-case paths; buyReqs / sellReqs capture the (verifiable)
@@ -61,6 +62,14 @@ type fakeIdentityClient struct {
 	allocateStatFn   func(context.Context, *identityv1.AllocateStatRequest) (*identityv1.AllocateStatResponse, error)
 	applyLevelUpReqs []*identityv1.ApplyLevelUpRequest
 	allocateStatReqs []*identityv1.AllocateStatRequest
+	// A5: real-time item persistence. addItemFn / consumeItemFn drive the
+	// pickup (AddItem) and drop (ConsumeItem) paths; addItemReqs /
+	// consumeItemReqs capture the forwarded inputs so tests can assert the
+	// gateway sent the right (nameid, amount) / (item_id, amount).
+	addItemFn       func(context.Context, *identityv1.AddItemRequest) (*identityv1.AddItemResponse, error)
+	consumeItemFn   func(context.Context, *identityv1.ConsumeItemRequest) (*identityv1.ConsumeItemResponse, error)
+	addItemReqs     []*identityv1.AddItemRequest
+	consumeItemReqs []*identityv1.ConsumeItemRequest
 }
 
 func (f *fakeIdentityClient) Authenticate(ctx context.Context, req *identityv1.AuthenticateRequest, _ ...grpc.CallOption) (*identityv1.AuthenticateResponse, error) {
@@ -227,16 +236,42 @@ func (f *fakeIdentityClient) AllocateStat(ctx context.Context, req *identityv1.A
 	return fn(ctx, req)
 }
 
+// A5: real-time item persistence RPCs. A missing fn returns a soft
+// success=false so pickup/drop handlers fall back to their fail encoding
+// (Result=0 / no throw ack) instead of aborting with an Unimplemented error.
+func (f *fakeIdentityClient) AddItem(ctx context.Context, req *identityv1.AddItemRequest, _ ...grpc.CallOption) (*identityv1.AddItemResponse, error) {
+	f.mu.Lock()
+	f.addItemReqs = append(f.addItemReqs, req)
+	fn := f.addItemFn
+	f.mu.Unlock()
+	if fn == nil {
+		return &identityv1.AddItemResponse{Success: false, Error: "no addItem fn installed"}, nil
+	}
+	return fn(ctx, req)
+}
+
+func (f *fakeIdentityClient) ConsumeItem(ctx context.Context, req *identityv1.ConsumeItemRequest, _ ...grpc.CallOption) (*identityv1.ConsumeItemResponse, error) {
+	f.mu.Lock()
+	f.consumeItemReqs = append(f.consumeItemReqs, req)
+	fn := f.consumeItemFn
+	f.mu.Unlock()
+	if fn == nil {
+		return &identityv1.ConsumeItemResponse{Success: false, Error: "no consumeItem fn installed"}, nil
+	}
+	return fn(ctx, req)
+}
+
 // fakeZoneClient is the dispatch-test stand-in for
 // zonev1.ZoneServiceClient. Tests install enterFn and moveFn to drive
 // the per-RPC responses. Mirrors the hand-rolled fake pattern from
 // internal/features/gateway/handler/map_ws_test.go so the dispatch
 // tests stay trivially diffable against the gRPC interface.
 type fakeZoneClient struct {
-	mu       sync.Mutex
-	enterFn  func(context.Context, *zonev1.EnterZoneRequest, ...grpc.CallOption) (*zonev1.EnterZoneResponse, error)
-	moveFn   func(context.Context, *zonev1.MoveEntityRequest, ...grpc.CallOption) (*zonev1.MoveEntityResponse, error)
-	moveReqs []*zonev1.MoveEntityRequest // captured MoveEntity calls (in arrival order)
+	mu            sync.Mutex
+	enterFn       func(context.Context, *zonev1.EnterZoneRequest, ...grpc.CallOption) (*zonev1.EnterZoneResponse, error)
+	moveFn        func(context.Context, *zonev1.MoveEntityRequest, ...grpc.CallOption) (*zonev1.MoveEntityResponse, error)
+	moveReqs      []*zonev1.MoveEntityRequest // captured MoveEntity calls (in arrival order)
+	listEntitiesFn func(context.Context, *zonev1.ListEntitiesRequest, ...grpc.CallOption) (*zonev1.ListEntitiesResponse, error)
 }
 
 func (f *fakeZoneClient) EnterZone(ctx context.Context, req *zonev1.EnterZoneRequest, opts ...grpc.CallOption) (*zonev1.EnterZoneResponse, error) {
@@ -384,6 +419,19 @@ func (f *fakeZoneClient) ListVendingShops(ctx context.Context, in *zonev1.ListVe
 
 func (f *fakeZoneClient) GetVendingShop(ctx context.Context, in *zonev1.GetVendingShopRequest, opts ...grpc.CallOption) (*zonev1.GetVendingShopResponse, error) {
 	return &zonev1.GetVendingShopResponse{Success: true}, nil
+}
+
+// ListEntities stubs the zone snapshot RPC. listEntitiesFn lets a test seed
+// a per-map mob roster; with no fn set it returns an empty roster (gateway
+// treats a cold cache as "no mobs to render").
+func (f *fakeZoneClient) ListEntities(ctx context.Context, in *zonev1.ListEntitiesRequest, opts ...grpc.CallOption) (*zonev1.ListEntitiesResponse, error) {
+	f.mu.Lock()
+	fn := f.listEntitiesFn
+	f.mu.Unlock()
+	if fn == nil {
+		return &zonev1.ListEntitiesResponse{Success: true}, nil
+	}
+	return fn(ctx, in, opts...)
 }
 
 // bufResponder captures every packet HandlePacket sends. Matched in
@@ -575,7 +623,7 @@ func TestDispatchHandler_AcceptLogin_EncodesAccept(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	conn := domain.ConnectionInfo{ID: 1, RemoteIP: "10.0.0.5:4321"}
 	resp := &bufResponder{}
@@ -628,7 +676,7 @@ func TestDispatchHandler_RefusedLogin_EncodesRefuse(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "wrongpw", 20250604)
 
@@ -654,7 +702,7 @@ func TestDispatchHandler_IdentityDown_RefusesWithSentinel99(t *testing.T) {
 			return nil, status.Error(codes.Unavailable, "identity service unreachable")
 		},
 	}
-	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "pw", 20250604)
 
@@ -677,7 +725,7 @@ func TestDispatchHandler_NilResponse_RefusesWithSentinel99(t *testing.T) {
 			return nil, nil
 		},
 	}
-	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "pw", 20250604)
 
@@ -703,7 +751,7 @@ func TestDispatchHandler_CancelledContext_NoRefuseSent(t *testing.T) {
 			return nil, status.Error(codes.Canceled, "client gone")
 		},
 	}
-	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "tester", "pw", 20250604)
 
@@ -728,7 +776,7 @@ func TestDispatchHandler_MalformedFrame_NoReplyNoError(t *testing.T) {
 			return &identityv1.AuthenticateResponse{}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 	resp := &bufResponder{}
 
 	// 10 bytes — well short of the 55-byte CA_LOGIN; ParseCALogin must
@@ -758,7 +806,7 @@ func TestDispatchHandler_PassesClientIPStrippedToAuthenticate(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 	resp := &bufResponder{}
 	frame := buildCALogin(t, "alice", "pw", 20250604)
 
@@ -802,7 +850,7 @@ func TestDispatchHandler_CALogin_ClientVersionWithinWindow_PerSession(t *testing
 		},
 	}
 	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	frame := buildCALogin(t, "alice", "pw", clientVersion)
 	if err := h.HandlePacket(context.Background(), conn, &bufResponder{}, packet.HeaderCALOGIN, frame); err != nil {
@@ -839,7 +887,7 @@ func TestDispatchHandler_CALogin_ClientVersionZero_FallsBackToDefault(t *testing
 		},
 	}
 	h := NewDispatchHandler(fake, nil, defaultPacketver, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	frame := buildCALogin(t, "alice", "pw", 0)
 	if err := h.HandlePacket(context.Background(), conn, &bufResponder{}, packet.HeaderCALOGIN, frame); err != nil {
@@ -885,7 +933,7 @@ func TestDispatchHandler_CALogin_ClientVersionOutsideWindow_FallsBackAndDebugLog
 	// to this test while still proving steady-state traffic stays quiet.
 	logger := zerolog.New(&logBuf).Level(zerolog.DebugLevel)
 	h := NewDispatchHandler(fake, nil, defaultPacketver, 20000000, 20260000,
-		logger, "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		logger, "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	frame := buildCALogin(t, "alice", "pw", outOfWindow)
 	if err := h.HandlePacket(context.Background(), conn, &bufResponder{}, packet.HeaderCALOGIN, frame); err != nil {
@@ -938,7 +986,7 @@ func TestDispatchHandler_CALogin_InvertedWindow_AlwaysFallsBack(t *testing.T) {
 	// must remain robust if config is loaded via a path that bypasses
 	// validation.
 	h := NewDispatchHandler(fake, nil, defaultPacketver, 20260000, 20000000,
-		logger, "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		logger, "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	frame := buildCALogin(t, "alice", "pw", inWindow)
 	if err := h.HandlePacket(context.Background(), conn, &bufResponder{}, packet.HeaderCALOGIN, frame); err != nil {
@@ -1093,7 +1141,7 @@ func TestDispatchHandler_CHEnter_ClampsTotalSlotsAboveMax(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000, newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 	resp := &bufResponder{}
 
 	if err := h.HandlePacket(context.Background(), &domain.ConnectionInfo{ID: 1}, resp, packet.HeaderCHENTER, chEnterFrame(1)); err != nil {
@@ -1156,7 +1204,7 @@ func TestDispatchHandler_CHSelectChar_Success_AdvertisesRealCIDAndMap(t *testing
 		},
 	}
 	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	conn := &domain.ConnectionInfo{ID: 1}
 	resp := &bufResponder{}
@@ -1214,7 +1262,7 @@ func TestDispatchHandler_CHSelectChar_EmptySlot_Refuses(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	// AccountID is set (prior CH_ENTER happened) but the picked slot is empty.
 	conn := &domain.ConnectionInfo{ID: 1, AccountID: 2000233}
@@ -1249,7 +1297,7 @@ func TestDispatchHandler_CHSelectChar_NoPriorCHEnter_Refuses(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	// AccountID deliberately unset: simulates a client that skipped CH_ENTER.
 	conn := &domain.ConnectionInfo{ID: 1}
@@ -1310,7 +1358,7 @@ func TestDispatchHandler_CZRequestMove_NoAccountID_DropsSilently(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1} // AccountID deliberately unset
@@ -1347,7 +1395,7 @@ func TestDispatchHandler_CZRequestMove_Success_EncodesZCNotifyPlayerMove(t *test
 		},
 	}
 	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -1399,7 +1447,7 @@ func TestDispatchHandler_CZRequestMove_ZoneRejects_NoReply(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -1421,7 +1469,7 @@ func TestDispatchHandler_CZRequestMove_ZoneGRPCError_NoReply(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -1438,7 +1486,7 @@ func TestDispatchHandler_CZRequestMove_NilZone_DropsSilently(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, nil, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -1500,7 +1548,7 @@ func TestDispatchHandler_CZEnter_Success_CachesAccountID(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -1647,7 +1695,7 @@ func TestDispatchHandler_CZEnter_IdentityFails_FallsBackToZeroSpawn(t *testing.T
 		},
 	}
 	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -1718,7 +1766,7 @@ func TestDispatchHandler_CZEnter_IdentitySuccessFalse_FallsBackToZeroSpawn(t *te
 		},
 	}
 	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -1748,7 +1796,7 @@ func TestDispatchHandler_CZEnter_ZoneRejects_DoesNotCacheAccountID(t *testing.T)
 		},
 	}
 	h := NewDispatchHandler(&fakeIdentityClient{}, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -1791,7 +1839,7 @@ func TestDispatchHandler_CZEnter_VerifySessionGate_Happy(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -1844,7 +1892,7 @@ func TestDispatchHandler_CZEnter_VerifySessionGate_WrongToken_Refuses(t *testing
 		},
 	}
 	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -1881,7 +1929,7 @@ func TestDispatchHandler_CZEnter_VerifySessionGate_AbsentSession_Refuses(t *test
 		},
 	}
 	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -1917,7 +1965,7 @@ func TestDispatchHandler_CZEnter_VerifySessionGate_TransportError_Refuses(t *tes
 		},
 	}
 	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -1956,7 +2004,7 @@ func TestDispatchHandler_CZNotifyActorInit_EncodesZCMapPropertyR2(t *testing.T) 
 	// fixed MAPPROPERTY_NOTHING frame followed by the M9 status burst
 	// (zero-valued because conn has no CharID set in this test).
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -2030,7 +2078,7 @@ func TestDispatchHandler_CZNotifyActorInit_StatusBurst(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -2129,7 +2177,7 @@ func TestDispatchHandler_CZNotifyActorInit_NoCharacter_FallsBackToZeros(t *testi
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -2177,7 +2225,7 @@ func TestDispatchHandler_CZNotifyActorInit_NoConnID_StillBurstsZeros(t *testing.
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1} // AccountID/CharID deliberately 0
@@ -2215,7 +2263,7 @@ func TestDispatchHandler_CZRequestTime_Success_EncodesZCNotifyTime(t *testing.T)
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -2251,7 +2299,7 @@ func TestDispatchHandler_CZRequestTime_MalformedFrame_DropsSilently(t *testing.T
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -2274,7 +2322,7 @@ func TestDispatchHandler_CZRequestTime_NoPriorEnter_StillReplies(t *testing.T) {
 	// even if the client never CZ_ENTERed, because the server-tick
 	// ping is independent of zone state.
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1} // AccountID deliberately 0
@@ -2341,7 +2389,7 @@ func TestDispatchHandler_CZGlobalMessage_Success_EncodesZCNotifyChat(t *testing.
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	const wantAID uint32 = 4242
@@ -2405,7 +2453,7 @@ func TestDispatchHandler_CZGlobalMessage_CP874_RoundTrip(t *testing.T) {
 	logger := zerolog.New(&logBuf).Level(zerolog.DebugLevel)
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		logger, "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		logger, "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	const wantAID uint32 = 4242
@@ -2453,7 +2501,7 @@ func TestDispatchHandler_CZGlobalMessage_MalformedFrame_DropsSilently(t *testing
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -2477,7 +2525,7 @@ func TestDispatchHandler_CZActionRequest_Sit_EncodesZCNotifyAct(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	const wantAID uint32 = 9999
@@ -2519,7 +2567,7 @@ func TestDispatchHandler_CZActionRequest_Stand_EncodesZCNotifyAct(t *testing.T) 
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 1}
@@ -2545,16 +2593,18 @@ func TestDispatchHandler_CZActionRequest_Stand_EncodesZCNotifyAct(t *testing.T) 
 }
 
 // TestDispatchHandler_CZActionRequest_OutOfScopeAction_NoReply covers
-// action codes that are silently dropped: 1 (pickup item), 4-6, 8-14.
+// action codes that are silently dropped: 4-6, 8-14. Action 1 (pickup
+// item) is handled by the A4 pickup path (handlePickup), which always
+// replies -- Result=0 for a missing target; see TestHandlePickup_*.
 // Attack actions (0, 7) are handled by the attack path; sit (2) and
 // stand (3) by the sit/stand path.
 func TestDispatchHandler_CZActionRequest_OutOfScopeAction_NoReply(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
-	for _, action := range []uint8{1, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14} {
+	for _, action := range []uint8{4, 5, 6, 8, 9, 10, 11, 12, 13, 14} {
 		action := action
 		t.Run(fmt.Sprintf("action_%d", action), func(t *testing.T) {
 			t.Parallel()
@@ -2588,7 +2638,7 @@ func TestDispatchHandler_CZActionRequest_AttackMonster_EncodesNotifyAct(t *testi
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	const wantAID uint32 = 200001
@@ -2649,7 +2699,7 @@ func TestDispatchHandler_Attack_StatDerivedDamage(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	type testCase struct {
 		name     string
@@ -2697,7 +2747,7 @@ func TestDispatchHandler_CZActionRequest_KillMonster_EncodesNotifyActAndVanish(t
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{
@@ -2766,7 +2816,7 @@ func TestDispatchHandler_CZActionRequest_AttackUnknownTarget_NoReply(t *testing.
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{
@@ -2798,7 +2848,7 @@ func TestDispatchHandler_CZActionRequest_MalformedFrame_DropsSilently(t *testing
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -2823,7 +2873,7 @@ func TestDispatchHandler_CZGlobalMessage_PreAuthGuard_DropsSilently(t *testing.T
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	// AccountID is zero — the pre-auth guard must trip.
@@ -2851,7 +2901,7 @@ func TestDispatchHandler_CZActionRequest_PreAuthGuard_DropsSilently(t *testing.T
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -2879,7 +2929,7 @@ func TestDispatchHandler_CZChangeDir_EncodesZCChangeDir(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	const wantAID uint32 = 7777
@@ -2929,7 +2979,7 @@ func TestDispatchHandler_CZChangeDir_MalformedFrame_DropsSilently(t *testing.T) 
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -2953,7 +3003,7 @@ func TestDispatchHandler_CZChangeDir_PreAuthGuard_DropsSilently(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -2981,7 +3031,7 @@ func TestDispatchHandler_CZReqEmotion_EncodesZCEmotion(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	const wantAID uint32 = 8888
@@ -3025,7 +3075,7 @@ func TestDispatchHandler_CZReqEmotion_MalformedFrame_DropsSilently(t *testing.T)
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -3049,7 +3099,7 @@ func TestDispatchHandler_CZReqEmotion_PreAuthGuard_DropsSilently(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -3087,7 +3137,7 @@ func TestDispatchHandler_CZGetCharNameRequest_EncodesZCAckReqName(t *testing.T) 
 		},
 	}
 	h := NewDispatchHandler(fake, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	const wantAID uint32 = 100
@@ -3133,7 +3183,7 @@ func TestDispatchHandler_CZGetCharNameRequest_UnknownGID_EmptyName(t *testing.T)
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100, CharID: 200}
@@ -3173,7 +3223,7 @@ func TestDispatchHandler_CZGetCharNameRequest_MalformedFrame_DropsSilently(t *te
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -3195,7 +3245,7 @@ func TestDispatchHandler_CZGetCharNameRequest_PreAuthGuard_DropsSilently(t *test
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -3222,7 +3272,7 @@ func TestDispatchHandler_CZRestart_TypeCharSelect_LoggedOnly(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -3249,7 +3299,7 @@ func TestDispatchHandler_CZRestart_TypeRespawn_LoggedOnly(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -3275,7 +3325,7 @@ func TestDispatchHandler_CZRestart_MalformedFrame_DropsSilently(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -3297,7 +3347,7 @@ func TestDispatchHandler_CZRestart_PreAuthGuard_DropsSilently(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -3335,7 +3385,7 @@ func TestDispatchHandler_CZContactNPC_ValidNPC_SendsDialog(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -3401,7 +3451,7 @@ func TestDispatchHandler_CZContactNPC_UnknownNPC_NoResponse(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -3428,7 +3478,7 @@ func TestDispatchHandler_CZContactNPC_MalformedFrame_DropsSilently(t *testing.T)
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -3450,7 +3500,7 @@ func TestDispatchHandler_CZContactNPC_PreAuthGuard_DropsSilently(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -3477,7 +3527,7 @@ func TestDispatchHandler_CZReqNextScript_SendsContinuation(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -3535,7 +3585,7 @@ func TestDispatchHandler_CZReqNextScript_MalformedFrame_DropsSilently(t *testing
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -3557,7 +3607,7 @@ func TestDispatchHandler_CZReqNextScript_PreAuthGuard_DropsSilently(t *testing.T
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -3583,7 +3633,7 @@ func TestDispatchHandler_CZCloseDialog_NoResponse(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -3609,7 +3659,7 @@ func TestDispatchHandler_CZCloseDialog_MalformedFrame_DropsSilently(t *testing.T
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -3631,7 +3681,7 @@ func TestDispatchHandler_CZCloseDialog_PreAuthGuard_DropsSilently(t *testing.T) 
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -3661,7 +3711,7 @@ func TestDispatchHandler_CZContactNPC_ShopNPC_SendsSelectDealtype(t *testing.T) 
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -3699,7 +3749,7 @@ func TestDispatchHandler_CZAckSelectDealType_Buy_SendsPurchaseItemList(t *testin
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -3775,7 +3825,7 @@ func TestDispatchHandler_CZAckSelectDealType_Sell_NoResponse(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -3802,7 +3852,7 @@ func TestDispatchHandler_CZAckSelectDealType_Cancel_NoResponse(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -3829,7 +3879,7 @@ func TestDispatchHandler_CZAckSelectDealType_UnknownNPC_NoResponse(t *testing.T)
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -3856,7 +3906,7 @@ func TestDispatchHandler_CZAckSelectDealType_MalformedFrame_DropsSilently(t *tes
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -3878,7 +3928,7 @@ func TestDispatchHandler_CZAckSelectDealType_PreAuthGuard_DropsSilently(t *testi
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -3913,7 +3963,7 @@ func TestDispatchHandler_CZPCPurchaseItemList_EncodesZCPCPurchaseResult(t *testi
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -3968,7 +4018,7 @@ func TestDispatchHandler_CZPCPurchaseItemList_MalformedFrame_DropsSilently(t *te
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
@@ -3992,7 +4042,7 @@ func TestDispatchHandler_CZPCPurchaseItemList_PreAuthGuard_DropsSilently(t *test
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1}
@@ -4040,7 +4090,7 @@ func TestDispatchHandler_CZNotifyActorInit_MonsterSpawn(t *testing.T) {
 			},
 		},
 		&fakeZoneClient{}, 20250604, 20000000, 20260000, newDispatchTestLogger(t),
-		"prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil,
+		"prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil,
 	)
 
 	resp := &bufResponder{}
@@ -4183,7 +4233,7 @@ func TestDispatchHandler_CZNotifyActorInit_MonsterCount(t *testing.T) {
 			},
 		},
 		&fakeZoneClient{}, 20250604, 20000000, 20260000, newDispatchTestLogger(t),
-		"prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil,
+		"prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil,
 	)
 
 	resp := &bufResponder{}
@@ -4253,7 +4303,7 @@ func (s *safeResponder) GetPackets() [][]byte {
 
 func TestDispatchHandler_Attack_MonsterRespawns(t *testing.T) {
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 	h.respawnDelay = 20 * time.Millisecond
 
 	resp := &safeResponder{}
@@ -4336,7 +4386,7 @@ func TestDispatchHandler_Attack_MonsterRespawns(t *testing.T) {
 
 func TestDispatchHandler_Attack_Concurrency(t *testing.T) {
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &safeResponder{}
 	conn := domain.ConnectionInfo{
@@ -4417,7 +4467,7 @@ func TestDispatchHandler_CZNotifyActorInit_EmitsInventoryLists(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -4504,7 +4554,7 @@ func TestDispatchHandler_CZNotifyActorInit_InventoryRPCError_FallsBackToEmpty(t 
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -4590,7 +4640,7 @@ func TestDispatchHandler_CZUseItem_Success_EncodesAck(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -4649,7 +4699,7 @@ func TestDispatchHandler_CZUseItem_IdentityRejects_EncodesFailAck(t *testing.T) 
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -4683,7 +4733,7 @@ func TestDispatchHandler_CZUseItem_PreAuthGuard_DropsSilently(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1} // AccountID=0 — pre-auth
@@ -4705,7 +4755,7 @@ func TestDispatchHandler_CZUseItem_MalformedFrame_DropsSilently(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -4745,7 +4795,7 @@ func TestDispatchHandler_CZReqWearEquip_Success_EncodesAck(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -4794,7 +4844,7 @@ func TestDispatchHandler_CZReqWearEquip_IdentityRejects_EncodesFailAck(t *testin
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -4827,7 +4877,7 @@ func TestDispatchHandler_CZReqWearEquip_PreAuthGuard_DropsSilently(t *testing.T)
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1} // AccountID=0
@@ -4849,7 +4899,7 @@ func TestDispatchHandler_CZReqWearEquip_MalformedFrame_DropsSilently(t *testing.
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -4882,7 +4932,7 @@ func TestDispatchHandler_CZReqTakeoffEquip_Success_EncodesAck(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -4927,7 +4977,7 @@ func TestDispatchHandler_CZReqTakeoffEquip_IdentityRejects_EncodesFailAck(t *tes
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -4961,7 +5011,7 @@ func TestDispatchHandler_CZReqTakeoffEquip_PreAuthGuard_DropsSilently(t *testing
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1} // AccountID=0
@@ -4983,7 +5033,7 @@ func TestDispatchHandler_CZReqTakeoffEquip_MalformedFrame_DropsSilently(t *testi
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -5074,7 +5124,7 @@ func TestDispatchHandler_CZPCAckSelectDealType_Sell_SendsSellList(t *testing.T) 
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -5137,7 +5187,7 @@ func TestDispatchHandler_CZPCAckSelectDealType_Cancel_ClearsShopNPC(t *testing.T
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -5187,7 +5237,7 @@ func TestDispatchHandler_CZPCPurchaseItemList_HappyPath(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -5251,7 +5301,7 @@ func TestDispatchHandler_CZPCPurchaseItemList_InsufficientZeny(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -5297,7 +5347,7 @@ func TestDispatchHandler_CZPCPurchaseItemList_ItemNotInCatalog(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -5337,7 +5387,7 @@ func TestDispatchHandler_CZPCPurchaseItemList_NoShopNPC(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -5394,7 +5444,7 @@ func TestDispatchHandler_CZPCSellItemList_HappyPath(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -5450,7 +5500,7 @@ func TestDispatchHandler_CZPCSellItemList_NoShopNPC(t *testing.T) {
 		},
 	}
 	h := NewDispatchHandler(identity, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -5486,7 +5536,7 @@ func TestDispatchHandler_CZNotifyActorInit_EmitsSkillInfoList(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242, CharID: 9001}
@@ -5630,7 +5680,7 @@ func TestDispatchHandler_CZUseSkill_BashHit_DeductsSPAndEmitsScaledDamage(t *tes
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	const wantAID uint32 = 200001
@@ -5728,7 +5778,7 @@ func TestDispatchHandler_CZUseSkill_BashKill_FiresDeathPath(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 	h.respawnDelay = 50 * time.Millisecond
 
 	resp := &safeResponder{}
@@ -5829,7 +5879,7 @@ func TestDispatchHandler_CZUseSkill_BashInsufficientSP_AcksAndNoOps(t *testing.T
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{
@@ -5887,7 +5937,7 @@ func TestDispatchHandler_CZUseSkill_UnknownTarget_NoSPSpend(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{
@@ -5937,7 +5987,7 @@ func TestDispatchHandler_CZUseSkill_NonBashSkill_DropsSilently(t *testing.T) {
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{
@@ -6026,7 +6076,7 @@ Body:
 	}
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), mobs, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), mobs, nil, nil)
 	h.respawnDelay = time.Hour // respawn irrelevant for this assertion
 
 	// Force every drop to win.
@@ -6071,8 +6121,10 @@ Body:
 		sizeLongPar      = 8
 	)
 	sizeZCItemFallEntry := (&packet.ItemFallEntryResponse{}).Size()
-	// Find every 22-byte window whose first two bytes are DD 0A
-	// (little-endian 0x0ADD).
+	sizeZCItemEntry := (&packet.ItemEntryResponse{}).Size()
+	// Find every window whose first two bytes are DD 0A (little-endian
+	// 0x0ADD). A4 widened the fall entry's NameID to uint32, so each
+	// window is 24 bytes.
 	var dropFrames [][]byte
 	for i := 0; i+sizeZCItemFallEntry <= len(burst); i++ {
 		if burst[i] == 0xDD && burst[i+1] == 0x0A {
@@ -6084,19 +6136,44 @@ Body:
 		t.Fatalf("got %d ZC_ITEM_FALL_ENTRY frames in burst, want 2; burst=% x", len(dropFrames), burst)
 	}
 
-	// Both drops should land at the Poring spawn (155, 165).
+	// A4 also emits a ZC_ITEM_ENTRY (0x009d, 19B) pickable-spawn frame
+	// right after each fall entry so the dropped item is lootable.
+	var entryFrames [][]byte
+	for i := 0; i+sizeZCItemEntry <= len(burst); i++ {
+		if burst[i] == 0x9d && burst[i+1] == 0x00 {
+			entryFrames = append(entryFrames, burst[i:i+sizeZCItemEntry])
+			i += sizeZCItemEntry - 1
+		}
+	}
+	if len(entryFrames) != 2 {
+		t.Fatalf("got %d ZC_ITEM_ENTRY frames in burst, want 2; burst=% x", len(entryFrames), burst)
+	}
+
+	// Both drops should land at the Poring spawn (155, 165). This test
+	// loads mob_db but no item_db, so nameid stays 0 (IT_ETC fallback);
+	// real nameid resolution is covered by TestAppendMonsterDrops_EmitsItemEntry.
 	for i, frame := range dropFrames {
-		if got := binary.LittleEndian.Uint16(frame[11:13]); got != 155 {
+		if got := binary.LittleEndian.Uint16(frame[13:15]); got != 155 {
 			t.Errorf("drop[%d] X = %d, want 155", i, got)
 		}
-		if got := binary.LittleEndian.Uint16(frame[13:15]); got != 165 {
+		if got := binary.LittleEndian.Uint16(frame[15:17]); got != 165 {
 			t.Errorf("drop[%d] Y = %d, want 165", i, got)
 		}
-		if got := binary.LittleEndian.Uint16(frame[6:8]); got != 0 {
-			t.Errorf("drop[%d] NameID = %d, want 0 (item DB deferred)", i, got)
+		if got := binary.LittleEndian.Uint32(frame[6:10]); got != 0 {
+			t.Errorf("drop[%d] NameID = %d, want 0 (item_db not loaded here)", i, got)
 		}
-		if frame[10] != 1 {
-			t.Errorf("drop[%d] Identified = %d, want 1", i, frame[10])
+		if frame[12] != 1 {
+			t.Errorf("drop[%d] Identified = %d, want 1", i, frame[12])
+		}
+	}
+
+	// Each ZC_ITEM_ENTRY shares the fall entry's spawn coords.
+	for i, frame := range entryFrames {
+		if got := binary.LittleEndian.Uint16(frame[11:13]); got != 155 {
+			t.Errorf("entry[%d] X = %d, want 155", i, got)
+		}
+		if got := binary.LittleEndian.Uint16(frame[13:15]); got != 165 {
+			t.Errorf("entry[%d] Y = %d, want 165", i, got)
 		}
 	}
 
@@ -6128,6 +6205,578 @@ Body:
 	if burst[firstDropOff] != 0xDD || burst[firstDropOff+1] != 0x0A {
 		t.Fatalf("burst[%d:%d] = % x, want DD 0A (ZC_ITEM_FALL_ENTRY)",
 			firstDropOff, firstDropOff+2, burst[firstDropOff:firstDropOff+2])
+	}
+}
+
+// TestHandlePickup_FloorItemFound seeds a floor item (object ID 42), issues a
+// CZ_ACTION_REQUEST pickup against it, and asserts the A4 echo path: the actor
+// gets one ZC_ITEM_PICKUP_ACK (Result=1) carrying the resolved nameid at the
+// lowest free slot; a second session on the same map gets one ZC_ITEM_DISAPPEAR;
+// the floor item is consumed and the inventory gains slot 0.
+func TestHandlePickup_FloorItemFound(t *testing.T) {
+	t.Parallel()
+
+	registry := NewSessionRegistry()
+	observer := newSampleSession(2, 22, "prontera")
+	registry.Register(2, observer)
+	observerResp := observer.Responder.(*fakeResponder)
+
+	// addItemFn returns a fresh inventory row id (4242); the session slot
+	// must end up holding that row id, NOT the floor item's nameid (909).
+	fc := &fakeIdentityClient{
+		addItemFn: func(_ context.Context, _ *identityv1.AddItemRequest) (*identityv1.AddItemResponse, error) {
+			return &identityv1.AddItemResponse{Success: true, ItemId: 4242}, nil
+		},
+	}
+	h := NewDispatchHandler(fc, &fakeZoneClient{}, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, registry, nil, nil, nil)
+
+	// Seed a floor item at object ID 42 under the handler's lock so the
+	// race detector sees a clean happens-before with the handler's claim.
+	h.floorItemsMu.Lock()
+	h.floorItems[42] = floorItemState{ItemID: 909, Type: 3, Amount: 1, X: 155, Y: 165}
+	h.floorItemsMu.Unlock()
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 9999, MapName: "prontera"}
+
+	req := packet.CZActionRequestRequest{TargetGID: 42, Action: packet.DMGPickup}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	// Actor: exactly one 70-byte ZC_ITEM_PICKUP_ACK with Result=1.
+	out := resp.buf.Bytes()
+	const wantAckLen = 70
+	if len(out) != wantAckLen {
+		t.Fatalf("pickup ack length = %d, want %d (buf=% x)", len(out), wantAckLen, out)
+	}
+	if out[0] != 0x41 || out[1] != 0x0b {
+		t.Fatalf("opcode = %02x %02x, want 41 0b (LE 0x0b41)", out[0], out[1])
+	}
+	if got := binary.LittleEndian.Uint16(out[2:4]); got != 0 {
+		t.Errorf("Index = %d, want 0 (lowest free slot)", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[4:6]); got != 1 {
+		t.Errorf("Count = %d, want 1", got)
+	}
+	if got := binary.LittleEndian.Uint32(out[6:10]); got != 909 {
+		t.Errorf("NameID = %d, want 909", got)
+	}
+	if out[10] != 1 {
+		t.Errorf("IsIdentified = %d, want 1", out[10])
+	}
+	if out[32] != 3 {
+		t.Errorf("Type = %d, want 3 (IT_ETC)", out[32])
+	}
+	if out[33] != 1 {
+		t.Errorf("Result = %d, want 1 (success)", out[33])
+	}
+
+	// Observer: exactly one 6-byte ZC_ITEM_DISAPPEAR for object ID 42.
+	if got := countPacketsOfOpcode(observerResp, packet.HeaderZCItemDisappear); got != 1 {
+		t.Fatalf("observer 0x00a1 count = %d, want 1", got)
+	}
+	obs := firstPacketOfOpcode(observerResp, packet.HeaderZCItemDisappear)
+	if len(obs) != 6 {
+		t.Fatalf("disappear length = %d, want 6", len(obs))
+	}
+	if got := binary.LittleEndian.Uint32(obs[2:6]); got != 42 {
+		t.Errorf("disappear AID = %d, want 42", got)
+	}
+
+	// Floor item consumed; inventory gained slot 0.
+	h.floorItemsMu.Lock()
+	_, floorPresent := h.floorItems[42]
+	h.floorItemsMu.Unlock()
+	if floorPresent {
+		t.Errorf("floor item 42 still present, want consumed")
+	}
+	if got, ok := conn.ResolveInventoryID(0); !ok || got != 4242 {
+		t.Errorf("inventory slot 0 = (%d, %v), want (4242, true) — session slot must hold the AddItem row id, not the nameid", got, ok)
+	}
+
+	// The AddItem RPC must carry the floor item's nameid (909) and amount
+	// (1); that is the L3 proof the pickup persists through identity.
+	fc.mu.Lock()
+	addReqs := fc.addItemReqs
+	fc.mu.Unlock()
+	if len(addReqs) != 1 {
+		t.Fatalf("AddItem call count = %d, want 1", len(addReqs))
+	}
+	if got := addReqs[0].GetNameid(); got != 909 {
+		t.Errorf("AddItem nameid = %d, want 909", got)
+	}
+	if got := addReqs[0].GetAmount(); got != 1 {
+		t.Errorf("AddItem amount = %d, want 1", got)
+	}
+}
+
+// TestHandlePickup_FloorItemMissing asserts the graceful void-click path: an
+// unknown target acks Result=0 and sends no vanish to observers.
+func TestHandlePickup_FloorItemMissing(t *testing.T) {
+	t.Parallel()
+
+	registry := NewSessionRegistry()
+	observer := newSampleSession(2, 22, "prontera")
+	registry.Register(2, observer)
+	observerResp := observer.Responder.(*fakeResponder)
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, registry, nil, nil, nil)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 9999, MapName: "prontera"}
+
+	req := packet.CZActionRequestRequest{TargetGID: 777, Action: packet.DMGPickup}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 70 {
+		t.Fatalf("pickup ack length = %d, want 70 (buf=% x)", len(out), out)
+	}
+	if out[0] != 0x41 || out[1] != 0x0b {
+		t.Fatalf("opcode = %02x %02x, want 41 0b", out[0], out[1])
+	}
+	if out[33] != 0 {
+		t.Errorf("Result = %d, want 0 (miss)", out[33])
+	}
+	if got := binary.LittleEndian.Uint16(out[2:4]); got != 0 {
+		t.Errorf("Index = %d, want 0 (unassigned on miss)", got)
+	}
+	if got := countPacketsOfOpcode(observerResp, packet.HeaderZCItemDisappear); got != 0 {
+		t.Errorf("observer vanish count = %d, want 0 on miss", got)
+	}
+}
+
+// TestHandlePickup_AddItemFails asserts the A5 fault-safe path: when identity
+// rejects the add (overweight), the actor gets a nack (Result=0), no vanish is
+// broadcast, the session inventory gains no slot, and the floor item is
+// restored to the ground so the pickup is a clean no-op rather than a loss.
+func TestHandlePickup_AddItemFails(t *testing.T) {
+	t.Parallel()
+
+	registry := NewSessionRegistry()
+	observer := newSampleSession(2, 22, "prontera")
+	registry.Register(2, observer)
+	observerResp := observer.Responder.(*fakeResponder)
+
+	fc := &fakeIdentityClient{
+		addItemFn: func(_ context.Context, _ *identityv1.AddItemRequest) (*identityv1.AddItemResponse, error) {
+			return &identityv1.AddItemResponse{Success: false, Error: "overweight"}, nil
+		},
+	}
+	h := NewDispatchHandler(fc, &fakeZoneClient{}, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, registry, nil, nil, nil)
+
+	h.floorItemsMu.Lock()
+	h.floorItems[42] = floorItemState{ItemID: 909, Type: 3, Amount: 1, X: 155, Y: 165}
+	h.floorItemsMu.Unlock()
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 9999, MapName: "prontera"}
+
+	req := packet.CZActionRequestRequest{TargetGID: 42, Action: packet.DMGPickup}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 70 {
+		t.Fatalf("pickup ack length = %d, want 70 (buf=% x)", len(out), out)
+	}
+	if out[33] != 0 {
+		t.Errorf("Result = %d, want 0 (nack on AddItem failure)", out[33])
+	}
+	if got := countPacketsOfOpcode(observerResp, packet.HeaderZCItemDisappear); got != 0 {
+		t.Errorf("observer vanish count = %d, want 0 (item not taken)", got)
+	}
+	if _, ok := conn.ResolveInventoryID(0); ok {
+		t.Errorf("inventory slot 0 present, want free on AddItem failure")
+	}
+
+	// Floor item restored so a later, lighter pickup can retry.
+	h.floorItemsMu.Lock()
+	_, restored := h.floorItems[42]
+	h.floorItemsMu.Unlock()
+	if !restored {
+		t.Errorf("floor item 42 not restored, want back on the ground")
+	}
+}
+
+// TestHandlePickup_AddItemRPCError asserts a transport-level RPC failure (not
+// a clean success=false) is handled identically to a soft reject: nack, no
+// vanish, no slot, floor item restored.
+func TestHandlePickup_AddItemRPCError(t *testing.T) {
+	t.Parallel()
+
+	registry := NewSessionRegistry()
+	observer := newSampleSession(2, 22, "prontera")
+	registry.Register(2, observer)
+
+	fc := &fakeIdentityClient{
+		addItemFn: func(_ context.Context, _ *identityv1.AddItemRequest) (*identityv1.AddItemResponse, error) {
+			return nil, status.Error(codes.Internal, "boom")
+		},
+	}
+	h := NewDispatchHandler(fc, &fakeZoneClient{}, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, registry, nil, nil, nil)
+
+	h.floorItemsMu.Lock()
+	h.floorItems[42] = floorItemState{ItemID: 909, Type: 3, Amount: 1, X: 155, Y: 165}
+	h.floorItemsMu.Unlock()
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 9999, MapName: "prontera"}
+
+	req := packet.CZActionRequestRequest{TargetGID: 42, Action: packet.DMGPickup}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 70 {
+		t.Fatalf("pickup ack length = %d, want 70 (buf=% x)", len(out), out)
+	}
+	if out[33] != 0 {
+		t.Errorf("Result = %d, want 0 (nack on AddItem RPC error)", out[33])
+	}
+	if _, ok := conn.ResolveInventoryID(0); ok {
+		t.Errorf("inventory slot 0 present, want free on AddItem RPC error")
+	}
+	h.floorItemsMu.Lock()
+	_, restored := h.floorItems[42]
+	h.floorItemsMu.Unlock()
+	if !restored {
+		t.Errorf("floor item 42 not restored, want back on the ground")
+	}
+}
+
+// TestHandleCZDropItem_Success seeds inventory slot 2 (row id 909), drops one
+// via the 0x0363 alias, and asserts the A5 persist-then-ack path: identity
+// receives the ConsumeItem RPC for the resolved row id, the actor gets one
+// ZC_ITEM_THROW_ACK, and a fully-drained stack (remaining==0) frees the slot.
+func TestHandleCZDropItem_Success(t *testing.T) {
+	t.Parallel()
+
+	fc := &fakeIdentityClient{
+		consumeItemFn: func(_ context.Context, _ *identityv1.ConsumeItemRequest) (*identityv1.ConsumeItemResponse, error) {
+			return &identityv1.ConsumeItemResponse{Success: true, Remaining: 0}, nil
+		},
+	}
+	h := NewDispatchHandler(fc, &fakeZoneClient{}, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+	conn.SetInventoryIndex(map[uint16]uint32{2: 909})
+
+	req := packet.CZDropItemRequest{InventoryIndex: 2, Amount: 1}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ITEM_DROP: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZDROPITEM0363, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 6 {
+		t.Fatalf("throw ack length = %d, want 6 (buf=% x)", len(out), out)
+	}
+	if out[0] != 0xaf || out[1] != 0x00 {
+		t.Fatalf("opcode = %02x %02x, want af 00 (LE 0x00af)", out[0], out[1])
+	}
+	if got := binary.LittleEndian.Uint16(out[2:4]); got != 2 {
+		t.Errorf("Index = %d, want 2", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[4:6]); got != 1 {
+		t.Errorf("Count = %d, want 1", got)
+	}
+	if _, ok := conn.ResolveInventoryID(2); ok {
+		t.Errorf("inventory slot 2 still present, want consumed")
+	}
+
+	// L3 proof: the drop persisted through identity for the resolved row id.
+	fc.mu.Lock()
+	consumeReqs := fc.consumeItemReqs
+	fc.mu.Unlock()
+	if len(consumeReqs) != 1 {
+		t.Fatalf("ConsumeItem call count = %d, want 1", len(consumeReqs))
+	}
+	if got := consumeReqs[0].GetItemId(); got != 909 {
+		t.Errorf("ConsumeItem item_id = %d, want 909 (session row id)", got)
+	}
+	if got := consumeReqs[0].GetAmount(); got != 1 {
+		t.Errorf("ConsumeItem amount = %d, want 1", got)
+	}
+}
+
+// TestHandleCZDropItem_PartialStack asserts a partial drop keeps the slot
+// mapped: ConsumeItem returns remaining>0, so the actor still gets a throw
+// ack for the dropped count, but the session slot is left intact for a
+// second partial drop to resolve to the same row id.
+func TestHandleCZDropItem_PartialStack(t *testing.T) {
+	t.Parallel()
+
+	fc := &fakeIdentityClient{
+		consumeItemFn: func(_ context.Context, _ *identityv1.ConsumeItemRequest) (*identityv1.ConsumeItemResponse, error) {
+			return &identityv1.ConsumeItemResponse{Success: true, Remaining: 2}, nil
+		},
+	}
+	h := NewDispatchHandler(fc, &fakeZoneClient{}, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+	conn.SetInventoryIndex(map[uint16]uint32{2: 909})
+
+	req := packet.CZDropItemRequest{InventoryIndex: 2, Amount: 3}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ITEM_DROP: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZDROPITEM0363, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	// Throw ack carries the dropped count.
+	out := resp.buf.Bytes()
+	if got := binary.LittleEndian.Uint16(out[4:6]); got != 3 {
+		t.Errorf("Count = %d, want 3", got)
+	}
+	// Partial drop keeps the slot mapped to the same row id.
+	if got, ok := conn.ResolveInventoryID(2); !ok || got != 909 {
+		t.Errorf("inventory slot 2 = (%d, %v), want (909, true) on partial drop", got, ok)
+	}
+}
+
+// TestHandleCZDropItem_ConsumeFails asserts the fuzz/fault-safe guard: when
+// identity rejects the consume (insufficient stack / transient RPC error),
+// no throw ack is sent and the slot is left untouched — the client never
+// throws an item the server kept.
+func TestHandleCZDropItem_ConsumeFails(t *testing.T) {
+	t.Parallel()
+
+	fc := &fakeIdentityClient{
+		consumeItemFn: func(_ context.Context, _ *identityv1.ConsumeItemRequest) (*identityv1.ConsumeItemResponse, error) {
+			return &identityv1.ConsumeItemResponse{Success: false, Error: "insufficient stack"}, nil
+		},
+	}
+	h := NewDispatchHandler(fc, &fakeZoneClient{}, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+	conn.SetInventoryIndex(map[uint16]uint32{2: 909})
+
+	req := packet.CZDropItemRequest{InventoryIndex: 2, Amount: 1}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ITEM_DROP: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZDROPITEM0363, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	if got := resp.buf.Len(); got != 0 {
+		t.Errorf("bytes sent = %d, want 0 (no ack on consume failure); buf=% x", got, resp.buf.Bytes())
+	}
+	if got, ok := conn.ResolveInventoryID(2); !ok || got != 909 {
+		t.Errorf("inventory slot 2 = (%d, %v), want (909, true) on consume failure", got, ok)
+	}
+}
+
+// TestHandleCZDropItem_UnknownPosition asserts the fuzz-safe guard: an empty
+// inventory yields no ack (the packet is silently dropped, never desyncing the
+// client).
+func TestHandleCZDropItem_UnknownPosition(t *testing.T) {
+	t.Parallel()
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 4242}
+
+	req := packet.CZDropItemRequest{InventoryIndex: 5, Amount: 1}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ITEM_DROP: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZDROPITEM0363, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	if got := resp.buf.Len(); got != 0 {
+		t.Errorf("bytes sent = %d, want 0 (silent drop on unknown position); buf=% x", got, resp.buf.Bytes())
+	}
+}
+
+// TestAppendMonsterDrops_EmitsItemEntry mirrors DropsRolled but loads an
+// item_db so the drop path resolves AegisName → numeric nameid. It asserts
+// that each winning drop emits a ZC_ITEM_FALL_ENTRY (0x0ADD) immediately
+// followed by a ZC_ITEM_ENTRY (0x009d), that both carry a non-zero resolved
+// nameid, and that each drop registers a floor item the pickup path can claim.
+// This is the resolution the nil-item_db path in DropsRolled cannot exercise.
+func TestAppendMonsterDrops_EmitsItemEntry(t *testing.T) {
+	t.Parallel()
+
+	mobs, err := mobdb.Load(bytes.NewBufferString(`Header:
+  Type: MOB_DB
+  Version: 5
+Body:
+  - Id: 1002
+    AegisName: PORING
+    Name: Poring
+    Level: 1
+    Hp: 50
+    BaseExp: 2
+    JobExp: 1
+    Attack: 7
+    Attack2: 10
+    Defense: 0
+    MagicDefense: 5
+    Str: 1
+    Agi: 1
+    Vit: 0
+    Int: 0
+    Dex: 1
+    Luk: 1
+    WalkSpeed: 400
+    AttackRange: 1
+    ChaseRange: 12
+    Size: Medium
+    Race: Plant
+    Element: Water
+    ElementLevel: 1
+    Ai: "02"
+    Drops:
+      - Item: Jellopy
+        Rate: 10000
+      - Item: Sticky_Mucus
+        Rate: 10000
+`))
+	if err != nil {
+		t.Fatalf("mobdb.Load: %v", err)
+	}
+	items, err := itemdb.Load(bytes.NewBufferString(`Header:
+  Type: ITEM_DB
+  Version: 3
+Body:
+  - Id: 909
+    AegisName: Jellopy
+    Name: Jellopy
+    Type: Etc
+  - Id: 938
+    AegisName: Sticky_Mucus
+    Name: Sticky Mucus
+    Type: Etc
+`))
+	if err != nil {
+		t.Fatalf("itemdb.Load: %v", err)
+	}
+
+	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), mobs, items, nil)
+	h.respawnDelay = time.Hour
+	h.setDropRoll(func(_ int) bool { return true })
+	h.setDamageRoll(func(min, max int32) int32 { return max })
+
+	resp := &safeResponder{}
+	conn := domain.ConnectionInfo{ID: 1, AccountID: 200001, BaseExp: 0, JobExp: 0}
+	conn.InitMonsterHP([]domain.MonsterSpawn{{GID: poringGID, MaxHP: 5}})
+	conn.SetCombatStats(10, 5, 0)
+
+	req := packet.CZActionRequestRequest{TargetGID: poringGID, Action: packet.DMGNormal}
+	var reqBuf bytes.Buffer
+	if err := req.Encode(&reqBuf); err != nil {
+		t.Fatalf("Encode CZ_ACTION_REQUEST: %v", err)
+	}
+	if err := h.HandlePacket(context.Background(), &conn, resp,
+		packet.HeaderCZACTIONREQUEST, reqBuf.Bytes()); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	pkts := resp.GetPackets()
+	if len(pkts) < 1 {
+		t.Fatalf("got %d packets, want ≥1", len(pkts))
+	}
+	burst := pkts[0]
+
+	// Each winning drop emits [0x0ADD (24B)][0x009d (19B)] contiguously, so a
+	// fall frame at offset i is paired with the entry frame at i+sizeFall —
+	// pairing by offset avoids any global byte-scan false match.
+	sizeFall := (&packet.ItemFallEntryResponse{}).Size()
+	sizeEntry := (&packet.ItemEntryResponse{}).Size()
+	var fallOffsets []int
+	for i := 0; i+sizeFall <= len(burst); i++ {
+		if burst[i] == 0xDD && burst[i+1] == 0x0A {
+			fallOffsets = append(fallOffsets, i)
+			i += sizeFall - 1
+		}
+	}
+	if len(fallOffsets) != 2 {
+		t.Fatalf("fall frames = %d, want 2; burst=% x", len(fallOffsets), burst)
+	}
+
+	// Both resolved nameids must appear across the paired entries.
+	want := map[uint32]bool{909: false, 938: false}
+	for i, off := range fallOffsets {
+		entryOff := off + sizeFall
+		if entryOff+sizeEntry > len(burst) ||
+			burst[entryOff] != 0x9d || burst[entryOff+1] != 0x00 {
+			t.Fatalf("fall[%d] at %d not followed by 0x009d; burst=% x", i, off, burst)
+		}
+		nameID := binary.LittleEndian.Uint32(burst[entryOff+6 : entryOff+10])
+		fallNameID := binary.LittleEndian.Uint32(burst[off+6 : off+10])
+		if nameID == 0 {
+			t.Errorf("entry[%d] NameID = 0, want resolved (item_db loaded)", i)
+			continue
+		}
+		want[nameID] = true
+		if fallNameID != nameID {
+			t.Errorf("fall[%d] NameID = %d, entry[%d] NameID = %d, want equal", i, fallNameID, i, nameID)
+		}
+	}
+	for id, seen := range want {
+		if !seen {
+			t.Errorf("nameid %d not present among entries (want both 909 and 938)", id)
+		}
+	}
+
+	// Each winning drop registered a floor item the pickup path can claim.
+	h.floorItemsMu.Lock()
+	floorCount := len(h.floorItems)
+	h.floorItemsMu.Unlock()
+	if floorCount != 2 {
+		t.Errorf("floorItems count = %d, want 2 (one per winning drop)", floorCount)
 	}
 }
 
@@ -6181,7 +6830,7 @@ func TestDispatchHandler_CZContactNPC_ScriptNPC_RunsVM(t *testing.T) {
 	scripts := scriptSetWith(scriptName, cs)
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, scripts)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, scripts)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 42, AccountID: 100}
@@ -6240,7 +6889,7 @@ func TestDispatchHandler_CZReqNextScript_ScriptNPC_ResumesVM(t *testing.T) {
 	scripts := scriptSetWith(scriptName, cs)
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, scripts)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, scripts)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 7, AccountID: 100}
@@ -6311,7 +6960,7 @@ L_Second:
 	scripts := scriptSetWith(scriptName, cs)
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, scripts)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, scripts)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 11, AccountID: 100}
@@ -6390,7 +7039,7 @@ func TestDispatchHandler_CZChooseMenu_NoActiveSession_DropsSilently(t *testing.T
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}
@@ -6413,7 +7062,7 @@ func TestDispatchHandler_CZCloseDialog_DropsSession(t *testing.T) {
 	scripts := scriptSetWith("SampleNPC", cs)
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, scripts)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, scripts)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 99, AccountID: 100}
@@ -6449,7 +7098,7 @@ func TestDispatchHandler_CZContactNPC_DialogNPC_NoScript_FallsBack(t *testing.T)
 	t.Parallel()
 
 	h := NewDispatchHandler(&fakeIdentityClient{}, &fakeZoneClient{}, 20250604, 20000000, 20260000,
-		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil, nil)
 
 	resp := &bufResponder{}
 	conn := domain.ConnectionInfo{ID: 1, AccountID: 100}

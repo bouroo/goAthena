@@ -122,16 +122,20 @@ func (r *inventoryRepo) Remove(ctx context.Context, id uint32) error {
 	return nil
 }
 
-// ConsumeOne atomically decrements the stack of the row with the
-// given id. It takes a row lock via a transaction containing
-// SELECT ... FOR UPDATE so concurrent concurrent use-item calls are
-// serialized at the DB level. When the resulting amount is 0 the row
-// is deleted rather than persisted with Amount=0, and 0 is returned
-// as remaining. The row's char_id is not re-checked here — the
-// repository layer owns every row it must lock.
-func (r *inventoryRepo) ConsumeOne(ctx context.Context, id uint32) (uint32, error) {
+// Consume atomically decrements the stack of the row with the given id by
+// amount. It takes a row lock via a transaction containing
+// SELECT ... FOR UPDATE so concurrent consume calls are serialized at the
+// DB level. When the resulting amount is 0 the row is deleted rather than
+// persisted with Amount=0, and 0 is returned as remaining. Requesting more
+// than the current stack is an error (the partial state is never
+// committed). The row's char_id is not re-checked here — the service layer
+// owns the ownership check; the repository owns every row it locks.
+func (r *inventoryRepo) Consume(ctx context.Context, id uint32, amount uint32) (uint32, error) {
 	if id == 0 {
 		return 0, fmt.Errorf("%w: id=0", domain.ErrItemNotFound)
+	}
+	if amount == 0 {
+		return 0, fmt.Errorf("consume inventory id %d: amount must be > 0", id)
 	}
 	var remaining uint32
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -141,24 +145,35 @@ func (r *inventoryRepo) ConsumeOne(ctx context.Context, id uint32) (uint32, erro
 			First(&model).Error; err != nil {
 			return fmt.Errorf("consume row (id=%d): %w", id, err)
 		}
-		if model.Amount <= 1 {
-			// Row is drained after this use — delete it thin.
+		if model.Amount < amount {
+			// Never commit a partial over-consume — abort the whole tx.
+			return fmt.Errorf("consume row (id=%d): want %d, have %d: %w",
+				id, amount, model.Amount, domain.ErrInsufficientStack)
+		}
+		remaining = model.Amount - amount
+		if remaining == 0 {
+			// Row is drained — delete it rather than persist Amount=0.
 			if deleteErr := tx.Where("id = ?", id).Delete(&InventoryModel{}).Error; deleteErr != nil {
 				return fmt.Errorf("remove emptied row (id=%d): %w", id, deleteErr)
 			}
-			remaining = 0
 			return nil
 		}
-		remaining = model.Amount - 1
 		if updateErr := tx.Model(&InventoryModel{}).Where("id = ?", id).Update("amount", remaining).Error; updateErr != nil {
 			return fmt.Errorf("update row amount (id=%d): %w", id, updateErr)
 		}
 		return nil
 	})
 	if err != nil {
-		return 0, fmt.Errorf("consume one (id=%d): %w", id, err)
+		return 0, fmt.Errorf("consume (id=%d, amount=%d): %w", id, amount, err)
 	}
 	return remaining, nil
+}
+
+// ConsumeOne is the amount=1 specialization of Consume (UseItem's
+// single-unit decrement). It delegates so the locking/delete logic has a
+// single implementation.
+func (r *inventoryRepo) ConsumeOne(ctx context.Context, id uint32) (uint32, error) {
+	return r.Consume(ctx, id, 1)
 }
 
 // SetEquip overwrites the equip-position bitfield for the given

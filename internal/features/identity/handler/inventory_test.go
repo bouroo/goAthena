@@ -276,3 +276,210 @@ func TestUseItem_InternalError(t *testing.T) {
 	st, _ := status.FromError(err)
 	assert.Equal(t, codes.Internal, st.Code())
 }
+
+// weightExceededWrapper / insufficientStackWrapper mirror notFoundWrapper so
+// the AddItem/ConsumeItem soft-failure paths can surface wrapped sentinels
+// that still satisfy errors.Is, without importing fmt.
+type weightExceededWrapper struct{}
+
+func (weightExceededWrapper) Error() string {
+	return "wrap: " + inventorydomain.ErrWeightExceeded.Error()
+}
+func (weightExceededWrapper) Unwrap() error { return inventorydomain.ErrWeightExceeded }
+
+type insufficientStackWrapper struct{}
+
+func (insufficientStackWrapper) Error() string {
+	return "wrap: " + inventorydomain.ErrInsufficientStack.Error()
+}
+func (insufficientStackWrapper) Unwrap() error { return inventorydomain.ErrInsufficientStack }
+
+func TestAddItem_HappyPath(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	svc.EXPECT().AddItem(gomock.Any(), uint32(7), uint32(42), uint32(512), uint32(3)).Return(uint32(909), nil)
+
+	resp, err := h.AddItem(context.Background(), &identityv1.AddItemRequest{
+		AccountId: 7, CharId: 42, Nameid: 512, Amount: 3,
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+	assert.Equal(t, uint32(909), resp.ItemId)
+	assert.Empty(t, resp.Error)
+}
+
+func TestAddItem_Overweight_EncodesAsSoftFailure(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	svc.EXPECT().AddItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(uint32(0), weightExceededWrapper{})
+
+	resp, err := h.AddItem(context.Background(), &identityv1.AddItemRequest{
+		AccountId: 7, CharId: 42, Nameid: 512, Amount: 3,
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Equal(t, uint32(0), resp.ItemId)
+	assert.Equal(t, "overweight", resp.Error)
+}
+
+func TestAddItem_NotFound_EncodesAsSoftFailure(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	svc.EXPECT().AddItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(uint32(0), notFoundWrapper{})
+
+	resp, err := h.AddItem(context.Background(), &identityv1.AddItemRequest{
+		AccountId: 7, CharId: 42, Nameid: 512, Amount: 3,
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.Error, "not found")
+}
+
+func TestAddItem_InternalError(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	svc.EXPECT().AddItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(uint32(0), errors.New("db write failed"))
+
+	_, err := h.AddItem(context.Background(), &identityv1.AddItemRequest{
+		AccountId: 7, CharId: 42, Nameid: 512, Amount: 3,
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	assert.Equal(t, codes.Internal, st.Code())
+}
+
+func TestAddItem_NilRequest(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	_, err := h.AddItem(context.Background(), nil)
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestAddItem_ZeroKeys(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	_, err := h.AddItem(context.Background(), &identityv1.AddItemRequest{
+		AccountId: 0, CharId: 42, Nameid: 512, Amount: 3,
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestConsumeItem_HappyPath(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	svc.EXPECT().ConsumeItem(gomock.Any(), uint32(7), uint32(42), uint32(909), uint32(2)).Return(uint32(3), nil)
+
+	resp, err := h.ConsumeItem(context.Background(), &identityv1.ConsumeItemRequest{
+		AccountId: 7, CharId: 42, ItemId: 909, Amount: 2,
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+	assert.Equal(t, uint32(3), resp.Remaining)
+	assert.Empty(t, resp.Error)
+}
+
+func TestConsumeItem_InsufficientStack_EncodesAsSoftFailure(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	svc.EXPECT().ConsumeItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(uint32(0), insufficientStackWrapper{})
+
+	resp, err := h.ConsumeItem(context.Background(), &identityv1.ConsumeItemRequest{
+		AccountId: 7, CharId: 42, ItemId: 909, Amount: 2,
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Equal(t, uint32(0), resp.Remaining)
+	assert.Equal(t, "insufficient stack for requested amount", resp.Error)
+}
+
+func TestConsumeItem_NotFound_EncodesAsSoftFailure(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	svc.EXPECT().ConsumeItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(uint32(0), notFoundWrapper{})
+
+	resp, err := h.ConsumeItem(context.Background(), &identityv1.ConsumeItemRequest{
+		AccountId: 7, CharId: 42, ItemId: 909, Amount: 2,
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.Error, "not found")
+}
+
+func TestConsumeItem_InternalError(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	svc.EXPECT().ConsumeItem(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(uint32(0), errors.New("db down"))
+
+	_, err := h.ConsumeItem(context.Background(), &identityv1.ConsumeItemRequest{
+		AccountId: 7, CharId: 42, ItemId: 909, Amount: 2,
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	assert.Equal(t, codes.Internal, st.Code())
+}
+
+func TestConsumeItem_NilRequest(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	_, err := h.ConsumeItem(context.Background(), nil)
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestConsumeItem_ZeroKeys(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+	_, err := h.ConsumeItem(context.Background(), &identityv1.ConsumeItemRequest{
+		AccountId: 7, CharId: 0, ItemId: 909, Amount: 2,
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}

@@ -126,6 +126,26 @@ type IdentityService interface {
 	// acquisition only.
 	CheckWeight(ctx context.Context, accountID, charID, addNameID, addAmount uint32) error
 
+	// AddItem acquires amount units of nameid for charID, persisting the
+	// gain immediately (the real-time counterpart to UseItem). When an
+	// existing plain stack matches the rAthena merge predicate
+	// (pc.cpp:6019 — same nameid, bound=0, expire_time=0, unique_id=0, and
+	// all-zero cards) the amount is merged into it via UpdateAmount;
+	// otherwise a new row is inserted via Add. Weight is enforced first:
+	// returns a wrapped inventorydomain.ErrWeightExceeded when the gain
+	// would exceed capacity (no row is mutated). Returns the inventory row
+	// id of the (possibly merged) stack — callers store it in the session
+	// invIndex so later equip/use RPCs resolve the slot to a real row id.
+	AddItem(ctx context.Context, accountID, charID, nameid, amount uint32) (itemID uint32, err error)
+
+	// ConsumeItem decrements the stack at itemID by amount; the row is
+	// deleted when the resulting amount reaches zero. Ownership is verified
+	// via assertItemOwnedByChar before the decrement. Returns the
+	// post-decrement stack count (0 when the row was deleted). A request
+	// for more than the current stack surfaces a wrapped
+	// inventorydomain.ErrInsufficientStack without a partial commit.
+	ConsumeItem(ctx context.Context, accountID, charID, itemID, amount uint32) (remaining uint32, err error)
+
 	// ApplyLevelUp persists a base-level-up computed by the gateway (D-213).
 	// Delegates to CharacterRepository.ApplyLevelUp with the optimistic-level
 	// guard. Returns post-update (baseLevel, statusPoint) and applied=true on

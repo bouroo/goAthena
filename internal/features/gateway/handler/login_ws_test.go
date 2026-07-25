@@ -129,6 +129,16 @@ func (f *loginFakeIdentityClient) AllocateStat(_ context.Context, _ *identityv1.
 	return &identityv1.AllocateStatResponse{Result: identityv1.StatResult_STAT_RESULT_INVALID_STAT}, nil
 }
 
+func (f *loginFakeIdentityClient) AddItem(ctx context.Context, _ *identityv1.AddItemRequest, _ ...grpc.CallOption) (*identityv1.AddItemResponse, error) {
+	_, _ = ctx, f
+	return nil, status.Error(codes.Unimplemented, "AddItem not installed")
+}
+
+func (f *loginFakeIdentityClient) ConsumeItem(ctx context.Context, _ *identityv1.ConsumeItemRequest, _ ...grpc.CallOption) (*identityv1.ConsumeItemResponse, error) {
+	_, _ = ctx, f
+	return nil, status.Error(codes.Unimplemented, "ConsumeItem not installed")
+}
+
 // wsDispatchAdapter mirrors service.DispatchHandler for the WS path so
 // this test exercises the full real WSHandler → processBytes →
 // domain.PacketHandler → identity client → AC_ACCEPT_LOGIN → WS write

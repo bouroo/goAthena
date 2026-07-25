@@ -41,6 +41,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +55,7 @@ import (
 	"github.com/bouroo/goAthena/internal/features/script/vm"
 	skilldomain "github.com/bouroo/goAthena/internal/features/skill/domain"
 	statsdomain "github.com/bouroo/goAthena/internal/features/stats/domain"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 	scriptpkg "github.com/bouroo/goAthena/pkg/ro/script"
@@ -143,11 +145,28 @@ type DispatchHandler struct {
 	// drops, use struct Def/Vit).
 	mobRegistry *mobdb.Registry
 
+	// itemRegistry resolves a drop entry's AegisName to its numeric
+	// item DB id (and Type), so spawned floor items carry the real
+	// nameid the client needs to render the correct sprite. May be nil
+	// (item_db not loaded); appendMonsterDrops then emits NameID=0 /
+	// IT_ETC, preserving pre-A4 behaviour. A4 wires this via the
+	// gateway DI provider.
+	itemRegistry *itemdb.Registry
+
 	// assign ground item object IDs in ZC_ITEM_FALL_ENTRY. rAthena
 	// uses a global counter but a per-handler value is sufficient for
 	// the single-player echo path (mobs and items do not cross
 	// connections).
 	groundItemCounter atomic.Uint32
+
+	// floorItems is the A4 session-local floor-item store: ground-item
+	// object ID → the item's resolved state. Populated when a drop lands
+	// (appendMonsterDrops) and consumed when a player picks it up
+	// (handlePickup). Guarded by floorItemsMu. This is single-actor echo
+	// state — cross-connection pickup is out of scope for A4; a future
+	// multi-actor surface would need a sweep on disconnect (see plan §10).
+	floorItems   map[uint32]floorItemState
+	floorItemsMu sync.Mutex
 
 	// dropRoll decides whether a single drop entry wins its roll.
 	// Defaulted to rand.IntN(10000) < rate (rAthena mob.cpp item_drop
@@ -197,6 +216,7 @@ func NewDispatchHandler(
 	zonePort uint16,
 	registry SessionRegistry,
 	mobs *mobdb.Registry,
+	items *itemdb.Registry,
 	scriptSet *scriptpkg.CompiledScriptSet,
 ) *DispatchHandler {
 	return &DispatchHandler{
@@ -212,7 +232,9 @@ func NewDispatchHandler(
 		zonePort:         zonePort,
 		registry:         registry,
 		mobRegistry:      mobs,
+		itemRegistry:     items,
 		scriptSet:        scriptSet,
+		floorItems:       make(map[uint32]floorItemState),
 		respawnDelay:     5 * time.Second,
 		damageRoll: func(low, high int32) int32 {
 			if low >= high {
@@ -244,6 +266,64 @@ func (h *DispatchHandler) setDamageRoll(f func(low, high int32) int32) {
 //nolint:unused // only used in tests
 func (h *DispatchHandler) setDropRoll(f func(rate int) bool) {
 	h.dropRoll = f
+}
+
+// maxInventorySlots is the player inventory capacity rAthena binds a pickup
+// to (common/mmo.hpp: MAX_INVENTORY = INVENTORY_BASE_SIZE[100] +
+// INVENTORY_EXPANSION_SIZE[0] = 100, slots 0..99 0-based per clif.cpp:2280).
+// A pickup with no free slot in this range fails (Result=0).
+const maxInventorySlots = 100
+
+// floorItemState records a spawned ground item the player can pick up.
+// Keyed by the object ID issued by groundItemCounter; access is guarded by
+// floorItemsMu. A4 is single-actor echo, so ownership/free-for-all rules
+// are out of scope.
+type floorItemState struct {
+	ItemID uint32 // resolved item DB id (0 if item_db not loaded)
+	Type   uint8  // IT_* enum (see itemTypeFromDB)
+	Amount uint16
+	X      uint16
+	Y      uint16
+}
+
+// itemTypeFromDB maps an item_db Type string to the rAthena item_types enum
+// (common/mmo.hpp:223). rAthena builds the constant name "IT_"+Type and
+// resolves it case-insensitively via script_get_constant; an unknown value
+// falls back to IT_ETC (3) (map/itemdb.cpp:144-145). Enum values verified
+// from mmo.hpp:223-239.
+func itemTypeFromDB(typeStr string) uint8 {
+	switch strings.ToLower(typeStr) {
+	case "healing":
+		return 0 // IT_HEALING
+	case "unknown":
+		return 1 // IT_UNKNOWN
+	case "usable":
+		return 2 // IT_USABLE
+	case "etc":
+		return 3 // IT_ETC
+	case "armor":
+		return 4 // IT_ARMOR
+	case "weapon":
+		return 5 // IT_WEAPON
+	case "card":
+		return 6 // IT_CARD
+	case "petegg":
+		return 7 // IT_PETEGG
+	case "petarmor":
+		return 8 // IT_PETARMOR
+	case "unknown2":
+		return 9 // IT_UNKNOWN2
+	case "ammo":
+		return 10 // IT_AMMO
+	case "delayconsume":
+		return 11 // IT_DELAYCONSUME
+	case "shadowgear":
+		return 12 // IT_SHADOWGEAR
+	case "cash":
+		return 18 // IT_CASH
+	default:
+		return 3 // IT_ETC (rAthena fallback)
+	}
 }
 
 // lookupMobEntry resolves a GID → mobdb.MobEntry via the registry,
@@ -326,16 +406,39 @@ func (h *DispatchHandler) handleMapPacket(ctx context.Context, conn *domain.Conn
 		return h.handleCZGetCharNameRequest(ctx, conn, resp, frame)
 	case packet.HeaderCZRESTART:
 		return h.handleCZRestart(ctx, conn, resp, frame)
+	case packet.HeaderCZSTATUSCHANGE:
+		return h.handleCZStatusChange(ctx, conn, resp, frame)
+	// A4: item ops (use / wear / take-off / drop) share a sub-dispatcher so
+	// the top-level switch stays under the gocyclo limit once the six
+	// CZ_ITEM_DROP aliases (0x0438 excluded — it is CZ_USE_SKILL2) landed.
+	case packet.HeaderCZUSEITEM2, packet.HeaderCZREQWEAREQUIPV5, packet.HeaderCZREQTAKEOFFEQUIP,
+		packet.HeaderCZDROPITEM0363, packet.HeaderCZDROPITEM0885, packet.HeaderCZDROPITEM02C4,
+		packet.HeaderCZDROPITEM0891, packet.HeaderCZDROPITEM0362, packet.HeaderCZDROPITEM089E:
+		return h.handleMapPacketItem(ctx, conn, resp, cmd, frame)
+	default:
+		return h.handleMapPacketNPC(ctx, conn, resp, cmd, frame)
+	}
+}
+
+// handleMapPacketItem dispatches the item sub-group (CZ_USE_ITEM2,
+// CZ_REQWEAREQUIP, CZ_REQ_TAKEOFF_EQUIP, and the six CZ_ITEM_DROP aliases).
+// Extracted from handleMapPacket in A4 so the top-level switch stays under
+// the gocyclo limit (mirrors the handleMapPacketCombat extraction).
+func (h *DispatchHandler) handleMapPacketItem(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, cmd uint16, frame []byte) error {
+	switch cmd {
 	case packet.HeaderCZUSEITEM2:
 		return h.handleCZUseItem(ctx, conn, resp, frame)
 	case packet.HeaderCZREQWEAREQUIPV5:
 		return h.handleCZReqWearEquip(ctx, conn, resp, frame)
 	case packet.HeaderCZREQTAKEOFFEQUIP:
 		return h.handleCZReqTakeoffEquip(ctx, conn, resp, frame)
-	case packet.HeaderCZSTATUSCHANGE:
-		return h.handleCZStatusChange(ctx, conn, resp, frame)
+	// Six C→S drop-item aliases share one 6-byte layout; the seventh alias
+	// (0x0438) is CZ_USE_SKILL2 and routed elsewhere.
+	case packet.HeaderCZDROPITEM0363, packet.HeaderCZDROPITEM0885, packet.HeaderCZDROPITEM02C4,
+		packet.HeaderCZDROPITEM0891, packet.HeaderCZDROPITEM0362, packet.HeaderCZDROPITEM089E:
+		return h.handleCZDropItem(ctx, conn, resp, frame)
 	default:
-		return h.handleMapPacketNPC(ctx, conn, resp, cmd, frame)
+		return nil
 	}
 }
 
@@ -2448,10 +2551,12 @@ func (h *DispatchHandler) handleCZActionRequest(ctx context.Context, conn *domai
 	switch req.Action {
 	case packet.DMGNormal, packet.DMGRepeat:
 		return h.handleAttack(ctx, conn, resp, req.TargetGID)
+	case packet.DMGPickup:
+		return h.handlePickup(ctx, conn, resp, req.TargetGID)
 	case packet.DMGSitDown, packet.DMGStandUp:
 		return h.handleSitStand(conn, resp, req.Action)
 	default:
-		// action 1 (pickup item), 4-6, 8-14 — out of scope.
+		// action 4-6, 8-14 — out of scope.
 		h.logger.Debug().
 			Uint64("conn", conn.ID).
 			Uint32("aid", conn.AccountID).
@@ -2613,35 +2718,77 @@ func (h *DispatchHandler) appendMonsterDrops(burst *bytes.Buffer, targetGID uint
 	if !ok {
 		return
 	}
+	x := uint16(spawn.X) //nolint:gosec // map cell coords fit in uint16
+	y := uint16(spawn.Y) //nolint:gosec // map cell coords fit in uint16
 	dropped := 0
 	for _, d := range mob.Drops {
 		if !h.dropRoll(d.Rate) {
 			continue
 		}
 		id := h.groundItemCounter.Add(1)
-		drop := packet.ItemFallEntryResponse{
+		// Resolve the drop's AegisName to the numeric nameid + IT_* type
+		// the wire needs. Without item_db loaded the client still renders
+		// a default sprite (NameID=0, IT_ETC), preserving pre-A4 boot.
+		var nameID uint32
+		typeByte := uint8(3) // IT_ETC fallback
+		if entry := h.itemRegistry.ByAegisName(d.Item); entry != nil {
+			nameID = uint32(entry.Id) //nolint:gosec // item ids are positive int32 in range
+			typeByte = itemTypeFromDB(entry.Type)
+		}
+		// ZC_ITEM_FALL_ENTRY (0x0ADD) — the throw/fall animation.
+		fallEntry := packet.ItemFallEntryResponse{
 			ID:     id,
-			NameID: 0, // item DB deferred; client renders a default sprite
-			Type:   3, // IT_ETC
+			NameID: nameID,
+			Type:   uint16(typeByte),
 			// Identified=1 lets the client display the item name slot
 			// without the "?" overlay. rAthena drops items already
 			// identified by default (mob.cpp item_drop).
 			Identified: 1,
-			X:          uint16(spawn.X), //nolint:gosec // map cell coords fit in uint16
-			Y:          uint16(spawn.Y), //nolint:gosec // map cell coords fit in uint16
+			X:          x,
+			Y:          y,
 			SubX:       0,
 			SubY:       0,
 			Amount:     1,
 		}
-		if err := drop.Encode(burst); err != nil {
+		if err := fallEntry.Encode(burst); err != nil {
 			h.logger.Error().
 				Err(err).
-				Uint64("conn", 0).
 				Uint32("target_gid", targetGID).
 				Str("item", d.Item).
 				Msg("encode ZC_ITEM_FALL_ENTRY failed")
 			continue
 		}
+		// ZC_ITEM_ENTRY (0x009d) — makes the floor item pickable. Without
+		// it the fall animation renders but a pickup click does nothing.
+		// Encoded independently so a failure here cannot skip the floor-
+		// item registration that follows.
+		pickEntry := packet.ItemEntryResponse{
+			AID:        id,
+			NameID:     nameID,
+			Identified: 1,
+			X:          x,
+			Y:          y,
+			Amount:     1,
+			SubX:       0,
+			SubY:       0,
+		}
+		if err := pickEntry.Encode(burst); err != nil {
+			h.logger.Error().
+				Err(err).
+				Uint32("target_gid", targetGID).
+				Str("item", d.Item).
+				Msg("encode ZC_ITEM_ENTRY failed")
+			continue
+		}
+		h.floorItemsMu.Lock()
+		h.floorItems[id] = floorItemState{
+			ItemID: nameID,
+			Type:   typeByte,
+			Amount: 1,
+			X:      x,
+			Y:      y,
+		}
+		h.floorItemsMu.Unlock()
 		dropped++
 	}
 	if dropped > 0 {
@@ -2651,6 +2798,340 @@ func (h *DispatchHandler) appendMonsterDrops(burst *bytes.Buffer, targetGID uint
 			Int("rolled", len(mob.Drops)).
 			Msg("monster dropped items")
 	}
+}
+
+// handleCZDropItem processes a client drop-item request (any of the six
+// registered CZ_ITEM_DROP aliases). It resolves the source inventory
+// position, persists the removal via the identity ConsumeItem RPC, and
+// only then acks the throw to the actor with ZC_ITEM_THROW_ACK. When the
+// consumed stack hits zero the session slot is freed; a partial drop keeps
+// the slot mapped to the same row id so a second partial drop still
+// resolves to it.
+//
+// Guards: an un-entered connection (AccountID==0), an unknown inventory
+// position, amount==0, or any persistence failure are silently dropped
+// with no ack, so a malformed/fuzzed packet or a transient RPC error
+// cannot desync the client's stack — the persisted inventory is the single
+// source of truth, the client never throws an item the server kept.
+func (h *DispatchHandler) handleCZDropItem(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+	req, err := packet.ParseCZDropItem(frame)
+	if err != nil {
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Int("frame_len", len(frame)).
+			Msg("malformed CZ_ITEM_DROP; dropping packet")
+		return nil
+	}
+
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint16("index", req.InventoryIndex).
+			Msg("CZ_ITEM_DROP without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	itemID, ok := conn.ResolveInventoryID(req.InventoryIndex)
+	if !ok {
+		h.logger.Debug().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("index", req.InventoryIndex).
+			Msg("CZ_ITEM_DROP unknown inventory position; dropping")
+		return nil
+	}
+
+	if req.Amount == 0 {
+		return nil
+	}
+
+	// Persist the drop before acking: on any failure the slot is left
+	// untouched and no throw ack is sent.
+	remaining, dropped := h.consumeDroppedItem(ctx, conn, itemID, req.Amount, req.InventoryIndex)
+	if !dropped {
+		return nil
+	}
+
+	ack := packet.ItemThrowAckResponse{
+		Index: req.InventoryIndex,
+		Count: req.Amount,
+	}
+	var buf bytes.Buffer
+	if err := ack.Encode(&buf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint16("index", req.InventoryIndex).
+			Msg("encode ZC_ITEM_THROW_ACK failed")
+		return nil
+	}
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_ITEM_THROW_ACK: %w", err)
+	}
+	// A partial drop leaves the slot mapping the same row id; only a
+	// fully-drained stack frees the slot.
+	if remaining == 0 {
+		conn.RemoveInventoryID(req.InventoryIndex)
+	}
+	return nil
+}
+
+// consumeDroppedItem decrements the stack at itemID by amount via the
+// identity ConsumeItem RPC and returns the post-drop remaining count.
+// ok=false (and a logged reason) when identity is unset, the RPC fails,
+// the response is nil, or identity rejects the consume (e.g. insufficient
+// stack); the caller then leaves the slot untouched and sends no throw
+// ack. Mirrors the UseItem RPC shape (2s timeout, client-gone debug,
+// gRPC-status warn, nil/success guard).
+func (h *DispatchHandler) consumeDroppedItem(ctx context.Context, conn *domain.ConnectionInfo, itemID uint32, amount uint16, index uint16) (uint32, bool) {
+	if h.identity == nil {
+		h.logger.Error().
+			Uint64("conn", conn.ID).
+			Msg("identity client not configured; rejecting CZ_ITEM_DROP")
+		return 0, false
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	gResp, err := h.identity.ConsumeItem(rpcCtx, &identityv1.ConsumeItemRequest{
+		AccountId: conn.AccountID,
+		CharId:    conn.CharID,
+		ItemId:    itemID,
+		Amount:    uint32(amount), //nolint:gosec // uint16→uint32 widen, cannot overflow
+	})
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint16("index", index).
+				Msg("identity ConsumeItem cancelled (client gone)")
+			return 0, false
+		}
+		st, _ := status.FromError(err)
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("index", index).
+			Str("grpc_code", st.Code().String()).
+			Msg("identity ConsumeItem RPC failed; dropping CZ_ITEM_DROP")
+		return 0, false
+	}
+	if gResp == nil || !gResp.GetSuccess() {
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint16("index", index).
+			Str("error", gResp.GetError()).
+			Msg("identity rejected ConsumeItem")
+		return 0, false
+	}
+	return gResp.GetRemaining(), true
+}
+
+// handlePickup processes a CZ_ACTION_REQUEST pickup (action=DMG_PICKUP_ITEM).
+// The request's TargetGID is the ground-item object ID (the AID written into
+// ZC_ITEM_ENTRY/ZC_ITEM_FALL_ENTRY by appendMonsterDrops). The floor item is
+// claimed (removed) under floorItemsMu so two concurrent pickups of the same
+// object ID cannot both succeed; the AddItem RPC then persists the gain, the
+// resulting inventory row id is wired into the session slot (NOT the nameid —
+// fixing the A4 invIndex defect), the actor is acked ZC_ITEM_PICKUP_ACK
+// (Result=1), and ZC_ITEM_DISAPPEAR is broadcast to the other map sessions.
+// A miss (unknown target, full inventory, or a persistence failure) restores
+// the floor item and acks Result=0 — nothing is lost, nothing is claimed.
+func (h *DispatchHandler) handlePickup(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, targetGID uint32) error {
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("target_gid", targetGID).
+			Msg("pickup without prior CZ_ENTER; dropping")
+		return nil
+	}
+
+	item, claimed := h.claimFloorItem(targetGID)
+	if !claimed {
+		return h.sendPickupAck(resp, conn, targetGID, packet.ItemPickupAckResponse{})
+	}
+
+	// Resolve a free slot before persisting so a full inventory is caught
+	// without a wasted RPC. On every non-success path the floor item is
+	// restored (below) so the pickup is a no-op, not a loss.
+	slot := lowestFreeInventorySlot(conn)
+	var ack packet.ItemPickupAckResponse
+	if slot >= 0 {
+		if rowID, persisted := h.persistPickup(ctx, conn, item); persisted {
+			conn.AddInventoryID(uint16(slot), rowID) //nolint:gosec // slot in [0,maxInventorySlots)
+			ack = packet.ItemPickupAckResponse{
+				Index:        uint16(slot), //nolint:gosec // slot is in [0,maxInventorySlots)
+				Count:        item.Amount,
+				NameID:       item.ItemID,
+				IsIdentified: 1,
+				Type:         item.Type,
+				Result:       1,
+			}
+		}
+	}
+	if ack.Result != 1 {
+		h.restoreFloorItem(targetGID, item)
+	}
+	if err := h.sendPickupAck(resp, conn, targetGID, ack); err != nil {
+		return err
+	}
+
+	// The picker needs no vanish of its own (it has the pickup ack); only
+	// the other sessions on the map must see the item disappear.
+	if ack.Result == 1 {
+		h.broadcastFloorItemVanish(conn, targetGID)
+	}
+	return nil
+}
+
+// claimFloorItem removes the floor item for targetGID under floorItemsMu and
+// returns it. ok=false when no such item exists (the caller acks a miss). It
+// does NOT touch the inventory slot — the caller reserves the slot and wires
+// the row id only after the AddItem RPC succeeds, so a failed/aborted pickup
+// leaves the item on the ground for a retry rather than claiming a slot with
+// the wrong id.
+func (h *DispatchHandler) claimFloorItem(targetGID uint32) (floorItemState, bool) {
+	h.floorItemsMu.Lock()
+	defer h.floorItemsMu.Unlock()
+	item, ok := h.floorItems[targetGID]
+	if !ok {
+		return floorItemState{}, false
+	}
+	delete(h.floorItems, targetGID)
+	return item, true
+}
+
+// restoreFloorItem puts a claimed item back on the ground under floorItemsMu.
+// Used when a pickup could not be persisted (full inventory or AddItem
+// failure) so the item is not lost.
+func (h *DispatchHandler) restoreFloorItem(targetGID uint32, item floorItemState) {
+	h.floorItemsMu.Lock()
+	h.floorItems[targetGID] = item
+	h.floorItemsMu.Unlock()
+}
+
+// persistPickup acquires item via the identity AddItem RPC and returns the
+// resulting inventory row id. ok=false when identity is unset, the RPC
+// fails, the response is nil, or identity rejects the add (e.g. overweight);
+// the caller restores the floor item on any such path. Mirrors the UseItem
+// RPC shape (2s timeout, client-gone debug, gRPC-status warn, nil/success
+// guard).
+func (h *DispatchHandler) persistPickup(ctx context.Context, conn *domain.ConnectionInfo, item floorItemState) (uint32, bool) {
+	if h.identity == nil {
+		h.logger.Error().
+			Uint64("conn", conn.ID).
+			Msg("identity client not configured; rejecting pickup")
+		return 0, false
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	gResp, err := h.identity.AddItem(rpcCtx, &identityv1.AddItemRequest{
+		AccountId: conn.AccountID,
+		CharId:    conn.CharID,
+		Nameid:    item.ItemID,
+		Amount:    uint32(item.Amount), //nolint:gosec // uint16→uint32 widen, cannot overflow
+	})
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint32("nameid", item.ItemID).
+				Msg("identity AddItem cancelled (client gone)")
+			return 0, false
+		}
+		st, _ := status.FromError(err)
+		h.logger.Warn().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint32("nameid", item.ItemID).
+			Str("grpc_code", st.Code().String()).
+			Msg("identity AddItem RPC failed; nacking pickup")
+		return 0, false
+	}
+	if gResp == nil || !gResp.GetSuccess() {
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint32("nameid", item.ItemID).
+			Str("error", gResp.GetError()).
+			Msg("identity rejected AddItem")
+		return 0, false
+	}
+	return gResp.GetItemId(), true
+}
+
+// sendPickupAck encodes ZC_ITEM_PICKUP_ACK and writes it. A zero-valued ack
+// (Result=0) is the miss/nack the client uses to abort the pickup animation.
+// Encode failures are logged and swallowed (the buffer is fixed-size); send
+// failures propagate so the caller can tear down the connection.
+func (h *DispatchHandler) sendPickupAck(resp domain.Responder, conn *domain.ConnectionInfo, targetGID uint32, ack packet.ItemPickupAckResponse) error {
+	var buf bytes.Buffer
+	if err := ack.Encode(&buf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("target_gid", targetGID).
+			Msg("encode ZC_ITEM_PICKUP_ACK failed")
+		return nil
+	}
+	if err := resp.SendPacket(buf.Bytes()); err != nil {
+		return fmt.Errorf("send ZC_ITEM_PICKUP_ACK: %w", err)
+	}
+	return nil
+}
+
+// lowestFreeInventorySlot returns the lowest 0-based inventory position not
+// already occupied, scanning [0, maxInventorySlots). Returns -1 if the
+// inventory is full. Mirrors rAthena's lowest-empty-slot assignment.
+func lowestFreeInventorySlot(conn *domain.ConnectionInfo) int {
+	for pos := range maxInventorySlots {
+		if _, ok := conn.ResolveInventoryID(uint16(pos)); !ok { //nolint:gosec // pos in [0,maxInventorySlots)
+			return pos
+		}
+	}
+	return -1
+}
+
+// broadcastFloorItemVanish sends ZC_ITEM_DISAPPEAR for targetGID to every
+// other session on the actor's map, mirroring BroadcastSubscriber.fanout's
+// encode-once / send-safe pattern. Per-session send failures are logged,
+// not propagated, so one dead observer cannot starve the rest.
+func (h *DispatchHandler) broadcastFloorItemVanish(conn *domain.ConnectionInfo, targetGID uint32) {
+	vanish := packet.ItemDisappearResponse{AID: targetGID}
+	var buf bytes.Buffer
+	if err := vanish.Encode(&buf); err != nil {
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("target_gid", targetGID).
+			Msg("encode ZC_ITEM_DISAPPEAR failed")
+		return
+	}
+	frame := buf.Bytes()
+	h.registry.ForEachOnMap(conn.MapName, func(aid uint32, s domain.Session) {
+		if aid == conn.AccountID || s.Responder == nil {
+			return
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				h.logger.Warn().
+					Interface("panic", r).
+					Uint32("aid", aid).
+					Msg("floor-item vanish broadcast: send panic recovered")
+			}
+		}()
+		if err := s.Responder.SendPacket(frame); err != nil {
+			h.logger.Warn().
+				Err(err).
+				Uint32("aid", aid).
+				Msg("floor-item vanish broadcast: send failed")
+		}
+	})
 }
 
 // handleCZUseSkill processes a CZ_USE_SKILL2 (0x0438) single-target skill

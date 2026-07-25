@@ -222,6 +222,12 @@ type LogConfig struct {
 // at gateway runtime via statsdomain.ExpRegistry. Optional -- when unset,
 // stats/domain falls back to its hardcoded pre-Renewal BaseExp table so dev
 // and CI boots succeed without the YAML.
+// ItemDBPath points at the rAthena item_db.yml (version 3) the gateway
+// dispatch uses to resolve mob-drop AegisNames to the numeric nameid/type
+// the wire floor-item frames carry. Optional -- when unset, drops fall back
+// to nameid 0 / IT_ETC so the gateway still boots without drop resolution.
+// The identity service resolves inventory weights from its own
+// IdentityConfig.ItemDBPath, an independent consumer of the same file.
 type ZoneConfig struct {
 	TickRate             time.Duration `mapstructure:"tick_rate" yaml:"tick_rate" env:"ZONE_TICK_RATE" validate:"required,min=10ms"`
 	MapDir               string        `mapstructure:"map_dir" yaml:"map_dir" env:"ZONE_MAP_DIR" validate:"required"`
@@ -231,6 +237,7 @@ type ZoneConfig struct {
 	MobDBPath            string        `mapstructure:"mob_db_path" yaml:"mob_db_path" env:"ZONE_MOB_DB_PATH" validate:"omitempty"`
 	SkillDBPath          string        `mapstructure:"skill_db_path" yaml:"skill_db_path" env:"ZONE_SKILL_DB_PATH" validate:"omitempty"`
 	JobExpDBPath         string        `mapstructure:"job_exp_db_path" yaml:"job_exp_db_path" env:"ZONE_JOB_EXP_DB_PATH" validate:"omitempty"`
+	ItemDBPath           string        `mapstructure:"item_db_path" yaml:"item_db_path" env:"ZONE_ITEM_DB_PATH" validate:"omitempty"`
 	MobSpawnsPath        string        `mapstructure:"mob_spawns_path" yaml:"mob_spawns_path" env:"ZONE_MOB_SPAWNS_PATH" validate:"omitempty"`
 	ScriptDir            string        `mapstructure:"script_dir" yaml:"script_dir" env:"ZONE_SCRIPT_DIR" validate:"omitempty"`
 	ScriptReloadInterval time.Duration `mapstructure:"script_reload_interval" yaml:"script_reload_interval" env:"ZONE_SCRIPT_RELOAD_INTERVAL" validate:"omitempty,min=0"`

@@ -50,6 +50,7 @@ const (
 	ZoneService_BuyVendingItem_FullMethodName      = "/zone.v1.ZoneService/BuyVendingItem"
 	ZoneService_ListVendingShops_FullMethodName    = "/zone.v1.ZoneService/ListVendingShops"
 	ZoneService_GetVendingShop_FullMethodName      = "/zone.v1.ZoneService/GetVendingShop"
+	ZoneService_ListEntities_FullMethodName        = "/zone.v1.ZoneService/ListEntities"
 )
 
 // ZoneServiceClient is the client API for ZoneService service.
@@ -134,6 +135,11 @@ type ZoneServiceClient interface {
 	ListVendingShops(ctx context.Context, in *ListVendingShopsRequest, opts ...grpc.CallOption) (*ListVendingShopsResponse, error)
 	// GetVendingShop returns the shop owned by a character.
 	GetVendingShop(ctx context.Context, in *GetVendingShopRequest, opts ...grpc.CallOption) (*GetVendingShopResponse, error)
+	// ListEntities returns a snapshot of entities currently in a map. The
+	// gateway calls this on map-enter to seed its per-map mob-view cache,
+	// closing the bootstrapping race where the zone spawns mobs before the
+	// gateway subscribes to EntitySpawned events.
+	ListEntities(ctx context.Context, in *ListEntitiesRequest, opts ...grpc.CallOption) (*ListEntitiesResponse, error)
 }
 
 type zoneServiceClient struct {
@@ -454,6 +460,16 @@ func (c *zoneServiceClient) GetVendingShop(ctx context.Context, in *GetVendingSh
 	return out, nil
 }
 
+func (c *zoneServiceClient) ListEntities(ctx context.Context, in *ListEntitiesRequest, opts ...grpc.CallOption) (*ListEntitiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListEntitiesResponse)
+	err := c.cc.Invoke(ctx, ZoneService_ListEntities_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ZoneServiceServer is the server API for ZoneService service.
 // All implementations must embed UnimplementedZoneServiceServer
 // for forward compatibility.
@@ -536,6 +552,11 @@ type ZoneServiceServer interface {
 	ListVendingShops(context.Context, *ListVendingShopsRequest) (*ListVendingShopsResponse, error)
 	// GetVendingShop returns the shop owned by a character.
 	GetVendingShop(context.Context, *GetVendingShopRequest) (*GetVendingShopResponse, error)
+	// ListEntities returns a snapshot of entities currently in a map. The
+	// gateway calls this on map-enter to seed its per-map mob-view cache,
+	// closing the bootstrapping race where the zone spawns mobs before the
+	// gateway subscribes to EntitySpawned events.
+	ListEntities(context.Context, *ListEntitiesRequest) (*ListEntitiesResponse, error)
 	mustEmbedUnimplementedZoneServiceServer()
 }
 
@@ -638,6 +659,9 @@ func (UnimplementedZoneServiceServer) ListVendingShops(context.Context, *ListVen
 }
 func (UnimplementedZoneServiceServer) GetVendingShop(context.Context, *GetVendingShopRequest) (*GetVendingShopResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVendingShop not implemented")
+}
+func (UnimplementedZoneServiceServer) ListEntities(context.Context, *ListEntitiesRequest) (*ListEntitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListEntities not implemented")
 }
 func (UnimplementedZoneServiceServer) mustEmbedUnimplementedZoneServiceServer() {}
 func (UnimplementedZoneServiceServer) testEmbeddedByValue()                     {}
@@ -1218,6 +1242,24 @@ func _ZoneService_GetVendingShop_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ZoneService_ListEntities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListEntitiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZoneServiceServer).ListEntities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ZoneService_ListEntities_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZoneServiceServer).ListEntities(ctx, req.(*ListEntitiesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ZoneService_ServiceDesc is the grpc.ServiceDesc for ZoneService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1348,6 +1390,10 @@ var ZoneService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetVendingShop",
 			Handler:    _ZoneService_GetVendingShop_Handler,
+		},
+		{
+			MethodName: "ListEntities",
+			Handler:    _ZoneService_ListEntities_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

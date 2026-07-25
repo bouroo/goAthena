@@ -42,6 +42,12 @@ message EntitySpawned {
   uint32 x = 3;
   uint32 y = 4;
   string name = 5;
+  uint32 object_type = 6; // clif_bl_type: 0=PC, 5=BL_MOB, 6=BL_NPC (clif.cpp)
+  uint32 job = 7;         // view sprite: mob_db SpriteID / NPC class / PC class
+  int32 hp = 8;           // current HP at spawn (0 for NPC)
+  int32 max_hp = 9;       // max HP (0 for NPC)
+  int32 speed = 10;       // walk speed in kRO units (0 for static NPC)
+  uint32 mob_id = 11;     // mob_db ID; gateway resolves exp/drops (mob only)
 }
 
 // EntityVanished indicates an entity disappeared from the map.
@@ -56,6 +62,7 @@ message EntityDamaged {
   int32 damage = 2;
   int32 new_hp = 3;
   int32 max_hp = 4;
+  uint32 attacker_id = 5; // source entity; ZC_NOTIFY_ACT srcID slot
 }
 
 // EntityKilled indicates an entity died (HP <= 0).

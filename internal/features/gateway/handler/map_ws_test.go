@@ -177,6 +177,10 @@ func (f *fakeZoneClient) GetVendingShop(_ context.Context, _ *zonev1.GetVendingS
 	return &zonev1.GetVendingShopResponse{Success: true}, nil
 }
 
+func (f *fakeZoneClient) ListEntities(_ context.Context, _ *zonev1.ListEntitiesRequest, _ ...grpc.CallOption) (*zonev1.ListEntitiesResponse, error) {
+	return &zonev1.ListEntitiesResponse{Success: true}, nil
+}
+
 // wsMapDispatchAdapter mirrors service.DispatchHandler for the WS path
 // so this test exercises the full real WSHandler → processBytes →
 // domain.PacketHandler → zone client → ZC_ACCEPT_ENTER → WS write

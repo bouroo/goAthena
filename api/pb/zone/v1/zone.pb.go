@@ -4061,11 +4061,115 @@ func (x *GetVendingShopResponse) GetShop() *VendingShopInfo {
 	return nil
 }
 
+type ListEntitiesRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	MapName          string                 `protobuf:"bytes,1,opt,name=map_name,json=mapName,proto3" json:"map_name,omitempty"`                               // map whose entities to snapshot
+	EntityTypeFilter uint32                 `protobuf:"varint,2,opt,name=entity_type_filter,json=entityTypeFilter,proto3" json:"entity_type_filter,omitempty"` // 0 = all; else domain.EntityType (2 = mob)
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ListEntitiesRequest) Reset() {
+	*x = ListEntitiesRequest{}
+	mi := &file_zone_v1_zone_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListEntitiesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListEntitiesRequest) ProtoMessage() {}
+
+func (x *ListEntitiesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListEntitiesRequest.ProtoReflect.Descriptor instead.
+func (*ListEntitiesRequest) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *ListEntitiesRequest) GetMapName() string {
+	if x != nil {
+		return x.MapName
+	}
+	return ""
+}
+
+func (x *ListEntitiesRequest) GetEntityTypeFilter() uint32 {
+	if x != nil {
+		return x.EntityTypeFilter
+	}
+	return 0
+}
+
+type ListEntitiesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Entities      []*EntitySpawned       `protobuf:"bytes,2,rep,name=entities,proto3" json:"entities,omitempty"` // reuses the broadcast spawn shape
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListEntitiesResponse) Reset() {
+	*x = ListEntitiesResponse{}
+	mi := &file_zone_v1_zone_proto_msgTypes[69]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListEntitiesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListEntitiesResponse) ProtoMessage() {}
+
+func (x *ListEntitiesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_zone_v1_zone_proto_msgTypes[69]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListEntitiesResponse.ProtoReflect.Descriptor instead.
+func (*ListEntitiesResponse) Descriptor() ([]byte, []int) {
+	return file_zone_v1_zone_proto_rawDescGZIP(), []int{69}
+}
+
+func (x *ListEntitiesResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ListEntitiesResponse) GetEntities() []*EntitySpawned {
+	if x != nil {
+		return x.Entities
+	}
+	return nil
+}
+
 var File_zone_v1_zone_proto protoreflect.FileDescriptor
 
 const file_zone_v1_zone_proto_rawDesc = "" +
 	"\n" +
-	"\x12zone/v1/zone.proto\x12\azone.v1\"\xd5\x01\n" +
+	"\x12zone/v1/zone.proto\x12\azone.v1\x1a\x13zone/v1/event.proto\"\xd5\x01\n" +
 	"\x10EnterZoneRequest\x12\x1d\n" +
 	"\n" +
 	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
@@ -4350,7 +4454,13 @@ const file_zone_v1_zone_proto_rawDesc = "" +
 	"\x16GetVendingShopResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
 	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12,\n" +
-	"\x04shop\x18\x03 \x01(\v2\x18.zone.v1.VendingShopInfoR\x04shop2\xfb\x12\n" +
+	"\x04shop\x18\x03 \x01(\v2\x18.zone.v1.VendingShopInfoR\x04shop\"^\n" +
+	"\x13ListEntitiesRequest\x12\x19\n" +
+	"\bmap_name\x18\x01 \x01(\tR\amapName\x12,\n" +
+	"\x12entity_type_filter\x18\x02 \x01(\rR\x10entityTypeFilter\"d\n" +
+	"\x14ListEntitiesResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x122\n" +
+	"\bentities\x18\x02 \x03(\v2\x16.zone.v1.EntitySpawnedR\bentities2\xc8\x13\n" +
 	"\vZoneService\x12B\n" +
 	"\tEnterZone\x12\x19.zone.v1.EnterZoneRequest\x1a\x1a.zone.v1.EnterZoneResponse\x12E\n" +
 	"\n" +
@@ -4385,7 +4495,8 @@ const file_zone_v1_zone_proto_rawDesc = "" +
 	"\x10CloseVendingShop\x12 .zone.v1.CloseVendingShopRequest\x1a!.zone.v1.CloseVendingShopResponse\x12Q\n" +
 	"\x0eBuyVendingItem\x12\x1e.zone.v1.BuyVendingItemRequest\x1a\x1f.zone.v1.BuyVendingItemResponse\x12W\n" +
 	"\x10ListVendingShops\x12 .zone.v1.ListVendingShopsRequest\x1a!.zone.v1.ListVendingShopsResponse\x12Q\n" +
-	"\x0eGetVendingShop\x12\x1e.zone.v1.GetVendingShopRequest\x1a\x1f.zone.v1.GetVendingShopResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
+	"\x0eGetVendingShop\x12\x1e.zone.v1.GetVendingShopRequest\x1a\x1f.zone.v1.GetVendingShopResponse\x12K\n" +
+	"\fListEntities\x12\x1c.zone.v1.ListEntitiesRequest\x1a\x1d.zone.v1.ListEntitiesResponseB2Z0github.com/bouroo/goAthena/api/pb/zone/v1;zonev1b\x06proto3"
 
 var (
 	file_zone_v1_zone_proto_rawDescOnce sync.Once
@@ -4399,7 +4510,7 @@ func file_zone_v1_zone_proto_rawDescGZIP() []byte {
 	return file_zone_v1_zone_proto_rawDescData
 }
 
-var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 68)
+var file_zone_v1_zone_proto_msgTypes = make([]protoimpl.MessageInfo, 70)
 var file_zone_v1_zone_proto_goTypes = []any{
 	(*EnterZoneRequest)(nil),            // 0: zone.v1.EnterZoneRequest
 	(*EnterZoneResponse)(nil),           // 1: zone.v1.EnterZoneResponse
@@ -4469,6 +4580,9 @@ var file_zone_v1_zone_proto_goTypes = []any{
 	(*ListVendingShopsResponse)(nil),    // 65: zone.v1.ListVendingShopsResponse
 	(*GetVendingShopRequest)(nil),       // 66: zone.v1.GetVendingShopRequest
 	(*GetVendingShopResponse)(nil),      // 67: zone.v1.GetVendingShopResponse
+	(*ListEntitiesRequest)(nil),         // 68: zone.v1.ListEntitiesRequest
+	(*ListEntitiesResponse)(nil),        // 69: zone.v1.ListEntitiesResponse
+	(*EntitySpawned)(nil),               // 70: zone.v1.EntitySpawned
 }
 var file_zone_v1_zone_proto_depIdxs = []int32{
 	28, // 0: zone.v1.OpenStorageResponse.items:type_name -> zone.v1.StorageItem
@@ -4480,73 +4594,76 @@ var file_zone_v1_zone_proto_depIdxs = []int32{
 	57, // 6: zone.v1.OpenVendingShopResponse.shop:type_name -> zone.v1.VendingShopInfo
 	57, // 7: zone.v1.ListVendingShopsResponse.shops:type_name -> zone.v1.VendingShopInfo
 	57, // 8: zone.v1.GetVendingShopResponse.shop:type_name -> zone.v1.VendingShopInfo
-	0,  // 9: zone.v1.ZoneService.EnterZone:input_type -> zone.v1.EnterZoneRequest
-	2,  // 10: zone.v1.ZoneService.MoveEntity:input_type -> zone.v1.MoveEntityRequest
-	4,  // 11: zone.v1.ZoneService.AttackEntity:input_type -> zone.v1.AttackEntityRequest
-	6,  // 12: zone.v1.ZoneService.PickupItem:input_type -> zone.v1.PickupItemRequest
-	8,  // 13: zone.v1.ZoneService.RequestTrade:input_type -> zone.v1.RequestTradeRequest
-	10, // 14: zone.v1.ZoneService.AddTradeItem:input_type -> zone.v1.AddTradeItemRequest
-	12, // 15: zone.v1.ZoneService.AddTradeZeny:input_type -> zone.v1.AddTradeZenyRequest
-	14, // 16: zone.v1.ZoneService.ConfirmTrade:input_type -> zone.v1.ConfirmTradeRequest
-	16, // 17: zone.v1.ZoneService.CompleteTrade:input_type -> zone.v1.CompleteTradeRequest
-	18, // 18: zone.v1.ZoneService.CancelTrade:input_type -> zone.v1.CancelTradeRequest
-	20, // 19: zone.v1.ZoneService.OpenStorage:input_type -> zone.v1.OpenStorageRequest
-	22, // 20: zone.v1.ZoneService.DepositItem:input_type -> zone.v1.DepositItemRequest
-	24, // 21: zone.v1.ZoneService.WithdrawItem:input_type -> zone.v1.WithdrawItemRequest
-	26, // 22: zone.v1.ZoneService.CloseStorage:input_type -> zone.v1.CloseStorageRequest
-	29, // 23: zone.v1.ZoneService.Whisper:input_type -> zone.v1.WhisperRequest
-	31, // 24: zone.v1.ZoneService.SendPartyChat:input_type -> zone.v1.SendPartyChatRequest
-	33, // 25: zone.v1.ZoneService.SendMapChat:input_type -> zone.v1.SendMapChatRequest
-	35, // 26: zone.v1.ZoneService.SendFriendRequest:input_type -> zone.v1.SendFriendRequestRequest
-	37, // 27: zone.v1.ZoneService.AcceptFriendRequest:input_type -> zone.v1.AcceptFriendRequestRequest
-	39, // 28: zone.v1.ZoneService.RejectFriendRequest:input_type -> zone.v1.RejectFriendRequestRequest
-	41, // 29: zone.v1.ZoneService.RemoveFriend:input_type -> zone.v1.RemoveFriendRequest
-	43, // 30: zone.v1.ZoneService.ListFriends:input_type -> zone.v1.ListFriendsRequest
-	46, // 31: zone.v1.ZoneService.CreateParty:input_type -> zone.v1.CreatePartyRequest
-	48, // 32: zone.v1.ZoneService.JoinParty:input_type -> zone.v1.JoinPartyRequest
-	50, // 33: zone.v1.ZoneService.LeaveParty:input_type -> zone.v1.LeavePartyRequest
-	52, // 34: zone.v1.ZoneService.GetParty:input_type -> zone.v1.GetPartyRequest
-	58, // 35: zone.v1.ZoneService.OpenVendingShop:input_type -> zone.v1.OpenVendingShopRequest
-	60, // 36: zone.v1.ZoneService.CloseVendingShop:input_type -> zone.v1.CloseVendingShopRequest
-	62, // 37: zone.v1.ZoneService.BuyVendingItem:input_type -> zone.v1.BuyVendingItemRequest
-	64, // 38: zone.v1.ZoneService.ListVendingShops:input_type -> zone.v1.ListVendingShopsRequest
-	66, // 39: zone.v1.ZoneService.GetVendingShop:input_type -> zone.v1.GetVendingShopRequest
-	1,  // 40: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
-	3,  // 41: zone.v1.ZoneService.MoveEntity:output_type -> zone.v1.MoveEntityResponse
-	5,  // 42: zone.v1.ZoneService.AttackEntity:output_type -> zone.v1.AttackEntityResponse
-	7,  // 43: zone.v1.ZoneService.PickupItem:output_type -> zone.v1.PickupItemResponse
-	9,  // 44: zone.v1.ZoneService.RequestTrade:output_type -> zone.v1.RequestTradeResponse
-	11, // 45: zone.v1.ZoneService.AddTradeItem:output_type -> zone.v1.AddTradeItemResponse
-	13, // 46: zone.v1.ZoneService.AddTradeZeny:output_type -> zone.v1.AddTradeZenyResponse
-	15, // 47: zone.v1.ZoneService.ConfirmTrade:output_type -> zone.v1.ConfirmTradeResponse
-	17, // 48: zone.v1.ZoneService.CompleteTrade:output_type -> zone.v1.CompleteTradeResponse
-	19, // 49: zone.v1.ZoneService.CancelTrade:output_type -> zone.v1.CancelTradeResponse
-	21, // 50: zone.v1.ZoneService.OpenStorage:output_type -> zone.v1.OpenStorageResponse
-	23, // 51: zone.v1.ZoneService.DepositItem:output_type -> zone.v1.DepositItemResponse
-	25, // 52: zone.v1.ZoneService.WithdrawItem:output_type -> zone.v1.WithdrawItemResponse
-	27, // 53: zone.v1.ZoneService.CloseStorage:output_type -> zone.v1.CloseStorageResponse
-	30, // 54: zone.v1.ZoneService.Whisper:output_type -> zone.v1.WhisperResponse
-	32, // 55: zone.v1.ZoneService.SendPartyChat:output_type -> zone.v1.SendPartyChatResponse
-	34, // 56: zone.v1.ZoneService.SendMapChat:output_type -> zone.v1.SendMapChatResponse
-	36, // 57: zone.v1.ZoneService.SendFriendRequest:output_type -> zone.v1.SendFriendRequestResponse
-	38, // 58: zone.v1.ZoneService.AcceptFriendRequest:output_type -> zone.v1.AcceptFriendRequestResponse
-	40, // 59: zone.v1.ZoneService.RejectFriendRequest:output_type -> zone.v1.RejectFriendRequestResponse
-	42, // 60: zone.v1.ZoneService.RemoveFriend:output_type -> zone.v1.RemoveFriendResponse
-	44, // 61: zone.v1.ZoneService.ListFriends:output_type -> zone.v1.ListFriendsResponse
-	47, // 62: zone.v1.ZoneService.CreateParty:output_type -> zone.v1.CreatePartyResponse
-	49, // 63: zone.v1.ZoneService.JoinParty:output_type -> zone.v1.JoinPartyResponse
-	51, // 64: zone.v1.ZoneService.LeaveParty:output_type -> zone.v1.LeavePartyResponse
-	53, // 65: zone.v1.ZoneService.GetParty:output_type -> zone.v1.GetPartyResponse
-	59, // 66: zone.v1.ZoneService.OpenVendingShop:output_type -> zone.v1.OpenVendingShopResponse
-	61, // 67: zone.v1.ZoneService.CloseVendingShop:output_type -> zone.v1.CloseVendingShopResponse
-	63, // 68: zone.v1.ZoneService.BuyVendingItem:output_type -> zone.v1.BuyVendingItemResponse
-	65, // 69: zone.v1.ZoneService.ListVendingShops:output_type -> zone.v1.ListVendingShopsResponse
-	67, // 70: zone.v1.ZoneService.GetVendingShop:output_type -> zone.v1.GetVendingShopResponse
-	40, // [40:71] is the sub-list for method output_type
-	9,  // [9:40] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	70, // 9: zone.v1.ListEntitiesResponse.entities:type_name -> zone.v1.EntitySpawned
+	0,  // 10: zone.v1.ZoneService.EnterZone:input_type -> zone.v1.EnterZoneRequest
+	2,  // 11: zone.v1.ZoneService.MoveEntity:input_type -> zone.v1.MoveEntityRequest
+	4,  // 12: zone.v1.ZoneService.AttackEntity:input_type -> zone.v1.AttackEntityRequest
+	6,  // 13: zone.v1.ZoneService.PickupItem:input_type -> zone.v1.PickupItemRequest
+	8,  // 14: zone.v1.ZoneService.RequestTrade:input_type -> zone.v1.RequestTradeRequest
+	10, // 15: zone.v1.ZoneService.AddTradeItem:input_type -> zone.v1.AddTradeItemRequest
+	12, // 16: zone.v1.ZoneService.AddTradeZeny:input_type -> zone.v1.AddTradeZenyRequest
+	14, // 17: zone.v1.ZoneService.ConfirmTrade:input_type -> zone.v1.ConfirmTradeRequest
+	16, // 18: zone.v1.ZoneService.CompleteTrade:input_type -> zone.v1.CompleteTradeRequest
+	18, // 19: zone.v1.ZoneService.CancelTrade:input_type -> zone.v1.CancelTradeRequest
+	20, // 20: zone.v1.ZoneService.OpenStorage:input_type -> zone.v1.OpenStorageRequest
+	22, // 21: zone.v1.ZoneService.DepositItem:input_type -> zone.v1.DepositItemRequest
+	24, // 22: zone.v1.ZoneService.WithdrawItem:input_type -> zone.v1.WithdrawItemRequest
+	26, // 23: zone.v1.ZoneService.CloseStorage:input_type -> zone.v1.CloseStorageRequest
+	29, // 24: zone.v1.ZoneService.Whisper:input_type -> zone.v1.WhisperRequest
+	31, // 25: zone.v1.ZoneService.SendPartyChat:input_type -> zone.v1.SendPartyChatRequest
+	33, // 26: zone.v1.ZoneService.SendMapChat:input_type -> zone.v1.SendMapChatRequest
+	35, // 27: zone.v1.ZoneService.SendFriendRequest:input_type -> zone.v1.SendFriendRequestRequest
+	37, // 28: zone.v1.ZoneService.AcceptFriendRequest:input_type -> zone.v1.AcceptFriendRequestRequest
+	39, // 29: zone.v1.ZoneService.RejectFriendRequest:input_type -> zone.v1.RejectFriendRequestRequest
+	41, // 30: zone.v1.ZoneService.RemoveFriend:input_type -> zone.v1.RemoveFriendRequest
+	43, // 31: zone.v1.ZoneService.ListFriends:input_type -> zone.v1.ListFriendsRequest
+	46, // 32: zone.v1.ZoneService.CreateParty:input_type -> zone.v1.CreatePartyRequest
+	48, // 33: zone.v1.ZoneService.JoinParty:input_type -> zone.v1.JoinPartyRequest
+	50, // 34: zone.v1.ZoneService.LeaveParty:input_type -> zone.v1.LeavePartyRequest
+	52, // 35: zone.v1.ZoneService.GetParty:input_type -> zone.v1.GetPartyRequest
+	58, // 36: zone.v1.ZoneService.OpenVendingShop:input_type -> zone.v1.OpenVendingShopRequest
+	60, // 37: zone.v1.ZoneService.CloseVendingShop:input_type -> zone.v1.CloseVendingShopRequest
+	62, // 38: zone.v1.ZoneService.BuyVendingItem:input_type -> zone.v1.BuyVendingItemRequest
+	64, // 39: zone.v1.ZoneService.ListVendingShops:input_type -> zone.v1.ListVendingShopsRequest
+	66, // 40: zone.v1.ZoneService.GetVendingShop:input_type -> zone.v1.GetVendingShopRequest
+	68, // 41: zone.v1.ZoneService.ListEntities:input_type -> zone.v1.ListEntitiesRequest
+	1,  // 42: zone.v1.ZoneService.EnterZone:output_type -> zone.v1.EnterZoneResponse
+	3,  // 43: zone.v1.ZoneService.MoveEntity:output_type -> zone.v1.MoveEntityResponse
+	5,  // 44: zone.v1.ZoneService.AttackEntity:output_type -> zone.v1.AttackEntityResponse
+	7,  // 45: zone.v1.ZoneService.PickupItem:output_type -> zone.v1.PickupItemResponse
+	9,  // 46: zone.v1.ZoneService.RequestTrade:output_type -> zone.v1.RequestTradeResponse
+	11, // 47: zone.v1.ZoneService.AddTradeItem:output_type -> zone.v1.AddTradeItemResponse
+	13, // 48: zone.v1.ZoneService.AddTradeZeny:output_type -> zone.v1.AddTradeZenyResponse
+	15, // 49: zone.v1.ZoneService.ConfirmTrade:output_type -> zone.v1.ConfirmTradeResponse
+	17, // 50: zone.v1.ZoneService.CompleteTrade:output_type -> zone.v1.CompleteTradeResponse
+	19, // 51: zone.v1.ZoneService.CancelTrade:output_type -> zone.v1.CancelTradeResponse
+	21, // 52: zone.v1.ZoneService.OpenStorage:output_type -> zone.v1.OpenStorageResponse
+	23, // 53: zone.v1.ZoneService.DepositItem:output_type -> zone.v1.DepositItemResponse
+	25, // 54: zone.v1.ZoneService.WithdrawItem:output_type -> zone.v1.WithdrawItemResponse
+	27, // 55: zone.v1.ZoneService.CloseStorage:output_type -> zone.v1.CloseStorageResponse
+	30, // 56: zone.v1.ZoneService.Whisper:output_type -> zone.v1.WhisperResponse
+	32, // 57: zone.v1.ZoneService.SendPartyChat:output_type -> zone.v1.SendPartyChatResponse
+	34, // 58: zone.v1.ZoneService.SendMapChat:output_type -> zone.v1.SendMapChatResponse
+	36, // 59: zone.v1.ZoneService.SendFriendRequest:output_type -> zone.v1.SendFriendRequestResponse
+	38, // 60: zone.v1.ZoneService.AcceptFriendRequest:output_type -> zone.v1.AcceptFriendRequestResponse
+	40, // 61: zone.v1.ZoneService.RejectFriendRequest:output_type -> zone.v1.RejectFriendRequestResponse
+	42, // 62: zone.v1.ZoneService.RemoveFriend:output_type -> zone.v1.RemoveFriendResponse
+	44, // 63: zone.v1.ZoneService.ListFriends:output_type -> zone.v1.ListFriendsResponse
+	47, // 64: zone.v1.ZoneService.CreateParty:output_type -> zone.v1.CreatePartyResponse
+	49, // 65: zone.v1.ZoneService.JoinParty:output_type -> zone.v1.JoinPartyResponse
+	51, // 66: zone.v1.ZoneService.LeaveParty:output_type -> zone.v1.LeavePartyResponse
+	53, // 67: zone.v1.ZoneService.GetParty:output_type -> zone.v1.GetPartyResponse
+	59, // 68: zone.v1.ZoneService.OpenVendingShop:output_type -> zone.v1.OpenVendingShopResponse
+	61, // 69: zone.v1.ZoneService.CloseVendingShop:output_type -> zone.v1.CloseVendingShopResponse
+	63, // 70: zone.v1.ZoneService.BuyVendingItem:output_type -> zone.v1.BuyVendingItemResponse
+	65, // 71: zone.v1.ZoneService.ListVendingShops:output_type -> zone.v1.ListVendingShopsResponse
+	67, // 72: zone.v1.ZoneService.GetVendingShop:output_type -> zone.v1.GetVendingShopResponse
+	69, // 73: zone.v1.ZoneService.ListEntities:output_type -> zone.v1.ListEntitiesResponse
+	42, // [42:74] is the sub-list for method output_type
+	10, // [10:42] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_zone_v1_zone_proto_init() }
@@ -4554,13 +4671,14 @@ func file_zone_v1_zone_proto_init() {
 	if File_zone_v1_zone_proto != nil {
 		return
 	}
+	file_zone_v1_event_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_zone_v1_zone_proto_rawDesc), len(file_zone_v1_zone_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   68,
+			NumMessages:   70,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

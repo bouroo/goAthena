@@ -42,6 +42,21 @@ func (m *MockIdentityService) EXPECT() *MockIdentityServiceMockRecorder {
 	return m.recorder
 }
 
+// AddItem mocks base method.
+func (m *MockIdentityService) AddItem(ctx context.Context, accountID, charID, nameid, amount uint32) (uint32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddItem", ctx, accountID, charID, nameid, amount)
+	ret0, _ := ret[0].(uint32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AddItem indicates an expected call of AddItem.
+func (mr *MockIdentityServiceMockRecorder) AddItem(ctx, accountID, charID, nameid, amount any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddItem", reflect.TypeOf((*MockIdentityService)(nil).AddItem), ctx, accountID, charID, nameid, amount)
+}
+
 // AllocateStat mocks base method.
 func (m *MockIdentityService) AllocateStat(ctx context.Context, accountID, charID, statID, amount uint32) (int, uint32, uint32, error) {
 	m.ctrl.T.Helper()
@@ -88,6 +103,21 @@ func (m *MockIdentityService) CheckWeight(ctx context.Context, accountID, charID
 func (mr *MockIdentityServiceMockRecorder) CheckWeight(ctx, accountID, charID, addNameID, addAmount any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckWeight", reflect.TypeOf((*MockIdentityService)(nil).CheckWeight), ctx, accountID, charID, addNameID, addAmount)
+}
+
+// ConsumeItem mocks base method.
+func (m *MockIdentityService) ConsumeItem(ctx context.Context, accountID, charID, itemID, amount uint32) (uint32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ConsumeItem", ctx, accountID, charID, itemID, amount)
+	ret0, _ := ret[0].(uint32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ConsumeItem indicates an expected call of ConsumeItem.
+func (mr *MockIdentityServiceMockRecorder) ConsumeItem(ctx, accountID, charID, itemID, amount any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConsumeItem", reflect.TypeOf((*MockIdentityService)(nil).ConsumeItem), ctx, accountID, charID, itemID, amount)
 }
 
 // EquipItem mocks base method.

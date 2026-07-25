@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -40,8 +41,13 @@ type fileFormat struct {
 }
 
 // Registry provides thread-safe lookup of item entries by ID.
+//
+// Both maps are populated once at Load time and never mutated afterwards,
+// so concurrent reads (the only operation after construction) are safe
+// without locking.
 type Registry struct {
 	entries map[int32]*ItemEntry
+	aegis   map[string]*ItemEntry // reverse lookup AegisName → entry
 }
 
 // Load parses a rAthena item_db YAML file from an io.Reader and returns a Registry.
@@ -63,6 +69,7 @@ func Load(r io.Reader) (*Registry, error) {
 	}
 
 	entries := make(map[int32]*ItemEntry, len(f.Body))
+	aegis := make(map[string]*ItemEntry, len(f.Body))
 	for _, entry := range f.Body {
 		if entry == nil {
 			continue
@@ -71,8 +78,14 @@ func Load(r io.Reader) (*Registry, error) {
 			entry.Type = "Etc"
 		}
 		entries[entry.Id] = entry
+		// mob_db drop tables carry an AegisName, not a numeric id, so the
+		// reverse map is what lets a drop resolve its item. A duplicate
+		// AegisName is a data error; last write wins to stay deterministic.
+		if entry.AegisName != "" {
+			aegis[entry.AegisName] = entry
+		}
 	}
-	return &Registry{entries: entries}, nil
+	return &Registry{entries: entries, aegis: aegis}, nil
 }
 
 // LoadFile is a convenience wrapper that opens a file and calls Load.
@@ -91,6 +104,16 @@ func (reg *Registry) Get(id int32) *ItemEntry {
 		return nil
 	}
 	return reg.entries[id]
+}
+
+// ByAegisName returns the ItemEntry whose AegisName matches, or nil if not
+// found. Used to resolve mob_db drop entries (which carry an AegisName
+// string) to the numeric item id the wire format requires.
+func (reg *Registry) ByAegisName(name string) *ItemEntry {
+	if reg == nil || name == "" {
+		return nil
+	}
+	return reg.aegis[name]
 }
 
 // Len returns the number of loaded item entries.
@@ -113,4 +136,35 @@ func (reg *Registry) Weight(nameID uint32) uint32 {
 		return 0
 	}
 	return uint32(entry.Weight)
+}
+
+// IsStackable reports whether the item type stacks in rAthena's inventory
+// model (itemdb.cpp:4932 item_data::isStackable): false for Weapon, Armor,
+// PetEgg, PetArmor, and ShadowGear; true otherwise. Unknown nameids (and a
+// nil registry) return true — the AddItem merge only commits when a matching
+// plain stack already exists, so a permissive default cannot corrupt a
+// distinct item.
+//
+// The comparison is case-insensitive because the shipped YAMLs are
+// inconsistent: renewal item_db.yml uses both "ShadowGear" and "Shadowgear"
+// for shadow-gear entries, and rAthena's own Type strings vary in casing.
+func (reg *Registry) IsStackable(nameID uint32) bool {
+	const maxItemID = uint32(1<<31 - 1)
+	if nameID > maxItemID {
+		return true
+	}
+	entry := reg.Get(int32(nameID))
+	if entry == nil {
+		return true
+	}
+	switch {
+	case strings.EqualFold(entry.Type, "Weapon"),
+		strings.EqualFold(entry.Type, "Armor"),
+		strings.EqualFold(entry.Type, "Petegg"),
+		strings.EqualFold(entry.Type, "Petarmor"),
+		strings.EqualFold(entry.Type, "Shadowgear"):
+		return false
+	default:
+		return true
+	}
 }

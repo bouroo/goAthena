@@ -103,6 +103,49 @@ func TestRegistry_GetLenAndWeight(t *testing.T) {
 	assert.Equal(t, uint32(0), (*Registry)(nil).Weight(1101))
 }
 
+func TestRegistry_ByAegisName(t *testing.T) {
+	t.Parallel()
+
+	reg := loadFixture(t)
+
+	// Hit — resolves the numeric id the wire format needs.
+	jellopy := reg.ByAegisName("Jellopy")
+	require.NotNil(t, jellopy)
+	assert.Equal(t, int32(909), jellopy.Id)
+
+	sword := reg.ByAegisName("Sword")
+	require.NotNil(t, sword)
+	assert.Equal(t, int32(1101), sword.Id)
+
+	// Miss and empty name never panic and return nil.
+	assert.Nil(t, reg.ByAegisName("DoesNotExist"))
+	assert.Nil(t, reg.ByAegisName(""))
+
+	// Nil receiver never panics.
+	assert.Nil(t, (*Registry)(nil).ByAegisName("Jellopy"))
+}
+
+func TestLoad_DuplicateAegisNameLastWins(t *testing.T) {
+	t.Parallel()
+
+	reg, err := Load(strings.NewReader(`Header:
+  Type: ITEM_DB
+  Version: 3
+Body:
+  - Id: 1
+    AegisName: Dup
+    Name: First
+  - Id: 2
+    AegisName: Dup
+    Name: Last
+`))
+	require.NoError(t, err)
+	entry := reg.ByAegisName("Dup")
+	require.NotNil(t, entry)
+	assert.Equal(t, "Last", entry.Name)
+	assert.Equal(t, int32(2), entry.Id)
+}
+
 func TestRegistry_WeightClampsNegativeValues(t *testing.T) {
 	reg, err := Load(strings.NewReader(`Header:
   Type: ITEM_DB

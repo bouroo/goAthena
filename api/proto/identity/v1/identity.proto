@@ -89,6 +89,23 @@ service IdentityService {
   // conditional update happen server-side (rathena/src/map/pc.cpp:8872
   // pc_statusup). Returns the resulting stat value and remaining status points.
   rpc AllocateStat(AllocateStatRequest) returns (AllocateStatResponse);
+
+  // AddItem acquires amount units of nameid for the character, persisting
+  // the gain immediately (the real-time counterpart to UseItem). When an
+  // existing plain stack matches the rAthena merge predicate (pc.cpp:6019
+  // — same nameid, bound, expire_time, unique_id, and cards) the amount is
+  // merged into it; otherwise a new inventory row is inserted. The
+  // returned item_id is the inventory row id — callers store it in the
+  // session invIndex so later equip/use RPCs resolve the slot to a real
+  // row id. success=false with error="overweight" when weight would exceed
+  // capacity (rathena/src/map/pc.cpp pc_checkweight).
+  rpc AddItem(AddItemRequest) returns (AddItemResponse);
+
+  // ConsumeItem decrements the stack at item_id by amount; when the
+  // remaining amount reaches zero the row is deleted. Partial-stack
+  // counterpart to UseItem (which always consumes one). item_id is the
+  // inventory row id, not a wire slot.
+  rpc ConsumeItem(ConsumeItemRequest) returns (ConsumeItemResponse);
 }
 
 // AuthMethod identifies which CA_LOGIN variant the client sent.
@@ -408,4 +425,30 @@ message AllocateStatResponse {
   uint32 new_value = 3;       // stat value after allocation (0 on non-OK)
   uint32 new_status_point = 4; // remaining status_point after allocation
   string error = 5;           // populated only on transport/internal failure
+}
+
+message AddItemRequest {
+  uint32 account_id = 1;
+  uint32 char_id = 2;
+  uint32 nameid = 3; // item DB id being acquired
+  uint32 amount = 4; // units to add (merged into an existing stack when possible)
+}
+
+message AddItemResponse {
+  bool success = 1;
+  uint32 item_id = 2; // inventory row id of the (possibly merged) stack — store in session invIndex
+  string error = 3;   // "overweight" on ErrWeightExceeded; "item not found or not owned by this character" on ErrItemNotFound
+}
+
+message ConsumeItemRequest {
+  uint32 account_id = 1;
+  uint32 char_id = 2;
+  uint32 item_id = 3; // inventory row id (not a wire slot)
+  uint32 amount = 4;  // units to remove (row deleted when remaining hits 0)
+}
+
+message ConsumeItemResponse {
+  bool success = 1;
+  uint32 remaining = 2; // stack count after consume (0 means the row was deleted)
+  string error = 3;     // populated only on transport/internal failure
 }

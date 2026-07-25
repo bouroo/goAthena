@@ -2664,6 +2664,262 @@ func (x *AllocateStatResponse) GetError() string {
 	return ""
 }
 
+type AddItemRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	Nameid        uint32                 `protobuf:"varint,3,opt,name=nameid,proto3" json:"nameid,omitempty"` // item DB id being acquired
+	Amount        uint32                 `protobuf:"varint,4,opt,name=amount,proto3" json:"amount,omitempty"` // units to add (merged into an existing stack when possible)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddItemRequest) Reset() {
+	*x = AddItemRequest{}
+	mi := &file_identity_v1_identity_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddItemRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddItemRequest) ProtoMessage() {}
+
+func (x *AddItemRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddItemRequest.ProtoReflect.Descriptor instead.
+func (*AddItemRequest) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *AddItemRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *AddItemRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *AddItemRequest) GetNameid() uint32 {
+	if x != nil {
+		return x.Nameid
+	}
+	return 0
+}
+
+func (x *AddItemRequest) GetAmount() uint32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+type AddItemResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ItemId        uint32                 `protobuf:"varint,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"` // inventory row id of the (possibly merged) stack — store in session invIndex
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`                  // "overweight" on ErrWeightExceeded; "item not found or not owned by this character" on ErrItemNotFound
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddItemResponse) Reset() {
+	*x = AddItemResponse{}
+	mi := &file_identity_v1_identity_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddItemResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddItemResponse) ProtoMessage() {}
+
+func (x *AddItemResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddItemResponse.ProtoReflect.Descriptor instead.
+func (*AddItemResponse) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *AddItemResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *AddItemResponse) GetItemId() uint32 {
+	if x != nil {
+		return x.ItemId
+	}
+	return 0
+}
+
+func (x *AddItemResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type ConsumeItemRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     uint32                 `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	CharId        uint32                 `protobuf:"varint,2,opt,name=char_id,json=charId,proto3" json:"char_id,omitempty"`
+	ItemId        uint32                 `protobuf:"varint,3,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"` // inventory row id (not a wire slot)
+	Amount        uint32                 `protobuf:"varint,4,opt,name=amount,proto3" json:"amount,omitempty"`               // units to remove (row deleted when remaining hits 0)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConsumeItemRequest) Reset() {
+	*x = ConsumeItemRequest{}
+	mi := &file_identity_v1_identity_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConsumeItemRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConsumeItemRequest) ProtoMessage() {}
+
+func (x *ConsumeItemRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConsumeItemRequest.ProtoReflect.Descriptor instead.
+func (*ConsumeItemRequest) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *ConsumeItemRequest) GetAccountId() uint32 {
+	if x != nil {
+		return x.AccountId
+	}
+	return 0
+}
+
+func (x *ConsumeItemRequest) GetCharId() uint32 {
+	if x != nil {
+		return x.CharId
+	}
+	return 0
+}
+
+func (x *ConsumeItemRequest) GetItemId() uint32 {
+	if x != nil {
+		return x.ItemId
+	}
+	return 0
+}
+
+func (x *ConsumeItemRequest) GetAmount() uint32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+type ConsumeItemResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Remaining     uint32                 `protobuf:"varint,2,opt,name=remaining,proto3" json:"remaining,omitempty"` // stack count after consume (0 means the row was deleted)
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`          // populated only on transport/internal failure
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConsumeItemResponse) Reset() {
+	*x = ConsumeItemResponse{}
+	mi := &file_identity_v1_identity_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConsumeItemResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConsumeItemResponse) ProtoMessage() {}
+
+func (x *ConsumeItemResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_identity_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConsumeItemResponse.ProtoReflect.Descriptor instead.
+func (*ConsumeItemResponse) Descriptor() ([]byte, []int) {
+	return file_identity_v1_identity_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *ConsumeItemResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ConsumeItemResponse) GetRemaining() uint32 {
+	if x != nil {
+		return x.Remaining
+	}
+	return 0
+}
+
+func (x *ConsumeItemResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_identity_v1_identity_proto protoreflect.FileDescriptor
 
 const file_identity_v1_identity_proto_rawDesc = "" +
@@ -2878,7 +3134,27 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\astat_id\x18\x02 \x01(\rR\x06statId\x12\x1b\n" +
 	"\tnew_value\x18\x03 \x01(\rR\bnewValue\x12(\n" +
 	"\x10new_status_point\x18\x04 \x01(\rR\x0enewStatusPoint\x12\x14\n" +
-	"\x05error\x18\x05 \x01(\tR\x05error*\xba\x01\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\"x\n" +
+	"\x0eAddItemRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\x12\x16\n" +
+	"\x06nameid\x18\x03 \x01(\rR\x06nameid\x12\x16\n" +
+	"\x06amount\x18\x04 \x01(\rR\x06amount\"Z\n" +
+	"\x0fAddItemResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x17\n" +
+	"\aitem_id\x18\x02 \x01(\rR\x06itemId\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"}\n" +
+	"\x12ConsumeItemRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\rR\taccountId\x12\x17\n" +
+	"\achar_id\x18\x02 \x01(\rR\x06charId\x12\x17\n" +
+	"\aitem_id\x18\x03 \x01(\rR\x06itemId\x12\x16\n" +
+	"\x06amount\x18\x04 \x01(\rR\x06amount\"c\n" +
+	"\x13ConsumeItemResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1c\n" +
+	"\tremaining\x18\x02 \x01(\rR\tremaining\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error*\xba\x01\n" +
 	"\n" +
 	"AuthMethod\x12\x1b\n" +
 	"\x17AUTH_METHOD_UNSPECIFIED\x10\x00\x12\x18\n" +
@@ -2914,7 +3190,7 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\x0eSTAT_RESULT_OK\x10\x01\x12#\n" +
 	"\x1fSTAT_RESULT_INSUFFICIENT_POINTS\x10\x02\x12\x18\n" +
 	"\x14STAT_RESULT_MAX_STAT\x10\x03\x12\x1c\n" +
-	"\x18STAT_RESULT_INVALID_STAT\x10\x042\xdf\b\n" +
+	"\x18STAT_RESULT_INVALID_STAT\x10\x042\xf7\t\n" +
 	"\x0fIdentityService\x12S\n" +
 	"\fAuthenticate\x12 .identity.v1.AuthenticateRequest\x1a!.identity.v1.AuthenticateResponse\x12_\n" +
 	"\x10GetCharacterList\x12$.identity.v1.GetCharacterListRequest\x1a%.identity.v1.GetCharacterListResponse\x12S\n" +
@@ -2929,7 +3205,9 @@ const file_identity_v1_identity_proto_rawDesc = "" +
 	"\n" +
 	"SellToShop\x12\x1e.identity.v1.SellToShopRequest\x1a\x1f.identity.v1.SellToShopResponse\x12S\n" +
 	"\fApplyLevelUp\x12 .identity.v1.ApplyLevelUpRequest\x1a!.identity.v1.ApplyLevelUpResponse\x12S\n" +
-	"\fAllocateStat\x12 .identity.v1.AllocateStatRequest\x1a!.identity.v1.AllocateStatResponseB:Z8github.com/bouroo/goAthena/api/pb/identity/v1;identityv1b\x06proto3"
+	"\fAllocateStat\x12 .identity.v1.AllocateStatRequest\x1a!.identity.v1.AllocateStatResponse\x12D\n" +
+	"\aAddItem\x12\x1b.identity.v1.AddItemRequest\x1a\x1c.identity.v1.AddItemResponse\x12P\n" +
+	"\vConsumeItem\x12\x1f.identity.v1.ConsumeItemRequest\x1a .identity.v1.ConsumeItemResponseB:Z8github.com/bouroo/goAthena/api/pb/identity/v1;identityv1b\x06proto3"
 
 var (
 	file_identity_v1_identity_proto_rawDescOnce sync.Once
@@ -2944,7 +3222,7 @@ func file_identity_v1_identity_proto_rawDescGZIP() []byte {
 }
 
 var file_identity_v1_identity_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_identity_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_identity_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_identity_v1_identity_proto_goTypes = []any{
 	(AuthMethod)(0),                    // 0: identity.v1.AuthMethod
 	(AuthResult)(0),                    // 1: identity.v1.AuthResult
@@ -2983,6 +3261,10 @@ var file_identity_v1_identity_proto_goTypes = []any{
 	(*ApplyLevelUpResponse)(nil),       // 34: identity.v1.ApplyLevelUpResponse
 	(*AllocateStatRequest)(nil),        // 35: identity.v1.AllocateStatRequest
 	(*AllocateStatResponse)(nil),       // 36: identity.v1.AllocateStatResponse
+	(*AddItemRequest)(nil),             // 37: identity.v1.AddItemRequest
+	(*AddItemResponse)(nil),            // 38: identity.v1.AddItemResponse
+	(*ConsumeItemRequest)(nil),         // 39: identity.v1.ConsumeItemRequest
+	(*ConsumeItemResponse)(nil),        // 40: identity.v1.ConsumeItemResponse
 }
 var file_identity_v1_identity_proto_depIdxs = []int32{
 	0,  // 0: identity.v1.AuthenticateRequest.method:type_name -> identity.v1.AuthMethod
@@ -3009,21 +3291,25 @@ var file_identity_v1_identity_proto_depIdxs = []int32{
 	31, // 21: identity.v1.IdentityService.SellToShop:input_type -> identity.v1.SellToShopRequest
 	33, // 22: identity.v1.IdentityService.ApplyLevelUp:input_type -> identity.v1.ApplyLevelUpRequest
 	35, // 23: identity.v1.IdentityService.AllocateStat:input_type -> identity.v1.AllocateStatRequest
-	6,  // 24: identity.v1.IdentityService.Authenticate:output_type -> identity.v1.AuthenticateResponse
-	10, // 25: identity.v1.IdentityService.GetCharacterList:output_type -> identity.v1.GetCharacterListResponse
-	13, // 26: identity.v1.IdentityService.GetCharacter:output_type -> identity.v1.GetCharacterResponse
-	15, // 27: identity.v1.IdentityService.GetCharacterBySlot:output_type -> identity.v1.GetCharacterBySlotResponse
-	17, // 28: identity.v1.IdentityService.VerifySession:output_type -> identity.v1.VerifySessionResponse
-	20, // 29: identity.v1.IdentityService.GetInventory:output_type -> identity.v1.GetInventoryResponse
-	22, // 30: identity.v1.IdentityService.EquipItem:output_type -> identity.v1.EquipItemResponse
-	24, // 31: identity.v1.IdentityService.UnequipItem:output_type -> identity.v1.UnequipItemResponse
-	26, // 32: identity.v1.IdentityService.UseItem:output_type -> identity.v1.UseItemResponse
-	30, // 33: identity.v1.IdentityService.BuyFromShop:output_type -> identity.v1.BuyFromShopResponse
-	32, // 34: identity.v1.IdentityService.SellToShop:output_type -> identity.v1.SellToShopResponse
-	34, // 35: identity.v1.IdentityService.ApplyLevelUp:output_type -> identity.v1.ApplyLevelUpResponse
-	36, // 36: identity.v1.IdentityService.AllocateStat:output_type -> identity.v1.AllocateStatResponse
-	24, // [24:37] is the sub-list for method output_type
-	11, // [11:24] is the sub-list for method input_type
+	37, // 24: identity.v1.IdentityService.AddItem:input_type -> identity.v1.AddItemRequest
+	39, // 25: identity.v1.IdentityService.ConsumeItem:input_type -> identity.v1.ConsumeItemRequest
+	6,  // 26: identity.v1.IdentityService.Authenticate:output_type -> identity.v1.AuthenticateResponse
+	10, // 27: identity.v1.IdentityService.GetCharacterList:output_type -> identity.v1.GetCharacterListResponse
+	13, // 28: identity.v1.IdentityService.GetCharacter:output_type -> identity.v1.GetCharacterResponse
+	15, // 29: identity.v1.IdentityService.GetCharacterBySlot:output_type -> identity.v1.GetCharacterBySlotResponse
+	17, // 30: identity.v1.IdentityService.VerifySession:output_type -> identity.v1.VerifySessionResponse
+	20, // 31: identity.v1.IdentityService.GetInventory:output_type -> identity.v1.GetInventoryResponse
+	22, // 32: identity.v1.IdentityService.EquipItem:output_type -> identity.v1.EquipItemResponse
+	24, // 33: identity.v1.IdentityService.UnequipItem:output_type -> identity.v1.UnequipItemResponse
+	26, // 34: identity.v1.IdentityService.UseItem:output_type -> identity.v1.UseItemResponse
+	30, // 35: identity.v1.IdentityService.BuyFromShop:output_type -> identity.v1.BuyFromShopResponse
+	32, // 36: identity.v1.IdentityService.SellToShop:output_type -> identity.v1.SellToShopResponse
+	34, // 37: identity.v1.IdentityService.ApplyLevelUp:output_type -> identity.v1.ApplyLevelUpResponse
+	36, // 38: identity.v1.IdentityService.AllocateStat:output_type -> identity.v1.AllocateStatResponse
+	38, // 39: identity.v1.IdentityService.AddItem:output_type -> identity.v1.AddItemResponse
+	40, // 40: identity.v1.IdentityService.ConsumeItem:output_type -> identity.v1.ConsumeItemResponse
+	26, // [26:41] is the sub-list for method output_type
+	11, // [11:26] is the sub-list for method input_type
 	11, // [11:11] is the sub-list for extension type_name
 	11, // [11:11] is the sub-list for extension extendee
 	0,  // [0:11] is the sub-list for field type_name
@@ -3040,7 +3326,7 @@ func file_identity_v1_identity_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_identity_v1_identity_proto_rawDesc), len(file_identity_v1_identity_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   32,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

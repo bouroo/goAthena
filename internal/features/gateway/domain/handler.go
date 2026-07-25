@@ -113,6 +113,32 @@ func (c *ConnectionInfo) ResolveInventoryID(pos uint16) (uint32, bool) {
 	return id, ok
 }
 
+// RemoveInventoryID deletes the slot at pos and returns the DB id that was
+// there (false if the slot was empty). Used by the A4 drop path to consume
+// the source inventory position after the server acknowledges the throw.
+// Reading and deleting from a nil map are both safe (no-op), so a
+// connection that never received an inventory burst yields (0, false).
+func (c *ConnectionInfo) RemoveInventoryID(pos uint16) (uint32, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id, ok := c.invIndex[pos]
+	delete(c.invIndex, pos)
+	return id, ok
+}
+
+// AddInventoryID stores dbID at the caller-chosen inventory position pos,
+// used by the A4 pickup path to record a newly acquired item. A nil
+// invIndex is lazily initialized so a pickup on a connection that never
+// received an inventory burst still succeeds.
+func (c *ConnectionInfo) AddInventoryID(pos uint16, dbID uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.invIndex == nil {
+		c.invIndex = make(map[uint16]uint32)
+	}
+	c.invIndex[pos] = dbID
+}
+
 // SetShopNPC records the NPC GID the player has just opened a shop
 // dialog with. Called on handleCZAckSelectDealType after the NPC is
 // resolved to a known shop entry; cleared on transaction completion

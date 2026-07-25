@@ -23,6 +23,18 @@ import (
 // goconst (and the next reader) sees it as a single concept.
 const errItemNotOwnedByChar = "item not found or not owned by this character"
 
+// errItemOverweight is the soft-failure reason AddItem returns when the
+// gain would exceed the character's carry capacity. Distinct from
+// errItemNotOwnedByChar so the gateway can map it to the pickup-fail ack
+// (Result=0) and leave the floor item untouched.
+const errItemOverweight = "overweight"
+
+// errItemInsufficientStack is the soft-failure reason ConsumeItem returns
+// when the requested amount exceeds the row's current stack — a client
+// desync, not a server fault, so it stays success=false rather than a
+// gRPC Internal status.
+const errItemInsufficientStack = "insufficient stack for requested amount"
+
 // grpcHandler implements identityv1.IdentityServiceServer. It is a thin
 // adapter: proto <-> domain mapping, error code translation, and the
 // protocol-level dichotomy between a wire failure (carried inside the
@@ -388,6 +400,62 @@ func (h *grpcHandler) UseItem(
 		ItemId:          req.GetItemId(),
 		RemainingAmount: remaining,
 	}, nil
+}
+
+// AddItem acquires amount units of nameid and returns the inventory row id
+// callers store in the session invIndex. ErrWeightExceeded maps to a soft
+// success=false (pickup fail, floor item stays); ErrItemNotFound maps to
+// the same shared not-owned string; anything else surfaces as Internal.
+func (h *grpcHandler) AddItem(
+	ctx context.Context,
+	req *identityv1.AddItemRequest,
+) (*identityv1.AddItemResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 || req.GetCharId() == 0 || req.GetNameid() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id, char_id and nameid must be non-zero")
+	}
+
+	itemID, err := h.svc.AddItem(ctx, req.GetAccountId(), req.GetCharId(), req.GetNameid(), req.GetAmount())
+	if err != nil {
+		if errors.Is(err, inventorydomain.ErrWeightExceeded) {
+			return &identityv1.AddItemResponse{Success: false, Error: errItemOverweight}, nil
+		}
+		if errors.Is(err, inventorydomain.ErrItemNotFound) {
+			return &identityv1.AddItemResponse{Success: false, Error: errItemNotOwnedByChar}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "add item: %v", err)
+	}
+	return &identityv1.AddItemResponse{Success: true, ItemId: itemID}, nil
+}
+
+// ConsumeItem decrements the stack at item_id by amount and returns the
+// post-decrement count (0 when the row was deleted). ErrItemNotFound and
+// ErrInsufficientStack are soft failures (client desyncs); anything else
+// surfaces as Internal.
+func (h *grpcHandler) ConsumeItem(
+	ctx context.Context,
+	req *identityv1.ConsumeItemRequest,
+) (*identityv1.ConsumeItemResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 || req.GetCharId() == 0 || req.GetItemId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id, char_id and item_id must be non-zero")
+	}
+
+	remaining, err := h.svc.ConsumeItem(ctx, req.GetAccountId(), req.GetCharId(), req.GetItemId(), req.GetAmount())
+	if err != nil {
+		if errors.Is(err, inventorydomain.ErrItemNotFound) {
+			return &identityv1.ConsumeItemResponse{Success: false, Error: errItemNotOwnedByChar}, nil
+		}
+		if errors.Is(err, inventorydomain.ErrInsufficientStack) {
+			return &identityv1.ConsumeItemResponse{Success: false, Error: errItemInsufficientStack}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "consume item: %v", err)
+	}
+	return &identityv1.ConsumeItemResponse{Success: true, Remaining: remaining}, nil
 }
 
 // BuyFromShop commits one or more shop buy orders for a character.

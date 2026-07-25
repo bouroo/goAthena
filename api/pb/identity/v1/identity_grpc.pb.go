@@ -32,6 +32,8 @@ const (
 	IdentityService_SellToShop_FullMethodName         = "/identity.v1.IdentityService/SellToShop"
 	IdentityService_ApplyLevelUp_FullMethodName       = "/identity.v1.IdentityService/ApplyLevelUp"
 	IdentityService_AllocateStat_FullMethodName       = "/identity.v1.IdentityService/AllocateStat"
+	IdentityService_AddItem_FullMethodName            = "/identity.v1.IdentityService/AddItem"
+	IdentityService_ConsumeItem_FullMethodName        = "/identity.v1.IdentityService/ConsumeItem"
 )
 
 // IdentityServiceClient is the client API for IdentityService service.
@@ -111,6 +113,21 @@ type IdentityServiceClient interface {
 	// conditional update happen server-side (rathena/src/map/pc.cpp:8872
 	// pc_statusup). Returns the resulting stat value and remaining status points.
 	AllocateStat(ctx context.Context, in *AllocateStatRequest, opts ...grpc.CallOption) (*AllocateStatResponse, error)
+	// AddItem acquires amount units of nameid for the character, persisting
+	// the gain immediately (the real-time counterpart to UseItem). When an
+	// existing plain stack matches the rAthena merge predicate (pc.cpp:6019
+	// — same nameid, bound, expire_time, unique_id, and cards) the amount is
+	// merged into it; otherwise a new inventory row is inserted. The
+	// returned item_id is the inventory row id — callers store it in the
+	// session invIndex so later equip/use RPCs resolve the slot to a real
+	// row id. success=false with error="overweight" when weight would exceed
+	// capacity (rathena/src/map/pc.cpp pc_checkweight).
+	AddItem(ctx context.Context, in *AddItemRequest, opts ...grpc.CallOption) (*AddItemResponse, error)
+	// ConsumeItem decrements the stack at item_id by amount; when the
+	// remaining amount reaches zero the row is deleted. Partial-stack
+	// counterpart to UseItem (which always consumes one). item_id is the
+	// inventory row id, not a wire slot.
+	ConsumeItem(ctx context.Context, in *ConsumeItemRequest, opts ...grpc.CallOption) (*ConsumeItemResponse, error)
 }
 
 type identityServiceClient struct {
@@ -251,6 +268,26 @@ func (c *identityServiceClient) AllocateStat(ctx context.Context, in *AllocateSt
 	return out, nil
 }
 
+func (c *identityServiceClient) AddItem(ctx context.Context, in *AddItemRequest, opts ...grpc.CallOption) (*AddItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddItemResponse)
+	err := c.cc.Invoke(ctx, IdentityService_AddItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *identityServiceClient) ConsumeItem(ctx context.Context, in *ConsumeItemRequest, opts ...grpc.CallOption) (*ConsumeItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConsumeItemResponse)
+	err := c.cc.Invoke(ctx, IdentityService_ConsumeItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IdentityServiceServer is the server API for IdentityService service.
 // All implementations must embed UnimplementedIdentityServiceServer
 // for forward compatibility.
@@ -328,6 +365,21 @@ type IdentityServiceServer interface {
 	// conditional update happen server-side (rathena/src/map/pc.cpp:8872
 	// pc_statusup). Returns the resulting stat value and remaining status points.
 	AllocateStat(context.Context, *AllocateStatRequest) (*AllocateStatResponse, error)
+	// AddItem acquires amount units of nameid for the character, persisting
+	// the gain immediately (the real-time counterpart to UseItem). When an
+	// existing plain stack matches the rAthena merge predicate (pc.cpp:6019
+	// — same nameid, bound, expire_time, unique_id, and cards) the amount is
+	// merged into it; otherwise a new inventory row is inserted. The
+	// returned item_id is the inventory row id — callers store it in the
+	// session invIndex so later equip/use RPCs resolve the slot to a real
+	// row id. success=false with error="overweight" when weight would exceed
+	// capacity (rathena/src/map/pc.cpp pc_checkweight).
+	AddItem(context.Context, *AddItemRequest) (*AddItemResponse, error)
+	// ConsumeItem decrements the stack at item_id by amount; when the
+	// remaining amount reaches zero the row is deleted. Partial-stack
+	// counterpart to UseItem (which always consumes one). item_id is the
+	// inventory row id, not a wire slot.
+	ConsumeItem(context.Context, *ConsumeItemRequest) (*ConsumeItemResponse, error)
 	mustEmbedUnimplementedIdentityServiceServer()
 }
 
@@ -376,6 +428,12 @@ func (UnimplementedIdentityServiceServer) ApplyLevelUp(context.Context, *ApplyLe
 }
 func (UnimplementedIdentityServiceServer) AllocateStat(context.Context, *AllocateStatRequest) (*AllocateStatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AllocateStat not implemented")
+}
+func (UnimplementedIdentityServiceServer) AddItem(context.Context, *AddItemRequest) (*AddItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddItem not implemented")
+}
+func (UnimplementedIdentityServiceServer) ConsumeItem(context.Context, *ConsumeItemRequest) (*ConsumeItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConsumeItem not implemented")
 }
 func (UnimplementedIdentityServiceServer) mustEmbedUnimplementedIdentityServiceServer() {}
 func (UnimplementedIdentityServiceServer) testEmbeddedByValue()                         {}
@@ -632,6 +690,42 @@ func _IdentityService_AllocateStat_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IdentityService_AddItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).AddItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_AddItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).AddItem(ctx, req.(*AddItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IdentityService_ConsumeItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConsumeItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).ConsumeItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_ConsumeItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).ConsumeItem(ctx, req.(*ConsumeItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IdentityService_ServiceDesc is the grpc.ServiceDesc for IdentityService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -690,6 +784,14 @@ var IdentityService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AllocateStat",
 			Handler:    _IdentityService_AllocateStat_Handler,
+		},
+		{
+			MethodName: "AddItem",
+			Handler:    _IdentityService_AddItem_Handler,
+		},
+		{
+			MethodName: "ConsumeItem",
+			Handler:    _IdentityService_ConsumeItem_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

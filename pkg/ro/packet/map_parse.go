@@ -984,3 +984,50 @@ func ParseCZChooseMenu(frame []byte) (CZChooseMenuRequest, error) {
 		Selected: int8(frame[6]), //nolint:gosec // byte→int8 conversion is the wire format — 0xff means "cancel" per rAthena.
 	}, nil
 }
+
+// CZDropItemRequest is the decoded form of a client → map-server drop-item
+// packet. rAthena registers seven modern aliases for this layout under
+// different PACKETVER guards (clif_packetdb.hpp:1385-1606); all share the
+// same 6-byte frame: int16 opcode | uint16 index | uint16 amount. The
+// opcode is accepted under any of the six free aliases registered in
+// NewMapServerDB (0x0438 collides with CZ_USE_SKILL2 and is excluded), so
+// ParseCZDropItem does not pin a single header — dispatch routes every
+// alias to it.
+type CZDropItemRequest struct {
+	// InventoryIndex is the 1-based inventory slot the client drops from.
+	InventoryIndex uint16
+	// Amount is how many of the stacked item to drop.
+	Amount uint16
+}
+
+// ParseCZDropItem decodes a drop-item frame. The frame must be exactly
+// sizeCZDropItem (6) bytes: opcode (2) + index (2) + amount (2). A frame
+// of any other length — including the legacy 4-byte pre-2010 layout — is
+// rejected. The opcode is NOT validated here because six aliases map to
+// this parser; dispatch has already selected it by opcode.
+func ParseCZDropItem(frame []byte) (CZDropItemRequest, error) {
+	if len(frame) != sizeCZDropItem {
+		return CZDropItemRequest{}, fmt.Errorf(
+			"packet: parse CZ_DROP_ITEM: want %d bytes, got %d",
+			sizeCZDropItem, len(frame),
+		)
+	}
+	return CZDropItemRequest{
+		InventoryIndex: binary.LittleEndian.Uint16(frame[2:4]),
+		Amount:         binary.LittleEndian.Uint16(frame[4:6]),
+	}, nil
+}
+
+// Encode writes the drop-item request. The opcode is written as
+// HeaderCZDROPITEM0363 by convention; this is only used in tests, since a
+// live frame always arrives with the client-chosen opcode already in place.
+func (r CZDropItemRequest) Encode(w io.Writer) error {
+	var buf [sizeCZDropItem]byte
+	binary.LittleEndian.PutUint16(buf[0:2], HeaderCZDROPITEM0363)
+	binary.LittleEndian.PutUint16(buf[2:4], r.InventoryIndex)
+	binary.LittleEndian.PutUint16(buf[4:6], r.Amount)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_DROP_ITEM: %w", err)
+	}
+	return nil
+}

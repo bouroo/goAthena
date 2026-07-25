@@ -26,6 +26,14 @@ var (
 	// (acquire handlers, future shop/mail/drop flows) can branch with
 	// errors.Is without depending on the service package.
 	ErrWeightExceeded = errors.New("inventory weight capacity exceeded")
+
+	// ErrInsufficientStack is returned by Consume when the requested
+	// amount exceeds the row's current stack. The transaction aborts —
+	// no partial decrement is ever committed. A distinct sentinel (vs
+	// ErrItemNotFound) lets callers tell "the row exists but is short"
+	// from "the row is gone", e.g. to map a client desync onto a
+	// soft no-op rather than a hard not-found failure.
+	ErrInsufficientStack = errors.New("inventory stack insufficient for requested amount")
 )
 
 // InventoryRepository is the outbound port for inventory persistence.
@@ -64,11 +72,17 @@ type InventoryRepository interface {
 	// item id. Returns ErrItemNotFound when no row matches.
 	SetEquip(ctx context.Context, id uint32, equipMask uint32) error
 
-	// ConsumeOne atomically decrements the stack of the row with the
-	// given id. It holds the row with SELECT ... FOR UPDATE inside a
-	// transaction, so concurrent UseItem calls on the same row are
-	// serialized at the DB level. If the resulting amount is 0, the
-	// row is deleted and 0 is returned. Errors include ErrItemNotFound
-	// when the row is missing or already at 0.
+	// Consume atomically decrements the stack of the row with the given id
+	// by amount. It holds the row with SELECT ... FOR UPDATE inside a
+	// transaction, so concurrent consume calls on the same row are
+	// serialized at the DB level. If the resulting amount is 0, the row is
+	// deleted and 0 is returned. Requesting more than the current stack is
+	// an error (the partial state is never committed). Errors include
+	// ErrItemNotFound when the row is missing.
+	Consume(ctx context.Context, id uint32, amount uint32) (remaining uint32, err error)
+
+	// ConsumeOne is the amount=1 specialization of Consume (UseItem's
+	// single-unit decrement). If the resulting amount is 0, the row is
+	// deleted and 0 is returned.
 	ConsumeOne(ctx context.Context, id uint32) (remaining uint32, err error)
 }

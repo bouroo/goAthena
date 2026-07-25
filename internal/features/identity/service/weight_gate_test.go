@@ -31,6 +31,11 @@ func (f fakeItemWeight) Weight(id uint32) uint32 {
 	return f.weights[id]
 }
 
+// IsStackable satisfies the broadened ItemWeightLookup interface. The
+// weight-gate test never exercises the merge path, so the permissive
+// default (always stackable) matches ZeroItemWeight.
+func (f fakeItemWeight) IsStackable(_ uint32) bool { return true }
+
 // newWeightSvc wires every dependency CheckWeight touches so the gate
 // can be exercised without touching the gRPC surface. Returns the
 // service plus the (accountID, charID) the gate was wired against.

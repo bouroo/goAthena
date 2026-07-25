@@ -56,6 +56,21 @@ func (mr *MockInventoryRepositoryMockRecorder) Add(ctx, charID, item any) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Add", reflect.TypeOf((*MockInventoryRepository)(nil).Add), ctx, charID, item)
 }
 
+// Consume mocks base method.
+func (m *MockInventoryRepository) Consume(ctx context.Context, id, amount uint32) (uint32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Consume", ctx, id, amount)
+	ret0, _ := ret[0].(uint32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Consume indicates an expected call of Consume.
+func (mr *MockInventoryRepositoryMockRecorder) Consume(ctx, id, amount any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Consume", reflect.TypeOf((*MockInventoryRepository)(nil).Consume), ctx, id, amount)
+}
+
 // ConsumeOne mocks base method.
 func (m *MockInventoryRepository) ConsumeOne(ctx context.Context, id uint32) (uint32, error) {
 	m.ctrl.T.Helper()

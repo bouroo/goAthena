@@ -53,12 +53,18 @@ func TestParse_BoolVariants(t *testing.T) {
 		raw  string
 		want bool
 	}{
-		{"yes", true}, {"YES", true}, {"Yes", true},
-		{"no", false}, {"NO", false},
-		{"true", true}, {"True", true},
+		{"yes", true},
+		{"YES", true},
+		{"Yes", true},
+		{"no", false},
+		{"NO", false},
+		{"true", true},
+		{"True", true},
 		{"false", false},
-		{"on", true}, {"On", true},
-		{"off", false}, {"OFF", false},
+		{"on", true},
+		{"On", true},
+		{"off", false},
+		{"OFF", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {

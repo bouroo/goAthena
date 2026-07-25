@@ -20,6 +20,7 @@ import (
 	skilldomain "github.com/bouroo/goAthena/internal/features/skill/domain"
 	statsdomain "github.com/bouroo/goAthena/internal/features/stats/domain"
 	natsinfra "github.com/bouroo/goAthena/internal/infrastructure/messaging/nats"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/jobdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
@@ -281,6 +282,10 @@ func buildDispatchHandler(
 	if err != nil {
 		return nil, err
 	}
+	items, err := loadItemRegistry(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
 	scripts, err := loadScriptSet(cfg, logger)
 	if err != nil {
 		return nil, err
@@ -297,6 +302,7 @@ func buildDispatchHandler(
 		zonePort,
 		registry,
 		mobs,
+		items,
 		scripts,
 	), nil
 }
@@ -317,6 +323,26 @@ func loadMobRegistry(cfg *config.Config, logger zerolog.Logger) (*mobdb.Registry
 	}
 	logger.Info().Int("entries", mobs.Len()).Str("path", cfg.Zone.MobDBPath).Msg("gateway di: mob_db loaded")
 	return mobs, nil
+}
+
+// loadItemRegistry loads the rAthena item_db.yml (version 3) from
+// cfg.Zone.ItemDBPath when configured, or returns (nil, nil) when the path
+// is empty. A nil registry is expected by the dispatch handler's drop path,
+// which falls back to nameid 0 / IT_ETC so the gateway still boots without
+// drop resolution. An explicit path that fails to load is a hard error:
+// silent degradation there would hide a misconfigured drop table behind
+// zeroed nameids on the wire.
+func loadItemRegistry(cfg *config.Config, logger zerolog.Logger) (*itemdb.Registry, error) {
+	if cfg == nil || cfg.Zone.ItemDBPath == "" {
+		logger.Info().Msg("gateway di: item_db_path unset; drop resolution disabled (floor items fall back to nameid 0/IT_ETC)")
+		return nil, nil
+	}
+	items, err := itemdb.LoadFile(cfg.Zone.ItemDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("load item_db %q: %w", cfg.Zone.ItemDBPath, err)
+	}
+	logger.Info().Int("entries", items.Len()).Str("path", cfg.Zone.ItemDBPath).Msg("gateway di: item_db loaded")
+	return items, nil
 }
 
 // loadSkillRegistry loads the rAthena skill_db.yml from cfg.Zone.SkillDBPath
