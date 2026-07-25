@@ -15,10 +15,10 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		length    int
 		direction Direction
 	}
-	// 6 C→S + 16 S→C = 22 entries total. M11 added CZ_ACTION_REQUEST,
-	// CZ_GLOBAL_MESSAGE, ZC_NOTIFY_CHAT, and ZC_ACTION_RESPONSE for the
-	// chat + sit/stand handlers. M14 added ZC_SET_UNIT_IDLE for NPC
-	// entity spawning.
+	// Core entries from the M-series + later phases. This list is a
+	// representative subset (not exhaustive); TestNewMapServerDB_Size
+	// pins the authoritative total. A3 adds the ZC_INVENTORY_START /
+	// ZC_INVENTORY_END bracket frames.
 	checks := []expect{
 		{HeaderCZENTER, "CZ_ENTER", sizeCZEnter, DirectionClientToServer},
 		{HeaderCZREQUESTMOVE, "CZ_REQUEST_MOVE", sizeCZRequestMove, DirectionClientToServer},
@@ -38,6 +38,10 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCLONGPARCHANGE, "ZC_LONGPAR_CHANGE", sizeZCLongParChange, DirectionServerToClient},
 		{HeaderZCINVENTORYITEMLISTNORMAL, "ZC_INVENTORY_ITEMLIST_NORMAL", VariableLength, DirectionServerToClient},
 		{HeaderZCINVENTORYITEMLISTEQUIP, "ZC_INVENTORY_ITEMLIST_EQUIP", VariableLength, DirectionServerToClient},
+		// A3: inventory bracket frames wrapping the item lists for
+		// MAIN@20250604 (clif.cpp clif_inventoryStart/End).
+		{HeaderZCINVENTORYSTART, "ZC_INVENTORY_START", sizeZCInventoryStart, DirectionServerToClient},
+		{HeaderZCINVENTORYEND, "ZC_INVENTORY_END", sizeZCInventoryEnd, DirectionServerToClient},
 		{HeaderZCSKILLINFOLIST, "ZC_SKILLINFO_LIST", VariableLength, DirectionServerToClient},
 		{HeaderZCSHORTCUTKEYLIST, "ZC_SHORTCUT_KEY_LIST", sizeZCShortcutKeyList, DirectionServerToClient},
 		{HeaderZCNOTIFYCHAT, "ZC_NOTIFY_CHAT", VariableLength, DirectionServerToClient},
@@ -99,7 +103,8 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// (CZ_USE_SKILL2, ZC_NOTIFY_SKILL, ZC_ACK_TOUSESKILL). P3c adds
 	// ZC_ITEM_FALL_ENTRY (0x0ADD) for a grand total of 59.
 	// P4b adds 2 menu entries (CZ_CHOOSE_MENU, ZC_MENU_LIST) → 61.
-	const want = 61
+	// A3 adds the inventory bracket (ZC_INVENTORY_START, ZC_INVENTORY_END) → 63.
+	const want = 63
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

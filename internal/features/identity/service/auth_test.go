@@ -515,3 +515,165 @@ func TestGetCharacter_RepoError_PropagatesUnchanged(t *testing.T) {
 	assert.ErrorIs(t, err, repoErr)
 	assert.NotErrorIs(t, err, domain.ErrCharacterNotFound)
 }
+
+func TestGetCharacterBySlot_HappyPath(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	accRepo := mocks.NewMockAccountRepository(ctrl)
+	chrRepo := mocks.NewMockCharacterRepository(ctrl)
+	sessRepo := mocks.NewMockSessionRepository(ctrl)
+
+	want := &domain.CharacterSummary{
+		CharID:    150002,
+		AccountID: 2000000,
+		Slot:      3,
+		Name:      "delta",
+		LastMap:   "izlude",
+	}
+	chrRepo.EXPECT().
+		GetBySlot(gomock.Any(), uint32(2000000), uint8(3)).
+		Return(want, nil)
+
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
+	got, err := svc.GetCharacterBySlot(context.Background(), 2000000, 3)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, want, got)
+}
+
+func TestGetCharacterBySlot_EmptySlot_PropagatesSentinel(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	accRepo := mocks.NewMockAccountRepository(ctrl)
+	chrRepo := mocks.NewMockCharacterRepository(ctrl)
+	sessRepo := mocks.NewMockSessionRepository(ctrl)
+
+	chrRepo.EXPECT().
+		GetBySlot(gomock.Any(), uint32(2000000), uint8(7)).
+		Return(nil, domain.ErrCharacterNotFound)
+
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
+	got, err := svc.GetCharacterBySlot(context.Background(), 2000000, 7)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.ErrorIs(t, err, domain.ErrCharacterNotFound,
+		"the handler maps ErrCharacterNotFound onto a char-select refusal; the service must propagate it unmodified")
+}
+
+func TestGetCharacterBySlot_RepoError_PropagatesUnchanged(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	accRepo := mocks.NewMockAccountRepository(ctrl)
+	chrRepo := mocks.NewMockCharacterRepository(ctrl)
+	sessRepo := mocks.NewMockSessionRepository(ctrl)
+
+	repoErr := errors.New("db down")
+	chrRepo.EXPECT().
+		GetBySlot(gomock.Any(), uint32(2000000), uint8(3)).
+		Return(nil, repoErr)
+
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
+	got, err := svc.GetCharacterBySlot(context.Background(), 2000000, 3)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.ErrorIs(t, err, repoErr)
+	assert.NotErrorIs(t, err, domain.ErrCharacterNotFound)
+}
+
+func TestVerifySession_HappyPath_TokenMatches(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	accRepo := mocks.NewMockAccountRepository(ctrl)
+	chrRepo := mocks.NewMockCharacterRepository(ctrl)
+	sessRepo := mocks.NewMockSessionRepository(ctrl)
+
+	sessRepo.EXPECT().
+		Get(gomock.Any(), uint32(2000000)).
+		Return(&domain.Session{
+			AccountID: 2000000,
+			LoginID1:  0x12345678,
+			Sex:       domain.SexFemale,
+		}, nil)
+
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
+	ok, sex, err := svc.VerifySession(context.Background(), 2000000, 0x12345678)
+	require.NoError(t, err)
+	assert.True(t, ok, "matching login_id1 must verify")
+	assert.Equal(t, domain.SexFemale, sex, "sex must come from the verified session")
+}
+
+func TestVerifySession_WrongToken_Refuses(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	accRepo := mocks.NewMockAccountRepository(ctrl)
+	chrRepo := mocks.NewMockCharacterRepository(ctrl)
+	sessRepo := mocks.NewMockSessionRepository(ctrl)
+
+	sessRepo.EXPECT().
+		Get(gomock.Any(), uint32(2000000)).
+		Return(&domain.Session{
+			AccountID: 2000000,
+			LoginID1:  0x12345678,
+			Sex:       domain.SexMale,
+		}, nil)
+
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
+	ok, sex, err := svc.VerifySession(context.Background(), 2000000, 0xdeadbeef)
+	require.NoError(t, err, "a wrong token is a clean refusal, not an error")
+	assert.False(t, ok, "a non-matching login_id1 must NOT verify")
+	assert.Empty(t, sex)
+}
+
+func TestVerifySession_AbsentSession_Refuses(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	accRepo := mocks.NewMockAccountRepository(ctrl)
+	chrRepo := mocks.NewMockCharacterRepository(ctrl)
+	sessRepo := mocks.NewMockSessionRepository(ctrl)
+
+	// (nil, nil) is the documented "no session / expired TTL" contract.
+	sessRepo.EXPECT().
+		Get(gomock.Any(), uint32(2000000)).
+		Return(nil, nil)
+
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
+	ok, sex, err := svc.VerifySession(context.Background(), 2000000, 0x12345678)
+	require.NoError(t, err, "an absent/expired session is a clean refusal, not an error")
+	assert.False(t, ok)
+	assert.Empty(t, sex)
+}
+
+func TestVerifySession_StoreError_Propagates(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	accRepo := mocks.NewMockAccountRepository(ctrl)
+	chrRepo := mocks.NewMockCharacterRepository(ctrl)
+	sessRepo := mocks.NewMockSessionRepository(ctrl)
+
+	repoErr := errors.New("valkey down")
+	sessRepo.EXPECT().
+		Get(gomock.Any(), uint32(2000000)).
+		Return(nil, repoErr)
+
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
+	ok, sex, err := svc.VerifySession(context.Background(), 2000000, 0x12345678)
+	require.Error(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, sex)
+	assert.ErrorIs(t, err, repoErr, "a store failure must surface so the gateway distinguishes 'down' from 'bad token'")
+}
+
+func TestVerifySession_ZeroAccount_RefusesBeforeQuery(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	accRepo := mocks.NewMockAccountRepository(ctrl)
+	chrRepo := mocks.NewMockCharacterRepository(ctrl)
+	sessRepo := mocks.NewMockSessionRepository(ctrl)
+
+	// No expectations: any Get call here would fail the test.
+	svc := service.NewIdentityService(accRepo, chrRepo, sessRepo, nopLogger(), false, 15, nil, inventorydomain.ZeroItemWeight{})
+	ok, sex, err := svc.VerifySession(context.Background(), 0, 0x12345678)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, sex)
+}

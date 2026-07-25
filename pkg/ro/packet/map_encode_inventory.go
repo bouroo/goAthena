@@ -148,35 +148,42 @@ func writeEquipItem(buf []byte, off int, it InventoryEquipItem) {
 }
 
 // InventoryListNormalResponse encodes a ZC_INVENTORY_ITEMLIST_NORMAL
-// packet (command 0x00a3, variable length, PACKETVER 20250604). The
-// server sends this on CZ_NOTIFY_ACTORINIT (LoadEndAck) so the
-// client initialises the inventory grid.
+// packet (command 0x0b09, variable length, PACKETVER MAIN@20250604).
+// The server sends this — bracketed by ZC_INVENTORY_START/END — on
+// CZ_NOTIFY_ACTORINIT (LoadEndAck) so the client initialises the
+// inventory grid.
 //
-// Wire layout (rathena/src/map/packets_struct.hpp:1187-1194 +
-// NORMALITEM_INFO:418-448):
+// Wire layout (rathena/src/map/packets_struct.hpp packet_itemlist_normal
+// + NORMALITEM_INFO:418-448):
 //
-//	int16  packetType   (0x00a3)
-//	int16  packetLength (4 + 26 * len(Items))
+//	int16  packetType   (0x0b09)
+//	int16  packetLength (5 + 26 * len(Items))
+//	uint8  invType      (INVTYPE_INVENTORY = 0)
 //	[per item, 26 bytes:] InventoryNormalItem
+//
+// TODO(B1): opcode + invType header resolve per-PACKETVER via the
+// PacketRegistry (packetdb N1.1). The 5-byte header + 0x0b09 are the
+// MAIN@20250604 forms.
 type InventoryListNormalResponse struct {
 	Items []InventoryNormalItem
 }
 
 // Encode writes the ZC_INVENTORY_ITEMLIST_NORMAL packet to w. The
-// wire length is 4 + 26 * len(Items); the encoder computes
+// wire length is 5 + 26 * len(Items); the encoder computes
 // packetLength from the entry count so the caller cannot
 // accidentally emit a frame whose length slot disagrees with the
 // trailing bytes.
 func (r InventoryListNormalResponse) Encode(w io.Writer) error {
-	total := 4 + len(r.Items)*sizeNormalItem
+	total := sizeEmptyInventoryListNormal + len(r.Items)*sizeNormalItem
 	if total > 0xffff {
 		return fmt.Errorf("packet: write ZC_INVENTORY_ITEMLIST_NORMAL: too many items (%d)", len(r.Items))
 	}
 	buf := make([]byte, total)
 	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTNORMAL)
 	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	buf[4] = 0 // invType = INVTYPE_INVENTORY
 	for i, it := range r.Items {
-		writeNormalItem(buf, 4+i*sizeNormalItem, it)
+		writeNormalItem(buf, sizeEmptyInventoryListNormal+i*sizeNormalItem, it)
 	}
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_INVENTORY_ITEMLIST_NORMAL: %w", err)
@@ -185,33 +192,40 @@ func (r InventoryListNormalResponse) Encode(w io.Writer) error {
 }
 
 // InventoryListEquipResponse encodes a ZC_INVENTORY_ITEMLIST_EQUIP
-// packet (command 0x00a4, variable length, PACKETVER 20250604). The
-// server sends this on CZ_NOTIFY_ACTORINIT (LoadEndAck) so the
-// client initialises the equip view.
+// packet (command 0x0b39, variable length, PACKETVER MAIN@20250604).
+// The server sends this — bracketed by ZC_INVENTORY_START/END — on
+// CZ_NOTIFY_ACTORINIT (LoadEndAck) so the client initialises the
+// equip view.
 //
-// Wire layout (rathena/src/map/packets_struct.hpp:1196-1203 +
-// EQUIPITEM_INFO:457-507):
+// Wire layout (rathena/src/map/packets_struct.hpp packet_itemlist_equip
+// + EQUIPITEM_INFO:457-507):
 //
-//	int16  packetType   (0x00a4)
-//	int16  packetLength (4 + 57 * len(Items))
+//	int16  packetType   (0x0b39)
+//	int16  packetLength (5 + 57 * len(Items))
+//	uint8  invType      (INVTYPE_INVENTORY = 0)
 //	[per item, 57 bytes:] InventoryEquipItem
+//
+// TODO(B1): opcode + invType header resolve per-PACKETVER via the
+// PacketRegistry (packetdb N1.1). The 5-byte header + 0x0b39 are the
+// MAIN@20250604 forms.
 type InventoryListEquipResponse struct {
 	Items []InventoryEquipItem
 }
 
 // Encode writes the ZC_INVENTORY_ITEMLIST_EQUIP packet to w. The
-// wire length is 4 + 57 * len(Items); the encoder computes
+// wire length is 5 + 57 * len(Items); the encoder computes
 // packetLength from the entry count.
 func (r InventoryListEquipResponse) Encode(w io.Writer) error {
-	total := 4 + len(r.Items)*sizeEquipItem
+	total := sizeEmptyInventoryListNormal + len(r.Items)*sizeEquipItem
 	if total > 0xffff {
 		return fmt.Errorf("packet: write ZC_INVENTORY_ITEMLIST_EQUIP: too many items (%d)", len(r.Items))
 	}
 	buf := make([]byte, total)
 	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTEQUIP)
 	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	buf[4] = 0 // invType = INVTYPE_INVENTORY
 	for i, it := range r.Items {
-		writeEquipItem(buf, 4+i*sizeEquipItem, it)
+		writeEquipItem(buf, sizeEmptyInventoryListNormal+i*sizeEquipItem, it)
 	}
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_INVENTORY_ITEMLIST_EQUIP: %w", err)

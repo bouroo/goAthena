@@ -119,6 +119,21 @@ func (mr *MockIdentityServiceMockRecorder) GetCharacter(ctx, accountID, charID a
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCharacter", reflect.TypeOf((*MockIdentityService)(nil).GetCharacter), ctx, accountID, charID)
 }
 
+// GetCharacterBySlot mocks base method.
+func (m *MockIdentityService) GetCharacterBySlot(ctx context.Context, accountID uint32, slot uint8) (*domain.CharacterSummary, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCharacterBySlot", ctx, accountID, slot)
+	ret0, _ := ret[0].(*domain.CharacterSummary)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetCharacterBySlot indicates an expected call of GetCharacterBySlot.
+func (mr *MockIdentityServiceMockRecorder) GetCharacterBySlot(ctx, accountID, slot any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCharacterBySlot", reflect.TypeOf((*MockIdentityService)(nil).GetCharacterBySlot), ctx, accountID, slot)
+}
+
 // GetInventory mocks base method.
 func (m *MockIdentityService) GetInventory(ctx context.Context, accountID, charID uint32) ([]domain0.InventoryItem, error) {
 	m.ctrl.T.Helper()
@@ -192,4 +207,20 @@ func (m *MockIdentityService) UseItem(ctx context.Context, accountID, charID, it
 func (mr *MockIdentityServiceMockRecorder) UseItem(ctx, accountID, charID, itemID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UseItem", reflect.TypeOf((*MockIdentityService)(nil).UseItem), ctx, accountID, charID, itemID)
+}
+
+// VerifySession mocks base method.
+func (m *MockIdentityService) VerifySession(ctx context.Context, accountID, loginID1 uint32) (bool, domain.Sex, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "VerifySession", ctx, accountID, loginID1)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(domain.Sex)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// VerifySession indicates an expected call of VerifySession.
+func (mr *MockIdentityServiceMockRecorder) VerifySession(ctx, accountID, loginID1 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "VerifySession", reflect.TypeOf((*MockIdentityService)(nil).VerifySession), ctx, accountID, loginID1)
 }

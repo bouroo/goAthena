@@ -201,6 +201,71 @@ func (h *grpcHandler) GetCharacter(
 	}, nil
 }
 
+// GetCharacterBySlot resolves a CH_SELECT_CHAR slot pick to the owning
+// char_id + last-saved map. Like GetCharacter, a "not found" outcome
+// (empty slot / missing account) is carried inside the response as
+// success=false rather than a gRPC status: an empty slot is the normal
+// "client clicked an empty lobby position" flow, and the gateway maps it
+// onto a char-select refusal. Backend (GORM) failures still surface as
+// gRPC Internal so the gateway can distinguish "slot empty" from
+// "backend down" by status code.
+func (h *grpcHandler) GetCharacterBySlot(
+	ctx context.Context,
+	req *identityv1.GetCharacterBySlotRequest,
+) (*identityv1.GetCharacterBySlotResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id must be non-zero")
+	}
+
+	char, err := h.svc.GetCharacterBySlot(ctx, req.GetAccountId(), uint8(req.GetSlot())) //nolint:gosec // slot is 0..MAX_CHARS-1, fits uint8
+	if err != nil {
+		if errors.Is(err, domain.ErrCharacterNotFound) {
+			return &identityv1.GetCharacterBySlotResponse{
+				Success: false,
+				Error:   "no character in slot",
+			}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "get character by slot: %v", err)
+	}
+
+	return &identityv1.GetCharacterBySlotResponse{
+		Success: true,
+		CharId:  char.CharID,
+		Slot:    uint32(char.Slot),
+		LastMap: char.LastMap,
+	}, nil
+}
+
+// VerifySession validates a map-phase CZ_ENTER's self-reported
+// (account_id, login_id1). The verdict is carried inside the response
+// (ok, sex): ok=false is the normal "no session / wrong token" refusal,
+// not a gRPC status — the gateway maps it onto ZC_REFUSE_ENTER. A store
+// failure still surfaces as gRPC Internal so "session store down" stays
+// distinguishable from "bad token" by status code.
+func (h *grpcHandler) VerifySession(
+	ctx context.Context,
+	req *identityv1.VerifySessionRequest,
+) (*identityv1.VerifySessionResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.GetAccountId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id must be non-zero")
+	}
+
+	ok, sex, err := h.svc.VerifySession(ctx, req.GetAccountId(), uint32(req.GetLoginId1())) //nolint:gosec // login_id1 is a 32-bit token carried as fixed64 on the wire
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "verify session: %v", err)
+	}
+	return &identityv1.VerifySessionResponse{
+		Ok:  ok,
+		Sex: string(sex),
+	}, nil
+}
+
 // GetInventory returns every item owned by the requested character.
 // An empty inventory is a normal outcome and is returned as an empty
 // (non-nil) repeated field; repository failures surface as gRPC

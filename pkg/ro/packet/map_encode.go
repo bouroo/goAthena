@@ -794,70 +794,87 @@ func StatusPointCost(currentVal uint8) uint8 {
 	return uint8(1 + (int(currentVal)+9)/10) //nolint:gosec // max return is 1+(255+9)/10 = 27
 }
 
-// The four empty list packets are completely static — their bytes never
+// The empty list packets are completely static — their bytes never
 // change — so they are built once at package init and shared by every
 // caller. Callers must treat the returned slices as read-only.
 var (
 	emptyInventoryListNormal []byte
 	emptyInventoryListEquip  []byte
 	emptySkillList           []byte
-	emptyHotkeyList          []byte
+	// emptyHotkeyListTab holds the two ZC_SHORTCUT_KEY_LIST frames
+	// rAthena emits for a fresh character (tab 0 and tab 1). See
+	// EncodeEmptyHotkeyList.
+	emptyHotkeyListTab [2][]byte
 )
 
 func init() {
-	emptyInventoryListNormal = make([]byte, sizeEmptyInventoryList)
+	// Inventory empty lists carry the MAIN@20250604 5-byte header
+	// (cmd + packetLength + invType=0). NOTE: rAthena suppresses these
+	// frames entirely when the inventory is empty (clif_inventorylist
+	// guards on `if (normal)` / `if (equip)`); the gateway mirrors that
+	// by emitting the START/END bracket instead on the empty path. These
+	// helpers remain as correct empty-list encoders for tests and any
+	// future caller that wants an explicit zero-item frame.
+	// TODO(B1): invType header + opcode resolve per-PACKETVER via the
+	// PacketRegistry (packetdb N1.1).
+	emptyInventoryListNormal = make([]byte, sizeEmptyInventoryListNormal)
 	binary.LittleEndian.PutUint16(emptyInventoryListNormal[0:], HeaderZCINVENTORYITEMLISTNORMAL)
-	binary.LittleEndian.PutUint16(emptyInventoryListNormal[2:], sizeEmptyInventoryList)
+	binary.LittleEndian.PutUint16(emptyInventoryListNormal[2:], sizeEmptyInventoryListNormal)
+	emptyInventoryListNormal[4] = 0 // invType = INVTYPE_INVENTORY
 
-	emptyInventoryListEquip = make([]byte, sizeEmptyInventoryList)
+	emptyInventoryListEquip = make([]byte, sizeEmptyInventoryListNormal)
 	binary.LittleEndian.PutUint16(emptyInventoryListEquip[0:], HeaderZCINVENTORYITEMLISTEQUIP)
-	binary.LittleEndian.PutUint16(emptyInventoryListEquip[2:], sizeEmptyInventoryList)
+	binary.LittleEndian.PutUint16(emptyInventoryListEquip[2:], sizeEmptyInventoryListNormal)
+	emptyInventoryListEquip[4] = 0 // invType = INVTYPE_INVENTORY
 
+	// The skill list header did not gain an invType byte for
+	// MAIN@20250604 (its opcode stayed 0x010f), so it keeps the
+	// 4-byte header.
 	emptySkillList = make([]byte, sizeEmptyInventoryList)
 	binary.LittleEndian.PutUint16(emptySkillList[0:], HeaderZCSKILLINFOLIST)
 	binary.LittleEndian.PutUint16(emptySkillList[2:], sizeEmptyInventoryList)
 
-	emptyHotkeyList = make([]byte, sizeZCShortcutKeyList)
-	binary.LittleEndian.PutUint16(emptyHotkeyList[0:], HeaderZCSHORTCUTKEYLIST)
-	// Remaining 189 bytes are zero (make already initializes to 0).
+	// Hotkey frames: 271 bytes each (cmd + rotate + tab + 38 slots).
+	// rAthena sends two of them (tab 0, tab 1) on every LoadEndAck;
+	// a fresh character has rotate=0 and all slots zero.
+	// TODO(B1): 38-slot shape + opcode resolve per-PACKETVER via the
+	// PacketRegistry (packetdb N1.1).
+	for tab := range 2 {
+		b := make([]byte, sizeZCShortcutKeyList)
+		binary.LittleEndian.PutUint16(b[0:], HeaderZCSHORTCUTKEYLIST)
+		binary.LittleEndian.PutUint16(b[3:], uint16(tab)) // tab (int16)
+		// Remaining bytes (rotate flag + 38 × 7 slot bytes) are zero
+		// (make already initializes to 0).
+		emptyHotkeyListTab[tab] = b
+	}
 }
 
 // EncodeEmptyInventoryListNormal returns the on-wire bytes for an
-// empty ZC_INVENTORY_ITEMLIST_NORMAL packet (opcode 0x00a3, 4 bytes).
-// The returned slice is freshly allocated and may be retained by
-// the caller; it is NOT shared with any other caller.
+// empty ZC_INVENTORY_ITEMLIST_NORMAL packet (opcode 0x0b09, 5 bytes).
+// Callers must treat the returned slice as read-only.
 //
-// Layout: [2:cmd=0x00a3][2:packetLength=4] (no NORMALITEM_INFO entries).
+// Layout: [2:cmd=0x0b09][2:packetLength=5][1:invType=0] (no
+// NORMALITEM_INFO entries).
 //
-// rAthena's clif_inventorylist (rathena/src/map/clif.cpp:3060) only sends
-// this packet when at least one stackable item is present; for a fresh
-// character with no items, an empty frame still needs to arrive so the
-// client initializes its inventory UI. Sending the 4-byte header with
-// packetLength=4 matches the rAthena minimum-frame convention: the
-// flexible-array count is implicit (wire length minus the header
-// divided by the per-entry size = 0).
-//
-// Source: rathena/src/map/packets_struct.hpp packet_itemlist_normal
-// (ZC_INVENTORY_ITEMLIST_NORMAL); opcode at rathena/src/map/
-// clif_packetdb.hpp.
+// TODO(B1): opcode + invType header resolve per-PACKETVER via the
+// PacketRegistry (packetdb N1.1). The 5-byte / 0x0b09 form is
+// MAIN@20250604. Note rAthena suppresses the empty frame in practice
+// (see EncodeInventoryStart/End); this helper is the correct empty
+// encoder regardless.
 func EncodeEmptyInventoryListNormal() []byte {
-	// Reuse the shared pre-allocated zero-list buffer — equivalent
-	// to encoding an empty InventoryListNormalResponse without
-	// allocating a fresh 4-byte slice per call.
 	return emptyInventoryListNormal
 }
 
 // EncodeEmptyInventoryListEquip returns the on-wire bytes for an
-// empty ZC_INVENTORY_ITEMLIST_EQUIP packet (opcode 0x00a4, 4 bytes).
-// The returned slice is freshly allocated and may be retained by
-// the caller; it is NOT shared with any other caller.
+// empty ZC_INVENTORY_ITEMLIST_EQUIP packet (opcode 0x0b39, 5 bytes).
+// Callers must treat the returned slice as read-only.
 //
-// Layout: [2:cmd=0x00a4][2:packetLength=4] (no EQUIPITEM_INFO entries).
+// Layout: [2:cmd=0x0b39][2:packetLength=5][1:invType=0] (no
+// EQUIPITEM_INFO entries).
 //
-// See EncodeEmptyInventoryListNormal for the empty-frame rationale. The
-// equip variant carries the player's currently-equipped items, so for
-// a fresh character without gear both list packets must arrive empty
-// to populate the equipment and inventory slots in the client UI.
+// TODO(B1): opcode + invType header resolve per-PACKETVER via the
+// PacketRegistry (packetdb N1.1). The 5-byte / 0x0b39 form is
+// MAIN@20250604.
 func EncodeEmptyInventoryListEquip() []byte {
 	return emptyInventoryListEquip
 }
@@ -878,24 +895,74 @@ func EncodeEmptySkillList() []byte {
 }
 
 // EncodeEmptyHotkeyList returns the pre-allocated on-wire bytes for an
-// empty ZC_SHORTCUT_KEY_LIST packet (opcode 0x02b9, 191 bytes). Callers
-// must not modify the returned slice.
+// empty ZC_SHORTCUT_KEY_LIST packet for the requested tab (opcode
+// 0x0b20, 271 bytes). Callers must not modify the returned slice.
+// tab must be 0 or 1; rAthena emits exactly these two frames on every
+// LoadEndAck (clif.cpp:10906-10908).
 //
-// Layout: [2:cmd=0x02b9] then 27 zero-filled hotkey_data slots, each
-// 7 bytes wide (int8 isSkill + uint32 id + int16 count). Total wire
-// length is 2 + 27*7 = 191 bytes.
+// Layout: [2:cmd=0x0b20][1:rotate=0][2:tab LE] then 38 zero-filled
+// hotkey_data slots, each 7 bytes wide (int8 isSkill + uint32 id +
+// int16 count). Total wire length is 2+1+2 + 38*7 = 271 bytes.
 //
 // Unlike the inventory/skill lists, the hotkey list is fixed-length:
 // rAthena always emits every slot regardless of how many the client
 // actually configured, and the slot count is encoded in the PACKETVER
-// struct shape (rathena/src/map/packets_struct.hpp:1613-1619 — the
-// PACKETVER < 20090603 branch gives MAX_HOTKEYS_PACKET=27 and opcode
-// 0x02b9). Zero-filling every slot means "no hotkey bound" for the
-// client. hotkey_data is declared at
+// struct shape (rathena/src/map/packets_struct.hpp:1584-1590 — the
+// PACKETVER_MAIN_NUM>=20190522 branch gives MAX_HOTKEYS_PACKET=38 and
+// opcode 0x0b20). Zero-filling every slot means "no hotkey bound" for
+// the client. hotkey_data is declared at
 // rathena/src/map/packets_struct.hpp:1576-1580.
-func EncodeEmptyHotkeyList() []byte {
-	return emptyHotkeyList
+//
+// TODO(B1): 38-slot shape + opcode resolve per-PACKETVER via the
+// PacketRegistry (packetdb N1.1).
+func EncodeEmptyHotkeyList(tab int) []byte {
+	if tab != 0 && tab != 1 {
+		// Defensive: the only valid tabs are 0 and 1. A bogus tab is a
+		// caller programming error; fall back to tab 0 rather than
+		// indexing out of bounds.
+		return emptyHotkeyListTab[0]
+	}
+	return emptyHotkeyListTab[tab]
 }
+
+// inventoryStartFrame and inventoryEndFrame are the pre-built
+// ZC_INVENTORY_START / ZC_INVENTORY_END bracket frames rAthena wraps
+// the inventory item lists in for MAIN@20250604 (clif.cpp
+// clif_inventoryStart/End). The gateway's inventory is always
+// INVTYPE_INVENTORY (invType=0) and an empty name, so both frames are
+// static. Callers must treat them as read-only.
+//
+// TODO(B1): opcode + struct resolve per-PACKETVER via the PacketRegistry
+// (packetdb N1.1). The 0x0b08/0x0b0b forms are MAIN@20250604.
+var (
+	inventoryStartFrame []byte
+	inventoryEndFrame   []byte
+)
+
+func init() {
+	inventoryStartFrame = make([]byte, sizeZCInventoryStart)
+	binary.LittleEndian.PutUint16(inventoryStartFrame[0:], HeaderZCINVENTORYSTART)
+	binary.LittleEndian.PutUint16(inventoryStartFrame[2:], sizeZCInventoryStart)
+	inventoryStartFrame[4] = 0 // invType = INVTYPE_INVENTORY
+	inventoryStartFrame[5] = 0 // name[0] = '\0'
+
+	inventoryEndFrame = make([]byte, sizeZCInventoryEnd)
+	binary.LittleEndian.PutUint16(inventoryEndFrame[0:], HeaderZCINVENTORYEND)
+	inventoryEndFrame[2] = 0 // invType = INVTYPE_INVENTORY
+	inventoryEndFrame[3] = 0 // flag
+}
+
+// EncodeInventoryStart returns the pre-allocated ZC_INVENTORY_START
+// (0x0b08) bracket frame (6 bytes). Callers must not modify the
+// returned slice. See inventoryStartFrame for layout and rAthena
+// reference.
+func EncodeInventoryStart() []byte { return inventoryStartFrame }
+
+// EncodeInventoryEnd returns the pre-allocated ZC_INVENTORY_END
+// (0x0b0b) bracket frame (4 bytes). Callers must not modify the
+// returned slice. See inventoryEndFrame for layout and rAthena
+// reference.
+func EncodeInventoryEnd() []byte { return inventoryEndFrame }
 
 // NotifyChatResponse encodes a ZC_NOTIFY_CHAT packet (command 0x008d,
 // variable length). The server sends this to broadcast a public chat

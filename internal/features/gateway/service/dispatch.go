@@ -681,16 +681,30 @@ func (h *DispatchHandler) handleCHEnter(ctx context.Context, conn *domain.Connec
 	if err := resp.SendPacket(buf.Bytes()); err != nil {
 		return fmt.Errorf("send HC_ACCEPT_ENTER: %w", err)
 	}
+
+	// Cache the account on the connection so the subsequent
+	// CH_SELECT_CHAR on this same char connection can resolve the
+	// client's slot pick without re-deriving the AID from the wire
+	// (CH_SELECT_CHAR carries only the slot). This is the char-server
+	// counterpart to handleCZEnter's map-phase caching; full session
+	// validation happens later at CZ_ENTER (ticket A2).
+	conn.AccountID = req.AccountID
 	return nil
 }
 
-// handleCHSelectChar emits HC_NOTIFY_ZONESVR pointing the client at
-// the configured zone service. M2b does not retain per-connection
-// character state, so the advertised CID is 0 (rAthena allows this
-// when the zone will resolve the char from the AID + slot on its
-// own). M3 will track the selected character explicitly and substitute
-// the real CID + the char's last-saved map.
-func (h *DispatchHandler) handleCHSelectChar(_ context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
+// handleCHSelectChar resolves the client's slot pick to a real character
+// and emits HC_NOTIFY_ZONESVR redirecting the client to the zone service.
+// The client connects to the zone on a fresh TCP connection (see
+// config.go MapAddr) carrying the AID/CID/AuthCode in CZ_ENTER, so the
+// only thing this connection must establish is the real char_id (the GID
+// the map server assigns) and the map the client should land on. rAthena
+// resolves the slot on the char server (char_clif.cpp make_char_slot);
+// here we ask identity.GetCharacterBySlot.
+//
+// On an empty slot or a missing account the gateway refuses the select
+// (HC_REFUSE_ENTER) rather than advertise CID 0, which the client would
+// treat as an unstyled/no-char entry.
+func (h *DispatchHandler) handleCHSelectChar(ctx context.Context, conn *domain.ConnectionInfo, resp domain.Responder, frame []byte) error {
 	req, err := packet.ParseCHSelectChar(frame)
 	if err != nil {
 		h.logger.Warn().
@@ -701,9 +715,70 @@ func (h *DispatchHandler) handleCHSelectChar(_ context.Context, conn *domain.Con
 		return nil
 	}
 
+	// CH_SELECT_CHAR carries only the slot; the AID was cached at
+	// CH_ENTER. A zero AID here means the client skipped CH_ENTER (or
+	// the connection is replayed out of order) — refuse rather than
+	// query identity with an all-zeros key.
+	if conn.AccountID == 0 {
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint8("slot", req.Slot).
+			Msg("CH_SELECT_CHAR without prior CH_ENTER; refusing")
+		return sendCharRefuse(resp, ErrIdentityUnavailableRefuse)
+	}
+
+	slotResp, err := h.identity.GetCharacterBySlot(ctx, &identityv1.GetCharacterBySlotRequest{
+		AccountId: conn.AccountID,
+		Slot:      uint32(req.Slot), //nolint:gosec // slot is 0..MAX_CHARS-1, fits uint32
+	})
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint8("slot", req.Slot).
+				Msg("identity GetCharacterBySlot cancelled (client gone)")
+			_ = err
+			return nil
+		}
+		st, _ := status.FromError(err)
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint8("slot", req.Slot).
+			Str("grpc_code", st.Code().String()).
+			Msg("identity GetCharacterBySlot RPC failed; refusing char select")
+		return sendCharRefuse(resp, ErrIdentityUnavailableRefuse)
+	}
+	if slotResp == nil || !slotResp.GetSuccess() || slotResp.GetCharId() == 0 {
+		h.logger.Info().
+			Uint64("conn", conn.ID).
+			Uint32("aid", conn.AccountID).
+			Uint8("slot", req.Slot).
+			Str("error", slotResp.GetError()).
+			Msg("char select refused (empty slot or no character)")
+		return sendCharRefuse(resp, ErrIdentityUnavailableRefuse)
+	}
+
+	// Map the client should land on: the character's last-saved map if
+	// present, else the operator default. HC_NOTIFY_ZONESVR advertises
+	// this so the client connects to the right map server (CZ_ENTER
+	// carries no map).
+	mapName := slotResp.GetLastMap()
+	if mapName == "" {
+		mapName = h.defaultMap
+	}
+
+	// Cache the selected char on the connection for the same-char-phase
+	// packets that may follow (e.g. a duplicate select); the map-phase
+	// connection will re-derive CID from CZ_ENTER, validated against the
+	// session at ticket A2.
+	conn.CharID = slotResp.GetCharId()
+
 	notify := packet.NotifyZoneServerResponse{
-		CID:     0, // M2b: no per-connection char state — see doc comment.
-		MapName: h.defaultMap,
+		CID:     slotResp.GetCharId(), // the GID the map server assigns.
+		MapName: mapName,
 		IP:      h.zoneIP,
 		Port:    h.zonePort,
 		Domain:  "",
@@ -714,6 +789,7 @@ func (h *DispatchHandler) handleCHSelectChar(_ context.Context, conn *domain.Con
 		h.logger.Error().
 			Err(err).
 			Uint64("conn", conn.ID).
+			Uint32("cid", notify.CID).
 			Uint8("slot", req.Slot).
 			Msg("encode HC_NOTIFY_ZONESVR failed; dropping")
 		return nil
@@ -721,6 +797,8 @@ func (h *DispatchHandler) handleCHSelectChar(_ context.Context, conn *domain.Con
 
 	h.logger.Info().
 		Uint64("conn", conn.ID).
+		Uint32("aid", conn.AccountID).
+		Uint32("cid", notify.CID).
 		Uint8("slot", req.Slot).
 		Str("map", notify.MapName).
 		Uint32("ip", notify.IP).
@@ -731,6 +809,67 @@ func (h *DispatchHandler) handleCHSelectChar(_ context.Context, conn *domain.Con
 		return fmt.Errorf("send HC_NOTIFY_ZONESVR: %w", err)
 	}
 	return nil
+}
+
+// gateResult is the verdict of the CZ_ENTER session gate.
+//   - gateAllow: the claimed identity is verified; the enter may proceed.
+//   - gateRefuse: send ZC_REFUSE_ENTER, do not cache AID/CID, do not call zone.
+//   - gateDrop: the client went away mid-RPC; send nothing and return.
+type gateResult int
+
+const (
+	gateRefuse gateResult = iota
+	gateAllow
+	gateDrop
+)
+
+// verifyMapEnter validates a CZ_ENTER's self-reported (account_id,
+// login_id1) against the auth node minted at CA_LOGIN, returning the
+// authoritative session sex to forward to the zone. It centralizes the
+// gate's branching so handleCZEnter stays under the cyclomatic-complexity
+// budget. The sex comes from the verified session, not the client byte;
+// a blank session sex falls back to the client byte defensively.
+func (h *DispatchHandler) verifyMapEnter(
+	ctx context.Context,
+	conn *domain.ConnectionInfo,
+	req packet.CZEnterRequest,
+) (string, gateResult) {
+	verified, err := h.identity.VerifySession(ctx, &identityv1.VerifySessionRequest{
+		AccountId: req.AccountID,
+		LoginId1:  uint64(req.AuthCode), //nolint:gosec // login_id1 is a 32-bit token widened to fixed64 on the wire
+	})
+	if err != nil {
+		if clientGone := errors.Is(err, context.Canceled) || ctx.Err() != nil; clientGone {
+			h.logger.Debug().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Uint32("aid", req.AccountID).
+				Msg("identity VerifySession cancelled (client gone)")
+			return "", gateDrop
+		}
+		st, _ := status.FromError(err)
+		h.logger.Error().
+			Err(err).
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Str("grpc_code", st.Code().String()).
+			Msg("identity VerifySession RPC failed; refusing map enter")
+		return "", gateRefuse
+	}
+	if verified == nil || !verified.GetOk() {
+		// No session / expired TTL / wrong login_id1.
+		h.logger.Warn().
+			Uint64("conn", conn.ID).
+			Uint32("aid", req.AccountID).
+			Msg("CZ_ENTER session verification failed; refusing map enter")
+		return "", gateRefuse
+	}
+
+	sex := verified.GetSex()
+	if sex == "" {
+		sex = sexString(req.Sex)
+	}
+	return sex, gateAllow
 }
 
 // handleCZEnter forwards CZ_ENTER to zone.EnterZone and encodes the
@@ -773,12 +912,28 @@ func (h *DispatchHandler) handleCZEnter(ctx context.Context, conn *domain.Connec
 		return sendMapRefuse(resp)
 	}
 
+	// The map connection is a fresh TCP socket with no carried state, so
+	// the client-supplied AID/CID in CZ_ENTER cannot be trusted yet. The
+	// AuthCode field is login_id1, the per-session token only a genuine
+	// CA_LOGIN mints. Validate it against the auth node before trusting
+	// the claimed identity (rAthena clif_parse_WantToConnection -> map_auth).
+	verifiedSex, gate := h.verifyMapEnter(ctx, conn, req)
+	switch gate {
+	case gateDrop:
+		// Client cancelled mid-RPC (gone) — clean disconnect, not a refusal.
+		return nil
+	case gateRefuse:
+		return sendMapRefuse(resp)
+	case gateAllow:
+		// Verified — proceed to the zone enter below.
+	}
+
 	zReq := &zonev1.EnterZoneRequest{
 		AccountId:  req.AccountID,
 		CharId:     req.CharID,
 		LoginId1:   uint64(req.AuthCode),
 		ClientTick: req.ClientTime,
-		Sex:        sexString(req.Sex),
+		Sex:        verifiedSex,
 		Packetver:  conn.Packetver,
 		ClientIp:   splitHost(conn.RemoteIP),
 	}
@@ -1411,7 +1566,11 @@ func (h *DispatchHandler) handleCZNotifyActorInit(ctx context.Context, conn *dom
 	// so the results are discarded.
 	_, _ = burst.Write(h.encodeInventoryLists(ctx, conn))
 	_, _ = burst.Write(h.encodeSkillList(conn))
-	_, _ = burst.Write(packet.EncodeEmptyHotkeyList())
+	// rAthena emits two ZC_SHORTCUT_KEY_LIST frames on every LoadEndAck
+	// (clif.cpp:10906-10908: clif_hotkeys_send(0) then clif_hotkeys_send(1)).
+	// TODO(B1): opcode + slot count resolve per-PACKETVER (packetdb N1.1).
+	_, _ = burst.Write(packet.EncodeEmptyHotkeyList(0))
+	_, _ = burst.Write(packet.EncodeEmptyHotkeyList(1))
 
 	// M14: append NPC spawn packets (ZC_SET_UNIT_IDLE, 0x09ff) after
 	// the empty list packets. rAthena's clif_parse_LoadEndAck spawns
@@ -1499,13 +1658,19 @@ func (h *DispatchHandler) handleCZNotifyActorInit(ctx context.Context, conn *dom
 	return nil
 }
 
-// encodeInventoryLists returns the on-wire bytes for
-// ZC_INVENTORY_ITEMLIST_NORMAL followed by ZC_INVENTORY_ITEMLIST_EQUIP,
-// sourced from identity.GetInventory. On any identity failure
-// (gRPC error, nil response) the two empty-list stubs are returned
-// instead so the client always sees the 4-byte header that
-// initialises its inventory grid — the player is already in the
-// map and a missing list is preferable to a torn connection.
+// encodeInventoryLists returns the on-wire bytes for the inventory
+// item lists, sourced from identity.GetInventory and bracketed by the
+// ZC_INVENTORY_START / ZC_INVENTORY_END frames rAthena wraps them in
+// for MAIN@20250604 (clif.cpp clif_inventorylist → clif_inventoryStart
+// / clif_inventoryEnd). On any identity failure (gRPC error, nil
+// response) the empty bracket is returned instead — the player is
+// already in the map and a missing list is preferable to a torn
+// connection.
+//
+// rAthena suppresses the zero-item list frames entirely: an empty
+// inventory emits only START → END, a non-empty one emits
+// START → normal → equip → END (clif_inventorylist guards on
+// `if (normal)` / `if (equip)`). The dispatcher mirrors that here.
 //
 // The split between normal and equip items mirrors rAthena's
 // `inventory.equip` column semantics: a non-zero EQP_* bitmask puts
@@ -1519,15 +1684,19 @@ func (h *DispatchHandler) handleCZNotifyActorInit(ctx context.Context, conn *dom
 // per-slot weight checks land in a later workstream; this path
 // always writes weight=0 / max-weight=0 because the InventoryItem
 // proto does not yet carry the per-item weight.
+//
+// TODO(B1): the bracket opcodes + the 5-byte invType list headers
+// resolve per-PACKETVER via the PacketRegistry (packetdb N1.1). The
+// MAIN@20250604 forms are used here.
 func (h *DispatchHandler) encodeInventoryLists(ctx context.Context, conn *domain.ConnectionInfo) []byte {
 	if h.identity == nil {
 		h.logger.Error().
 			Uint64("conn", conn.ID).
 			Msg("identity client not configured; emitting empty inventory lists")
-		return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
+		return concat(packet.EncodeInventoryStart(), packet.EncodeInventoryEnd())
 	}
 	if conn.AccountID == 0 || conn.CharID == 0 {
-		return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
+		return concat(packet.EncodeInventoryStart(), packet.EncodeInventoryEnd())
 	}
 
 	resp, err := h.identity.GetInventory(ctx, &identityv1.GetInventoryRequest{
@@ -1540,7 +1709,7 @@ func (h *DispatchHandler) encodeInventoryLists(ctx context.Context, conn *domain
 				Err(err).
 				Uint64("conn", conn.ID).
 				Msg("identity GetInventory cancelled (client gone)")
-			return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
+			return concat(packet.EncodeInventoryStart(), packet.EncodeInventoryEnd())
 		}
 		st, _ := status.FromError(err)
 		h.logger.Warn().
@@ -1550,7 +1719,7 @@ func (h *DispatchHandler) encodeInventoryLists(ctx context.Context, conn *domain
 			Uint32("cid", conn.CharID).
 			Str("grpc_code", st.Code().String()).
 			Msg("identity GetInventory RPC failed; emitting empty inventory lists")
-		return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
+		return concat(packet.EncodeInventoryStart(), packet.EncodeInventoryEnd())
 	}
 	if resp == nil {
 		h.logger.Warn().
@@ -1558,13 +1727,70 @@ func (h *DispatchHandler) encodeInventoryLists(ctx context.Context, conn *domain
 			Uint32("aid", conn.AccountID).
 			Uint32("cid", conn.CharID).
 			Msg("identity returned nil GetInventory response; emitting empty inventory lists")
-		return concat(packet.EncodeEmptyInventoryListNormal(), packet.EncodeEmptyInventoryListEquip())
+		return concat(packet.EncodeInventoryStart(), packet.EncodeInventoryEnd())
 	}
 
-	items := resp.GetItems()
-	normal := make([]packet.InventoryNormalItem, 0, len(items))
-	equip := make([]packet.InventoryEquipItem, 0, len(items))
-	invIndexMap := make(map[uint16]uint32, len(items))
+	normal, equip, invIndexMap := partitionInventory(resp.GetItems())
+	conn.SetInventoryIndex(invIndexMap)
+
+	var buf bytes.Buffer
+	_, _ = buf.Write(packet.EncodeInventoryStart())
+	if len(normal) > 0 {
+		normalResp := packet.InventoryListNormalResponse{Items: normal}
+		if err := normalResp.Encode(&buf); err != nil {
+			// Encode errors only fire on >0xffff total length, which
+			// cannot happen for a 26-byte per-item layout unless the
+			// player has more than ~2500 items. Treat as a programming
+			// error and fall back to the empty bracket so the handshake
+			// completes.
+			h.logger.Error().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Int("items", len(normal)).
+				Msg("encode ZC_INVENTORY_ITEMLIST_NORMAL failed; skipping list")
+			buf.Reset()
+			_, _ = buf.Write(packet.EncodeInventoryStart())
+		}
+	}
+	if len(equip) > 0 {
+		equipResp := packet.InventoryListEquipResponse{Items: equip}
+		if err := equipResp.Encode(&buf); err != nil {
+			h.logger.Error().
+				Err(err).
+				Uint64("conn", conn.ID).
+				Int("items", len(equip)).
+				Msg("encode ZC_INVENTORY_ITEMLIST_EQUIP failed; skipping list")
+		}
+	}
+	_, _ = buf.Write(packet.EncodeInventoryEnd())
+
+	h.logger.Info().
+		Uint64("conn", conn.ID).
+		Uint32("aid", conn.AccountID).
+		Uint32("cid", conn.CharID).
+		Int("normal_items", len(normal)).
+		Int("equip_items", len(equip)).
+		Msg("inventory lists sent")
+
+	return buf.Bytes()
+}
+
+// partitionInventory splits the identity proto's flat item slice into
+// the two inventory-list payloads the map protocol sends: items with
+// equip==0 go to the normal list, items with a non-zero equip location
+// go to the equip list. It also returns the inventory-grid index → DB
+// item-id map the dispatcher caches on the connection for later
+// use-item / drop handlers. The grid index is the on-wire position of
+// each item, assigned in proto order.
+func partitionInventory(items []*identityv1.InventoryItem) (
+	normal []packet.InventoryNormalItem,
+	equip []packet.InventoryEquipItem,
+	invIndexMap map[uint16]uint32,
+) {
+	normal = make([]packet.InventoryNormalItem, 0, len(items))
+	equip = make([]packet.InventoryEquipItem, 0, len(items))
+	invIndexMap = make(map[uint16]uint32, len(items))
+
 	var pos uint16
 	for _, it := range items {
 		if it == nil {
@@ -1598,50 +1824,7 @@ func (h *DispatchHandler) encodeInventoryLists(ctx context.Context, conn *domain
 		}
 		pos++
 	}
-	conn.SetInventoryIndex(invIndexMap)
-
-	var buf bytes.Buffer
-	normalResp := packet.InventoryListNormalResponse{Items: normal}
-	if err := normalResp.Encode(&buf); err != nil {
-		// Encode errors only fire on >0xffff total length, which
-		// cannot happen for a 26-byte per-item layout unless the
-		// player has more than ~2500 items. Treat as a programming
-		// error and fall back to empty lists so the handshake
-		// completes.
-		h.logger.Error().
-			Err(err).
-			Uint64("conn", conn.ID).
-			Int("items", len(normal)).
-			Msg("encode ZC_INVENTORY_ITEMLIST_NORMAL failed; emitting empty list")
-		buf.Reset()
-		_, _ = buf.Write(packet.EncodeEmptyInventoryListNormal())
-	}
-	equipResp := packet.InventoryListEquipResponse{Items: equip}
-	if err := equipResp.Encode(&buf); err != nil {
-		h.logger.Error().
-			Err(err).
-			Uint64("conn", conn.ID).
-			Int("items", len(equip)).
-			Msg("encode ZC_INVENTORY_ITEMLIST_EQUIP failed; emitting empty list")
-		// Drop the trailing partial equip frame; the previous normal
-		// frame is already in buf and the client tolerates a missing
-		// equip list when the normal list is present.
-		// TODO(P2A-WEIGHT): on rollback we lose the normal list too;
-		// future work could keep the prefix and reset only after.
-		buf.Reset()
-		_, _ = buf.Write(packet.EncodeEmptyInventoryListNormal())
-		_, _ = buf.Write(packet.EncodeEmptyInventoryListEquip())
-	}
-
-	h.logger.Info().
-		Uint64("conn", conn.ID).
-		Uint32("aid", conn.AccountID).
-		Uint32("cid", conn.CharID).
-		Int("normal_items", len(normal)).
-		Int("equip_items", len(equip)).
-		Msg("inventory lists sent")
-
-	return buf.Bytes()
+	return normal, equip, invIndexMap
 }
 
 // encodeSkillList builds the ZC_SKILLINFO_LIST (0x010f) frame sent

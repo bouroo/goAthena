@@ -162,14 +162,24 @@ const (
 	// ZC_PC_SELL_RESULT (0x00cb, S→C) is the per-transaction ack.
 	// rathena/src/map/clif_packetdb.hpp + clif.cpp:buy_sell_selection /
 	// clif_parse_PurchaseItem / clif_purchaseitemlist for shape.
-	HeaderCZPCSELLITEMLIST          uint16 = 0x00c9 // CZ_PC_SELL_ITEMLIST
-	HeaderZCPCSELLITEMLIST          uint16 = 0x00c7 // ZC_PC_SELL_ITEMLIST
-	HeaderZCPCSELLRESULT            uint16 = 0x00cb // ZC_PC_SELL_RESULT
-	HeaderZCSTATUS                  uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
-	HeaderZCPARCHANGE               uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
-	HeaderZCLONGPARCHANGE           uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
-	HeaderZCINVENTORYITEMLISTNORMAL uint16 = 0x00a3 // rathena/src/map/clif_packetdb.hpp (ZC_INVENTORY_ITEMLIST_NORMAL)
-	HeaderZCINVENTORYITEMLISTEQUIP  uint16 = 0x00a4 // rathena/src/map/clif_packetdb.hpp (ZC_INVENTORY_ITEMLIST_EQUIP)
+	HeaderCZPCSELLITEMLIST uint16 = 0x00c9 // CZ_PC_SELL_ITEMLIST
+	HeaderZCPCSELLITEMLIST uint16 = 0x00c7 // ZC_PC_SELL_ITEMLIST
+	HeaderZCPCSELLRESULT   uint16 = 0x00cb // ZC_PC_SELL_RESULT
+	HeaderZCSTATUS         uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
+	HeaderZCPARCHANGE      uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
+	HeaderZCLONGPARCHANGE  uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
+	// TODO(B1): these opcodes + the 5-byte invType header resolve
+	// per-PACKETVER from the inventorylistnormalType /
+	// inventorylistequipType aliases (clif_packetdb.hpp) once the
+	// PacketRegistry resolves symbolic *Type entries (packetdb N1.1).
+	// The values below are the resolved MAIN@20250604 forms.
+	HeaderZCINVENTORYITEMLISTNORMAL uint16 = 0x0b09 // rathena/src/map/packets_struct.hpp:137 (inventorylistnormalType, MAIN_NUM>=20181002)
+	HeaderZCINVENTORYITEMLISTEQUIP  uint16 = 0x0b39 // rathena/src/map/packets_struct.hpp:148 (inventorylistequipType, MAIN_NUM>=20200916)
+	// Inventory bracket frames that wrap the item lists for
+	// MAIN_NUM>=20181002 (clif.cpp clif_inventoryStart/End).
+	// TODO(B1): resolve via PacketRegistry (packetdb N1.1).
+	HeaderZCINVENTORYSTART uint16 = 0x0b08 // ZC_INVENTORY_START — packets_struct.hpp PACKET_ZC_INVENTORY_START
+	HeaderZCINVENTORYEND   uint16 = 0x0b0b // ZC_INVENTORY_END — packets_struct.hpp PACKET_ZC_INVENTORY_END
 	// P2A: ZC_REQ_WEAR_EQUIP_ACK_V5 (0x0999) — server ack for
 	// CZ_REQ_WEAR_EQUIP_V5. rathena/src/map/packets_struct.hpp:1269-1276
 	// (PACKETVER_MAIN_NUM >= 20121205 branch). Fixed 11 bytes:
@@ -211,7 +221,12 @@ const (
 	HeaderCZSTATUSCHANGE    uint16 = 0x00bb // rathena/src/map/clif.cpp:12714 (CZ_STATUS_CHANGE)
 	HeaderZCSTATUSCHANGEACK uint16 = 0x00bc // rathena/src/map/clif.cpp:4283 (ZC_STATUS_CHANGE_ACK)
 	HeaderZCNOTIFYEFFECT    uint16 = 0x019b // rathena/src/map/packets.hpp:1120 (ZC_NOTIFY_EFFECT)
-	HeaderZCSHORTCUTKEYLIST uint16 = 0x02b9 // rathena/src/map/packets_struct.hpp:1619 (ZC_SHORTCUT_KEY_LIST, PACKETVER < 20090603)
+	// TODO(B1): opcode + the 38-slot/rotate/tab struct resolve
+	// per-PACKETVER from HEADER_ZC_SHORTCUT_KEY_LIST once the
+	// PacketRegistry resolves symbolic entries (packetdb N1.1). The
+	// value below is the resolved MAIN@20250604 form
+	// (PACKETVER_MAIN_NUM >= 20190522, 38 slots).
+	HeaderZCSHORTCUTKEYLIST uint16 = 0x0b20 // rathena/src/map/packets_struct.hpp:1584 (ZC_SHORTCUT_KEY_LIST, MAIN_NUM>=20190522)
 	// ZC_NOTIFY_ACT (0x08c8) — damage / action notification. rathena/src/map/
 	// packets.hpp:1426 (PACKETVER >= 20131223). Fixed 34 bytes.
 	HeaderZCNOTIFYACT uint16 = 0x08c8
@@ -339,20 +354,43 @@ const (
 	// (rathena/src/map/packets.hpp:1120 ZC_NOTIFY_EFFECT).
 	sizeZCNotifyEffect = 10
 	// sizeEmptyInventoryList = int16 packetType + int16 packetLength = 2+2 = 4.
-	// Used for ZC_INVENTORY_ITEMLIST_NORMAL / ZC_INVENTORY_ITEMLIST_EQUIP /
-	// ZC_SKILLINFO_LIST when the list is empty (count=0). The trailing
-	// NORMALITEM_INFO / EQUIPITEM_INFO / SKILLDATA flexible array is
-	// omitted entirely; rAthena's clif_send path only writes the header
-	// in that case. See rathena/src/map/clif.cpp clif_inventorylist
-	// (~:3060) and clif_skillinfoblock (~:5694).
+	// Used for ZC_SKILLINFO_LIST when the list is empty (count=0). The
+	// trailing SKILLDATA flexible array is omitted entirely; rAthena's
+	// clif_skillinfoblock (~:5694) writes only the header in that case.
+	//
+	// The inventory normal/equip lists NO LONGER share this constant:
+	// for MAIN@20250604 they carry a trailing uint8 invType (5-byte
+	// header — see sizeEmptyInventoryListNormal). And rAthena
+	// suppresses their empty frames entirely (clif_inventorylist guards
+	// on `if (normal)` / `if (equip)`), so the empty-inventory path
+	// emits only the START/END bracket, never an empty list frame.
 	sizeEmptyInventoryList = 4
-	// sizeZCShortcutKeyList = int16 packetType + 27 * hotkey_data =
-	// 2 + 27*(int8 isSkill + uint32 id + int16 count) = 2 + 27*7 = 191
-	// (rathena/src/map/packets_struct.hpp:1613-1619 — the PACKETVER
-	// < 20090603 branch that gives opcode 0x02b9 with MAX_HOTKEYS_PACKET=27).
-	// All 27 slots are zero-filled for a fresh character. hotkey_data is
-	// declared at rathena/src/map/packets_struct.hpp:1576-1580.
-	sizeZCShortcutKeyList = 191
+	// sizeEmptyInventoryListNormal = int16 packetType + int16
+	// packetLength + uint8 invType = 2+2+1 = 5 for MAIN@20250604
+	// (packet_itemlist_normal carries invType when MAIN_NUM>=20181002).
+	// TODO(B1): resolve per-PACKETVER via PacketRegistry (packetdb N1.1).
+	sizeEmptyInventoryListNormal = 5
+	// sizeZCShortcutKeyList = int16 packetType + int8 rotate +
+	// int16 tab + 38 * hotkey_data = 2 + 1 + 2 + 38*(int8 isSkill +
+	// uint32 id + int16 count) = 5 + 38*7 = 271
+	// (rathena/src/map/packets_struct.hpp:1584-1590 — the
+	// PACKETVER_MAIN_NUM>=20190522 branch that gives opcode 0x0b20 with
+	// MAX_HOTKEYS_PACKET=38). All 38 slots are zero-filled for a fresh
+	// character. hotkey_data is declared at
+	// rathena/src/map/packets_struct.hpp:1576-1580.
+	// TODO(B1): resolve per-PACKETVER via PacketRegistry (packetdb N1.1).
+	sizeZCShortcutKeyList = 271
+	// sizeZCInventoryStart = the minimum on-wire size of a
+	// ZC_INVENTORY_START frame: int16 packetType + int16 packetLength +
+	// uint8 invType + char name[1] = 2+2+1+1 = 6. clif_inventoryStart
+	// always sends at least one NUL name byte (safestrnlen("",24)+1=1),
+	// so the empty-name frame is 6 bytes with packetLength=6.
+	// TODO(B1): resolve per-PACKETVER via PacketRegistry (packetdb N1.1).
+	sizeZCInventoryStart = 6
+	// sizeZCInventoryEnd = int16 packetType + uint8 invType + char flag
+	// = 2+1+1 = 4 (NO length field — clif_inventoryEnd sends sizeof(p)).
+	// TODO(B1): resolve per-PACKETVER via PacketRegistry (packetdb N1.1).
+	sizeZCInventoryEnd = 4
 	// sizeCZActionRequest = int16 packetType + uint32 targetGID +
 	// uint8 action = 2+4+1 = 7 (rathena/src/map/clif_packetdb.hpp:38 —
 	// `parseable_packet(0x0089,7,clif_parse_ActionRequest,2,6)`). The pos
@@ -666,16 +704,25 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCLongParChange,
 		Direction: DirectionServerToClient,
 	})
-	// M10: empty list packets emitted after the status burst. The three
+	// M10: list packets emitted after the status burst. The three
 	// list packets (inventory normal/equip, skill) are variable-length —
 	// the wire length is encoded in the int16 packetLength slot and the
 	// trailing flexible array may be zero entries — so we register
 	// VariableLength (-1) and rely on the codec to read the wire length
-	// at decode time. ZC_SHORTCUT_KEY_LIST (0x02b9) is fixed at 191
-	// bytes (2-byte opcode + 27 zero-filled hotkey slots of 7 bytes
-	// each) regardless of how many slots the client actually has
-	// configured; the slot count is encoded in the PACKETVER's struct
+	// at decode time. ZC_SHORTCUT_KEY_LIST (0x0b20) is fixed at 271
+	// bytes (2-byte opcode + rotate + tab + 38 zero-filled hotkey slots
+	// of 7 bytes each) regardless of how many slots the client actually
+	// has configured; the slot count is encoded in the PACKETVER's struct
 	// shape, not the wire data.
+	// TODO(B1): inventory list opcodes + the 5-byte invType header and
+	// the 38-slot hotkey shape resolve per-PACKETVER via PacketRegistry
+	// (packetdb N1.1). The MAIN@20250604 forms are registered here.
+	db.Register(Definition{
+		ID:        HeaderZCINVENTORYSTART,
+		Name:      "ZC_INVENTORY_START",
+		Length:    sizeZCInventoryStart,
+		Direction: DirectionServerToClient,
+	})
 	db.Register(Definition{
 		ID:        HeaderZCINVENTORYITEMLISTNORMAL,
 		Name:      "ZC_INVENTORY_ITEMLIST_NORMAL",
@@ -686,6 +733,12 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCINVENTORYITEMLISTEQUIP,
 		Name:      "ZC_INVENTORY_ITEMLIST_EQUIP",
 		Length:    VariableLength,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCINVENTORYEND,
+		Name:      "ZC_INVENTORY_END",
+		Length:    sizeZCInventoryEnd,
 		Direction: DirectionServerToClient,
 	})
 	db.Register(Definition{

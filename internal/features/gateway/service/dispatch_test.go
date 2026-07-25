@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -40,8 +41,10 @@ import (
 type fakeIdentityClient struct {
 	mu              sync.Mutex
 	authenticateFn  func(context.Context, *identityv1.AuthenticateRequest) (*identityv1.AuthenticateResponse, error)
-	characterListFn func(context.Context, *identityv1.GetCharacterListRequest) (*identityv1.GetCharacterListResponse, error)
-	getCharacterFn  func(context.Context, *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error)
+	characterListFn    func(context.Context, *identityv1.GetCharacterListRequest) (*identityv1.GetCharacterListResponse, error)
+	getCharacterFn     func(context.Context, *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error)
+	getCharacterBySlotFn func(context.Context, *identityv1.GetCharacterBySlotRequest) (*identityv1.GetCharacterBySlotResponse, error)
+	verifySessionFn      func(context.Context, *identityv1.VerifySessionRequest) (*identityv1.VerifySessionResponse, error)
 	getInventoryFn  func(context.Context, *identityv1.GetInventoryRequest) (*identityv1.GetInventoryResponse, error)
 	equipItemFn     func(context.Context, *identityv1.EquipItemRequest) (*identityv1.EquipItemResponse, error)
 	unequipItemFn   func(context.Context, *identityv1.UnequipItemRequest) (*identityv1.UnequipItemResponse, error)
@@ -97,11 +100,42 @@ func (f *fakeIdentityClient) GetCharacter(ctx context.Context, req *identityv1.G
 	return fn(ctx, req)
 }
 
+func (f *fakeIdentityClient) GetCharacterBySlot(ctx context.Context, req *identityv1.GetCharacterBySlotRequest, _ ...grpc.CallOption) (*identityv1.GetCharacterBySlotResponse, error) {
+	f.mu.Lock()
+	fn := f.getCharacterBySlotFn
+	f.mu.Unlock()
+	if fn == nil {
+		// A missing fn means the test does not exercise char-select.
+		// Return success=false so handleCHSelectChar refuses cleanly
+		// rather than aborting the handshake with an Unimplemented error.
+		return &identityv1.GetCharacterBySlotResponse{
+			Success: false,
+			Error:   "no getCharacterBySlot fn installed",
+		}, nil
+	}
+	return fn(ctx, req)
+}
+
 // Inventory RPC stubs — dispatch tests that need a real response
 // install getInventoryFn / equipItemFn / unequipItemFn / useItemFn;
 // tests that don't install one get a `success=false` or empty
 // response so the dispatcher falls back to the empty-list / fail
 // ack paths without aborting the handshake.
+//
+// VerifySession RPC stub — the CZ_ENTER gate calls this before trusting
+// the client AID/CID. Tests that exercise map-enter install verifySessionFn;
+// tests that don't get ok=true so the dispatch path is unaffected (the
+// gate is a no-op pass-through unless overridden).
+func (f *fakeIdentityClient) VerifySession(ctx context.Context, req *identityv1.VerifySessionRequest, _ ...grpc.CallOption) (*identityv1.VerifySessionResponse, error) {
+	f.mu.Lock()
+	fn := f.verifySessionFn
+	f.mu.Unlock()
+	if fn == nil {
+		return &identityv1.VerifySessionResponse{Ok: true, Sex: "M"}, nil
+	}
+	return fn(ctx, req)
+}
+
 func (f *fakeIdentityClient) GetInventory(ctx context.Context, req *identityv1.GetInventoryRequest, _ ...grpc.CallOption) (*identityv1.GetInventoryResponse, error) {
 	f.mu.Lock()
 	fn := f.getInventoryFn
@@ -390,19 +424,21 @@ type parChangeRecord struct {
 
 // parseStatusBurst walks a status-burst response buffer sequentially
 // and returns the ZC_PAR_CHANGE records it contains, the ZC_STATUS
-// payload, the ZC_LONGPAR_CHANGE count, the M10 empty list
+// payload, the ZC_LONGPAR_CHANGE count, the inventory/skill/hotkey
 // packet records, and the M14 NPC spawn (ZC_SET_UNIT_IDLE) records.
 // This replaces the byte-by-byte header scan that could misfire when
 // a payload value happened to match a packet header byte pair.
 //
 // Layout consumed: leading ZC_MAPPROPERTY_R2 (8 bytes) is skipped; then
 // 0..N ZC_PAR_CHANGE / ZC_LONGPAR_CHANGE (8 bytes each), then exactly
-// one ZC_STATUS (44 bytes), then the four M10 empty list packets
-// (ZC_INVENTORY_ITEMLIST_NORMAL 0x00a3 / ZC_INVENTORY_ITEMLIST_EQUIP
-// 0x00a4 / ZC_SKILLINFO_LIST 0x010f are 4 bytes each, and
-// ZC_SHORTCUT_KEY_LIST 0x02b9 is 191 bytes), then 0..N M14 NPC spawn
-// packets (ZC_SET_UNIT_IDLE 0x09ff, 107 bytes each). The buffer must
-// be fully consumed.
+// one ZC_STATUS (44 bytes), then the A3 inventory/skill/hotkey block:
+// ZC_INVENTORY_START 0x0b08 (6 bytes) → optional
+// ZC_INVENTORY_ITEMLIST_NORMAL 0x0b09 / ZC_INVENTORY_ITEMLIST_EQUIP
+// 0x0b39 (variable, 5-byte header + items) → ZC_INVENTORY_END 0x0b0b
+// (4 bytes) → ZC_SKILLINFO_LIST 0x010f (4-byte empty header + 37 bytes
+// per skill) → two ZC_SHORTCUT_KEY_LIST 0x0b20 frames (271 bytes each),
+// then 0..N M14 NPC spawn packets (ZC_SET_UNIT_IDLE 0x09ff, 107 bytes
+// each). The buffer must be fully consumed.
 func parseStatusBurst(t *testing.T, buf []byte) (
 	parChanges []parChangeRecord,
 	longParChanges int,
@@ -440,23 +476,36 @@ func parseStatusBurst(t *testing.T, buf []byte) (
 			}
 			statusPayload = buf[offset : offset+44]
 			offset += 44
-		case 0x00a3: // ZC_INVENTORY_ITEMLIST_NORMAL (M10, empty = 4 bytes)
+		case 0x0b08: // ZC_INVENTORY_START (A3, fixed 6 bytes)
+			const startSize = 6
+			if offset+startSize > len(buf) {
+				t.Fatalf("truncated ZC_INVENTORY_START at offset %d (have %d bytes)", offset, len(buf)-offset)
+			}
+			emptyListPackets = append(emptyListPackets, cmd)
+			offset += startSize
+		case 0x0b0b: // ZC_INVENTORY_END (A3, fixed 4 bytes)
 			if offset+4 > len(buf) {
+				t.Fatalf("truncated ZC_INVENTORY_END at offset %d (have %d bytes)", offset, len(buf)-offset)
+			}
+			emptyListPackets = append(emptyListPackets, cmd)
+			offset += 4
+		case 0x0b09: // ZC_INVENTORY_ITEMLIST_NORMAL (A3, variable 5-byte header + 26B/items)
+			if offset+5 > len(buf) {
 				t.Fatalf("truncated ZC_INVENTORY_ITEMLIST_NORMAL at offset %d (have %d bytes)", offset, len(buf)-offset)
 			}
 			plen := binary.LittleEndian.Uint16(buf[offset+2 : offset+4])
-			if plen != 4 {
-				t.Fatalf("ZC_INVENTORY_ITEMLIST_NORMAL packetLength = %d, want 4 (empty)", plen)
+			if int(plen) < 5 || offset+int(plen) > len(buf) {
+				t.Fatalf("ZC_INVENTORY_ITEMLIST_NORMAL packetLength = %d invalid at offset %d", plen, offset)
 			}
 			emptyListPackets = append(emptyListPackets, cmd)
 			offset += int(plen)
-		case 0x00a4: // ZC_INVENTORY_ITEMLIST_EQUIP (M10, empty = 4 bytes)
-			if offset+4 > len(buf) {
+		case 0x0b39: // ZC_INVENTORY_ITEMLIST_EQUIP (A3, variable 5-byte header + 57B/items)
+			if offset+5 > len(buf) {
 				t.Fatalf("truncated ZC_INVENTORY_ITEMLIST_EQUIP at offset %d (have %d bytes)", offset, len(buf)-offset)
 			}
 			plen := binary.LittleEndian.Uint16(buf[offset+2 : offset+4])
-			if plen != 4 {
-				t.Fatalf("ZC_INVENTORY_ITEMLIST_EQUIP packetLength = %d, want 4 (empty)", plen)
+			if int(plen) < 5 || offset+int(plen) > len(buf) {
+				t.Fatalf("ZC_INVENTORY_ITEMLIST_EQUIP packetLength = %d invalid at offset %d", plen, offset)
 			}
 			emptyListPackets = append(emptyListPackets, cmd)
 			offset += int(plen)
@@ -470,8 +519,8 @@ func parseStatusBurst(t *testing.T, buf []byte) (
 			}
 			emptyListPackets = append(emptyListPackets, cmd)
 			offset += int(plen)
-		case 0x02b9: // ZC_SHORTCUT_KEY_LIST (M10, fixed 191 bytes)
-			const hotkeySize = 191
+		case 0x0b20: // ZC_SHORTCUT_KEY_LIST (A3, fixed 271 bytes)
+			const hotkeySize = 271
 			if offset+hotkeySize > len(buf) {
 				t.Fatalf("truncated ZC_SHORTCUT_KEY_LIST at offset %d (have %d bytes)", offset, len(buf)-offset)
 			}
@@ -1069,6 +1118,155 @@ func TestDispatchHandler_CHEnter_ClampsTotalSlotsAboveMax(t *testing.T) {
 	}
 }
 
+// chSelectCharFrame builds the 3-byte CH_SELECT_CHAR frame (int16 cmd +
+// uint8 slot). The dispatcher reads the cmd from the dispatch table, so
+// the frame passed to HandlePacket is the body after the 2-byte header.
+func chSelectCharFrame(slot uint8) []byte {
+	// ParseCHSelectChar wants sizeCHSelectChar bytes: the 2-byte cmd + 1
+	// slot byte. The gateway's HandlePacket passes the full frame
+	// (header inclusive) down to the parser.
+	buf := make([]byte, 3)
+	binary.LittleEndian.PutUint16(buf[0:2], packet.HeaderCHSELECTCHAR)
+	buf[2] = slot
+	return buf
+}
+
+func TestDispatchHandler_CHSelectChar_Success_AdvertisesRealCIDAndMap(t *testing.T) {
+	t.Parallel()
+
+	const aid uint32 = 2000233
+	const wantCID uint32 = 150002
+	const slot uint8 = 3
+
+	var gotSlotReq *identityv1.GetCharacterBySlotRequest
+	fake := &fakeIdentityClient{
+		// CH_ENTER must succeed so the AID is cached on the conn for the
+		// subsequent CH_SELECT_CHAR (which carries only the slot).
+		characterListFn: func(_ context.Context, _ *identityv1.GetCharacterListRequest) (*identityv1.GetCharacterListResponse, error) {
+			return &identityv1.GetCharacterListResponse{Characters: nil, TotalSlots: 9}, nil
+		},
+		getCharacterBySlotFn: func(_ context.Context, req *identityv1.GetCharacterBySlotRequest) (*identityv1.GetCharacterBySlotResponse, error) {
+			gotSlotReq = req
+			return &identityv1.GetCharacterBySlotResponse{
+				Success: true,
+				CharId:  wantCID,
+				Slot:    uint32(slot),
+				LastMap: "izlude",
+			}, nil
+		},
+	}
+	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+
+	conn := &domain.ConnectionInfo{ID: 1}
+	resp := &bufResponder{}
+
+	// (1) CH_ENTER caches the AID on the connection.
+	if err := h.HandlePacket(context.Background(), conn, resp, packet.HeaderCHENTER, chEnterFrame(aid)); err != nil {
+		t.Fatalf("CH_ENTER HandlePacket err = %v, want nil", err)
+	}
+	if conn.AccountID != aid {
+		t.Fatalf("after CH_ENTER, conn.AccountID = %d, want %d (must be cached for CH_SELECT_CHAR)", conn.AccountID, aid)
+	}
+	// CH_ENTER writes the AID echo + HC_ACCEPT_ENTER; reset the buffer so
+	// CH_SELECT_CHAR's output is isolated.
+	resp.buf.Reset()
+
+	// (2) CH_SELECT_CHAR on the SAME connection resolves the slot.
+	if err := h.HandlePacket(context.Background(), conn, resp, packet.HeaderCHSELECTCHAR, chSelectCharFrame(slot)); err != nil {
+		t.Fatalf("CH_SELECT_CHAR HandlePacket err = %v, want nil", err)
+	}
+
+	if gotSlotReq.GetAccountId() != aid {
+		t.Errorf("GetCharacterBySlot account_id = %d, want %d (cached AID must scope the lookup)", gotSlotReq.GetAccountId(), aid)
+	}
+	if gotSlotReq.GetSlot() != uint32(slot) {
+		t.Errorf("GetCharacterBySlot slot = %d, want %d", gotSlotReq.GetSlot(), slot)
+	}
+	if conn.CharID != wantCID {
+		t.Errorf("after CH_SELECT_CHAR, conn.CharID = %d, want %d (real GID must be cached)", conn.CharID, wantCID)
+	}
+
+	out := resp.buf.Bytes()
+	if got := len(out); got != 156 {
+		t.Fatalf("HC_NOTIFY_ZONESVR length = %d, want 156", got)
+	}
+	if out[0] != 0xc5 || out[1] != 0x0a {
+		t.Errorf("opcode = %02x %02x, want c5 0a (LE 0x0ac5)", out[0], out[1])
+	}
+	if got := binary.LittleEndian.Uint32(out[2:6]); got != wantCID {
+		t.Errorf("CID at [2:6] = %d, want %d (the real char_id, not 0)", got, wantCID)
+	}
+	if got := string(bytes.TrimRight(out[6:22], "\x00")); got != "izlude" {
+		t.Errorf("mapName at [6:22] = %q, want %q (character's last_map)", got, "izlude")
+	}
+	if got := binary.LittleEndian.Uint16(out[26:28]); got != 5121 {
+		t.Errorf("port at [26:28] = %d, want 5121", got)
+	}
+}
+
+func TestDispatchHandler_CHSelectChar_EmptySlot_Refuses(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeIdentityClient{
+		getCharacterBySlotFn: func(_ context.Context, _ *identityv1.GetCharacterBySlotRequest) (*identityv1.GetCharacterBySlotResponse, error) {
+			return &identityv1.GetCharacterBySlotResponse{Success: false, Error: "no character in slot"}, nil
+		},
+	}
+	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+
+	// AccountID is set (prior CH_ENTER happened) but the picked slot is empty.
+	conn := &domain.ConnectionInfo{ID: 1, AccountID: 2000233}
+	resp := &bufResponder{}
+	if err := h.HandlePacket(context.Background(), conn, resp, packet.HeaderCHSELECTCHAR, chSelectCharFrame(7)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 3 {
+		t.Fatalf("HC_REFUSE_ENTER length = %d, want 3", len(out))
+	}
+	if out[0] != 0x6c || out[1] != 0x00 {
+		t.Errorf("opcode = %02x %02x, want 6c 00 (LE 0x006c)", out[0], out[1])
+	}
+	if got := out[2]; got != uint8(ErrIdentityUnavailableRefuse) {
+		t.Errorf("refuse error = %d, want %d (server-closed sentinel for an empty slot)", got, ErrIdentityUnavailableRefuse)
+	}
+	if conn.CharID != 0 {
+		t.Errorf("conn.CharID = %d, want 0 (a refused select must not cache a CID)", conn.CharID)
+	}
+}
+
+func TestDispatchHandler_CHSelectChar_NoPriorCHEnter_Refuses(t *testing.T) {
+	t.Parallel()
+
+	// GetCharacterBySlot must never be reached when the AID was not cached.
+	fake := &fakeIdentityClient{
+		getCharacterBySlotFn: func(_ context.Context, _ *identityv1.GetCharacterBySlotRequest) (*identityv1.GetCharacterBySlotResponse, error) {
+			t.Fatal("GetCharacterBySlot must not be called without a prior CH_ENTER")
+			return nil, nil
+		},
+	}
+	h := NewDispatchHandler(fake, nil, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+
+	// AccountID deliberately unset: simulates a client that skipped CH_ENTER.
+	conn := &domain.ConnectionInfo{ID: 1}
+	resp := &bufResponder{}
+	if err := h.HandlePacket(context.Background(), conn, resp, packet.HeaderCHSELECTCHAR, chSelectCharFrame(0)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) != 3 {
+		t.Fatalf("HC_REFUSE_ENTER length = %d, want 3", len(out))
+	}
+	if got := out[2]; got != uint8(ErrIdentityUnavailableRefuse) {
+		t.Errorf("refuse error = %d, want %d", got, ErrIdentityUnavailableRefuse)
+	}
+}
+
 // chEnterFrame builds a minimal 17-byte CH_ENTER frame for tests that
 // only care about the response, not the request parse.
 func chEnterFrame(accountID uint32) []byte {
@@ -1563,6 +1761,180 @@ func TestDispatchHandler_CZEnter_ZoneRejects_DoesNotCacheAccountID(t *testing.T)
 	}
 }
 
+// TestDispatchHandler_CZEnter_VerifySessionGate_Happy exercises the A2
+// session-validation gate end-to-end: the gateway calls VerifySession
+// with the parsed (account_id, login_id1), and on ok=true forwards the
+// verified sex to the zone (not the client byte) and proceeds to cache
+// the AID + call EnterZone.
+func TestDispatchHandler_CZEnter_VerifySessionGate_Happy(t *testing.T) {
+	t.Parallel()
+
+	const aid, cid, loginID1 = uint32(4242), uint32(9001), uint32(0xCAFEBABE)
+	var gotVerifyReq *identityv1.VerifySessionRequest
+	var gotZoneReq *zonev1.EnterZoneRequest
+
+	zone := &fakeZoneClient{
+		enterFn: func(_ context.Context, req *zonev1.EnterZoneRequest, _ ...grpc.CallOption) (*zonev1.EnterZoneResponse, error) {
+			gotZoneReq = req
+			return &zonev1.EnterZoneResponse{Success: true, MapName: "prontera", MapX: 150, MapY: 200}, nil
+		},
+	}
+	identity := &fakeIdentityClient{
+		verifySessionFn: func(_ context.Context, req *identityv1.VerifySessionRequest) (*identityv1.VerifySessionResponse, error) {
+			gotVerifyReq = req
+			// Verified session says female, even though the client byte says male (1).
+			return &identityv1.VerifySessionResponse{Ok: true, Sex: "F"}, nil
+		},
+		// GetCharacter is still needed for the spawn packet; keep it minimal.
+		getCharacterFn: func(_ context.Context, _ *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+			return &identityv1.GetCharacterResponse{Success: false}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZENTER,
+		buildCZEnter(aid, cid, loginID1, 0xbeef0000, 1)); err != nil { // sex byte = 1 (male) on the wire
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	require.NotNil(t, gotVerifyReq, "VerifySession must be called before zone")
+	assert.Equal(t, aid, gotVerifyReq.GetAccountId(), "VerifySession must get the parsed account_id")
+	assert.Equal(t, uint64(loginID1), gotVerifyReq.GetLoginId1(), "VerifySession must get the CZ_ENTER authCode as login_id1")
+	require.NotNil(t, gotZoneReq, "EnterZone must be called on a verified session")
+	assert.Equal(t, aid, gotZoneReq.GetAccountId())
+	assert.Equal(t, cid, gotZoneReq.GetCharId())
+	assert.Equal(t, "F", gotZoneReq.GetSex(), "zone sex must come from the verified session, not the client byte")
+	if conn.AccountID != aid {
+		t.Fatalf("after verified CZ_ENTER, conn.AccountID = %d, want %d", conn.AccountID, aid)
+	}
+
+	out := resp.buf.Bytes()
+	if len(out) < 13 {
+		t.Fatalf("responder length = %d, want >= 13 (ZC_ACCEPT_ENTER on a verified enter)", len(out))
+	}
+	if out[0] != 0xeb || out[1] != 0x02 {
+		t.Errorf("ZC_ACCEPT_ENTER opcode = %02x %02x, want eb 02 (LE 0x02eb)", out[0], out[1])
+	}
+}
+
+// TestDispatchHandler_CZEnter_VerifySessionGate_WrongToken_Refuses is the
+// core A2 security gate: a wrong login_id1 must refuse, must NOT cache the
+// AID/CID, and must NOT call zone. An attacker can no longer enter any map
+// by spoofing AID+CID.
+func TestDispatchHandler_CZEnter_VerifySessionGate_WrongToken_Refuses(t *testing.T) {
+	t.Parallel()
+
+	zone := &fakeZoneClient{
+		enterFn: func(_ context.Context, _ *zonev1.EnterZoneRequest, _ ...grpc.CallOption) (*zonev1.EnterZoneResponse, error) {
+			t.Fatal("EnterZone must NOT be called when login_id1 does not match")
+			return nil, nil
+		},
+	}
+	identity := &fakeIdentityClient{
+		verifySessionFn: func(_ context.Context, _ *identityv1.VerifySessionRequest) (*identityv1.VerifySessionResponse, error) {
+			return &identityv1.VerifySessionResponse{Ok: false}, nil
+		},
+		// getCharacter must never be reached either — the gate fires first.
+		getCharacterFn: func(_ context.Context, _ *identityv1.GetCharacterRequest) (*identityv1.GetCharacterResponse, error) {
+			t.Fatal("GetCharacter must NOT be called when the session is unverified")
+			return nil, nil
+		},
+	}
+	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZENTER,
+		buildCZEnter(4242, 9001, 0xdead0000, 0xbeef0000, 1)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	if conn.AccountID != 0 {
+		t.Errorf("conn.AccountID = %d, want 0 (an unverified enter must not cache AID)", conn.AccountID)
+	}
+	if conn.CharID != 0 {
+		t.Errorf("conn.CharID = %d, want 0 (an unverified enter must not cache CID)", conn.CharID)
+	}
+	out := resp.buf.Bytes()
+	if len(out) != 3 {
+		t.Fatalf("ZC_REFUSE_ENTER length = %d, want 3", len(out))
+	}
+	if out[0] != 0x74 || out[1] != 0x00 {
+		t.Errorf("opcode = %02x %02x, want 74 00 (LE 0x0074)", out[0], out[1])
+	}
+}
+
+// TestDispatchHandler_CZEnter_VerifySessionGate_AbsentSession_Refuses
+// covers the expired-TTL / no-login case: VerifySession returns ok=false
+// (no session node) and the gateway refuses identically to a wrong token.
+func TestDispatchHandler_CZEnter_VerifySessionGate_AbsentSession_Refuses(t *testing.T) {
+	t.Parallel()
+
+	zone := &fakeZoneClient{}
+	identity := &fakeIdentityClient{
+		verifySessionFn: func(_ context.Context, _ *identityv1.VerifySessionRequest) (*identityv1.VerifySessionResponse, error) {
+			return &identityv1.VerifySessionResponse{Ok: false}, nil
+		},
+	}
+	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZENTER,
+		buildCZEnter(4242, 9001, 0xdead0000, 0xbeef0000, 1)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil", err)
+	}
+
+	if conn.AccountID != 0 {
+		t.Errorf("conn.AccountID = %d, want 0 (expired session must not cache AID)", conn.AccountID)
+	}
+	out := resp.buf.Bytes()
+	if len(out) != 3 || out[0] != 0x74 || out[1] != 0x00 {
+		t.Fatalf("ZC_REFUSE_ENTER = %x, want 74 00 00", out)
+	}
+}
+
+// TestDispatchHandler_CZEnter_VerifySessionGate_TransportError_Refuses
+// covers the "session store down" path: a transport error must refuse
+// (not crash, not proceed) so a downed identity store cannot open the map.
+func TestDispatchHandler_CZEnter_VerifySessionGate_TransportError_Refuses(t *testing.T) {
+	t.Parallel()
+
+	zone := &fakeZoneClient{
+		enterFn: func(_ context.Context, _ *zonev1.EnterZoneRequest, _ ...grpc.CallOption) (*zonev1.EnterZoneResponse, error) {
+			t.Fatal("EnterZone must NOT be called when VerifySession errors")
+			return nil, nil
+		},
+	}
+	identity := &fakeIdentityClient{
+		verifySessionFn: func(_ context.Context, _ *identityv1.VerifySessionRequest) (*identityv1.VerifySessionResponse, error) {
+			return nil, status.Error(codes.Unavailable, "identity store down")
+		},
+	}
+	h := NewDispatchHandler(identity, zone, 20250604, 20000000, 20260000,
+		newDispatchTestLogger(t), "prontera", parseIPv4("127.0.0.1"), 5121, NewSessionRegistry(), nil, nil)
+
+	resp := &bufResponder{}
+	conn := domain.ConnectionInfo{ID: 1}
+	if err := h.HandlePacket(context.Background(), &conn, resp, packet.HeaderCZENTER,
+		buildCZEnter(4242, 9001, 0xdead0000, 0xbeef0000, 1)); err != nil {
+		t.Fatalf("HandlePacket err = %v, want nil (a transport error refuses, does not bubble)", err)
+	}
+
+	if conn.AccountID != 0 {
+		t.Errorf("conn.AccountID = %d, want 0", conn.AccountID)
+	}
+	out := resp.buf.Bytes()
+	if len(out) != 3 || out[0] != 0x74 || out[1] != 0x00 {
+		t.Fatalf("ZC_REFUSE_ENTER = %x, want 74 00 00", out)
+	}
+}
+
 // buildCZEnter crafts a 19-byte CZ_ENTER frame for the dispatch tests.
 func buildCZEnter(accountID, charID, authCode, clientTime uint32, sex uint8) []byte {
 	frame := make([]byte, 19)
@@ -1707,15 +2079,18 @@ func TestDispatchHandler_CZNotifyActorInit_StatusBurst(t *testing.T) {
 		t.Errorf("expected at least one ZC_LONGPAR_CHANGE in burst, got 0")
 	}
 
-	// (7) M10: the four empty list packets (inventory normal, inventory
-	// equip, skill, hotkey) must follow the status burst in the
-	// documented rAthena LoadEndAck order
-	// (rathena/src/map/clif.cpp:10791-10915).
+	// (7) M10/A3: the empty-list frames must follow the status burst in
+	// the documented rAthena LoadEndAck order
+	// (rathena/src/map/clif.cpp:10791-10915). MAIN@20250604 wraps the
+	// (empty) inventory in ZC_INVENTORY_START → ZC_INVENTORY_END, then
+	// emits the empty skill list, then two ZC_SHORTCUT_KEY_LIST frames
+	// (tab 0, tab 1).
 	wantEmpty := []uint16{
-		0x00a3, // ZC_INVENTORY_ITEMLIST_NORMAL
-		0x00a4, // ZC_INVENTORY_ITEMLIST_EQUIP
+		0x0b08, // ZC_INVENTORY_START
+		0x0b0b, // ZC_INVENTORY_END
 		0x010f, // ZC_SKILLINFO_LIST
-		0x02b9, // ZC_SHORTCUT_KEY_LIST
+		0x0b20, // ZC_SHORTCUT_KEY_LIST (tab 0)
+		0x0b20, // ZC_SHORTCUT_KEY_LIST (tab 1)
 	}
 	if len(emptyListPackets) != len(wantEmpty) {
 		t.Fatalf("empty-list packets seen = %d, want %d (opcodes: % x)",
@@ -1827,7 +2202,7 @@ func TestDispatchHandler_CZNotifyActorInit_NoConnID_StillBurstsZeros(t *testing.
 	if len(statusPayload) != 44 {
 		t.Errorf("ZC_STATUS payload = %d bytes, want 44", len(statusPayload))
 	}
-	wantEmpty := []uint16{0x00a3, 0x00a4, 0x010f, 0x02b9}
+	wantEmpty := []uint16{0x0b08, 0x0b0b, 0x010f, 0x0b20, 0x0b20}
 	if len(emptyListPackets) != len(wantEmpty) {
 		t.Errorf("empty-list packets seen = %d, want %d (opcodes: % x)",
 			len(emptyListPackets), len(wantEmpty), emptyListPackets)
@@ -3699,11 +4074,15 @@ func TestDispatchHandler_CZNotifyActorInit_MonsterSpawn(t *testing.T) {
 			offset += 8
 		case 0x00bd:
 			offset += 44
-		case 0x00a3, 0x00a4, 0x010f:
+		case 0x0b08: // ZC_INVENTORY_START
+			offset += 6
+		case 0x0b0b: // ZC_INVENTORY_END
+			offset += 4
+		case 0x0b09, 0x0b39, 0x010f: // inventory list normal/equip, skill list
 			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
 			offset += plen
-		case 0x02b9:
-			offset += 191
+		case 0x0b20: // ZC_SHORTCUT_KEY_LIST (two frames, 271 each)
+			offset += 271
 		case 0x09ff:
 			gid := binary.LittleEndian.Uint32(out[offset+5 : offset+9])
 			objType := out[offset+4]
@@ -3831,14 +4210,18 @@ func TestDispatchHandler_CZNotifyActorInit_MonsterCount(t *testing.T) {
 			offset += 8
 		case 0x00bd:
 			offset += 44
-		case 0x00a3, 0x00a4, 0x010f:
+		case 0x0b08: // ZC_INVENTORY_START
+			offset += 6
+		case 0x0b0b: // ZC_INVENTORY_END
+			offset += 4
+		case 0x0b09, 0x0b39, 0x010f: // inventory list normal/equip, skill list
 			if offset+4 > len(out) {
-				t.Fatalf("truncated empty list packet 0x%04x at offset %d", cmd, offset)
+				t.Fatalf("truncated list packet 0x%04x at offset %d", cmd, offset)
 			}
 			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
 			offset += plen
-		case 0x02b9:
-			offset += 191
+		case 0x0b20: // ZC_SHORTCUT_KEY_LIST (two frames, 271 each)
+			offset += 271
 		default:
 			t.Fatalf("unexpected packet 0x%04x at offset %d (buf=% x)", cmd, offset, out)
 		}
@@ -3996,10 +4379,11 @@ func TestDispatchHandler_Attack_Concurrency(t *testing.T) {
 	}
 }
 
-// P2A: inventory list emission on CZ_NOTIFY_ACTORINIT. The handler
-// must call identity.GetInventory and emit ZC_INVENTORY_ITEMLIST_NORMAL
-// (0x00a3) followed by ZC_INVENTORY_ITEMLIST_EQUIP (0x00a4) in the
-// documented rAthena LoadEndAck order
+// P2A/A3: inventory list emission on CZ_NOTIFY_ACTORINIT. The handler
+// must call identity.GetInventory and emit the bracket
+// ZC_INVENTORY_START (0x0b08) → ZC_INVENTORY_ITEMLIST_NORMAL (0x0b09)
+// → ZC_INVENTORY_ITEMLIST_EQUIP (0x0b39) → ZC_INVENTORY_END (0x0b0b)
+// in the documented rAthena LoadEndAck order
 // (rathena/src/map/clif.cpp:10791-10915). Items with
 // inventory.equip==0 go to the normal list, items with non-zero
 // equip go to the equip list.
@@ -4045,11 +4429,13 @@ func TestDispatchHandler_CZNotifyActorInit_EmitsInventoryLists(t *testing.T) {
 	out := resp.buf.Bytes()
 
 	// Walk the burst sequentially, recording the ZC_INVENTORY_ITEMLIST_NORMAL
-	// and ZC_INVENTORY_ITEMLIST_EQUIP frames by their variable-length packetLength.
+	// (0x0b09) and ZC_INVENTORY_ITEMLIST_EQUIP (0x0b39) frames by their
+	// variable-length packetLength.
 	const wantNormalItems = 2
 	const wantEquipItems = 1
 	const normalItemSize = 26 // sizeNormalItem
 	const equipItemSize = 57  // sizeEquipItem
+	const listHeaderSize = 5  // sizeEmptyInventoryListNormal (opcode+len+invType)
 	var normalLen, equipLen int
 
 	offset := 8 // skip leading 8-byte ZC_MAPPROPERTY_R2
@@ -4060,19 +4446,23 @@ func TestDispatchHandler_CZNotifyActorInit_EmitsInventoryLists(t *testing.T) {
 			offset += 8
 		case 0x00bd:
 			offset += 44
-		case 0x00a3:
+		case 0x0b08: // ZC_INVENTORY_START
+			offset += 6
+		case 0x0b0b: // ZC_INVENTORY_END
+			offset += 4
+		case 0x0b09: // ZC_INVENTORY_ITEMLIST_NORMAL
 			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
 			normalLen = plen
 			offset += plen
-		case 0x00a4:
+		case 0x0b39: // ZC_INVENTORY_ITEMLIST_EQUIP
 			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
 			equipLen = plen
 			offset += plen
-		case 0x010f:
+		case 0x010f: // ZC_SKILLINFO_LIST
 			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
 			offset += plen
-		case 0x02b9:
-			offset += 191
+		case 0x0b20: // ZC_SHORTCUT_KEY_LIST (two frames, 271 each)
+			offset += 271
 		case 0x09ff:
 			offset += 107
 		default:
@@ -4080,14 +4470,14 @@ func TestDispatchHandler_CZNotifyActorInit_EmitsInventoryLists(t *testing.T) {
 		}
 	}
 
-	wantNormalLen := 4 + wantNormalItems*normalItemSize
+	wantNormalLen := listHeaderSize + wantNormalItems*normalItemSize
 	if normalLen != wantNormalLen {
-		t.Errorf("ZC_INVENTORY_ITEMLIST_NORMAL length = %d, want %d (2 normal items × 26 + 4 header)",
+		t.Errorf("ZC_INVENTORY_ITEMLIST_NORMAL length = %d, want %d (2 normal items × 26 + 5 header)",
 			normalLen, wantNormalLen)
 	}
-	wantEquipLen := 4 + wantEquipItems*equipItemSize
+	wantEquipLen := listHeaderSize + wantEquipItems*equipItemSize
 	if equipLen != wantEquipLen {
-		t.Errorf("ZC_INVENTORY_ITEMLIST_EQUIP length = %d, want %d (1 equip item × 57 + 4 header)",
+		t.Errorf("ZC_INVENTORY_ITEMLIST_EQUIP length = %d, want %d (1 equip item × 57 + 5 header)",
 			equipLen, wantEquipLen)
 	}
 }
@@ -4122,10 +4512,14 @@ func TestDispatchHandler_CZNotifyActorInit_InventoryRPCError_FallsBackToEmpty(t 
 		packet.HeaderCZNOTIFYACTORINIT, make([]byte, 2)); err != nil {
 		t.Fatalf("HandlePacket err = %v", err)
 	}
-	// Walk the burst and assert the two inventory list frames are
-	// the 4-byte empty stubs.
-	normalEmpty := false
-	equipEmpty := false
+	// Walk the burst and assert the empty-fallback path emits the
+	// inventory bracket with no item-list frames between them
+	// (rAthena suppresses the empty ZC_INVENTORY_ITEMLIST_* stubs and
+	// only sends START → END).
+	sawStart := false
+	sawEnd := false
+	sawNormalList := false
+	sawEquipList := false
 	offset := 8
 	for offset+2 <= len(resp.buf.Bytes()) {
 		cmd := binary.LittleEndian.Uint16(resp.buf.Bytes()[offset:])
@@ -4134,32 +4528,40 @@ func TestDispatchHandler_CZNotifyActorInit_InventoryRPCError_FallsBackToEmpty(t 
 			offset += 8
 		case 0x00bd:
 			offset += 44
-		case 0x00a3:
+		case 0x0b08: // ZC_INVENTORY_START
+			sawStart = true
+			offset += 6
+		case 0x0b0b: // ZC_INVENTORY_END
+			sawEnd = true
+			offset += 4
+		case 0x0b09: // ZC_INVENTORY_ITEMLIST_NORMAL (must NOT appear on fallback)
+			sawNormalList = true
 			plen := int(binary.LittleEndian.Uint16(resp.buf.Bytes()[offset+2 : offset+4]))
-			if plen == 4 {
-				normalEmpty = true
-			}
 			offset += plen
-		case 0x00a4:
+		case 0x0b39: // ZC_INVENTORY_ITEMLIST_EQUIP (must NOT appear on fallback)
+			sawEquipList = true
 			plen := int(binary.LittleEndian.Uint16(resp.buf.Bytes()[offset+2 : offset+4]))
-			if plen == 4 {
-				equipEmpty = true
-			}
 			offset += plen
 		case 0x010f:
 			plen := int(binary.LittleEndian.Uint16(resp.buf.Bytes()[offset+2 : offset+4]))
 			offset += plen
-		case 0x02b9:
-			offset += 191
+		case 0x0b20: // ZC_SHORTCUT_KEY_LIST (two frames, 271 each)
+			offset += 271
 		case 0x09ff:
 			offset += 107
 		}
 	}
-	if !normalEmpty {
-		t.Errorf("ZC_INVENTORY_ITEMLIST_NORMAL not emitted as empty (4-byte) frame")
+	if !sawStart {
+		t.Errorf("ZC_INVENTORY_START (0x0b08) not emitted on fallback")
 	}
-	if !equipEmpty {
-		t.Errorf("ZC_INVENTORY_ITEMLIST_EQUIP not emitted as empty (4-byte) frame")
+	if !sawEnd {
+		t.Errorf("ZC_INVENTORY_END (0x0b0b) not emitted on fallback")
+	}
+	if sawNormalList {
+		t.Errorf("ZC_INVENTORY_ITEMLIST_NORMAL emitted on fallback; want bracket only")
+	}
+	if sawEquipList {
+		t.Errorf("ZC_INVENTORY_ITEMLIST_EQUIP emitted on fallback; want bracket only")
 	}
 }
 
@@ -5109,15 +5511,19 @@ func TestDispatchHandler_CZNotifyActorInit_EmitsSkillInfoList(t *testing.T) {
 			offset += 8
 		case 0x00bd:
 			offset += 44
-		case 0x00a3, 0x00a4, 0x010f:
+		case 0x0b08: // ZC_INVENTORY_START
+			offset += 6
+		case 0x0b0b: // ZC_INVENTORY_END
+			offset += 4
+		case 0x0b09, 0x0b39, 0x010f: // inventory list normal/equip, skill list
 			plen := int(binary.LittleEndian.Uint16(out[offset+2 : offset+4]))
 			if cmd == 0x010f {
 				skillStart = offset
 				skillPlen = plen
 			}
 			offset += plen
-		case 0x02b9:
-			offset += 191
+		case 0x0b20: // ZC_SHORTCUT_KEY_LIST (two frames, 271 each)
+			offset += 271
 		case 0x09ff:
 			offset += 107
 		default:

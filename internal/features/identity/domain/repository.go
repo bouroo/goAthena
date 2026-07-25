@@ -50,6 +50,13 @@ type CharacterRepository interface {
 	// (inter.cpp::char_clif_top) — a charID alone is not unique to an
 	// account, so callers that omit accountID risk cross-account reads.
 	GetByID(ctx context.Context, accountID, charID uint32) (*CharacterSummary, error)
+	// GetBySlot fetches the character occupying a slot on an account.
+	// The slot is the 0..MAX_CHARS-1 position the client selects in
+	// CH_SELECT_CHAR (char_clif.cpp make_char_slot); it is unique only
+	// within an account, so accountID scopes the lookup. Returns
+	// ErrCharacterNotFound when the slot is empty. accountID == 0 is
+	// rejected up front so callers cannot probe the all-zeros key.
+	GetBySlot(ctx context.Context, accountID uint32, slot uint8) (*CharacterSummary, error)
 
 	// ApplyLevelUp atomically sets base_level=toLevel, adds grantedStatusPoints to
 	// status_point, and sets base_exp=0, WHERE account_id=? AND char_id=? AND

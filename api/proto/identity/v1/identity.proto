@@ -25,6 +25,23 @@ service IdentityService {
   // spawn packet (ZC_SPAWN_UNIT 0x09fe) with real character data.
   rpc GetCharacter(GetCharacterRequest) returns (GetCharacterResponse);
 
+  // GetCharacterBySlot resolves the character occupying a slot on an
+  // authenticated account. The gateway calls this on CH_SELECT_CHAR to
+  // translate the client's 0-based slot pick into the real char_id (the
+  // GID the map server assigns) and the character's last-saved map for the
+  // HC_NOTIFY_ZONESVR redirect. success=false encodes an empty slot or a
+  // missing account (the gateway refuses the char-select).
+  rpc GetCharacterBySlot(GetCharacterBySlotRequest) returns (GetCharacterBySlotResponse);
+
+  // VerifySession validates a map-phase CZ_ENTER's self-reported
+  // (account_id, login_id1) against the auth node minted at CA_LOGIN.
+  // The map connection is a fresh TCP socket that carries no carried
+  // state, so the gateway must not trust the client-supplied AID/CID
+  // until login_id1 matches the per-session token in the session store
+  // (rathena clif_parse_WantToConnection -> map_auth). ok=false covers
+  // absent/expired/mismatched; the gateway refuses the map enter.
+  rpc VerifySession(VerifySessionRequest) returns (VerifySessionResponse);
+
   // GetInventory returns every item the character owns. Backed by the
   // `inventory` table (rathena/sql-files/main.sql); consumed by the
   // gateway when building the inventory view on map enter and after
@@ -187,6 +204,41 @@ message GetCharacterResponse {
   bool success = 1;
   CharacterDetail character = 2;
   string error = 3;
+}
+
+// GetCharacterBySlotRequest resolves a CH_SELECT_CHAR slot pick.
+message GetCharacterBySlotRequest {
+  uint32 account_id = 1;   // owning account; scopes the slot lookup
+  uint32 slot = 2;         // 0..MAX_CHARS-1 (char_num)
+}
+
+// GetCharacterBySlotResponse carries the minimal fields the gateway needs
+// to build the HC_NOTIFY_ZONESVR redirect: the char_id (GID) and the
+// character's last-saved map. success=false encodes an empty slot or a
+// missing account so the gateway can refuse the char-select.
+message GetCharacterBySlotResponse {
+  bool success = 1;
+  uint32 char_id = 2;
+  uint32 slot = 3;         // echoed back for client-side correlation
+  string last_map = 4;     // empty → gateway falls back to its default map
+  string error = 5;
+}
+
+// VerifySessionRequest carries the CZ_ENTER self-describing fields the
+// gateway must validate. login_id1 is the per-session token minted at
+// CA_LOGIN (AuthResponse.login_id1); only a genuine login produces it.
+message VerifySessionRequest {
+  uint32 account_id = 1;   // the AID CZ_ENTER claims
+  fixed64 login_id1 = 2;   // the authCode (= login_id1) CZ_ENTER carries
+}
+
+// VerifySessionResponse is a boolean verdict plus the session's sex, taken
+// from the verified auth node (not the client byte) so the gateway emits
+// the authoritative sex in CZ_ENTER. ok=false on absent/expired/mismatch;
+// the gateway treats that as a ZC_REFUSE_ENTER.
+message VerifySessionResponse {
+  bool ok = 1;
+  string sex = 2;   // "M"/"F"/"S" from the session; empty when ok=false
 }
 
 // GetInventoryRequest asks for every inventory item belonging to (account_id, char_id).

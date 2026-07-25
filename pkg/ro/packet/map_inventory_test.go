@@ -295,23 +295,28 @@ func TestInventoryListNormalResponse_Encode(t *testing.T) {
 	}
 	got := buf.Bytes()
 
-	const wantLen = 4 + 2*sizeNormalItem
+	// MAIN@20250604 header is 5 bytes (cmd + packetLength + invType).
+	const wantLen = sizeEmptyInventoryListNormal + 2*sizeNormalItem
 	if len(got) != wantLen {
 		t.Fatalf("len = %d, want %d", len(got), wantLen)
 	}
-	// Opcode = 0x00a3 LE.
-	if got[0] != 0xa3 || got[1] != 0x00 {
-		t.Errorf("header = %02x %02x, want a3 00", got[0], got[1])
+	// Opcode = 0x0b09 LE.
+	if got[0] != 0x09 || got[1] != 0x0b {
+		t.Errorf("header = %02x %02x, want 09 0b", got[0], got[1])
 	}
 	// packetLength = wantLen.
 	if plen := binary.LittleEndian.Uint16(got[2:]); plen != wantLen {
 		t.Errorf("packetLength = %d, want %d", plen, wantLen)
 	}
+	// invType byte = INVTYPE_INVENTORY (0).
+	if got[4] != 0 {
+		t.Errorf("invType = 0x%02x, want 0x00", got[4])
+	}
 
-	// First item: index=2, ITID=0xAB, type=0, count=10, WearState=0,
-	// then 4*uint16 cards (all zero), then HireExpireDate=0,
-	// bindOnEquipType=0, Flag=0x01.
-	off := 4
+	// First item starts at the 5-byte header. index=2, ITID=0xAB,
+	// type=0, count=10, WearState=0, then 4*uint16 cards (all zero),
+	// then HireExpireDate=0, bindOnEquipType=0, Flag=0x01.
+	off := sizeEmptyInventoryListNormal
 	if v := binary.LittleEndian.Uint16(got[off:]); v != 2 {
 		t.Errorf("item[0].index = %d, want 2", v)
 	}
@@ -332,7 +337,7 @@ func TestInventoryListNormalResponse_Encode(t *testing.T) {
 	}
 
 	// Second item at the second 26-byte slot.
-	off = 4 + sizeNormalItem
+	off = sizeEmptyInventoryListNormal + sizeNormalItem
 	if v := binary.LittleEndian.Uint16(got[off:]); v != 3 {
 		t.Errorf("item[1].index = %d, want 3", v)
 	}
@@ -344,7 +349,7 @@ func TestInventoryListNormalResponse_Encode(t *testing.T) {
 	}
 }
 
-func TestInventoryListNormalResponse_EmptyIsFourBytes(t *testing.T) {
+func TestInventoryListNormalResponse_EmptyIsFiveBytes(t *testing.T) {
 	t.Parallel()
 
 	var resp InventoryListNormalResponse
@@ -352,11 +357,14 @@ func TestInventoryListNormalResponse_EmptyIsFourBytes(t *testing.T) {
 	if err := resp.Encode(&buf); err != nil {
 		t.Fatalf("Encode err = %v", err)
 	}
-	if len(buf.Bytes()) != 4 {
-		t.Errorf("empty len = %d, want 4", len(buf.Bytes()))
+	if len(buf.Bytes()) != sizeEmptyInventoryListNormal {
+		t.Errorf("empty len = %d, want %d", len(buf.Bytes()), sizeEmptyInventoryListNormal)
 	}
-	if buf.Bytes()[0] != 0xa3 || buf.Bytes()[1] != 0x00 {
-		t.Errorf("empty header = %02x %02x, want a3 00", buf.Bytes()[0], buf.Bytes()[1])
+	if buf.Bytes()[0] != 0x09 || buf.Bytes()[1] != 0x0b {
+		t.Errorf("empty header = %02x %02x, want 09 0b", buf.Bytes()[0], buf.Bytes()[1])
+	}
+	if buf.Bytes()[4] != 0 {
+		t.Errorf("empty invType = 0x%02x, want 0x00", buf.Bytes()[4])
 	}
 }
 
@@ -383,19 +391,23 @@ func TestInventoryListEquipResponse_Encode(t *testing.T) {
 	}
 	got := buf.Bytes()
 
-	const wantLen = 4 + sizeEquipItem
+	// MAIN@20250604 header is 5 bytes (cmd + packetLength + invType).
+	const wantLen = sizeEmptyInventoryListNormal + sizeEquipItem
 	if len(got) != wantLen {
 		t.Fatalf("len = %d, want %d", len(got), wantLen)
 	}
-	// Opcode = 0x00a4 LE.
-	if got[0] != 0xa4 || got[1] != 0x00 {
-		t.Errorf("header = %02x %02x, want a4 00", got[0], got[1])
+	// Opcode = 0x0b39 LE.
+	if got[0] != 0x39 || got[1] != 0x0b {
+		t.Errorf("header = %02x %02x, want 39 0b", got[0], got[1])
 	}
 	if plen := binary.LittleEndian.Uint16(got[2:]); plen != wantLen {
 		t.Errorf("packetLength = %d, want %d", plen, wantLen)
 	}
+	if got[4] != 0 {
+		t.Errorf("invType = 0x%02x, want 0x00", got[4])
+	}
 
-	off := 4
+	off := sizeEmptyInventoryListNormal
 	if v := binary.LittleEndian.Uint16(got[off:]); v != 9 {
 		t.Errorf("item.index = %d, want 9", v)
 	}
@@ -425,7 +437,7 @@ func TestInventoryListEquipResponse_Encode(t *testing.T) {
 	}
 }
 
-func TestInventoryListEquipResponse_EmptyIsFourBytes(t *testing.T) {
+func TestInventoryListEquipResponse_EmptyIsFiveBytes(t *testing.T) {
 	t.Parallel()
 
 	var resp InventoryListEquipResponse
@@ -433,11 +445,14 @@ func TestInventoryListEquipResponse_EmptyIsFourBytes(t *testing.T) {
 	if err := resp.Encode(&buf); err != nil {
 		t.Fatalf("Encode err = %v", err)
 	}
-	if len(buf.Bytes()) != 4 {
-		t.Errorf("empty len = %d, want 4", len(buf.Bytes()))
+	if len(buf.Bytes()) != sizeEmptyInventoryListNormal {
+		t.Errorf("empty len = %d, want %d", len(buf.Bytes()), sizeEmptyInventoryListNormal)
 	}
-	if buf.Bytes()[0] != 0xa4 || buf.Bytes()[1] != 0x00 {
-		t.Errorf("empty header = %02x %02x, want a4 00", buf.Bytes()[0], buf.Bytes()[1])
+	if buf.Bytes()[0] != 0x39 || buf.Bytes()[1] != 0x0b {
+		t.Errorf("empty header = %02x %02x, want 39 0b", buf.Bytes()[0], buf.Bytes()[1])
+	}
+	if buf.Bytes()[4] != 0 {
+		t.Errorf("empty invType = 0x%02x, want 0x00", buf.Bytes()[4])
 	}
 }
 

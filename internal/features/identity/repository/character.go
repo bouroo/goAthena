@@ -93,7 +93,31 @@ func (r *characterRepo) GetByID(ctx context.Context, accountID, charID uint32) (
 	return &out, nil
 }
 
-// charModelToDomain maps a CharModel row to its domain summary.
+// GetBySlot resolves the character occupying a slot on an account. The
+// char_num column is the per-account slot index (0..MAX_CHARS-1); it is
+// scoped by account_id so a slot alone is never unique. A slot the client
+// has no character in (e.g. an empty slot in the lobby) yields no row,
+// surfaced as ErrCharacterNotFound. accountID == 0 is rejected up front
+// for the same reason as GetByID.
+func (r *characterRepo) GetBySlot(ctx context.Context, accountID uint32, slot uint8) (*domain.CharacterSummary, error) {
+	if accountID == 0 {
+		return nil, fmt.Errorf("get character by slot (account=%d, slot=%d): %w", accountID, slot, domain.ErrCharacterNotFound)
+	}
+	var model CharModel
+	err := r.db.WithContext(ctx).
+		Select(charSelectColumns).
+		Where("account_id = ? AND char_num = ?", accountID, slot).
+		Take(&model).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("get character by slot (account=%d, slot=%d): %w", accountID, slot, domain.ErrCharacterNotFound)
+		}
+		return nil, fmt.Errorf("get character by slot (account=%d, slot=%d): %w", accountID, slot, err)
+	}
+	out := charModelToDomain(&model)
+	return &out, nil
+}
+
 func charModelToDomain(m *CharModel) domain.CharacterSummary {
 	if m == nil {
 		return domain.CharacterSummary{}

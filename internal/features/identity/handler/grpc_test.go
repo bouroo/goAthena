@@ -492,3 +492,213 @@ func TestGetCharacter_ZeroKeys_ReturnsInvalidArgument(t *testing.T) {
 		})
 	}
 }
+
+func TestGetCharacterBySlot_HappyPath(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+
+	svc.EXPECT().
+		GetCharacterBySlot(gomock.Any(), uint32(9), uint8(3)).
+		Return(&domain.CharacterSummary{
+			CharID:    101,
+			AccountID: 9,
+			Slot:      3,
+			LastMap:   "izlude",
+		}, nil)
+
+	resp, err := h.GetCharacterBySlot(context.Background(), &identityv1.GetCharacterBySlotRequest{
+		AccountId: 9,
+		Slot:      3,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.True(t, resp.GetSuccess())
+	assert.Empty(t, resp.GetError())
+	assert.Equal(t, uint32(101), resp.GetCharId(), "char_id is the GID the map server assigns")
+	assert.Equal(t, uint32(3), resp.GetSlot(), "slot echoes the client's pick for correlation")
+	assert.Equal(t, "izlude", resp.GetLastMap(), "last_map drives the HC_NOTIFY_ZONESVR redirect")
+}
+
+func TestGetCharacterBySlot_EmptySlot_ReturnsSuccessFalse(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+
+	svc.EXPECT().
+		GetCharacterBySlot(gomock.Any(), uint32(9), uint8(7)).
+		Return(nil, domain.ErrCharacterNotFound)
+
+	resp, err := h.GetCharacterBySlot(context.Background(), &identityv1.GetCharacterBySlotRequest{
+		AccountId: 9,
+		Slot:      7,
+	})
+	require.NoError(t, err, "an empty slot is a normal outcome, surfaced as success=false not a gRPC status")
+	require.NotNil(t, resp)
+	assert.False(t, resp.GetSuccess())
+	assert.Zero(t, resp.GetCharId())
+	assert.Empty(t, resp.GetLastMap())
+	assert.Equal(t, "no character in slot", resp.GetError())
+}
+
+func TestGetCharacterBySlot_InternalError_ReturnsInternalStatus(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+
+	svc.EXPECT().
+		GetCharacterBySlot(gomock.Any(), uint32(9), uint8(3)).
+		Return(nil, errors.New("db down"))
+
+	resp, err := h.GetCharacterBySlot(context.Background(), &identityv1.GetCharacterBySlotRequest{
+		AccountId: 9,
+		Slot:      3,
+	})
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.Internal, st.Code())
+	assert.Contains(t, st.Message(), "get character by slot")
+}
+
+func TestGetCharacterBySlot_NilRequest_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+
+	resp, err := h.GetCharacterBySlot(context.Background(), nil)
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestGetCharacterBySlot_ZeroAccount_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+
+	// Service must not be called for a zero account.
+	resp, err := h.GetCharacterBySlot(context.Background(), &identityv1.GetCharacterBySlotRequest{
+		AccountId: 0,
+		Slot:      3,
+	})
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestVerifySession_HappyPath(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+
+	svc.EXPECT().
+		VerifySession(gomock.Any(), uint32(9), uint32(0x12345678)).
+		Return(true, domain.SexFemale, nil)
+
+	resp, err := h.VerifySession(context.Background(), &identityv1.VerifySessionRequest{
+		AccountId: 9,
+		LoginId1:  0x12345678,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.True(t, resp.GetOk())
+	assert.Equal(t, "F", resp.GetSex(), "sex is carried from the verified session")
+}
+
+func TestVerifySession_Refusal_ReturnsOkFalse(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+
+	// ok=false is a clean refusal, not an error — the gateway maps it onto
+	// ZC_REFUSE_ENTER.
+	svc.EXPECT().
+		VerifySession(gomock.Any(), uint32(9), uint32(0xdeadbeef)).
+		Return(false, domain.Sex(""), nil)
+
+	resp, err := h.VerifySession(context.Background(), &identityv1.VerifySessionRequest{
+		AccountId: 9,
+		LoginId1:  0xdeadbeef,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.False(t, resp.GetOk())
+	assert.Empty(t, resp.GetSex())
+}
+
+func TestVerifySession_InternalError_ReturnsInternalStatus(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+
+	svc.EXPECT().
+		VerifySession(gomock.Any(), uint32(9), uint32(0x12345678)).
+		Return(false, domain.Sex(""), errors.New("valkey down"))
+
+	resp, err := h.VerifySession(context.Background(), &identityv1.VerifySessionRequest{
+		AccountId: 9,
+		LoginId1:  0x12345678,
+	})
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.Internal, st.Code())
+	assert.Contains(t, st.Message(), "verify session")
+}
+
+func TestVerifySession_NilRequest_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+
+	resp, err := h.VerifySession(context.Background(), nil)
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestVerifySession_ZeroAccount_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	svc := domainmock.NewMockIdentityService(ctrl)
+	shop := economydomainmock.NewMockShopService(ctrl)
+	h := handler.NewGRPCHandler(svc, shop)
+
+	// Service must not be called for a zero account.
+	resp, err := h.VerifySession(context.Background(), &identityv1.VerifySessionRequest{
+		AccountId: 0,
+		LoginId1:  0x12345678,
+	})
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}

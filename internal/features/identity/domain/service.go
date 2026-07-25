@@ -73,6 +73,22 @@ type IdentityService interface {
 	// charID == 0 is rejected with ErrCharacterNotFound so callers can't
 	// accidentally query the all-zeros key.
 	GetCharacter(ctx context.Context, accountID, charID uint32) (*CharacterSummary, error)
+	// GetCharacterBySlot resolves the character occupying a slot on an
+	// authenticated account (CH_SELECT_CHAR picks by slot, not char_id).
+	// Returns ErrCharacterNotFound (wrapped) when the slot is empty or the
+	// account has no characters; the handler maps that onto a char-select
+	// refusal. accountID == 0 is rejected with ErrCharacterNotFound so the
+	// gateway's no-prior-CH_ENTER guard cannot trigger a doomed round-trip.
+	GetCharacterBySlot(ctx context.Context, accountID uint32, slot uint8) (*CharacterSummary, error)
+	// VerifySession validates a map-phase CZ_ENTER's self-reported
+	// (accountID, loginID1) against the auth node minted at CA_LOGIN. The
+	// map connection is a fresh TCP socket with no carried state, so the
+	// gateway must confirm loginID1 matches the per-session token before
+	// trusting the client-supplied AID/CID. Returns (true, session.Sex)
+	// only when a live session exists and the token matches; (false, "")
+	// covers an absent/expired session or a mismatch. accountID == 0 is
+	// rejected up front as (false, "") without a round-trip.
+	VerifySession(ctx context.Context, accountID, loginID1 uint32) (ok bool, sex Sex, err error)
 
 	// GetInventory returns every item the given character owns. The
 	// (accountID, charID) pair is treated defensively — both must be

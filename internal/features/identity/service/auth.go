@@ -240,6 +240,56 @@ func (s *identityService) GetCharacter(ctx context.Context, accountID, charID ui
 	return char, nil
 }
 
+// GetCharacterBySlot resolves the character at a slot for an account. The
+// gateway calls this on CH_SELECT_CHAR to translate the client's 0-based
+// slot pick into the real char_id + last_map the map redirect needs. A
+// missing row propagates as a wrapped ErrCharacterNotFound so the handler
+// can map it onto a char-select refusal.
+func (s *identityService) GetCharacterBySlot(ctx context.Context, accountID uint32, slot uint8) (*domain.CharacterSummary, error) {
+	char, err := s.characters.GetBySlot(ctx, accountID, slot)
+	if err != nil {
+		return nil, fmt.Errorf("get character by slot (account=%d, slot=%d): %w", accountID, slot, err)
+	}
+	return char, nil
+}
+
+// VerifySession validates a map-phase CZ_ENTER's self-reported
+// (accountID, loginID1) against the auth node minted at CA_LOGIN. rAthena
+// re-checks login_id1 on the map server (clif_parse_WantToConnection ->
+// map_auth) because the map connection is a fresh socket carrying no
+// server-side state; the gateway is goAthena's trust boundary.
+//
+// An absent/expired session (the Valkey TTL elapsed, or no login ever
+// happened) is the documented (nil, nil) outcome of SessionRepository.Get
+// and maps to (ok=false, nil) here — a clean refusal, not an error. Only a
+// genuine store failure returns err, which the gateway surfaces as a
+// server-closed refuse rather than conflating "store down" with "bad
+// token". The token compare is constant-time so a probing attacker cannot
+// distinguish "no session" from "wrong token" by latency, and a zero
+// accountID is rejected before any round-trip.
+func (s *identityService) VerifySession(ctx context.Context, accountID, loginID1 uint32) (bool, domain.Sex, error) {
+	if accountID == 0 {
+		return false, "", nil
+	}
+	sess, err := s.sessions.Get(ctx, accountID)
+	if err != nil {
+		return false, "", fmt.Errorf("verify session for account %d: %w", accountID, err)
+	}
+	if sess == nil {
+		return false, "", nil
+	}
+	// Constant-time compare over the 4-byte tokens. subtle.ConstantTimeCompare
+	// requires equal-length byte slices; both operands are uint32 → 4 bytes.
+	want := sess.LoginID1
+	if subtle.ConstantTimeCompare(
+		binary.LittleEndian.AppendUint32(nil, want),
+		binary.LittleEndian.AppendUint32(nil, loginID1),
+	) != 1 {
+		return false, "", nil
+	}
+	return true, sess.Sex, nil
+}
+
 // authErrorFromState maps acc.state (login.cpp:372-375) to the wire code.
 // state=0 means OK and is handled by the caller; any non-zero state maps
 // to state-1, clamped to the AuthError range to avoid wrap-around on

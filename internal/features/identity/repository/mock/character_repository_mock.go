@@ -90,6 +90,21 @@ func (mr *MockCharacterRepositoryMockRecorder) GetByID(ctx, accountID, charID an
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByID", reflect.TypeOf((*MockCharacterRepository)(nil).GetByID), ctx, accountID, charID)
 }
 
+// GetBySlot mocks base method.
+func (m *MockCharacterRepository) GetBySlot(ctx context.Context, accountID uint32, slot uint8) (*domain.CharacterSummary, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetBySlot", ctx, accountID, slot)
+	ret0, _ := ret[0].(*domain.CharacterSummary)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetBySlot indicates an expected call of GetBySlot.
+func (mr *MockCharacterRepositoryMockRecorder) GetBySlot(ctx, accountID, slot any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBySlot", reflect.TypeOf((*MockCharacterRepository)(nil).GetBySlot), ctx, accountID, slot)
+}
+
 // ListByAccount mocks base method.
 func (m *MockCharacterRepository) ListByAccount(ctx context.Context, accountID uint32, maxSlots int) ([]domain.CharacterSummary, error) {
 	m.ctrl.T.Helper()

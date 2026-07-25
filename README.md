@@ -76,6 +76,8 @@ goAthena has shipped all five planned phases. The core platform is in place: ing
 
 For the full phase-by-phase breakdown (deliverables, exit gates, and metrics), see [`.agents/plans/go-athena-emulator/project-plan.md`](.agents/plans/go-athena-emulator/project-plan.md).
 
+> **Compatibility status (2026-07-24).** goAthena is not yet a drop-in replacement for rAthena / rathenaThailand, nor playable by ClientROThailand or roBrowser. The foundation is strong (DB schema ~98% faithful, rAthena YAML loaders, auth, packet framing, architecture), but the client-reachable game loop is ~30–40% implemented and the protocol serves a single PACKETVER (Thai Classic 20250604). See the [compatibility assessment](.agents/plans/go-athena-emulator/compatibility-assessment.md) for the verified gap analysis and the A–E roadmap.
+
 ## Architecture
 
 ### Multi-service clean architecture

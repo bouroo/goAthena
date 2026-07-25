@@ -1324,21 +1324,21 @@ func TestEncodeEmptyInventoryListNormal(t *testing.T) {
 
 	got := EncodeEmptyInventoryListNormal()
 
-	const wantLen = 4
+	// MAIN@20250604 header: cmd + packetLength + invType = 2+2+1 = 5.
+	const wantLen = 5
 	if len(got) != wantLen {
 		t.Fatalf("len = %d, want %d", len(got), wantLen)
 	}
-	if got[0] != 0xa3 || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want a3 00 (LE 0x00a3 ZC_INVENTORY_ITEMLIST_NORMAL)",
+	if got[0] != 0x09 || got[1] != 0x0b {
+		t.Errorf("opcode bytes = %02x %02x, want 09 0b (LE 0x0b09 ZC_INVENTORY_ITEMLIST_NORMAL)",
 			got[0], got[1])
 	}
 	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
 		t.Errorf("packetLength = %d, want %d", plen, wantLen)
 	}
-	// Header fully occupied by opcode (2) + packetLength (2); with an
-	// empty list there are no trailing payload bytes to check.
-	if len(got) > 4 {
-		t.Errorf("expected zero trailing payload bytes, got %d", len(got)-4)
+	// invType byte (offset 4) must be INVTYPE_INVENTORY = 0.
+	if got[4] != 0 {
+		t.Errorf("invType byte = 0x%02x, want 0x00 (INVTYPE_INVENTORY)", got[4])
 	}
 }
 
@@ -1347,19 +1347,67 @@ func TestEncodeEmptyInventoryListEquip(t *testing.T) {
 
 	got := EncodeEmptyInventoryListEquip()
 
-	const wantLen = 4
+	// MAIN@20250604 header: cmd + packetLength + invType = 2+2+1 = 5.
+	const wantLen = 5
 	if len(got) != wantLen {
 		t.Fatalf("len = %d, want %d", len(got), wantLen)
 	}
-	if got[0] != 0xa4 || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want a4 00 (LE 0x00a4 ZC_INVENTORY_ITEMLIST_EQUIP)",
+	if got[0] != 0x39 || got[1] != 0x0b {
+		t.Errorf("opcode bytes = %02x %02x, want 39 0b (LE 0x0b39 ZC_INVENTORY_ITEMLIST_EQUIP)",
 			got[0], got[1])
 	}
 	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
 		t.Errorf("packetLength = %d, want %d", plen, wantLen)
 	}
-	if len(got) > 4 {
-		t.Errorf("expected zero trailing payload bytes, got %d", len(got)-4)
+	if got[4] != 0 {
+		t.Errorf("invType byte = 0x%02x, want 0x00 (INVTYPE_INVENTORY)", got[4])
+	}
+}
+
+func TestEncodeInventoryStart(t *testing.T) {
+	t.Parallel()
+
+	got := EncodeInventoryStart()
+
+	// MAIN@20250604: cmd + packetLength + invType + name[1] = 2+2+1+1 = 6.
+	const wantLen = 6
+	if len(got) != wantLen {
+		t.Fatalf("len = %d, want %d", len(got), wantLen)
+	}
+	if got[0] != 0x08 || got[1] != 0x0b {
+		t.Errorf("opcode bytes = %02x %02x, want 08 0b (LE 0x0b08 ZC_INVENTORY_START)",
+			got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	if got[4] != 0 {
+		t.Errorf("invType byte = 0x%02x, want 0x00 (INVTYPE_INVENTORY)", got[4])
+	}
+	if got[5] != 0 {
+		t.Errorf("name[0] byte = 0x%02x, want 0x00 (empty name NUL)", got[5])
+	}
+}
+
+func TestEncodeInventoryEnd(t *testing.T) {
+	t.Parallel()
+
+	got := EncodeInventoryEnd()
+
+	// MAIN@20250604: cmd + invType + flag = 2+1+1 = 4 (NO length field).
+	const wantLen = 4
+	if len(got) != wantLen {
+		t.Fatalf("len = %d, want %d", len(got), wantLen)
+	}
+	if got[0] != 0x0b || got[1] != 0x0b {
+		t.Errorf("opcode bytes = %02x %02x, want 0b 0b (LE 0x0b0b ZC_INVENTORY_END)",
+			got[0], got[1])
+	}
+	if got[2] != 0 {
+		t.Errorf("invType byte = 0x%02x, want 0x00 (INVTYPE_INVENTORY)", got[2])
+	}
+	if got[3] != 0 {
+		t.Errorf("flag byte = 0x%02x, want 0x00", got[3])
 	}
 }
 
@@ -1387,52 +1435,71 @@ func TestEncodeEmptySkillList(t *testing.T) {
 func TestEncodeEmptyHotkeyList(t *testing.T) {
 	t.Parallel()
 
-	got := EncodeEmptyHotkeyList()
+	// MAIN@20250604: rAthena emits two frames (tab 0, tab 1); both are
+	// 271 bytes = cmd(2) + rotate(1) + tab(2) + 38 slots * 7.
+	const wantLen = 2 + 1 + 2 + 38*7
+	if wantLen != 271 {
+		t.Fatalf("internal: wantLen miscalc = %d, expected 271", wantLen)
+	}
 
-	const wantLen = 191 // 2 (opcode) + 27 * 7 (hotkey slots)
-	if len(got) != wantLen {
-		t.Fatalf("len = %d, want %d", len(got), wantLen)
-	}
-	if got[0] != 0xb9 || got[1] != 0x02 {
-		t.Errorf("opcode bytes = %02x %02x, want b9 02 (LE 0x02b9 ZC_SHORTCUT_KEY_LIST)",
-			got[0], got[1])
-	}
-	// Every payload byte (i.e. everything past the 2-byte opcode) must be
-	// zero — a hotkey slot with isSkill=0/id=0/count=0 means "no hotkey
-	// bound", which is exactly what an empty list should advertise.
-	for i := 2; i < len(got); i++ {
-		if got[i] != 0 {
-			t.Errorf("payload byte[%d] = 0x%02x, want 0x00", i, got[i])
+	for _, tab := range []int{0, 1} {
+		got := EncodeEmptyHotkeyList(tab)
+		if len(got) != wantLen {
+			t.Fatalf("tab %d: len = %d, want %d", tab, len(got), wantLen)
 		}
-	}
-
-	// Verify the slot count and per-slot width match the constants the
-	// size was derived from — regression guard against accidentally
-	// changing one without the other. Inline the literal values
-	// (27 slots * 7 bytes) so this test does not depend on unexported
-	// production constants the linter would otherwise flag as unused.
-	wantFromSlots := 2 + 27*7
-	if len(got) != wantFromSlots {
-		t.Errorf("len(got) = %d, want 2+27*7 = %d", len(got), wantFromSlots)
+		if got[0] != 0x20 || got[1] != 0x0b {
+			t.Errorf("tab %d: opcode bytes = %02x %02x, want 20 0b (LE 0x0b20 ZC_SHORTCUT_KEY_LIST)",
+				tab, got[0], got[1])
+		}
+		// rotate byte (offset 2) is 0 for a fresh character.
+		if got[2] != 0 {
+			t.Errorf("tab %d: rotate byte = 0x%02x, want 0x00", tab, got[2])
+		}
+		// tab int16 (offsets 3-4, LE) must match the requested tab.
+		if tabWire := int(binary.LittleEndian.Uint16(got[3:5])); tabWire != tab {
+			t.Errorf("tab %d: tab int16 = 0x%04x, want 0x%04x", tab, tabWire, tab)
+		}
+		// Every slot byte (offset 5 onward = 38 * 7) must be zero — an
+		// isSkill=0/id=0/count=0 slot means "no hotkey bound".
+		for i := 5; i < len(got); i++ {
+			if got[i] != 0 {
+				t.Errorf("tab %d: slot byte[%d] = 0x%02x, want 0x00", tab, i, got[i])
+			}
+		}
 	}
 }
 
-// Sanity check: the three variable-length list packets share the same
-// minimum-frame size (4 bytes = opcode + packetLength). This invariant
-// is what lets the dispatch handler send them as a single coalesced
-// write without per-packet length framing.
-func TestEmptyListEncoders_ShareMinimumFrameSize(t *testing.T) {
+func TestEncodeEmptyHotkeyList_BadTabFallsBackToTab0(t *testing.T) {
 	t.Parallel()
 
-	encs := map[string][]byte{
-		"InventoryListNormal": EncodeEmptyInventoryListNormal(),
-		"InventoryListEquip":  EncodeEmptyInventoryListEquip(),
-		"SkillList":           EncodeEmptySkillList(),
+	// A bogus tab is a caller programming error; the helper falls back
+	// to the tab-0 frame rather than indexing out of bounds.
+	got := EncodeEmptyHotkeyList(99)
+	if tabWire := int(binary.LittleEndian.Uint16(got[3:5])); tabWire != 0 {
+		t.Errorf("bogus tab fallback: tab int16 = 0x%04x, want 0x0000 (tab 0)", tabWire)
 	}
-	for name, got := range encs {
-		if len(got) != sizeEmptyInventoryList {
-			t.Errorf("%s len = %d, want %d (sizeEmptyInventoryList)",
-				name, len(got), sizeEmptyInventoryList)
+}
+
+// Sanity check: each empty list encoder matches its own minimum-frame
+// size. The skill list is 4 bytes (opcode + packetLength); the
+// inventory normal/equip lists are 5 bytes for MAIN@20250604 (they
+// carry a trailing invType byte). The dispatch handler coalesces them
+// into a single write and relies on each length slot being correct.
+func TestEmptyListEncoders_MinimumFrameSize(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		got  []byte
+		want int
+	}{
+		{"SkillList", EncodeEmptySkillList(), sizeEmptyInventoryList},
+		{"InventoryListNormal", EncodeEmptyInventoryListNormal(), sizeEmptyInventoryListNormal},
+		{"InventoryListEquip", EncodeEmptyInventoryListEquip(), sizeEmptyInventoryListNormal},
+	}
+	for _, tc := range cases {
+		if len(tc.got) != tc.want {
+			t.Errorf("%s len = %d, want %d", tc.name, len(tc.got), tc.want)
 		}
 	}
 }

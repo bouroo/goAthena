@@ -228,6 +228,84 @@ func TestCharacterRepository_GetByID(t *testing.T) {
 	})
 }
 
+func TestCharacterRepository_GetBySlot(t *testing.T) {
+	t.Parallel()
+
+	t.Run("happy path returns the character occupying the slot", func(t *testing.T) {
+		t.Parallel()
+		gormDB, mock := newMockGormDB(t)
+		repo := repository.NewCharacterRepository(gormDB)
+
+		rows := sqlmock.NewRows(charColumns).AddRow(
+			uint32(150002), uint32(2000000), int8(3), "delta", uint16(4001),
+			uint32(70), uint32(45), uint64(500000), uint64(90000), uint32(500),
+			uint32(3000), uint32(2500), uint32(150), uint32(100), uint8(5), uint16(3),
+			uint16(1), uint16(2), uint16(1), uint16(0), uint16(0),
+			uint16(0), uint16(0), "izlude", int64(0), int64(0), "M",
+			uint16(8), uint16(12), uint16(7), uint16(3), uint16(15), uint16(2),
+			uint32(0), uint32(7),
+		)
+		mock.ExpectQuery(`SELECT .* FROM "char" WHERE account_id = \$1 AND char_num = \$2`).
+			WithArgs(uint32(2000000), uint8(3), 1).
+			WillReturnRows(rows)
+
+		got, err := repo.GetBySlot(context.Background(), 2000000, 3)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, uint32(150002), got.CharID)
+		assert.Equal(t, uint32(2000000), got.AccountID)
+		assert.Equal(t, uint8(3), got.Slot, "char_num must round-trip as Slot")
+		assert.Equal(t, "izlude", got.LastMap, "last_map is carried for the map redirect")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("empty slot returns ErrCharacterNotFound", func(t *testing.T) {
+		t.Parallel()
+		gormDB, mock := newMockGormDB(t)
+		repo := repository.NewCharacterRepository(gormDB)
+
+		mock.ExpectQuery(`SELECT .* FROM "char" WHERE account_id = \$1 AND char_num = \$2`).
+			WithArgs(uint32(2000000), uint8(7), 1).
+			WillReturnError(gorm.ErrRecordNotFound)
+
+		got, err := repo.GetBySlot(context.Background(), 2000000, 7)
+		require.Error(t, err)
+		assert.Nil(t, got)
+		assert.ErrorIs(t, err, domain.ErrCharacterNotFound)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("other DB error is wrapped with the account and slot", func(t *testing.T) {
+		t.Parallel()
+		gormDB, mock := newMockGormDB(t)
+		repo := repository.NewCharacterRepository(gormDB)
+
+		boom := assert.AnError
+		mock.ExpectQuery(`SELECT .* FROM "char" WHERE account_id = \$1 AND char_num = \$2`).
+			WithArgs(uint32(2000000), uint8(3), 1).
+			WillReturnError(boom)
+
+		got, err := repo.GetBySlot(context.Background(), 2000000, 3)
+		require.Error(t, err)
+		assert.Nil(t, got)
+		assert.ErrorIs(t, err, boom)
+		assert.NotErrorIs(t, err, domain.ErrCharacterNotFound, "boom should not alias ErrCharacterNotFound")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("zero account is rejected before any query", func(t *testing.T) {
+		t.Parallel()
+		gormDB, _ := newMockGormDB(t)
+		repo := repository.NewCharacterRepository(gormDB)
+
+		// No expectations: any SQL fired here would fail the test.
+		got, err := repo.GetBySlot(context.Background(), 0, 0)
+		require.Error(t, err)
+		assert.Nil(t, got)
+		assert.ErrorIs(t, err, domain.ErrCharacterNotFound)
+	})
+}
+
 func TestCharacterRepository_CharModelToDomain(t *testing.T) {
 	t.Parallel()
 
