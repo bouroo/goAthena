@@ -5,6 +5,7 @@ run:
 linters:
   enable:
     - bodyclose
+    - depguard
     - errcheck
     - errorlint
     - exhaustive
@@ -32,6 +33,36 @@ linters:
   disable:
     - lll
   settings:
+    depguard:
+      rules:
+        # Every module package is forbidden from importing the composition root:
+        # internal/app is a wiring sink, and a module importing it forms a cycle.
+        module_no_composition_root:
+          files:
+            - "**/internal/modules/**"
+          deny:
+            - pkg: "github.com/bouroo/goAthena/internal/app"
+              desc: "modules must not import the composition root (internal/app)"
+        # The domain layer of every module is pure: it defines ports and value
+        # objects only and may never reach down into persistence drivers, the
+        # shared infrastructure package, or the composition root. Clean-architecture
+        # invariant mirrored by internal/app/arch_test.go (defense in depth).
+        module_domain_purity:
+          files:
+            - "**/internal/modules/**/domain/**"
+          deny:
+            - pkg: "gorm.io"
+              desc: "domain must not depend on persistence; define a port instead"
+            - pkg: "github.com/valkey-io"
+              desc: "domain must not depend on persistence; define a port instead"
+            - pkg: "github.com/redis/go-redis"
+              desc: "domain must not depend on persistence; define a port instead"
+            - pkg: "github.com/nats-io"
+              desc: "domain must not depend on persistence; define a port instead"
+            - pkg: "github.com/bouroo/goAthena/internal/infrastructure"
+              desc: "domain must not import infrastructure; depend on a port"
+            - pkg: "github.com/bouroo/goAthena/internal/app"
+              desc: "modules must not import the composition root (internal/app)"
     dupl:
       threshold: 20
     errcheck:
@@ -59,10 +90,6 @@ linters:
     generated: lax
     paths:
       - examples$
-      - api/pb$
-      - internal/features/example/repository/mock$
-      - internal/features/example/service/mock$
-      - internal/features/identity/repository/mock$
     rules:
       - linters:
           - revive
@@ -82,9 +109,6 @@ linters:
           - revive
           - wrapcheck
         path: '_test\.go$'
-      - linters:
-          - revive
-        path: "tests/"
 formatters:
   enable:
     - gofmt
@@ -95,4 +119,3 @@ formatters:
       - third_party$
       - builtin$
       - examples$
-      - api/pb$

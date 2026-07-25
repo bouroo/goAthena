@@ -1,4 +1,5 @@
-// Package migrations embeds SQL migration files so cmd/migrate is self-contained.
+// Package migrations embeds SQL migration files so `goathena migrate` is
+// self-contained (no external SQL directory at runtime).
 package migrations
 
 import "embed"
