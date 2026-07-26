@@ -226,13 +226,18 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return fmt.Errorf("resolve CZ_REQUEST_MOVE handler: %w", err)
 	}
+	actionHandler, err := do.Invoke[*worldapp.ActionHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_ACTION_REQUEST handler: %w", err)
+	}
 	do.ProvideValue(injector, gwapp.Handlers{
-		OnCALogin:       loginHandler.Handle,
-		OnCHEnter:       enterHandler.Handle,
-		OnCHSelectChar:  selectHandler.Handle,
-		OnCHMakeChar:    makeHandler.Handle,
-		OnCZEnter:       mapEnterHandler.Handle,
-		OnCZRequestMove: moveHandler.Handle,
+		OnCALogin:         loginHandler.Handle,
+		OnCHEnter:         enterHandler.Handle,
+		OnCHSelectChar:    selectHandler.Handle,
+		OnCHMakeChar:      makeHandler.Handle,
+		OnCZEnter:         mapEnterHandler.Handle,
+		OnCZRequestMove:   moveHandler.Handle,
+		OnCZActionRequest: actionHandler.Handle,
 	})
 	return nil
 }

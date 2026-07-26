@@ -34,6 +34,9 @@ type Handlers struct {
 	// OnCZRequestMove serves CZ_REQUEST_MOVE (0x0085), the click-to-walk
 	// request. Provided by the world module (M4c).
 	OnCZRequestMove domain.PacketHandler
+	// OnCZActionRequest serves CZ_ACTION_REQUEST (0x0089), the attack/motion
+	// request. Provided by the world module (M6).
+	OnCZActionRequest domain.PacketHandler
 }
 
 // BuildDispatcher assembles the three role-keyed dispatch tables from the
@@ -61,6 +64,9 @@ func BuildDispatcher(h Handlers) *domain.Dispatcher {
 	}
 	if h.OnCZRequestMove != nil {
 		mapT[packet.HeaderCZREQUESTMOVE] = h.OnCZRequestMove
+	}
+	if h.OnCZActionRequest != nil {
+		mapT[packet.HeaderCZACTIONREQUEST] = h.OnCZActionRequest
 	}
 	return domain.NewDispatcher(login, char, mapT)
 }

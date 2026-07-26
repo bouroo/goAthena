@@ -20,3 +20,16 @@ import (
 type CharacterGetter interface {
 	GetByID(ctx context.Context, accountID, charID uint32) (*chardomain.Character, error)
 }
+
+// ProgressionStore is the world combat use case's view of character persistence:
+// it loads a character (to read the current EXP/level) and writes back the
+// levelable slice after a kill. It is satisfied structurally by the character
+// module's CharacterRepository. Named in the world context — alongside
+// CharacterGetter — so combat's unit tests substitute a fake without importing
+// character/infra. The SaveProgression scoping contract (accountID +
+// charID, never a client-supplied id) is the impersonation guard shared with
+// CharacterGetter and the CZ_ENTER gate.
+type ProgressionStore interface {
+	GetByID(ctx context.Context, accountID, charID uint32) (*chardomain.Character, error)
+	SaveProgression(ctx context.Context, accountID, charID uint32, p chardomain.Progression) error
+}

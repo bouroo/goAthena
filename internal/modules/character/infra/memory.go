@@ -111,6 +111,33 @@ func (r *MemoryCharacterRepository) nextCharID() uint32 {
 // 000002_identity.up.sql: AUTO_INCREMENT=150000).
 const firstCharID = 150000
 
+// SaveProgression writes the levelable columns for the character at
+// (accountID, charID). The store is keyed by (accountID, slot), so this locates
+// the row the same way GetByID does — a linear scan for a matching char_id
+// within the account (the impersonation guard: a char_id from another account
+// yields ErrCharacterNotFound). Only the Progression fields are overwritten;
+// appearance, identity, and position stay as Create set them.
+func (r *MemoryCharacterRepository) SaveProgression(_ context.Context, accountID, charID uint32, p domain.Progression) error {
+	for k, c := range r.bySlot {
+		if k.accountID == accountID && c.CharID == charID {
+			c.BaseExp = p.BaseExp
+			c.JobExp = p.JobExp
+			c.BaseLevel = p.BaseLevel
+			c.JobLevel = p.JobLevel
+			c.Zeny = p.Zeny
+			c.StatusPoint = p.StatusPoint
+			c.SkillPoint = p.SkillPoint
+			c.HP = p.HP
+			c.MaxHP = p.MaxHP
+			c.SP = p.SP
+			c.MaxSP = p.MaxSP
+			r.bySlot[k] = c
+			return nil
+		}
+	}
+	return domain.ErrCharacterNotFound
+}
+
 // newNoviceDomain is the domain twin of newNoviceModel — same novice defaults,
 // expressed as a domain.Character for the in-memory adapter.
 func newNoviceDomain(in domain.CreateCharacter, charID uint32) domain.Character {

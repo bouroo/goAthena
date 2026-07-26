@@ -208,6 +208,40 @@ func (r *GORMCharacterRepository) GetByID(ctx context.Context, accountID uint32,
 	return &c, nil
 }
 
+// SaveProgression writes the levelable columns for the character at
+// (accountID, charID). It uses a column-selective Updates with an explicit map
+// (never Save on the full model, which would clobber appearance/identity/position
+// columns the progression path must not touch). Scoping by account_id is the
+// impersonation guard; a char_id from another account matches no row and yields
+// ErrCharacterNotFound via the RowsAffected==0 check. None of the progression
+// columns are MariaDB reserved words (`int`/`rename` are, but they are not
+// progression columns), so the map needs no back-quoting.
+func (r *GORMCharacterRepository) SaveProgression(ctx context.Context, accountID, charID uint32, p domain.Progression) error {
+	res := r.db.WithContext(ctx).
+		Table((charModel{}).TableName()).
+		Where("account_id = ? AND char_id = ?", accountID, charID).
+		Updates(map[string]any{
+			"base_exp":     p.BaseExp,
+			"job_exp":      p.JobExp,
+			"base_level":   p.BaseLevel,
+			"job_level":    p.JobLevel,
+			"zeny":         p.Zeny,
+			"status_point": p.StatusPoint,
+			"skill_point":  p.SkillPoint,
+			"hp":           p.HP,
+			"max_hp":       p.MaxHP,
+			"sp":           p.SP,
+			"max_sp":       p.MaxSP,
+		})
+	if res.Error != nil {
+		return fmt.Errorf("save progression account %d char %d: %w", accountID, charID, res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return domain.ErrCharacterNotFound
+	}
+	return nil
+}
+
 // Create inserts a new character with the server-assigned novice defaults and
 // returns the persisted row (char_id is the DB-assigned auto-increment). It
 // guards name uniqueness and slot occupancy at the DB before insert and maps a

@@ -95,6 +95,20 @@ func Register(ctx context.Context, c do.Injector) error {
 	mover := app.NewMoveService(registry, maps, app.SystemClock(), 256)
 	do.ProvideValue(c, mover)
 	do.ProvideValue(c, app.NewMoveHandler(mover))
+
+	// M6: the combat service. It resolves the attacker from the player registry,
+	// the target from the mob registry, stats + base EXP from the mob_db loaded
+	// above (may be nil when mob_db is unconfigured — combat then falls back to a
+	// flat hit and awards no EXP), and broadcasts damage/vanish through the map
+	// AOI. The character repository (chars, resolved above as the spawn lookup)
+	// is reused as the progression store for the EXP/level read-modify-write and
+	// persist on kill — CharacterRepository satisfies ProgressionStore
+	// structurally (GetByID + SaveProgression). Like movement it resolves
+	// synchronously on the conn goroutine; the handler is provided for the
+	// composition root to thread into the map-role dispatch table.
+	combat := app.NewCombatService(registry, mobs, maps, mobDB, chars, app.SystemClock(), app.SystemRespawnScheduler{})
+	do.ProvideValue(c, combat)
+	do.ProvideValue(c, app.NewActionHandler(combat))
 	return nil
 }
 

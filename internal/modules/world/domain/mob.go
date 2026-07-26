@@ -109,6 +109,29 @@ func (m *Mob) SetHP(hp int32) {
 	m.HP = hp
 }
 
+// ApplyDamage subtracts amount from the mob's HP under the write lock and
+// reports whether THIS call killed it. Two players landing the killing blow in
+// the same tick race this method: the lock serializes the decrements, and the
+// caller that drives HP to <= 0 is the sole one to receive died=true — the
+// authoritative kill credit (EXP, M6) is awarded exactly once. A call against
+// an already-dead mob (HP <= 0) is a no-op returning died=false, so a late
+// in-flight attack on a mob another goroutine just killed cannot double-award
+// the death. amount is assumed >= 1 (the damage calc floors at 1); a non-positive
+// amount leaves HP unchanged.
+func (m *Mob) ApplyDamage(amount int32) (newHP int32, died bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.HP <= 0 {
+		return 0, false
+	}
+	m.HP -= amount
+	if m.HP <= 0 {
+		m.HP = 0
+		return 0, true
+	}
+	return m.HP, false
+}
+
 // SpawnUnit builds the ZC_SPAWN_UNIT frame for this mob. The field map mirrors
 // rAthena clif_set_unit_idle / clif_spawn_unit for a BL_MOB at PACKETVER
 // 20250604 (>= every version cutoff the struct encodes):

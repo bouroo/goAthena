@@ -110,6 +110,48 @@ type Character struct {
 	Rename       uint32
 }
 
+// Progression is the levelable slice of a `char`-table row: exactly the columns
+// that change through play (EXP, levels, zeny, status/skill points, HP/SP) and
+// nothing else. It is the write surface for SaveProgression: a caller loads a
+// Character, applies a play delta (EXP gained, a level-up), and hands back only
+// these fields. Identity is passed separately (accountID, charID) so the write
+// stays scoped by the trusted account — never a client-supplied id — and the
+// appearance/identity columns (name, class, hair, last_map, …) are structurally
+// outside what progression can touch.
+type Progression struct {
+	BaseExp     uint64 // base_exp
+	JobExp      uint64 // job_exp
+	BaseLevel   uint16 // base_level
+	JobLevel    uint16 // job_level
+	Zeny        uint32 // zeny
+	StatusPoint uint32 // status_point
+	SkillPoint  uint32 // skill_point
+	HP          uint32 // hp
+	MaxHP       uint32 // max_hp
+	SP          uint32 // sp
+	MaxSP       uint32 // max_sp
+}
+
+// ProgressionOf projects the levelable fields of a Character into a Progression.
+// Combat (and future play use cases) load a Character, mutate the result, and
+// pass it to SaveProgression; this helper fills the unchanged fields so the
+// caller overrides only the ones its delta touched.
+func ProgressionOf(c *Character) Progression {
+	return Progression{
+		BaseExp:     c.BaseExp,
+		JobExp:      c.JobExp,
+		BaseLevel:   c.BaseLevel,
+		JobLevel:    c.JobLevel,
+		Zeny:        c.Zeny,
+		StatusPoint: c.StatusPoint,
+		SkillPoint:  c.SkillPoint,
+		HP:          c.HP,
+		MaxHP:       c.MaxHP,
+		SP:          c.SP,
+		MaxSP:       c.MaxSP,
+	}
+}
+
 // CharacterRepository is the outbound persistence port for characters. The GORM
 // and in-memory adapters implement it.
 type CharacterRepository interface {
@@ -136,4 +178,12 @@ type CharacterRepository interface {
 	// rejection, so the handler can map it to the right HC_REFUSE_MAKECHAR byte
 	// without inspecting the underlying message.
 	Create(ctx context.Context, in CreateCharacter) (*Character, error)
+	// SaveProgression writes the levelable columns (EXP, levels, zeny,
+	// status/skill points, HP/SP) for the character at (accountID, charID). It
+	// is a column-selective update: appearance, identity, and position columns
+	// are untouched. Scoping by accountID is the impersonation guard — a charID
+	// belonging to another account yields ErrCharacterNotFound, never a cross-
+	// account write. RowsAffected==0 (the char does not exist under that
+	// account) is reported as ErrCharacterNotFound.
+	SaveProgression(ctx context.Context, accountID, charID uint32, p Progression) error
 }

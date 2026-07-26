@@ -694,6 +694,431 @@ func TestServe_MapEnter_ShowsSpawnedMobs(t *testing.T) {
 	}, seen, "the entering player sees all four spawned mobs by sprite + name")
 }
 
+// TestServe_Combat_KillAwardsExpAndRespawns is the M6 end-to-end proof. It boots
+// the real modular monolith, logs in, enters Prontera co-located with a Poring,
+// and plays the full combat loop across every real boundary the milestone wires:
+//
+//   - CZ_ACTION_REQUEST over TCP → CombatService → ZC_NOTIFY_ACT broadcast back to
+//     the attacker, carrying the L1 damage formula (15 ATK − (0 DEF + 1 VIT/2=0)).
+//   - the killing blow → ZC_NOTIFY_VANISH + the killer-only EXP/level/status
+//     broadcasts: a level-1 novice at 8 EXP kills a Poring worth 2 BaseExp (8→10),
+//     crossing the level-2 threshold (10) → SPBaseExp, SPBaseLevel, SPStatusPoint.
+//   - MobRespawnDelay (5s) on the real time.AfterFunc → a fresh ZC_SPAWN_UNIT for
+//     sprite 1002 with a NEW EntityID (a new lifetime, never the dead mob's).
+//   - SaveProgression → committed to MariaDB; read back through a separate GORM
+//     session confirms base_exp/base_level/status_point persisted.
+//
+// The Poring wanders one cell per 400ms, so the test cannot hardcode the mob's
+// cell. It reads the mob's current position from the enter spawn frame (and from
+// each ZC_UNIT_WALKING thereafter), steps onto that cell, and bursts attacks —
+// re-chasing each cycle until the kill. A burst resolves in a few ms, so every
+// burst that reached the mob's cell lands all its hits; extra attacks past the
+// kill are silently dropped (the torn-down mob no longer resolves ByEntity).
+// Combat e2e expectations, derived from the mob_db Poring (HP 50, BaseExp 2,
+// Defense 0, Vit 1, sprite 1002) and the L1 melee formula (15 ATK − 0 = 15 dmg):
+// four 15-dmg hits kill (60 ≥ 50), and 8 seed EXP + 2 kill EXP = 10 crosses the
+// level-2 threshold, granting one level (status_point 0 → 3).
+const (
+	poringSprite      uint16 = 1002
+	attacksPerBurst          = 6 // ≥4 needed; surplus hits a torn-down mob (silent drop)
+	expectedHitDamage int32  = 15
+	expectedExp       int32  = 10 // 8 seed + 2 Poring
+	expectedLevel     int32  = 2
+	expectedStatus    int32  = 3 // statusPointsPerBaseLevel (3) × 1 level
+)
+
+func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	// A level-1 novice at base_exp 8 on the Poring's home cell (155,165). A Poring
+	// kill grants 2 BaseExp (8→10), crossing the level-2 threshold and so driving
+	// the full EXP + level-up + status-point broadcast. meleeDamage(L1, Poring) is
+	// 15 ATK − (0 DEF + 1 VIT/2=0) = 15; four hits (60 ≥ 50 HP) kill it.
+	seedCharID := seedCombatChar(t, cfg, seededAccountID, "E2eSlayer", "prontera", 155, 165)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	// --- login → CZ_ENTER → ZC_ACCEPT_ENTER (same gate path as M3/M5) ---
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN received; login likely failed against the DB")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1, "AC_ACCEPT_LOGIN carried no login_id1 to echo in CZ_ENTER")
+	require.NoError(t, loginConn.Close(), "close the login/char connection (map is a reconnect)")
+
+	mapConn, err := net.Dial("tcp", mapAddr)
+	require.NoError(t, err)
+	defer mapConn.Close()
+	var enter bytes.Buffer
+	require.NoError(t, packet.CZEnterRequest{
+		AccountID: seededAccountID, CharID: seedCharID, AuthCode: loginID1, ClientTime: 0, Sex: sexByte,
+	}.Encode(&enter))
+	_, err = mapConn.Write(enter.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	enterResp := make([]byte, packet.MapAcceptEnterResponse{}.Size())
+	_, err = io.ReadFull(mapConn, enterResp)
+	require.NoError(t, err, "no ZC_ACCEPT_ENTER received; CZ_ENTER verification likely failed")
+	require.Equal(t, packet.HeaderZCACCEPTENTER, binary.LittleEndian.Uint16(enterResp[0:2]),
+		"expected ZC_ACCEPT_ENTER header")
+
+	// --- locate the Poring in the enter spawn burst. EnterWorld writes the PC
+	// self-spawn then every AOI mob back-to-back; the frame-dispatching reader
+	// tolerates any interleaving. The Poring's EntityID is its spawn-frame AID
+	// (CombatService resolves the target by EntityID), its cell the packed pos. ---
+	var (
+		poringID     uint32
+		mobX, mobY   int16
+		findDeadline = 5 * time.Second
+	)
+	findEnd := time.Now().Add(findDeadline)
+	for poringID == 0 && time.Now().Before(findEnd) {
+		require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+		frame, ok := readMapFrame(t, mapConn)
+		if !ok {
+			continue
+		}
+		if binary.LittleEndian.Uint16(frame) != packet.HeaderZCSPAWNUNIT || frame[4] != 5 {
+			continue // PC self-spawn (ObjectType 0) or a non-mob frame.
+		}
+		if binary.LittleEndian.Uint16(frame[23:25]) == poringSprite {
+			poringID = binary.LittleEndian.Uint32(frame[5:9])
+			mobX, mobY = decodeCell(frame[63:66])
+		}
+	}
+	require.NotZero(t, poringID, "no Poring (sprite 1002) in the enter spawn burst within %v", findDeadline)
+
+	// --- chase + attack until the Poring dies ---
+	var (
+		notifyActs [][]byte
+		vanishSeen bool
+		expVal     int32
+		expSeen    bool
+		levelVal   int32
+		levelSeen  bool
+		statusVal  int32
+		statusSeen bool
+		// capturedRespawn holds the respawned Poring's ZC_SPAWN_UNIT frame. The 5s
+		// respawn timer (armed at the kill) may fire during the chase tail, the
+		// reposition awaitFrame, or the dedicated drain below; handleCombat captures
+		// it at whichever read site delivers it, so the assertion does not depend on
+		// which one ran first.
+		capturedRespawn []byte
+	)
+	handleCombat := func(op uint16, frame []byte) {
+		switch op {
+		case packet.HeaderZCUNITWALKING:
+			// Track the Poring's latest cell as it wanders (packed destXY).
+			if binary.LittleEndian.Uint32(frame[5:9]) == poringID {
+				mobX, mobY = decodeCell(frame[70:73])
+			}
+		case packet.HeaderZCSPAWNUNIT:
+			// Capture the respawned Poring (BL_MOB, sprite 1002, fresh EntityID ≠
+			// the killed poringID). The original spawn is read by the earlier
+			// burst-finding loop, not here, so the only Poring spawn this handler
+			// ever sees is the post-kill respawn.
+			if capturedRespawn == nil && frame[4] == 5 &&
+				binary.LittleEndian.Uint16(frame[23:25]) == poringSprite &&
+				binary.LittleEndian.Uint32(frame[5:9]) != poringID {
+				capturedRespawn = frame
+			}
+		case packet.HeaderZCNOTIFYACT:
+			notifyActs = append(notifyActs, frame)
+		case packet.HeaderZCNOTIFYVANISH:
+			if binary.LittleEndian.Uint32(frame[2:6]) == poringID {
+				vanishSeen = true
+			}
+		case packet.HeaderZCLONGPARCHANGE:
+			if binary.LittleEndian.Uint16(frame[2:4]) == packet.SPBaseExp {
+				expVal = int32(binary.LittleEndian.Uint32(frame[4:8]))
+				expSeen = true
+			}
+		case packet.HeaderZCPARCHANGE:
+			switch binary.LittleEndian.Uint16(frame[2:4]) {
+			case packet.SPBaseLevel:
+				levelVal = int32(binary.LittleEndian.Uint32(frame[4:8]))
+				levelSeen = true
+			case packet.SPStatusPoint:
+				statusVal = int32(binary.LittleEndian.Uint32(frame[4:8]))
+				statusSeen = true
+			}
+		}
+	}
+	sendMove := func(x, y int16) {
+		var b bytes.Buffer
+		require.NoError(t, packet.CZRequestMoveRequest{DestX: x, DestY: y}.Encode(&b))
+		_, err := mapConn.Write(b.Bytes())
+		require.NoError(t, err)
+	}
+	sendAttack := func() {
+		var b bytes.Buffer
+		// Action is ignored by CombatService (only TargetGID is read); DMG_NORMAL
+		// is the honest attack selector.
+		require.NoError(t, packet.CZActionRequestRequest{TargetGID: poringID, Action: packet.DMGNormal}.Encode(&b))
+		_, err := mapConn.Write(b.Bytes())
+		require.NoError(t, err)
+	}
+
+	chaseEnd := time.Now().Add(30 * time.Second)
+	for time.Now().Before(chaseEnd) && !vanishSeen {
+		// Drain buffered frames first (late responses, mob-position updates, the
+		// remaining spawn-burst frames after the Poring).
+		drainFrames(t, mapConn, 150*time.Millisecond, handleCombat)
+		if vanishSeen {
+			break
+		}
+		// Step onto the Poring's current cell, then wait for the move ack so the
+		// server has committed our position before the attack burst.
+		sendMove(mobX, mobY)
+		awaitFrame(t, mapConn, packet.HeaderZCNOTIFYPLAYERMOVE, 500*time.Millisecond, handleCombat)
+		// 6 attacks ≥ 4 needed (60 ≥ 50 HP); any past the kill hit a torn-down
+		// mob and are silently dropped, so the surplus is harmless insurance.
+		for i := 0; i < attacksPerBurst; i++ {
+			sendAttack()
+		}
+		drainFrames(t, mapConn, 400*time.Millisecond, handleCombat)
+	}
+	require.Truef(t, vanishSeen, "Poring did not die within %v (NotifyAct frames seen: %d)",
+		30*time.Second, len(notifyActs))
+
+	// --- assertions on the combat response stream ---
+	require.NotEmpty(t, notifyActs, "no ZC_NOTIFY_ACT observed for the kill")
+	hit := notifyActs[0]
+	require.Equal(t, seededAccountID, binary.LittleEndian.Uint32(hit[2:6]),
+		"ZC_NOTIFY_ACT SrcID is the attacker account")
+	require.Equal(t, poringID, binary.LittleEndian.Uint32(hit[6:10]),
+		"ZC_NOTIFY_ACT TargetID is the Poring's EntityID")
+	require.Equal(t, expectedHitDamage, int32(binary.LittleEndian.Uint32(hit[22:26])),
+		"ZC_NOTIFY_ACT Damage matches meleeDamage at L1 (15 ATK − 0)")
+	require.True(t, expSeen, "no SPBaseExp (ZC_LONGPAR_CHANGE) update observed")
+	require.Equal(t, expectedExp, expVal, "SPBaseExp = seed 8 + Poring 2 = 10")
+	require.True(t, levelSeen, "no SPBaseLevel (ZC_PAR_CHANGE) update observed — kill did not level the novice")
+	require.Equal(t, expectedLevel, levelVal, "SPBaseLevel = 2")
+	require.True(t, statusSeen, "no SPStatusPoint (ZC_PAR_CHANGE) update observed")
+	require.Equal(t, expectedStatus, statusVal, "SPStatusPoint = 0 seed + 3/level = 3")
+
+	// --- respawn: reposition on the home cell, then await the respawned Poring.
+	// di.go wires SystemRespawnScheduler (a real time.AfterFunc); the timer is
+	// armed at the kill (onMobDeath.scheduleRespawn), so it fires 5s later — which
+	// may land during the chase tail, the reposition awaitFrame, or the drain
+	// below. handleCombat captures the spawn at whichever read site delivers it;
+	// this drain loops until capture (or the 8s bound) so the assertion holds
+	// regardless of which site ran first. ---
+	sendMove(155, 165)
+	awaitFrame(t, mapConn, packet.HeaderZCNOTIFYPLAYERMOVE, 500*time.Millisecond, handleCombat)
+	respawnEnd := time.Now().Add(8 * time.Second)
+	for capturedRespawn == nil && time.Now().Before(respawnEnd) {
+		require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+		frame, ok := readMapFrame(t, mapConn)
+		if !ok {
+			continue
+		}
+		handleCombat(binary.LittleEndian.Uint16(frame), frame)
+	}
+	require.NotNil(t, capturedRespawn,
+		"no Poring respawn (ZC_SPAWN_UNIT sprite 1002, fresh ID) within 8s; respawn timer did not fire")
+	require.Equal(t, uint8(5), capturedRespawn[4], "respawned unit ObjectType is BL_MOB")
+	require.Equal(t, poringSprite, binary.LittleEndian.Uint16(capturedRespawn[23:25]),
+		"respawned unit sprite is the Poring (1002)")
+	require.NotEqual(t, poringID, binary.LittleEndian.Uint32(capturedRespawn[5:9]),
+		"respawned Poring has a fresh EntityID, not the dead mob's")
+
+	// --- persistence: read the committed progression back from MariaDB via a
+	// separate session. awardKill.SaveProgression commits synchronously before
+	// the handler returns, so by the time the wire packets above are drained the
+	// row is long since committed. ---
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to read back progression")
+	t.Cleanup(func() { sqlDB, _ := gdb.DB(); _ = sqlDB.Close() })
+	var prog struct {
+		BaseExp     uint64
+		BaseLevel   uint16
+		StatusPoint uint32
+	}
+	require.NoError(t, gdb.Raw(
+		"SELECT base_exp, base_level, status_point FROM `char` WHERE char_id = ?", seedCharID).
+		Scan(&prog).Error, "read back persisted progression")
+	assert.Equal(t, uint64(expectedExp), prog.BaseExp, "persisted base_exp = 8 seed + 2 Poring")
+	assert.Equal(t, uint16(expectedLevel), prog.BaseLevel, "persisted base_level = 2")
+	assert.Equal(t, uint32(expectedStatus), prog.StatusPoint, "persisted status_point = 3")
+}
+
+// readMapFrame reads exactly one framed map-role packet from conn, dispatching on
+// the 2-byte opcode: variable-length packets (spawn-unit, unit-walking) carry
+// their total wire length at [2:4]; fixed-length packets are read to their known
+// size (via the response type's Size()). Returns (frame, true) on success and
+// (nil, false) on a read deadline/EOF — the latter ends a drain rather than
+// failing. An unsupported opcode fails the test loudly: the server sent a frame
+// type the test must be taught to handle.
+func readMapFrame(t *testing.T, conn net.Conn) ([]byte, bool) {
+	t.Helper()
+	opBuf := make([]byte, 2)
+	// The opcode read is the drain's idle sentinel: a read deadline or close
+	// here ends the drain, not the test. Once an opcode is read the rest of its
+	// frame is already buffered (gnet writes whole frames), so any later short
+	// read is a genuine desync/disconnect and fails loudly.
+	if _, err := io.ReadFull(conn, opBuf); err != nil {
+		return nil, false
+	}
+	op := binary.LittleEndian.Uint16(opBuf)
+	if op == packet.HeaderZCSPAWNUNIT || op == packet.HeaderZCUNITWALKING {
+		lenBuf := make([]byte, 2)
+		_, err := io.ReadFull(conn, lenBuf)
+		require.NoErrorf(t, err, "read length prefix of opcode 0x%04x", op)
+		total := int(binary.LittleEndian.Uint16(lenBuf))
+		require.GreaterOrEqualf(t, total, 4, "variable packet length %d < 4 for opcode 0x%04x", total, op)
+		frame := make([]byte, total)
+		copy(frame[0:2], opBuf)
+		copy(frame[2:4], lenBuf)
+		if total > 4 {
+			_, err = io.ReadFull(conn, frame[4:])
+			require.NoErrorf(t, err, "read %d-byte body of opcode 0x%04x", total-4, op)
+		}
+		return frame, true
+	}
+	total := mapFrameSize(op)
+	require.NotZero(t, total, "readMapFrame: unsupported opcode 0x%04x (add its size to mapFrameSize)", op)
+	frame := make([]byte, total)
+	copy(frame[0:2], opBuf)
+	_, err := io.ReadFull(conn, frame[2:])
+	require.NoErrorf(t, err, "read %d-byte fixed body of opcode 0x%04x", total-2, op)
+	return frame, true
+}
+
+// mapFrameSize returns the fixed wire length for a map-role opcode, sourced from
+// each response type's Size() method (no magic numbers). Variable-length opcodes
+// are handled by readMapFrame's length-prefix branch, not here. Zero ⇒ unknown.
+func mapFrameSize(op uint16) int {
+	switch op {
+	case packet.HeaderZCACCEPTENTER:
+		return packet.MapAcceptEnterResponse{}.Size()
+	case packet.HeaderZCNOTIFYPLAYERMOVE:
+		return packet.MapNotifyPlayerMoveResponse{}.Size()
+	case packet.HeaderZCACTIONRESPONSE:
+		return packet.ActionResponse{}.Size()
+	case packet.HeaderZCNOTIFYACT:
+		return packet.NotifyActResponse{}.Size()
+	case packet.HeaderZCNOTIFYVANISH:
+		return packet.NotifyVanishResponse{}.Size()
+	case packet.HeaderZCPARCHANGE:
+		return packet.ParChangeResponse{}.Size()
+	case packet.HeaderZCLONGPARCHANGE:
+		return packet.LongParChangeResponse{}.Size()
+	default:
+		return 0
+	}
+}
+
+// drainFrames reads framed packets from conn, dispatching each to handle, until
+// no full frame arrives within idle (a read deadline ends the drain rather than
+// blocking). Used to collect late responses and mob-position updates between
+// chase cycles.
+func drainFrames(t *testing.T, conn net.Conn, idle time.Duration, handle func(op uint16, frame []byte)) {
+	t.Helper()
+	for {
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(idle)))
+		frame, ok := readMapFrame(t, conn)
+		if !ok {
+			return
+		}
+		handle(binary.LittleEndian.Uint16(frame), frame)
+	}
+}
+
+// awaitFrame reads framed packets until one with opcode want arrives (or timeout
+// elapses), dispatching every intervening frame to handle. Returns the matched
+// frame, or (nil, false) on timeout.
+func awaitFrame(t *testing.T, conn net.Conn, want uint16, timeout time.Duration, handle func(op uint16, frame []byte)) ([]byte, bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		require.NoError(t, conn.SetReadDeadline(deadline))
+		frame, ok := readMapFrame(t, conn)
+		if !ok {
+			return nil, false
+		}
+		op := binary.LittleEndian.Uint16(frame)
+		if handle != nil {
+			handle(op, frame)
+		}
+		if op == want {
+			return frame, true
+		}
+	}
+}
+
+// decodeCell unpacks a 3-byte rAthena packed position (RBUFPOS) to (x, y),
+// mirroring pkg/ro/packet/coords.go decodePos (dir is dropped — combat only
+// needs the cell).
+func decodeCell(p []byte) (x, y int16) {
+	x = int16((uint16(p[0]) << 2) | (uint16(p[1]) >> 6))
+	y = int16((uint16(p[1]&0x3f) << 4) | (uint16(p[2]) >> 4))
+	return x, y
+}
+
+// seedCombatChar inserts a level-1 novice (base_exp 8, just under the level-2
+// threshold of 10) at slot 0 on the given cell, so a single Poring kill
+// (BaseExp 2: 8→10) drives the full EXP + level-up + status-point broadcast the
+// combat e2e asserts. It mirrors seedCharForAccount's clear/insert/readback/
+// LIFO-cleanup structure; only base_level/base_exp/base_job values differ.
+func seedCombatChar(t *testing.T, cfg *config.Config, accountID uint32, name, lastMap string, lastX, lastY int) uint32 {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to seed combat char")
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	require.NoError(t, gdb.Exec("DELETE FROM `char` WHERE account_id = ?", accountID).Error,
+		"clear existing chars for test account")
+	require.NoError(t, gdb.Exec(
+		`INSERT INTO `+"`char`"+` (account_id, char_num, name, class, base_level, job_level,
+		   base_exp, job_exp, zeny, str, agi, vit, `+"`int`"+`, dex, luk,
+		   max_hp, hp, max_sp, sp, status_point, skill_point,
+		   hair, hair_color, clothes_color, body, weapon, shield,
+		   head_top, head_mid, head_bottom, robe,
+		   last_map, last_x, last_y, sex, option, karma, manner)
+		 VALUES (?, 0, ?, 0, 1, 1, 8, 1, 0, 1,1,1,1,1,1, 40,40,11,11,0,0, 2,1,0,0,0,0, 0,0,0,0, ?, ?, ?, 1, 0, 0, 0)`,
+		accountID, name, lastMap, lastX, lastY).Error, "insert level-1 combat seed char row")
+
+	var charID uint32
+	require.NoError(t, gdb.Raw(
+		"SELECT char_id FROM `char` WHERE account_id = ? AND char_num = 0", accountID).
+		Scan(&charID).Error, "read back seeded combat char_id")
+	require.NotZero(t, charID, "seeded combat char_id is 0")
+	t.Cleanup(func() { _ = gdb.Exec("DELETE FROM `char` WHERE char_id = ?", charID).Error })
+	return charID
+}
+
 // readLengthPrefixedPacket reads one rAthena packet whose uint16 length at byte
 // offset 2 is the total wire length (header included) — the framing of
 // HC_ACCEPT_ENTER. It peeks the 4-byte header, then reads the remainder.
