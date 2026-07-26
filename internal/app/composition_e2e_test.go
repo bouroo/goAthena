@@ -21,6 +21,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/app"
 	"github.com/bouroo/goAthena/internal/config"
+	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -119,11 +120,20 @@ func loadConfigForE2E(t *testing.T) *config.Config {
 	t.Setenv("CONFIG_FILE", filepath.Join(root, "config.yaml"))
 	cfg, err := config.Load()
 	require.NoError(t, err, "load config.yaml")
-	// zone.map_dir is a repo-root-relative path in config.yaml ("./data/maps"),
-	// resolved against the server's CWD at runtime. A test process runs with its
-	// own CWD (the package dir), so absolutize it against the repo root or the
-	// FileMapStore would look for maps under the test's CWD and fail to load.
+	// zone.map_dir / mob_db_path / mob_spawns_path are repo-root-relative paths
+	// in config.yaml, resolved against the server's CWD at runtime. A test
+	// process runs with its own CWD (the package dir), so absolutize each against
+	// the repo root or the FileMapStore / mobdb loaders would look for the files
+	// under the test's CWD and find nothing. The *_path fields are omitempty, so
+	// only rebase the ones actually set (Clean("")=="." would otherwise turn an
+	// unset path into the repo root).
 	cfg.Zone.MapDir = filepath.Join(root, filepath.Clean(cfg.Zone.MapDir))
+	if cfg.Zone.MobDBPath != "" {
+		cfg.Zone.MobDBPath = filepath.Join(root, filepath.Clean(cfg.Zone.MobDBPath))
+	}
+	if cfg.Zone.MobSpawnsPath != "" {
+		cfg.Zone.MobSpawnsPath = filepath.Join(root, filepath.Clean(cfg.Zone.MobSpawnsPath))
+	}
 	return cfg
 }
 
@@ -209,7 +219,7 @@ func TestServe_CharListAndSelect_RoundTrip(t *testing.T) {
 	// non-empty and the select resolves a known GID. account 2000000 is the
 	// dedicated test account; clearing its chars at setup keeps the slot-0
 	// pick deterministic across runs.
-	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eHero", "prontera")
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eHero", "prontera", 53, 111)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -429,7 +439,7 @@ func TestServe_MapEnter_RoundTrip(t *testing.T) {
 	// the seedCharForAccount defaults ("prontera", 53, 111) so the self-spawn
 	// PosX/PosY are predictable; the cleanup inside seedCharForAccount removes
 	// the row after the test.
-	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eHero", "prontera")
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eHero", "prontera", 53, 111)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -553,6 +563,137 @@ func TestServe_MapEnter_RoundTrip(t *testing.T) {
 	assert.Equal(t, want[9:12], notifyMove[9:12], "self-ack packed dest (60,115)")
 }
 
+// TestServe_MapEnter_ShowsSpawnedMobs is the M5 end-to-end proof. The real
+// monolith eagerly runs SpawnAll during world.Register (before any listener
+// accepts), placing the four data/mob_spawns/prontera.yml mobs onto Prontera.
+// This test seeds a char co-located with the Poring spawn cell (155,165) so all
+// four mobs fall inside the entering player's 15-cell AOI viewport, then asserts
+// the live map TCP conn delivers the PC self-spawn followed by four BL_MOB
+// ZC_SPAWN_UNIT frames — one per mob_db sprite (Poring/Lunatic/Drops/Spore),
+// each carrying its mob_db id in the job slot and an EntityID in the mob partition
+// (>= MobIDBase, disjoint from player account_ids). It crosses every M5 seam
+// together: mob_db load → spawn-file parse → AOI placement → enter-world spawn
+// exchange → live TCP write.
+func TestServe_MapEnter_ShowsSpawnedMobs(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	// Co-locate the char with the Poring spawn cell (155,165). All four
+	// prontera.yml mobs — Poring 155,165; Lunatic 165,165; Drops 155,175; Spore
+	// 165,175 — sit within a 15-cell Chebyshev box of this point, so the
+	// entering player's spawn exchange surfaces every one of them.
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eHero", "prontera", 155, 165)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	// Login on the login/char listener to mint the session the map trust gate
+	// verifies on the dedicated map connection.
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN received; login likely failed against the DB")
+	require.Equal(t, packet.HeaderACACCEPTLOGIN, binary.LittleEndian.Uint16(accept[0:2]),
+		"expected AC_ACCEPT_LOGIN header")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1, "AC_ACCEPT_LOGIN carried no login_id1 to echo in CZ_ENTER")
+	require.NoError(t, loginConn.Close(), "close the login/char connection (map is a reconnect)")
+
+	// Reconnect to the dedicated map listener and CZ_ENTER.
+	mapConn, err := net.Dial("tcp", mapAddr)
+	require.NoError(t, err)
+	defer mapConn.Close()
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+
+	var enter bytes.Buffer
+	require.NoError(t, packet.CZEnterRequest{
+		AccountID: seededAccountID, CharID: seedCharID, AuthCode: loginID1, ClientTime: 0, Sex: sexByte,
+	}.Encode(&enter))
+	_, err = mapConn.Write(enter.Bytes())
+	require.NoError(t, err)
+
+	// ZC_ACCEPT_ENTER (0x02eb, 13B): the trust gate admitted the session.
+	resp := make([]byte, packet.MapAcceptEnterResponse{}.Size())
+	_, err = io.ReadFull(mapConn, resp)
+	require.NoError(t, err, "no ZC_ACCEPT_ENTER received; CZ_ENTER verification likely failed")
+	require.Equal(t, packet.HeaderZCACCEPTENTER, binary.LittleEndian.Uint16(resp[0:2]),
+		"expected ZC_ACCEPT_ENTER header")
+
+	// --- ZC_SPAWN_UNIT burst. EnterWorld writes the PC self-spawn, then the
+	// exchange frame for every mob in AOI range, back-to-back before the handler
+	// returns. Mobs do not move on their first tick sighting (they settle one
+	// WalkSpeed interval before ambling), so no ZC_UNIT_WALKING interleaves this
+	// burst in the enter window: the next bytes are exactly 1 PC + 4 mob spawns.
+	// Frame[0] is the player; frames[1:5] are the mobs — their order over the AOI
+	// towers is not stable, so they are collected into a set, not sequenced. ---
+	const (
+		spawnSize = 107 // packet.SpawnUnitResponse{}.Size()
+		mobCount  = 4
+	)
+	burst := make([]byte, spawnSize*(1+mobCount))
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, err = io.ReadFull(mapConn, burst)
+	require.NoError(t, err, "no spawn burst received; SpawnAll likely placed no mobs in AOI range")
+
+	// Frame 0: the PC self-spawn.
+	self := burst[0:spawnSize]
+	require.Equal(t, packet.HeaderZCSPAWNUNIT, binary.LittleEndian.Uint16(self[0:2]),
+		"frame 0 header is ZC_SPAWN_UNIT")
+	require.Equal(t, uint8(0), self[4], "frame 0 ObjectType is PC")
+	require.Equal(t, seededAccountID, binary.LittleEndian.Uint32(self[5:9]),
+		"frame 0 AID is the seeded account_id")
+	require.Equal(t, seedCharID, binary.LittleEndian.Uint32(self[9:13]),
+		"frame 0 GID is the seeded char_id")
+
+	// Frames 1..4: the four mobs, keyed by sprite id (the spawn packet's job slot).
+	seen := make(map[int16]string, mobCount)
+	for i := 0; i < mobCount; i++ {
+		f := burst[(1+i)*spawnSize : (2+i)*spawnSize]
+		require.Equal(t, packet.HeaderZCSPAWNUNIT, binary.LittleEndian.Uint16(f[0:2]),
+			"mob frame header is ZC_SPAWN_UNIT")
+		require.Equal(t, uint8(5), f[4], "mob ObjectType is BL_MOB (NPC_MOB_TYPE)")
+		assert.GreaterOrEqual(t, binary.LittleEndian.Uint32(f[5:9]), worlddomain.MobIDBase,
+			"mob AID is in the mob partition (>= START_NPC_NUM), disjoint from account_ids")
+		assert.Equal(t, uint32(0), binary.LittleEndian.Uint32(f[9:13]),
+			"mob GID is 0 (no map_session_data)")
+		assert.Equal(t, int32(-1), int32(binary.LittleEndian.Uint32(f[72:76])), "mob MaxHP = -1 at full HP")
+		assert.Equal(t, int32(-1), int32(binary.LittleEndian.Uint32(f[76:80])), "mob HP = -1 at full HP")
+		seen[int16(binary.LittleEndian.Uint16(f[23:25]))] = string(bytes.TrimRight(f[83:107], "\x00"))
+	}
+
+	assert.Equal(t, map[int16]string{
+		1002: "Poring", 1063: "Lunatic", 1113: "Drops", 1014: "Spore",
+	}, seen, "the entering player sees all four spawned mobs by sprite + name")
+}
+
 // readLengthPrefixedPacket reads one rAthena packet whose uint16 length at byte
 // offset 2 is the total wire length (header included) — the framing of
 // HC_ACCEPT_ENTER. It peeks the 4-byte header, then reads the remainder.
@@ -570,11 +711,15 @@ func readLengthPrefixedPacket(t *testing.T, r io.Reader) []byte {
 }
 
 // seedCharForAccount inserts a single char row for accountID at slot 0 with the
-// given name and last_map, returns its auto-increment char_id, and registers a
-// cleanup that removes every char row it created. It connects to MariaDB with
-// the same DSN app.Serve uses, and clears any pre-existing chars for the account
-// first so the slot-0 selection in the test is deterministic.
-func seedCharForAccount(t *testing.T, cfg *config.Config, accountID uint32, name, lastMap string) uint32 {
+// given name, last_map, and last cell (last_x/last_y), returns its auto-increment
+// char_id, and registers a cleanup that removes every char row it created. It
+// connects to MariaDB with the same DSN app.Serve uses, and clears any
+// pre-existing chars for the account first so the slot-0 selection in the test
+// is deterministic. lastX/lastY are the persisted spawn cell: SpawnService uses
+// the char's last position when the caller passes a zero SpawnPoint, so a test
+// that wants to enter near a known world entity (e.g. a mob spawn cell) seeds
+// the char there.
+func seedCharForAccount(t *testing.T, cfg *config.Config, accountID uint32, name, lastMap string, lastX, lastY int) uint32 {
 	t.Helper()
 	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
 	require.NoError(t, err, "open gorm to seed char")
@@ -596,8 +741,8 @@ func seedCharForAccount(t *testing.T, cfg *config.Config, accountID uint32, name
 		   hair, hair_color, clothes_color, body, weapon, shield,
 		   head_top, head_mid, head_bottom, robe,
 		   last_map, last_x, last_y, sex, option, karma, manner)
-		 VALUES (?, 0, ?, 0, 12, 10, 500, 200, 3000, 9,1,1,1,1,1, 200,100,50,50,0,0, 2,1,0,0,0,0, 0,0,0,0, ?, 53,111, 1, 0, 0, 0)`,
-		accountID, name, lastMap).Error, "insert seed char row")
+		 VALUES (?, 0, ?, 0, 12, 10, 500, 200, 3000, 9,1,1,1,1,1, 200,100,50,50,0,0, 2,1,0,0,0,0, 0,0,0,0, ?, ?, ?, 1, 0, 0, 0)`,
+		accountID, name, lastMap, lastX, lastY).Error, "insert seed char row")
 
 	var charID uint32
 	require.NoError(t, gdb.Raw(

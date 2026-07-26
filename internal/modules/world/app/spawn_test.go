@@ -126,7 +126,8 @@ func TestSpawnService_EnterWorld_SelfSpawn(t *testing.T) {
 	}}
 	maps := &memMapStore{maps: map[string]*domain.Map{"prontera": newTestMap(200, 200)}}
 	registry := domain.NewPlayerRegistry()
-	svc := app.NewSpawnService(chars, maps, registry)
+	mobs := domain.NewMobRegistry()
+	svc := app.NewSpawnService(chars, maps, registry, mobs)
 
 	conn := &captureConn{role: gwdomain.RoleMap, remote: "127.0.0.1:5121"}
 	// spawn zeros ⇒ use the character's persisted last_x/last_y (the M4b path).
@@ -176,7 +177,8 @@ func TestSpawnService_EnterWorld_NeighborBroadcast(t *testing.T) {
 	require.NoError(t, registry.Register(neighbor))
 	require.NoError(t, mp.AOI.AddEntity(&aoi.Entity{ID: neighbor.EntityID, Type: aoi.EntityPlayer, X: 53, Y: 111}))
 
-	svc := app.NewSpawnService(chars, maps, registry)
+	mobs := domain.NewMobRegistry()
+	svc := app.NewSpawnService(chars, maps, registry, mobs)
 	newcomerConn := &captureConn{role: gwdomain.RoleMap, remote: "c"}
 	err := svc.EnterWorld(context.Background(), newcomerConn, newcomerAID, newcomerCID, app.SpawnPoint{})
 	require.NoError(t, err)
@@ -208,7 +210,8 @@ func TestSpawnService_EnterWorld_CharNotFound(t *testing.T) {
 	chars := &fakeCharGetter{chars: map[uint64]chardomain.Character{}}
 	maps := &memMapStore{maps: map[string]*domain.Map{"prontera": newTestMap(200, 200)}}
 	registry := domain.NewPlayerRegistry()
-	svc := app.NewSpawnService(chars, maps, registry)
+	mobs := domain.NewMobRegistry()
+	svc := app.NewSpawnService(chars, maps, registry, mobs)
 
 	conn := &captureConn{role: gwdomain.RoleMap}
 	err := svc.EnterWorld(context.Background(), conn, 999, 1, app.SpawnPoint{})
@@ -229,7 +232,8 @@ func TestSpawnService_EnterWorld_MapLoadFail(t *testing.T) {
 	// No "prontera" entry ⇒ Load returns an error.
 	maps := &memMapStore{maps: map[string]*domain.Map{}}
 	registry := domain.NewPlayerRegistry()
-	svc := app.NewSpawnService(chars, maps, registry)
+	mobs := domain.NewMobRegistry()
+	svc := app.NewSpawnService(chars, maps, registry, mobs)
 
 	conn := &captureConn{role: gwdomain.RoleMap}
 	err := svc.EnterWorld(context.Background(), conn, aid, cid, app.SpawnPoint{})
@@ -251,7 +255,8 @@ func TestSpawnService_EnterWorld_SpawnOverride(t *testing.T) {
 	}}
 	maps := &memMapStore{maps: map[string]*domain.Map{"prontera": newTestMap(200, 200)}}
 	registry := domain.NewPlayerRegistry()
-	svc := app.NewSpawnService(chars, maps, registry)
+	mobs := domain.NewMobRegistry()
+	svc := app.NewSpawnService(chars, maps, registry, mobs)
 
 	conn := &captureConn{role: gwdomain.RoleMap}
 	override := app.SpawnPoint{PosX: 100, PosY: 50, Dir: 4}
@@ -277,7 +282,8 @@ func TestSpawnService_EnterWorld_DuplicateAccountRollsBack(t *testing.T) {
 	// Pre-register the same account to force the duplicate path.
 	require.NoError(t, registry.Register(&domain.Player{AccountID: aid, MapName: "prontera"}))
 
-	svc := app.NewSpawnService(chars, maps, registry)
+	mobs := domain.NewMobRegistry()
+	svc := app.NewSpawnService(chars, maps, registry, mobs)
 	conn := &captureConn{role: gwdomain.RoleMap}
 	err := svc.EnterWorld(context.Background(), conn, aid, cid, app.SpawnPoint{})
 	assert.ErrorIs(t, err, domain.ErrPlayerAlreadyRegistered)
@@ -310,7 +316,8 @@ func TestSpawnService_EnterWorld_DeadNeighborDropped(t *testing.T) {
 	require.NoError(t, registry.Register(neighbor))
 	require.NoError(t, mp.AOI.AddEntity(&aoi.Entity{ID: neighbor.EntityID, Type: aoi.EntityPlayer, X: 53, Y: 111}))
 
-	svc := app.NewSpawnService(chars, maps, registry)
+	mobs := domain.NewMobRegistry()
+	svc := app.NewSpawnService(chars, maps, registry, mobs)
 	newcomerConn := &captureConn{role: gwdomain.RoleMap}
 	err := svc.EnterWorld(context.Background(), newcomerConn, newcomerAID, newcomerCID, app.SpawnPoint{})
 	require.NoError(t, err, "enter succeeds despite a dead neighbor")

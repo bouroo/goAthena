@@ -116,10 +116,17 @@ func (h *MapEnterHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame 
 	// accountID off the auth cache (sess.AccountID), never req.AccountID. A nil
 	// spawner keeps the M3 behavior (accept then stop) for tests that exercise
 	// only the gate.
+	//
+	// A zero SpawnPoint is passed deliberately: EnterWorld then spawns the player
+	// at the char's loaded last_x/last_y (resolveSpawn's persisted-position
+	// branch). h.spawn (DefaultSpawn) is only the cell ZC_ACCEPT_ENTER above
+	// advertises for the client's initial render; the self-spawn frame carries
+	// the authoritative cell. Passing h.spawn here would force every relog back
+	// to the novice cell and discard a char's persisted position.
 	if h.spawner == nil {
 		return nil
 	}
-	if err := h.spawner.EnterWorld(ctx, conn, sess.AccountID, req.CharID, h.spawn); err != nil {
+	if err := h.spawner.EnterWorld(ctx, conn, sess.AccountID, req.CharID, SpawnPoint{}); err != nil {
 		return fmt.Errorf("enter world account %d char %d: %w", sess.AccountID, req.CharID, err)
 	}
 	return nil

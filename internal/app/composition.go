@@ -180,6 +180,18 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 		return fmt.Errorf("resolve world move service: %w", err)
 	}
 	application.RegisterRunnable("world-move", mover.Run)
+
+	// M5: the mob wander tick. A second supervised runnable drives idle wander
+	// per mob on the zone tick cadence. It never calls FindPath (the move worker
+	// remains the sole pathfinder owner — single-step wander checks only the
+	// immutable MapData), so the two runnables do not contend on the shared A*
+	// scratch buffers. Like world-move, a panic here fans into the error channel
+	// and tears the process down.
+	mobSvc, err := do.Invoke[*worldapp.MobService](injector)
+	if err != nil {
+		return fmt.Errorf("resolve world mob service: %w", err)
+	}
+	application.RegisterRunnable("world-mob-tick", mobSvc.Run)
 	return nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rs/zerolog"
 	"github.com/samber/do/v2"
 
 	"github.com/bouroo/goAthena/internal/config"
@@ -22,16 +23,18 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/internal/modules/world/infra"
+	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 )
 
 // Register builds the world bounded context. M3 provides the CZ_ENTER handler
 // (the map-enter trust gate) over the account Authenticator; M4a adds the
 // filesystem-backed MapStore that loads the per-map AOI grid and A* pathfinder.
 // M4b layers the spawn-on-enter flow: the in-process PlayerRegistry and the
-// SpawnService the gate calls after ZC_ACCEPT_ENTER. ctx is accepted to match
-// the samber/do v2 Register convention but is unused — the map is loaded lazily
-// on first demand (spawn-on-enter), not eagerly at Register.
-func Register(_ context.Context, c do.Injector) error {
+// SpawnService the gate calls after ZC_ACCEPT_ENTER. M5 adds the mob corpus:
+// the MobRegistry + MobService that populate the world at boot and drive the
+// idle-wander tick; SpawnAll runs eagerly here so mobs exist before the first
+// enter-world spawn exchange.
+func Register(ctx context.Context, c do.Injector) error {
 	auth, err := do.Invoke[accountdomain.Authenticator](c)
 	if err != nil {
 		return fmt.Errorf("world: resolve account authenticator: %w", err)
@@ -60,7 +63,26 @@ func Register(_ context.Context, c do.Injector) error {
 	registry := domain.NewPlayerRegistry()
 	do.ProvideValue(c, registry)
 
-	spawner := app.NewSpawnService(chars, maps, registry)
+	// M5: the mob registry + spawn corpus. mob_db is optional per ZoneConfig —
+	// an empty path or an unreadable file logs a warning and the zone boots with
+	// no mobs (db stays nil; SpawnAll/Run become no-ops), matching the documented
+	// "misconfigured zone still boots" contract. The logger is resolved
+	// defensively: telemetry.Register has already provided it by the time
+	// world.Register runs, but a missing logger must not itself fail boot.
+	mobs := domain.NewMobRegistry()
+	do.ProvideValue(c, mobs)
+	mobDB := loadMobDB(c, cfg.Zone.MobDBPath)
+
+	mobSvc := app.NewMobService(mobs, registry, maps, mobDB, cfg.Zone.MobSpawnsPath, app.SystemClock(), cfg.Zone.TickRate, nil)
+	// Eagerly populate the world so mobs exist before the first player can
+	// connect. A spawn failure is non-fatal (logged): the maps that did resolve
+	// keep their mobs, the tick still runs, and the boot continues.
+	if err := mobSvc.SpawnAll(ctx); err != nil {
+		warnLogger(c).Warn().Err(err).Msg("world: mob spawn failed; some maps may be empty")
+	}
+	do.ProvideValue(c, mobSvc)
+
+	spawner := app.NewSpawnService(chars, maps, registry, mobs)
 	do.ProvideValue(c, app.NewMapEnterHandler(auth, app.DefaultSpawn, spawner))
 
 	// M4c: the movement worker. A single MoveService owns every map's
@@ -74,4 +96,32 @@ func Register(_ context.Context, c do.Injector) error {
 	do.ProvideValue(c, mover)
 	do.ProvideValue(c, app.NewMoveHandler(mover))
 	return nil
+}
+
+// loadMobDB reads the mob_db YAML at path into a mobdb.Registry. An empty path
+// yields a nil registry (no mobs). A read or parse failure is logged but not
+// returned — the zone boots with no mobs rather than aborting — so a corrupt or
+// missing mob_db degrades gracefully instead of failing the whole process.
+func loadMobDB(c do.Injector, path string) *mobdb.Registry {
+	if path == "" {
+		return nil
+	}
+	reg, err := mobdb.LoadFile(path)
+	if err != nil {
+		warnLogger(c).Warn().Err(err).Str("path", path).
+			Msg("world: mob_db load failed; mob spawning disabled")
+		return nil
+	}
+	return reg
+}
+
+// warnLogger resolves the process logger for non-fatal warnings; if the logger
+// is not on the injector it falls back to zerolog's default stderr logger so a
+// warning is never dropped purely because telemetry misconfigured.
+func warnLogger(c do.Injector) *zerolog.Logger {
+	if lg, err := do.Invoke[*zerolog.Logger](c); err == nil {
+		return lg
+	}
+	fallback := zerolog.Nop()
+	return &fallback
 }

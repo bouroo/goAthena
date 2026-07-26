@@ -18,6 +18,7 @@ package app
 import (
 	"context"
 
+	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -30,3 +31,36 @@ import (
 func (s *MoveService) ResolveForTest(ctx context.Context, accountID uint32, req packet.CZRequestMoveRequest) {
 	s.resolve(ctx, moveReq{accountID: accountID, destX: req.DestX, destY: req.DestY})
 }
+
+// fixedStep is a stepSource whose Intn always returns the same neighbor index
+// (clamped into range), so a unit test can assert the exact step the wander tick
+// would make. It lives here under the unit tag alongside the seam that uses it;
+// the production tick uses randStep (the global rand source).
+type fixedStep struct{ idx int }
+
+// Intn implements stepSource, clamping the fixed index into [0,n).
+func (f fixedStep) Intn(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if f.idx >= n {
+		return n - 1
+	}
+	if f.idx < 0 {
+		return 0
+	}
+	return f.idx
+}
+
+// WanderStepForTest runs one synchronous wander step for mob on mp, injecting a
+// fixed neighbor index so the test asserts an exact deterministic move. The
+// production Run loop picks the index via the stepSource RNG; this seam bypasses
+// both the ticker and the RNG so the assertions run after the step resolves.
+func (s *MobService) WanderStepForTest(mp *domain.Map, mob *domain.Mob, stepIdx int) {
+	s.rand = fixedStep{idx: stepIdx}
+	s.wanderStep(mp, mob)
+}
+
+// StepOffsetForTest returns the wander step offset at the given index so a test
+// can compute the expected destination without re-declaring the 8-entry table.
+func StepOffsetForTest(i int) [2]int { return stepOffsets[i%len(stepOffsets)] }

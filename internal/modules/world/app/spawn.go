@@ -11,29 +11,33 @@ import (
 	gwdomain "github.com/bouroo/goAthena/internal/modules/gateway/domain"
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
+	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
 // SpawnService owns the enter-world flow: load the character, load the map,
 // build and register the player, add it to the map's AOI grid, then drive the
-// two-way spawn exchange — the entering client sees the players already on the
-// map, and those players see the newcomer. It holds the three collaborators it
-// crosses (character lookup, map load, the live-session registry) and nothing
-// else; combat, movement, and the tick are later use cases.
+// two-way spawn exchange — the entering client sees the players and mobs already
+// on the map, and those players see the newcomer. It holds the collaborators it
+// crosses (character lookup, map load, the live-session PC registry, the mob
+// registry) and nothing else; combat, movement, and the tick are later use cases.
 //
-// Concurrency note: the registry and AOI grid are concurrency-safe; the
+// Concurrency note: the registries and AOI grid are concurrency-safe; the
 // broadcast writes to *other* players' Conns from this goroutine, so the TCP
 // adapter must be on AsyncWrite by the time EnterWorld is wired (task #22).
 type SpawnService struct {
 	chars    domain.CharacterGetter
 	maps     domain.MapStore
 	registry *domain.PlayerRegistry
+	mobs     *domain.MobRegistry
 }
 
-// NewSpawnService binds the three enter-world collaborators. The registry is
-// shared across the whole process (one per server), so callers must pass the
-// same instance to every SpawnService and to the disconnect/movement paths.
-func NewSpawnService(chars domain.CharacterGetter, maps domain.MapStore, registry *domain.PlayerRegistry) *SpawnService {
-	return &SpawnService{chars: chars, maps: maps, registry: registry}
+// NewSpawnService binds the enter-world collaborators. The PC registry is shared
+// across the whole process (one per server), so callers must pass the same
+// instance to every SpawnService and to the disconnect/movement paths. mobs is
+// the mob registry MobService populates at boot; an empty registry (no mob_db)
+// makes the mob branch of the spawn exchange a no-op.
+func NewSpawnService(chars domain.CharacterGetter, maps domain.MapStore, registry *domain.PlayerRegistry, mobs *domain.MobRegistry) *SpawnService {
+	return &SpawnService{chars: chars, maps: maps, registry: registry, mobs: mobs}
 }
 
 // EnterWorld is the spawn-on-enter use case. It runs after MapEnterHandler has
@@ -116,34 +120,57 @@ func (s *SpawnService) EnterWorld(ctx context.Context, conn gwdomain.Conn, accou
 		return fmt.Errorf("spawn: encode self ZC_SPAWN_UNIT: %w", err)
 	}
 
-	// Two-way spawn exchange with everyone already on the map within AOI range:
-	// the newcomer's spawn goes to each neighbor, and each neighbor's spawn goes
-	// to the newcomer. A neighbor whose Conn write fails is dead — tear it down
-	// (idempotent) so its stale AOI entity does not keep polluting broadcasts.
-	// The entering player's spawn is not aborted by a neighbor's dead socket.
-	visible := mp.AOI.QueryVisible(int(posX), int(posY))
-	for _, e := range visible {
-		if e.ID == player.EntityID {
-			continue // do not self-spawn twice
-		}
-		neighbor, ok := s.registry.ByAccount(uint32(e.ID))
-		if !ok {
-			// An AOI entity without a registry entry is an NPC/mob (M5+) or a
-			// torn-down player the grid has not yet removed; skip it for the
-			// PC-only spawn exchange M4b ships.
-			continue
-		}
-		if err := selfFrame.Encode(connWriter{neighbor.Conn}); err != nil {
-			s.dropNeighbor(mp, neighbor)
-			continue
-		}
-		if err := neighbor.SpawnUnit().Encode(connWriter{conn}); err != nil {
-			_ = mp.AOI.RemoveEntity(player.EntityID)
-			rollback()
-			return fmt.Errorf("spawn: encode neighbor ZC_SPAWN_UNIT for account %d: %w", e.ID, err)
-		}
+	// Two-way spawn exchange with everyone already on the map within AOI range
+	// (see exchangeSpawns). Any encode failure rolls back the player.
+	if err := s.exchangeSpawns(mp, player, selfFrame); err != nil {
+		_ = mp.AOI.RemoveEntity(player.EntityID)
+		rollback()
+		return err
 	}
 
+	return nil
+}
+
+// exchangeSpawns drives the two-way spawn exchange for an entering player: the
+// newcomer's selfFrame goes to each neighbor PC, each neighbor PC's spawn goes
+// to the newcomer, and every mob in range spawns for the newcomer. A neighbor PC
+// whose Conn write fails is dead — tear it down (idempotent) via dropNeighbor so
+// its stale AOI entity stops polluting future broadcasts; the entering player's
+// spawn is not aborted by a neighbor's dead socket. Mobs have no Conn, so a mob
+// spawn only flows mob→entering-player (never the reverse). An encode failure the
+// newcomer would observe (its own conn) returns an error so EnterWorld rolls back.
+func (s *SpawnService) exchangeSpawns(mp *domain.Map, player *domain.Player, selfFrame packet.SpawnUnitResponse) error {
+	visible := mp.AOI.QueryVisible(int(player.PosX), int(player.PosY))
+	for _, e := range visible {
+		if e.ID == player.EntityID && e.Type == aoi.EntityPlayer {
+			continue // do not self-spawn twice
+		}
+		switch e.Type {
+		case aoi.EntityMob:
+			mob, ok := s.mobs.ByEntity(e.ID)
+			if !ok {
+				continue // a torn-down mob the grid has not yet removed
+			}
+			if err := mob.SpawnUnit().Encode(connWriter{player.Conn}); err != nil {
+				return fmt.Errorf("spawn: encode mob ZC_SPAWN_UNIT for entity %d: %w", e.ID, err)
+			}
+		case aoi.EntityPlayer:
+			neighbor, ok := s.registry.ByAccount(uint32(e.ID))
+			if !ok {
+				continue // a torn-down session the grid has not yet removed
+			}
+			if err := selfFrame.Encode(connWriter{neighbor.Conn}); err != nil {
+				s.dropNeighbor(mp, neighbor)
+				continue
+			}
+			if err := neighbor.SpawnUnit().Encode(connWriter{player.Conn}); err != nil {
+				return fmt.Errorf("spawn: encode neighbor ZC_SPAWN_UNIT for account %d: %w", e.ID, err)
+			}
+		case aoi.EntityNPC:
+			// NPCs surface to the client via their own spawn path (M14+); they are
+			// not part of the PC/mob spawn exchange. Listed for exhaustiveness.
+		}
+	}
 	return nil
 }
 
