@@ -18,6 +18,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/statcalc"
 )
 
 // fakeCharGetter is a world/domain.CharacterGetter stand-in for the spawn use
@@ -90,10 +91,59 @@ func expectSpawnUnit(t *testing.T, aid, gid uint32, posX, posY int16, dir uint8,
 	return buf.Bytes()
 }
 
+// expectStatusBurst encodes the full enter status burst independently of the
+// SpawnService, so a drift in any field the burst carries — the ZC_STATUS body
+// (via statcalc), the opcode split (par/longpar/longlongpar), the var id order,
+// or the naked-Novice weight formula — surfaces as a byte mismatch. It mirrors
+// SpawnService.sendEnterStatus field-for-field. The two hardcoded constants
+// (500 = novice fist aspd_base, 20000 = Novice job default MaxWeight) are the
+// oracle's own copy; if the app changes either the test fails.
+func expectStatusBurst(t *testing.T, c chardomain.Character) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	require.NoError(t, (statcalc.ZCStatus(statcalc.StatusInputs{
+		Base: statcalc.Base{
+			Level: c.BaseLevel,
+			Str:   c.Str, Agi: c.Agi, Vit: c.Vit, Int: c.Int, Dex: c.Dex, Luk: c.Luk,
+		},
+		StatusPoint:    c.StatusPoint,
+		WeaponBaseASPD: 500, // noviceFistASPD (db/pre-re/job_aspd.yml:95)
+	})).Encode(&buf))
+
+	maxWeight := int32(20000) + int32(c.Str)*300 // noviceMaxWeightBase + str*300 (status.cpp:3663)
+	pars := []packet.ParChangeResponse{
+		{VarID: packet.SPStr, Count: int32(c.Str)},
+		{VarID: packet.SPAgi, Count: int32(c.Agi)},
+		{VarID: packet.SPVit, Count: int32(c.Vit)},
+		{VarID: packet.SPInt, Count: int32(c.Int)},
+		{VarID: packet.SPDex, Count: int32(c.Dex)},
+		{VarID: packet.SPLuk, Count: int32(c.Luk)},
+		{VarID: packet.SPHP, Count: int32(c.HP)},
+		{VarID: packet.SPMaxHP, Count: int32(c.MaxHP)},
+		{VarID: packet.SPSP, Count: int32(c.SP)},
+		{VarID: packet.SPMaxSP, Count: int32(c.MaxSP)},
+		{VarID: packet.SPBaseLevel, Count: int32(c.BaseLevel)},
+		{VarID: packet.SPJobLevel, Count: int32(c.JobLevel)},
+		{VarID: packet.SPStatusPoint, Count: int32(c.StatusPoint)},
+		{VarID: packet.SPSkillPoint, Count: int32(c.SkillPoint)},
+		{VarID: packet.SPWeight, Count: 0},
+		{VarID: packet.SPMaxWeight, Count: maxWeight},
+	}
+	for _, pc := range pars {
+		require.NoError(t, pc.Encode(&buf))
+	}
+	require.NoError(t, (packet.LongParChangeResponse{VarID: packet.SPZeny, Amount: int32(c.Zeny)}).Encode(&buf))
+	require.NoError(t, (packet.LongLongParChangeResponse{VarID: packet.SPBaseExp, Amount: int64(c.BaseExp)}).Encode(&buf))
+	require.NoError(t, (packet.LongLongParChangeResponse{VarID: packet.SPJobExp, Amount: int64(c.JobExp)}).Encode(&buf))
+	return buf.Bytes()
+}
+
 // splitFrames slices a captured byte stream into per-packet frames using the
-// 2-byte length prefix every map packet carries at [2:4]. ZC_SPAWN_UNIT is 107
-// bytes; this helper is generic so it tolerates any length-prefixed frame the
-// spawn flow emits.
+// 2-byte length prefix every map packet carries at [2:4]. It is only valid for
+// streams of length-prefixed frames (ZC_SPAWN_UNIT, walk) — the enter status
+// burst's fixed-size packets (ZC_STATUS / par-change family) carry field data,
+// not a length, at [2:4], so the entering player's stream is asserted raw
+// instead. Neighbor/observer streams are pure spawn frames, so this applies.
 func splitFrames(t *testing.T, b []byte) [][]byte {
 	t.Helper()
 	var out [][]byte
@@ -107,11 +157,6 @@ func splitFrames(t *testing.T, b []byte) [][]byte {
 	require.Empty(t, b, "no trailing bytes after the last frame")
 	return out
 }
-
-// frameAID reads the AID field at [5:9] of a ZC_SPAWN_UNIT frame so the
-// neighbor-broadcast test can identify which frame belongs to which player
-// without re-deriving the whole layout.
-func frameAID(frame []byte) uint32 { return binary.LittleEndian.Uint32(frame[5:9]) }
 
 // TestSpawnService_EnterWorld_SelfSpawn is the M4b happy path: an entering
 // player with no neighbors loads its character, registers, joins the AOI grid,
@@ -134,16 +179,51 @@ func TestSpawnService_EnterWorld_SelfSpawn(t *testing.T) {
 	err := svc.EnterWorld(context.Background(), conn, aid, cid, app.SpawnPoint{})
 	require.NoError(t, err)
 
-	// Exactly one frame: the self-spawn. A lone enterer has no neighbors to
-	// exchange with, so nothing else is written.
-	frames := splitFrames(t, conn.buf.Bytes())
-	require.Len(t, frames, 1, "lone enterer sees only its self-spawn")
-	want := expectSpawnUnit(t, aid, cid, 53, 111, 0, "Tester")
-	assert.Equal(t, want, frames[0], "self-spawn ZC_SPAWN_UNIT bytes")
+	// The conn stream is the self-spawn frame immediately followed by the enter
+	// status burst (ZC_STATUS + par/longpar/longlongpar family). A lone enterer
+	// has no neighbors to exchange with, so nothing else is written. Comparing
+	// the whole stream byte-exact pins both the spawn frame and the burst's
+	// ordering in one shot.
+	want := append(append([]byte{}, expectSpawnUnit(t, aid, cid, 53, 111, 0, "Tester")...),
+		expectStatusBurst(t, aNovice(aid, cid))...)
+	assert.Equal(t, want, conn.buf.Bytes(), "self-spawn + enter status burst stream")
 
 	p, ok := registry.ByAccount(aid)
 	require.True(t, ok, "player registered")
 	assert.Same(t, conn, p.Conn, "registry holds the entering conn")
+}
+
+// TestSpawnService_EnterWorld_StatusBurst isolates the enter status burst with
+// non-trivial stats and vitals, and — the point of the M7c opcode fix — base EXP
+// beyond the int32 range. Real stats force every par-change field off zero, and
+// 5_000_000_000 base EXP can only survive the wire through the 64-bit
+// ZC_LONGLONGPAR_CHANGE (0x0acb); the 32-bit variant the kill path once used would
+// truncate it. The whole stream is byte-exact against the independent oracle.
+func TestSpawnService_EnterWorld_StatusBurst(t *testing.T) {
+	t.Parallel()
+	const aid, cid uint32 = 2000003, 150003
+	// Mirror aNovice's appearance (expectSpawnUnit pins those fields), then set
+	// real stats/vitals/points and a >int32-max EXP.
+	char := aNovice(aid, cid)
+	char.Str, char.Agi, char.Vit, char.Int, char.Dex, char.Luk = 50, 20, 30, 40, 10, 15
+	char.JobLevel = 10
+	char.MaxHP, char.HP = 4000, 3500
+	char.MaxSP, char.SP = 200, 150
+	char.StatusPoint, char.SkillPoint, char.Zeny = 127, 30, 123456
+	char.BaseExp, char.JobExp = 5_000_000_000, 2_000_000_000 // > int32 max (2_147_483_647)
+
+	chars := &fakeCharGetter{chars: map[uint64]chardomain.Character{charKey(aid, cid): char}}
+	maps := &memMapStore{maps: map[string]*domain.Map{"prontera": newTestMap(200, 200)}}
+	registry := domain.NewPlayerRegistry()
+	mobs := domain.NewMobRegistry()
+	svc := app.NewSpawnService(chars, maps, registry, mobs)
+
+	conn := &captureConn{role: gwdomain.RoleMap}
+	require.NoError(t, svc.EnterWorld(context.Background(), conn, aid, cid, app.SpawnPoint{}))
+
+	want := append(append([]byte{}, expectSpawnUnit(t, aid, cid, 53, 111, 0, "Tester")...),
+		expectStatusBurst(t, char)...)
+	assert.Equal(t, want, conn.buf.Bytes(), "self-spawn + status burst with real stats and int64 EXP")
 }
 
 // TestSpawnService_EnterWorld_NeighborBroadcast is the two-way spawn exchange:
@@ -183,15 +263,23 @@ func TestSpawnService_EnterWorld_NeighborBroadcast(t *testing.T) {
 	err := svc.EnterWorld(context.Background(), newcomerConn, newcomerAID, newcomerCID, app.SpawnPoint{})
 	require.NoError(t, err)
 
-	// Newcomer: self-spawn + one neighbor spawn, byte-exact.
-	newcomerFrames := splitFrames(t, newcomerConn.buf.Bytes())
-	require.Len(t, newcomerFrames, 2, "newcomer sees self + one neighbor")
-	assert.Equal(t, expectSpawnUnit(t, newcomerAID, newcomerCID, 53, 111, 0, "Tester"), newcomerFrames[0], "first frame is the self-spawn")
-	assert.Equal(t, expectSpawnUnit(t, neighborAID, neighborCID, 53, 111, 0, "Neighbor"), newcomerFrames[1], "second frame is the neighbor")
+	// Newcomer stream: self-spawn, then the enter status burst, then the
+	// neighbor's spawn frame — the exchange writes the neighbor spawn after the
+	// burst. The whole stream is asserted byte-exact so the burst's position
+	// (it must follow the self-spawn, not replace it) is pinned alongside its
+	// contents.
+	newcomerWant := bytes.Join([][]byte{
+		expectSpawnUnit(t, newcomerAID, newcomerCID, 53, 111, 0, "Tester"),
+		expectStatusBurst(t, aNovice(newcomerAID, newcomerCID)),
+		expectSpawnUnit(t, neighborAID, neighborCID, 53, 111, 0, "Neighbor"),
+	}, nil)
+	assert.Equal(t, newcomerWant, newcomerConn.buf.Bytes(), "newcomer: self-spawn + status burst + neighbor spawn")
 
-	// Neighbor: only the newcomer's spawn (no self-spawn to itself).
+	// Neighbor: only the newcomer's spawn. The burst targets the entering
+	// player's own HUD, so it is never sent to a neighbor — the neighbor stream
+	// is a single length-prefixed spawn frame, which splitFrames reads cleanly.
 	neighborFrames := splitFrames(t, neighborConn.buf.Bytes())
-	require.Len(t, neighborFrames, 1, "neighbor sees only the newcomer")
+	require.Len(t, neighborFrames, 1, "neighbor sees only the newcomer's spawn")
 	assert.Equal(t, expectSpawnUnit(t, newcomerAID, newcomerCID, 53, 111, 0, "Tester"), neighborFrames[0], "neighbor received the newcomer's spawn")
 
 	// Both players are registered and on the grid.
@@ -262,9 +350,11 @@ func TestSpawnService_EnterWorld_SpawnOverride(t *testing.T) {
 	override := app.SpawnPoint{PosX: 100, PosY: 50, Dir: 4}
 	require.NoError(t, svc.EnterWorld(context.Background(), conn, aid, cid, override))
 
-	frames := splitFrames(t, conn.buf.Bytes())
-	require.Len(t, frames, 1)
-	assert.Equal(t, expectSpawnUnit(t, aid, cid, 100, 50, 4, "Tester"), frames[0], "override wins over char last_x/last_y")
+	// Override cell wins over the char's persisted last_x/last_y; the stream is
+	// the override-positioned self-spawn followed by the enter status burst.
+	want := append(append([]byte{}, expectSpawnUnit(t, aid, cid, 100, 50, 4, "Tester")...),
+		expectStatusBurst(t, aNovice(aid, cid))...)
+	assert.Equal(t, want, conn.buf.Bytes(), "override-positioned self-spawn + status burst")
 }
 
 // TestSpawnService_EnterWorld_DuplicateAccountRollsBack asserts a second enter
@@ -328,11 +418,11 @@ func TestSpawnService_EnterWorld_DeadNeighborDropped(t *testing.T) {
 	_, _, _, alive := mp.AOI.EntityLocation(neighbor.EntityID)
 	assert.False(t, alive, "dead neighbor removed from AOI")
 
-	// The newcomer still got its self-spawn (the dead neighbor's spawn-to-newcomer
-	// write also fails, but that path drops the neighbor rather than aborting).
-	frames := splitFrames(t, newcomerConn.buf.Bytes())
-	require.GreaterOrEqual(t, len(frames), 1, "newcomer still self-spawns")
-	assert.Equal(t, newcomerAID, frameAID(frames[0]), "first frame is the newcomer's self-spawn")
+	// The newcomer still got its self-spawn + status burst (the dead neighbor's
+	// spawn-to-newcomer write also fails, but that path drops the neighbor rather
+	// than aborting). The stream must begin with the newcomer's self-spawn frame.
+	selfSpawn := expectSpawnUnit(t, newcomerAID, newcomerCID, 53, 111, 0, "Tester")
+	assert.True(t, bytes.HasPrefix(newcomerConn.buf.Bytes(), selfSpawn), "stream begins with the newcomer's self-spawn")
 }
 
 // withName returns a copy of c with the name field overridden, for seeding a

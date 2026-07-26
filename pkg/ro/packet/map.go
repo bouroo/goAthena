@@ -84,6 +84,14 @@ const (
 	// rathena/src/map/clif_packetdb.hpp:61 (`parseable_packet(0x00b2,3,clif_parse_Restart,2)`).
 	// Fixed 3 bytes: [2:cmd][1:type uint8] (0=respawn, 1=return to char select).
 	HeaderCZRESTART uint16 = 0x00b2
+	// ZC_RESTART_ACK (0x00b3) — server acknowledges a CZ_RESTART. Built by
+	// rAthena's clif_charselectok (clif.cpp:846) in response to the char-server's
+	// 0x2b03 reply to a char-select request (chrif.cpp:1800). The type byte is an
+	// OK/refuse flag, NOT the request's selector: 1 = char-select allowed (client
+	// disconnects the map conn and reconnects to the char server), 0 = refused.
+	// Wire: rathena/src/map/packets.hpp:598-602
+	// (`struct PACKET_ZC_RESTART_ACK { int16 packetType; uint8 type; }`).
+	HeaderZCRESTARTACK uint16 = 0x00b3
 	// CZ_CONTACTNPC (0x0090) — client clicks an NPC. rathena/src/map/
 	// clif_packetdb.hpp:42 (`parseable_packet(0x0090,7,clif_parse_NpcClicked,2,6)`).
 	// Fixed 7 bytes: [2:cmd][4:AID uint32][1:type uint8] (1=click).
@@ -162,12 +170,13 @@ const (
 	// ZC_PC_SELL_RESULT (0x00cb, S→C) is the per-transaction ack.
 	// rathena/src/map/clif_packetdb.hpp + clif.cpp:buy_sell_selection /
 	// clif_parse_PurchaseItem / clif_purchaseitemlist for shape.
-	HeaderCZPCSELLITEMLIST uint16 = 0x00c9 // CZ_PC_SELL_ITEMLIST
-	HeaderZCPCSELLITEMLIST uint16 = 0x00c7 // ZC_PC_SELL_ITEMLIST
-	HeaderZCPCSELLRESULT   uint16 = 0x00cb // ZC_PC_SELL_RESULT
-	HeaderZCSTATUS         uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
-	HeaderZCPARCHANGE      uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
-	HeaderZCLONGPARCHANGE  uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
+	HeaderCZPCSELLITEMLIST    uint16 = 0x00c9 // CZ_PC_SELL_ITEMLIST
+	HeaderZCPCSELLITEMLIST    uint16 = 0x00c7 // ZC_PC_SELL_ITEMLIST
+	HeaderZCPCSELLRESULT      uint16 = 0x00cb // ZC_PC_SELL_RESULT
+	HeaderZCSTATUS            uint16 = 0x00bd // rathena/src/map/packets.hpp:909 (ZC_STATUS)
+	HeaderZCPARCHANGE         uint16 = 0x00b0 // rathena/src/map/packets_struct.hpp:354 (ZC_PAR_CHANGE)
+	HeaderZCLONGPARCHANGE     uint16 = 0x00b1 // rathena/src/map/packets_struct.hpp:361 (ZC_LONGPAR_CHANGE)
+	HeaderZCLONGLONGPARCHANGE uint16 = 0x0acb // rathena/src/map/packets_struct.hpp:399 (ZC_LONGLONGPAR_CHANGE; PACKETVER>=20170830)
 	// TODO(B1): these opcodes + the 5-byte invType header resolve
 	// per-PACKETVER from the inventorylistnormalType /
 	// inventorylistequipType aliases (clif_packetdb.hpp) once the
@@ -355,6 +364,11 @@ const (
 	// sizeZCLongParChange = int16 packetType + uint16 varID + int32 amount = 2+2+4 = 8
 	// (rathena/src/map/packets_struct.hpp:361-365).
 	sizeZCLongParChange = 8
+	// sizeZCLongLongParChange = int16 packetType + uint16 varID + int64 amount = 2+2+8 = 12
+	// (rathena/src/map/packets_struct.hpp:399-404, ZC_LONGLONGPAR_CHANGE). PACKETVER
+	// >= 20170830 routes SP_BASEEXP/SP_JOBEXP/SP_NEXTBASEEXP/SP_NEXTJOBEXP through
+	// this 64-bit variant instead of ZC_LONGPAR_CHANGE (clif.cpp:3735-3747).
+	sizeZCLongLongParChange = 12
 	// P2C: stat allocation + level-up effect sizes.
 	// sizeCZStatusChange = int16 packetType + uint16 statusID + uint8 amount = 2+2+1 = 5
 	// (rathena/src/map/clif.cpp:12714 clif_parse_StatusChange).
@@ -443,6 +457,9 @@ const (
 	// sizeCZRestart = int16 packetType + uint8 type = 2+1 = 3
 	// (rathena/src/map/clif_packetdb.hpp:61).
 	sizeCZRestart = 3
+	// sizeZCRestartAck = int16 packetType + uint8 type = 2+1 = 3
+	// (rathena/src/map/packets.hpp:598-602 — PACKET_ZC_RESTART_ACK).
+	sizeZCRestartAck = 3
 	// sizeCZContactNPC = int16 packetType + uint32 AID + uint8 type = 2+4+1 = 7
 	// (rathena/src/map/clif_packetdb.hpp:42).
 	sizeCZContactNPC = 7
@@ -717,6 +734,12 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCLONGPARCHANGE,
 		Name:      "ZC_LONGPAR_CHANGE",
 		Length:    sizeZCLongParChange,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCLONGLONGPARCHANGE,
+		Name:      "ZC_LONGLONGPAR_CHANGE",
+		Length:    sizeZCLongLongParChange,
 		Direction: DirectionServerToClient,
 	})
 	// M10: list packets emitted after the status burst. The three

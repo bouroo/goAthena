@@ -418,6 +418,7 @@ func validConfig() *config.Config {
 			IdentityAddr: "localhost:50051",
 			ZoneAddr:     "localhost:50052",
 			MapAddr:      "localhost:5121",
+			MapWSAddr:    "localhost:6902",
 		},
 		Assets: config.AssetsConfig{
 			Enabled:    false,

@@ -327,9 +327,11 @@ func (s *CombatService) awardKill(ctx context.Context, killer *domain.Player, en
 
 	// Per-player status broadcast: base EXP always (every kill that grants EXP),
 	// base level + status points only on a level-up. Sent to the killer's conn
-	// alone — these are personal status params, not AOI-visible events. The
-	// ZC_LONGPAR_CHANGE slot for EXP is 32-bit; slice EXP stays far under 2^31.
-	if err := (packet.LongParChangeResponse{VarID: packet.SPBaseExp, Amount: int32(c.BaseExp)}).Encode(connWriter{killer.Conn}); err != nil { //nolint:gosec // G115: uint64→int32, slice EXP bounded under 2^31
+	// alone — these are personal status params, not AOI-visible events. At
+	// PACKETVER >= 20170830 clif_updatestatus routes SP_BASEEXP through the 64-bit
+	// ZC_LONGLONGPAR_CHANGE (0x0acb), so EXP rides int64 here, never the 32-bit
+	// variant the client no longer parses for exp.
+	if err := (packet.LongLongParChangeResponse{VarID: packet.SPBaseExp, Amount: int64(c.BaseExp)}).Encode(connWriter{killer.Conn}); err != nil { //nolint:gosec // G115: uint64→int64 is value-preserving; EXP is the field's native width
 		return fmt.Errorf("combat: send base-exp update to account %d: %w", killer.AccountID, err)
 	}
 	if leveledUp {

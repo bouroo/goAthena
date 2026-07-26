@@ -151,6 +151,14 @@ type GatewayConfig struct {
 	// a new TCP connection to after CH_SELECT_CHAR. Defaults to "localhost:5121"
 	// (the Thai Classic map port).
 	MapAddr string `mapstructure:"map_addr" yaml:"map_addr" env:"GATEWAY_MAP_ADDR" validate:"required"`
+	// MapWSAddr is the WebSocket "host:port" of the dedicated map-role listener
+	// that roBrowser reconnects to after char select — the WS analogue of MapAddr
+	// for the second transport. A native TCP client (ClientROThailand) never dials
+	// it; roBrowser, which cannot speak raw TCP, reaches the map server here. Like
+	// the login/char WS listener it serves the "/ws/" upgrade path, but every
+	// accepted connection starts at the map role (NewMapWSServer) so CZ_ENTER
+	// routes through the map dispatch table. Defaults to "localhost:6902".
+	MapWSAddr string `mapstructure:"map_ws_addr" yaml:"map_ws_addr" env:"GATEWAY_MAP_WS_ADDR" validate:"required"`
 	// TextCodepage names the wire text encoding for native TCP sessions
 	// (character names, chat, NPC text). One of "utf-8" (default),
 	// "windows-874"/"cp874"/"tis-620" (Thai Classic), or "euc-kr". Parsed
@@ -435,6 +443,7 @@ func setDefaults(v *viper.Viper) {
 		"gateway.identity_addr":      "localhost:50051",
 		"gateway.zone_addr":          "localhost:50052",
 		"gateway.map_addr":           "localhost:5121",
+		"gateway.map_ws_addr":        "localhost:6902",
 		"gateway.text_codepage":      "utf-8",
 
 		"identity.use_md5_passwords": false,
@@ -521,6 +530,7 @@ func leafBindings() []leafBinding {
 		{"gateway.identity_addr", "GATEWAY_IDENTITY_ADDR"},
 		{"gateway.zone_addr", "GATEWAY_ZONE_ADDR"},
 		{"gateway.map_addr", "GATEWAY_MAP_ADDR"},
+		{"gateway.map_ws_addr", "GATEWAY_MAP_WS_ADDR"},
 		{"gateway.text_codepage", "GATEWAY_TEXT_CODEPAGE"},
 
 		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},

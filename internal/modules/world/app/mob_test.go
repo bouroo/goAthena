@@ -166,18 +166,20 @@ func TestSpawnService_EnterWorld_ShowsMobToNewcomer(t *testing.T) {
 	conn := &captureConn{role: gwdomain.RoleMap, remote: "c"}
 	require.NoError(t, svc.EnterWorld(context.Background(), conn, aid, cid, app.SpawnPoint{}))
 
-	// [0] self-spawn (PC), [1] the mob's spawn — both byte-exact.
-	frames := splitFrames(t, conn.buf.Bytes())
-	require.Len(t, frames, 2, "newcomer sees self-spawn + the mob")
-	assert.Equal(t, expectSpawnUnit(t, aid, cid, 53, 111, 0, "Tester"), frames[0], "first frame is the PC self-spawn")
-
+	// Newcomer stream: PC self-spawn, then the enter status burst, then the mob
+	// spawn — the mob is written during the spawn exchange, after the burst.
 	var wantMob bytes.Buffer
 	require.NoError(t, (packet.SpawnUnitResponse{
 		ObjectType: 5, AID: uint32(mob.EntityID), GID: 0,
 		Speed: 400, Job: 1002, PosX: 53, PosY: 111, Dir: 0,
 		XSize: 0, YSize: 0, CLevel: 1, MaxHP: -1, HP: -1, Name: "Poring",
 	}).Encode(&wantMob))
-	assert.Equal(t, wantMob.Bytes(), frames[1], "mob spawn frame is the BL_MOB encoding")
+	want := bytes.Join([][]byte{
+		expectSpawnUnit(t, aid, cid, 53, 111, 0, "Tester"),
+		expectStatusBurst(t, aNovice(aid, cid)),
+		wantMob.Bytes(),
+	}, nil)
+	assert.Equal(t, want, conn.buf.Bytes(), "PC self-spawn + status burst + mob spawn")
 }
 
 // TestMobService_SpawnAll_RegistersAllGroups asserts SpawnAll parses a spawn file

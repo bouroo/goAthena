@@ -109,6 +109,26 @@ func Register(ctx context.Context, c do.Injector) error {
 	combat := app.NewCombatService(registry, mobs, maps, mobDB, chars, app.SystemClock(), app.SystemRespawnScheduler{})
 	do.ProvideValue(c, combat)
 	do.ProvideValue(c, app.NewActionHandler(combat))
+
+	// M7: player-expression handlers. The time handler echoes the shared server
+	// tick (ZC_NOTIFY_TIME) against the same Clock movement stamps MoveStartTime
+	// with. The social service owns the change-direction + emotion broadcasts;
+	// it shares the movement/spawn collaborators (registry + map store) and adds
+	// nothing else, so one AOI-walk path serves dir/emotion. All three resolve
+	// synchronously on the conn goroutine and are provided here for the
+	// composition root to thread into the map-role dispatch table.
+	social := app.NewSocialService(registry, maps)
+	do.ProvideValue(c, app.NewTimeHandler(app.SystemClock()))
+	do.ProvideValue(c, app.NewChangeDirHandler(social))
+	do.ProvideValue(c, app.NewEmotionHandler(social))
+
+	// M7d: the char-select-return handler. CZ_RESTART type 1 sends
+	// ZC_RESTART_ACK, unregisters the player (so a fresh CZ_ENTER re-registers
+	// cleanly rather than hitting ErrPlayerAlreadyRegistered), removes its AOI
+	// entity, and closes the map conn so the client reconnects to the char
+	// listener. It shares the registry + map-store collaborators social uses.
+	restart := app.NewRestartService(registry, maps)
+	do.ProvideValue(c, app.NewRestartHandler(restart))
 	return nil
 }
 

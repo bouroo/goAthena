@@ -12,7 +12,21 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/statcalc"
 )
+
+// noviceFistASPD is the Novice fist aspd_base (db/pre-re/job_aspd.yml:95,
+// BaseASPD.Fist). The combat slice ships a single naked-Novice class with no
+// equipped weapon, so every entering character's ZC_STATUS ASPD derives from
+// this delay. Per-job ASPD lookup replaces this once the job DB loads (M8+).
+const noviceFistASPD uint16 = 500
+
+// noviceMaxWeightBase is the Novice job's base MaxWeight: the pre-re job_stats
+// Novice block omits MaxWeight, so it falls back to the documented default 20000
+// (job_stats.yml:27). status_calc_pc adds str*300 (status.cpp:3663), so a naked
+// novice's max weight is 20000 + str*300; current weight is 0 (no inventory).
+// Slice-wide naked-Novice baseline until the job DB loads (M8+).
+const noviceMaxWeightBase int32 = 20000
 
 // SpawnService owns the enter-world flow: load the character, load the map,
 // build and register the player, add it to the map's AOI grid, then drive the
@@ -120,12 +134,99 @@ func (s *SpawnService) EnterWorld(ctx context.Context, conn gwdomain.Conn, accou
 		return fmt.Errorf("spawn: encode self ZC_SPAWN_UNIT: %w", err)
 	}
 
+	// Enter status burst: populate the HUD (base stats + derived combat values
+	// via ZC_STATUS, then every parameter it does not carry via the par-change
+	// family). A failure rolls the player back, same as the self-spawn above.
+	if err := s.sendEnterStatus(conn, char); err != nil {
+		_ = mp.AOI.RemoveEntity(player.EntityID)
+		rollback()
+		return err
+	}
+
 	// Two-way spawn exchange with everyone already on the map within AOI range
 	// (see exchangeSpawns). Any encode failure rolls back the player.
 	if err := s.exchangeSpawns(mp, player, selfFrame); err != nil {
 		_ = mp.AOI.RemoveEntity(player.EntityID)
 		rollback()
 		return err
+	}
+
+	return nil
+}
+
+// sendEnterStatus emits the enter status burst a freshly spawned PC needs to
+// populate its HUD. rAthena's connect_new path (clif.cpp:10927-10932) sends
+// SP_BASEEXP/SP_NEXTBASEEXP/SP_JOBEXP/SP_NEXTJOBEXP/SP_SKILLPOINT then
+// clif_initialstatus — which emits ZC_STATUS and the six stat par-changes plus
+// SP_ATTACKRANGE/SP_ASPD — with HP/SP/zeny/weight sent by the surrounding
+// load-end. The exact interleave is not client-observable, so this groups by
+// opcode.
+//
+// At PACKETVER >= 20170830 EXP rides the 64-bit ZC_LONGLONGPAR_CHANGE
+// (clif.cpp:3735), never the 32-bit variant; zeny stays 32-bit. The slice omits
+// SP_NEXTBASEEXP/SP_NEXTJOBEXP (no next-exp table — statpoint/jobdb data absent)
+// and SP_ATTACKRANGE (no constant defined): the client shows a 0 next-exp
+// threshold and default melee range, cosmetic not breaking. Weight uses the
+// naked-Novice baseline (current 0, max 20000+str*300). All values come from the
+// character aggregate; none are fabricated.
+func (s *SpawnService) sendEnterStatus(conn gwdomain.Conn, char *chardomain.Character) error {
+	w := connWriter{conn}
+
+	if err := (statcalc.ZCStatus(statcalc.StatusInputs{
+		Base: statcalc.Base{
+			Level: char.BaseLevel,
+			Str:   char.Str, Agi: char.Agi, Vit: char.Vit,
+			Int: char.Int, Dex: char.Dex, Luk: char.Luk,
+		},
+		StatusPoint:    char.StatusPoint,
+		WeaponBaseASPD: noviceFistASPD,
+	})).Encode(w); err != nil {
+		return fmt.Errorf("spawn: encode ZC_STATUS: %w", err)
+	}
+
+	// ZC_PAR_CHANGE (0x00b0): the six base stats (rAthena re-sends these right
+	// after ZC_STATUS so the stat-allocation panel tracks live values), then
+	// every HUD parameter ZC_STATUS does not carry.
+	maxWeight := noviceMaxWeightBase + int32(char.Str)*300 //nolint:gosec // G115: uint16 str; str*300 << int32 max
+	for _, pc := range []packet.ParChangeResponse{
+		{VarID: packet.SPStr, Count: int32(char.Str)},
+		{VarID: packet.SPAgi, Count: int32(char.Agi)},
+		{VarID: packet.SPVit, Count: int32(char.Vit)},
+		{VarID: packet.SPInt, Count: int32(char.Int)},
+		{VarID: packet.SPDex, Count: int32(char.Dex)},
+		{VarID: packet.SPLuk, Count: int32(char.Luk)},
+		{VarID: packet.SPHP, Count: int32(char.HP)},       //nolint:gosec // G115: HP fits the int32 wire field (RO HP < 2^31)
+		{VarID: packet.SPMaxHP, Count: int32(char.MaxHP)}, //nolint:gosec // G115: HP fits the int32 wire field (RO HP < 2^31)
+		{VarID: packet.SPSP, Count: int32(char.SP)},       //nolint:gosec // G115: SP fits the int32 wire field (RO SP < 2^31)
+		{VarID: packet.SPMaxSP, Count: int32(char.MaxSP)}, //nolint:gosec // G115: vitals fit the int32 wire field (RO HP/SP < 2^31)
+		{VarID: packet.SPBaseLevel, Count: int32(char.BaseLevel)},
+		{VarID: packet.SPJobLevel, Count: int32(char.JobLevel)},
+		{VarID: packet.SPStatusPoint, Count: int32(char.StatusPoint)}, //nolint:gosec // G115: points fit the int32 wire field
+		{VarID: packet.SPSkillPoint, Count: int32(char.SkillPoint)},   //nolint:gosec // G115: points fit the int32 wire field
+		{VarID: packet.SPWeight, Count: 0},
+		{VarID: packet.SPMaxWeight, Count: maxWeight},
+	} {
+		if err := pc.Encode(w); err != nil {
+			return fmt.Errorf("spawn: encode ZC_PAR_CHANGE var %d: %w", pc.VarID, err)
+		}
+	}
+
+	// ZC_LONGPAR_CHANGE (0x00b1): zeny is a 32-bit value.
+	if err := (packet.LongParChangeResponse{VarID: packet.SPZeny, Amount: int32(char.Zeny)}).Encode(w); err != nil { //nolint:gosec // G115: zeny uint32→int32 is the field's native width
+		return fmt.Errorf("spawn: encode ZC_LONGPAR_CHANGE zeny: %w", err)
+	}
+
+	// ZC_LONGLONGPAR_CHANGE (0x0acb): EXP is 64-bit at PACKETVER >= 20170830.
+	for _, e := range []struct {
+		varID  uint16
+		amount int64
+	}{
+		{packet.SPBaseExp, int64(char.BaseExp)}, //nolint:gosec // G115: uint64→int64 value-preserving
+		{packet.SPJobExp, int64(char.JobExp)},   //nolint:gosec // G115: uint64→int64 value-preserving
+	} {
+		if err := (packet.LongLongParChangeResponse{VarID: e.varID, Amount: e.amount}).Encode(w); err != nil { //nolint:gosec // G115: uint64→int64 value-preserving
+			return fmt.Errorf("spawn: encode ZC_LONGLONGPAR_CHANGE var %d: %w", e.varID, err)
+		}
 	}
 
 	return nil

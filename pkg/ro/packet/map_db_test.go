@@ -36,6 +36,7 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCSTATUS, "ZC_STATUS", sizeZCStatus, DirectionServerToClient},
 		{HeaderZCPARCHANGE, "ZC_PAR_CHANGE", sizeZCParChange, DirectionServerToClient},
 		{HeaderZCLONGPARCHANGE, "ZC_LONGPAR_CHANGE", sizeZCLongParChange, DirectionServerToClient},
+		{HeaderZCLONGLONGPARCHANGE, "ZC_LONGLONGPAR_CHANGE", sizeZCLongLongParChange, DirectionServerToClient},
 		{HeaderZCINVENTORYITEMLISTNORMAL, "ZC_INVENTORY_ITEMLIST_NORMAL", VariableLength, DirectionServerToClient},
 		{HeaderZCINVENTORYITEMLISTEQUIP, "ZC_INVENTORY_ITEMLIST_EQUIP", VariableLength, DirectionServerToClient},
 		// A3: inventory bracket frames wrapping the item lists for
@@ -119,7 +120,9 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// A3 adds the inventory bracket (ZC_INVENTORY_START, ZC_INVENTORY_END) → 63.
 	// A4 adds 6 C→S drop aliases (CZ_ITEM_DROP) + 4 S→C floor-item/ack
 	// frames (ZC_ITEM_ENTRY/DISAPPEAR/THROW_ACK/PICKUP_ACK) → 73.
-	const want = 73
+	// M7c adds ZC_LONGLONGPAR_CHANGE (0x0acb) for the 64-bit exp parameters at
+	// PACKETVER >= 20170830 → 74.
+	const want = 74
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -153,6 +156,7 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCSTATUS, sizeZCStatus},
 		{HeaderZCPARCHANGE, sizeZCParChange},
 		{HeaderZCLONGPARCHANGE, sizeZCLongParChange},
+		{HeaderZCLONGLONGPARCHANGE, sizeZCLongLongParChange},
 		{HeaderZCINVENTORYITEMLISTNORMAL, VariableLength},
 		{HeaderZCINVENTORYITEMLISTEQUIP, VariableLength},
 		{HeaderZCSKILLINFOLIST, VariableLength},

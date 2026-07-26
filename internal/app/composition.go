@@ -169,6 +169,17 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 	application.RegisterRunnable("gateway-map-tcp", func(runCtx context.Context) error {
 		return gwinfra.NewMapTCPHandler(runCtx, logger, disp, newMapDec).Run("tcp://" + cfg.Gateway.MapAddr)
 	})
+	// The map-role WebSocket listener — roBrowser's only way to reach the map
+	// server, since a browser cannot open the raw TCP socket HC_NOTIFY_ZONESVR
+	// otherwise points at. Every accepted connection starts at the map role
+	// (NewMapWSServer), so CZ_ENTER routes through the map dispatch table exactly
+	// as the TCP map listener does. It shares the dispatcher, decoder factory,
+	// and origin policy with the login/char WS listener; only its initial role
+	// and bind address differ. Wired with the dual-client e2e (M7e).
+	application.RegisterRunnable("gateway-map-ws", func(runCtx context.Context) error {
+		return gwinfra.NewMapWSServer(runCtx, logger, disp, newMapDec, cfg.Gateway.WS.AllowedOrigins).
+			Run(cfg.Gateway.MapWSAddr)
+	})
 	// M4c: the movement worker. A single goroutine owns every map's pathfinder
 	// (the single-goroutine contract world/domain/map.go documents), so CZ_REQUEST_MOVE
 	// handlers enqueue and this runnable resolves moves in arrival order. Registering
@@ -230,6 +241,22 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return fmt.Errorf("resolve CZ_ACTION_REQUEST handler: %w", err)
 	}
+	timeHandler, err := do.Invoke[*worldapp.TimeHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_REQUEST_TIME handler: %w", err)
+	}
+	changeDirHandler, err := do.Invoke[*worldapp.ChangeDirHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_CHANGE_DIR handler: %w", err)
+	}
+	emotionHandler, err := do.Invoke[*worldapp.EmotionHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_REQ_EMOTION handler: %w", err)
+	}
+	restartHandler, err := do.Invoke[*worldapp.RestartHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_RESTART handler: %w", err)
+	}
 	do.ProvideValue(injector, gwapp.Handlers{
 		OnCALogin:         loginHandler.Handle,
 		OnCHEnter:         enterHandler.Handle,
@@ -238,6 +265,10 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCZEnter:         mapEnterHandler.Handle,
 		OnCZRequestMove:   moveHandler.Handle,
 		OnCZActionRequest: actionHandler.Handle,
+		OnCZRequestTime:   timeHandler.Handle,
+		OnCZChangeDir:     changeDirHandler.Handle,
+		OnCZReqEmotion:    emotionHandler.Handle,
+		OnCZRestart:       restartHandler.Handle,
 	})
 	return nil
 }

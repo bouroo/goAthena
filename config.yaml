@@ -66,6 +66,7 @@ gateway:
   identity_addr: "localhost:50051"
   zone_addr: "localhost:50052"
   map_addr: "localhost:5121"
+  map_ws_addr: "localhost:6902"
 
 identity:
   use_md5_passwords: false

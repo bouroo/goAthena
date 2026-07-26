@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
@@ -137,12 +138,12 @@ func loadConfigForE2E(t *testing.T) *config.Config {
 	return cfg
 }
 
-// rebindListenersToEphemeralPorts moves HTTP, gRPC, and all three gateway
-// listeners (login/char TCP, WS, and map TCP) onto free loopback ports so the
-// test never collides with a running goathena serve, and returns the gateway
-// TCP address the test dials. All Port fields validate min=1, so 0 is unusable;
-// freePort yields valid, non-conflicting ports. The map listener's address is
-// left on cfg.Gateway.MapAddr for the map-enter test to wait on and dial.
+// rebindListenersToEphemeralPorts moves HTTP, gRPC, and every gateway listener
+// (login/char TCP + WS, map TCP + WS) onto free loopback ports so the test never
+// collides with a running goathena serve, and returns the gateway TCP address the
+// test dials. All Port fields validate min=1, so 0 is unusable; freePort yields
+// valid, non-conflicting ports. The map listener addresses are left on
+// cfg.Gateway.MapAddr / MapWSAddr for the map-enter tests to wait on and dial.
 func rebindListenersToEphemeralPorts(t *testing.T, cfg *config.Config) string {
 	t.Helper()
 	cfg.HTTP.Host, cfg.HTTP.Port = "127.0.0.1", freePort(t)
@@ -152,6 +153,7 @@ func rebindListenersToEphemeralPorts(t *testing.T, cfg *config.Config) string {
 	cfg.Gateway.TCP.Addr = tcpAddr
 	cfg.Gateway.WS.Addr = net.JoinHostPort("127.0.0.1", strconv.Itoa(freePort(t)))
 	cfg.Gateway.MapAddr = net.JoinHostPort("127.0.0.1", strconv.Itoa(freePort(t)))
+	cfg.Gateway.MapWSAddr = net.JoinHostPort("127.0.0.1", strconv.Itoa(freePort(t)))
 	return tcpAddr
 }
 
@@ -530,6 +532,12 @@ func TestServe_MapEnter_RoundTrip(t *testing.T) {
 	copy(nameField, []byte("E2eHero"))
 	assert.Equal(t, nameField, spawn[83:107], "spawn name field")
 
+	// --- M7c: enter status burst. EnterWorld writes the self-spawn, then the
+	// ZC_STATUS + par-change family, before the spawn exchange or any later
+	// frame. Drain it so the move-ack read below lands on ZC_NOTIFY_PLAYERMOVE,
+	// not the burst's tail. ---
+	drainEnterStatusBurst(t, mapConn)
+
 	// --- M4c: CZ_REQUEST_MOVE (0x0085, 5B) → ZC_NOTIFY_PLAYERMOVE (0x0087, 12B).
 	// This crosses the move handler → MoveService queue → worker goroutine → real
 	// Prontera pathfinder (the single-goroutine contract the world-move Runnable
@@ -647,24 +655,25 @@ func TestServe_MapEnter_ShowsSpawnedMobs(t *testing.T) {
 	require.Equal(t, packet.HeaderZCACCEPTENTER, binary.LittleEndian.Uint16(resp[0:2]),
 		"expected ZC_ACCEPT_ENTER header")
 
-	// --- ZC_SPAWN_UNIT burst. EnterWorld writes the PC self-spawn, then the
-	// exchange frame for every mob in AOI range, back-to-back before the handler
-	// returns. Mobs do not move on their first tick sighting (they settle one
-	// WalkSpeed interval before ambling), so no ZC_UNIT_WALKING interleaves this
-	// burst in the enter window: the next bytes are exactly 1 PC + 4 mob spawns.
-	// Frame[0] is the player; frames[1:5] are the mobs — their order over the AOI
-	// towers is not stable, so they are collected into a set, not sequenced. ---
+	// --- ZC_SPAWN_UNIT frames. EnterWorld writes the PC self-spawn, then the
+	// enter status burst (ZC_STATUS + par-change family), then the exchange frame
+	// for every mob in AOI range. The self-spawn and the burst are fixed in
+	// width, so the test reads the self-spawn, drains the burst, then reads the
+	// mob spawns. Mobs do not move on their first tick sighting (they settle one
+	// WalkSpeed interval before ambling), so no ZC_UNIT_WALKING interleaves the
+	// mob burst in the enter window: the next bytes after the burst are exactly
+	// the four mob spawns. Their order over the AOI towers is not stable, so they
+	// are collected into a set, not sequenced. ---
 	const (
 		spawnSize = 107 // packet.SpawnUnitResponse{}.Size()
 		mobCount  = 4
 	)
-	burst := make([]byte, spawnSize*(1+mobCount))
-	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
-	_, err = io.ReadFull(mapConn, burst)
-	require.NoError(t, err, "no spawn burst received; SpawnAll likely placed no mobs in AOI range")
 
 	// Frame 0: the PC self-spawn.
-	self := burst[0:spawnSize]
+	self := make([]byte, spawnSize)
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, err = io.ReadFull(mapConn, self)
+	require.NoError(t, err, "no PC self-spawn received; spawn-on-enter likely failed to load the char/map")
 	require.Equal(t, packet.HeaderZCSPAWNUNIT, binary.LittleEndian.Uint16(self[0:2]),
 		"frame 0 header is ZC_SPAWN_UNIT")
 	require.Equal(t, uint8(0), self[4], "frame 0 ObjectType is PC")
@@ -673,10 +682,18 @@ func TestServe_MapEnter_ShowsSpawnedMobs(t *testing.T) {
 	require.Equal(t, seedCharID, binary.LittleEndian.Uint32(self[9:13]),
 		"frame 0 GID is the seeded char_id")
 
+	// Enter status burst: ZC_STATUS + the par-change family, between the
+	// self-spawn and the mob spawns.
+	drainEnterStatusBurst(t, mapConn)
+
 	// Frames 1..4: the four mobs, keyed by sprite id (the spawn packet's job slot).
 	seen := make(map[int16]string, mobCount)
+	mobBurst := make([]byte, spawnSize*mobCount)
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, err = io.ReadFull(mapConn, mobBurst)
+	require.NoError(t, err, "no mob spawn burst received; SpawnAll likely placed no mobs in AOI range")
 	for i := 0; i < mobCount; i++ {
-		f := burst[(1+i)*spawnSize : (2+i)*spawnSize]
+		f := mobBurst[i*spawnSize : (1+i)*spawnSize]
 		require.Equal(t, packet.HeaderZCSPAWNUNIT, binary.LittleEndian.Uint16(f[0:2]),
 			"mob frame header is ZC_SPAWN_UNIT")
 		require.Equal(t, uint8(5), f[4], "mob ObjectType is BL_MOB (NPC_MOB_TYPE)")
@@ -857,9 +874,13 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 			if binary.LittleEndian.Uint32(frame[2:6]) == poringID {
 				vanishSeen = true
 			}
-		case packet.HeaderZCLONGPARCHANGE:
+		case packet.HeaderZCLONGLONGPARCHANGE:
+			// At PACKETVER >= 20170830 clif_updatestatus routes SP_BASEEXP through
+			// the 64-bit ZC_LONGLONGPAR_CHANGE (0x0acb), so EXP rides int64 (offset
+			// 4:12), not the 32-bit ZC_LONGPAR_CHANGE. The award's value (10) is far
+			// under int32, so it narrows cleanly for the assertion.
 			if binary.LittleEndian.Uint16(frame[2:4]) == packet.SPBaseExp {
-				expVal = int32(binary.LittleEndian.Uint32(frame[4:8]))
+				expVal = int32(binary.LittleEndian.Uint64(frame[4:12])) //nolint:gosec // G115: exp (10) narrows losslessly
 				expSeen = true
 			}
 		case packet.HeaderZCPARCHANGE:
@@ -972,6 +993,281 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 	assert.Equal(t, uint32(expectedStatus), prog.StatusPoint, "persisted status_point = 3")
 }
 
+// connectAndEnterMap opens a fresh connection to the dedicated map listener,
+// sends CZ_ENTER, and asserts the full enter exchange — ZC_ACCEPT_ENTER (trust
+// gate admitted the session) then ZC_SPAWN_UNIT (SpawnService loaded the char and
+// self-spawned) — draining the enter status burst afterward so the caller's next
+// read lands on a clean stream. It is the reusable enter primitive for the
+// restart e2e, which must enter, return to char select, and re-enter.
+func connectAndEnterMap(t *testing.T, mapAddr string, charID uint32, loginID1 uint32, sexByte uint8, name string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", mapAddr)
+	require.NoError(t, err)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+
+	var enter bytes.Buffer
+	require.NoError(t, packet.CZEnterRequest{
+		AccountID: seededAccountID, CharID: charID, AuthCode: loginID1, ClientTime: 0, Sex: sexByte,
+	}.Encode(&enter))
+	_, err = conn.Write(enter.Bytes())
+	require.NoError(t, err)
+
+	resp := make([]byte, packet.MapAcceptEnterResponse{}.Size())
+	_, err = io.ReadFull(conn, resp)
+	require.NoError(t, err, "no ZC_ACCEPT_ENTER; CZ_ENTER verification likely failed")
+	require.Equal(t, packet.HeaderZCACCEPTENTER, binary.LittleEndian.Uint16(resp[0:2]), "expected ZC_ACCEPT_ENTER")
+
+	spawn := make([]byte, packet.SpawnUnitResponse{}.Size())
+	_, err = io.ReadFull(conn, spawn)
+	require.NoError(t, err, "no ZC_SPAWN_UNIT; spawn-on-enter likely failed (ErrPlayerAlreadyRegistered?)")
+	require.Equal(t, packet.HeaderZCSPAWNUNIT, binary.LittleEndian.Uint16(spawn[0:2]), "expected ZC_SPAWN_UNIT")
+	assert.Equal(t, seededAccountID, binary.LittleEndian.Uint32(spawn[5:9]), "spawn AID = account_id")
+	assert.Equal(t, charID, binary.LittleEndian.Uint32(spawn[9:13]), "spawn GID = char_id")
+
+	drainEnterStatusBurst(t, conn)
+	return conn
+}
+
+// TestServe_Restart_ReturnsToCharSelectAndReenters is the M7d end-to-end: a
+// player enters the world, sends CZ_RESTART (type 1 = return to char select), and
+// the server replies ZC_RESTART_ACK(type=1) then closes the map connection. The
+// client then reconnects and re-enters CZ_ENTER — which must succeed, proving the
+// char-select teardown unregistered the player (a lingering entry would make the
+// re-enter's SpawnService.Register hit ErrPlayerAlreadyRegistered and drop the
+// spawn frame).
+func TestServe_Restart_ReturnsToCharSelectAndReenters(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eReturn", "prontera", 53, 111)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	// --- Login to capture the session token the CZ_ENTER gate verifies. ---
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN; login likely failed against the DB")
+	require.Equal(t, packet.HeaderACACCEPTLOGIN, binary.LittleEndian.Uint16(accept[0:2]))
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1)
+	require.NoError(t, loginConn.Close())
+
+	// --- First enter. ---
+	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eReturn")
+	defer mapConn.Close()
+
+	// --- CZ_RESTART (0x00b2, 3B, type=1) → ZC_RESTART_ACK (0x00b3, 3B, type=1). ---
+	var restart bytes.Buffer
+	require.NoError(t, packet.CZRestartRequest{Type: 1}.Encode(&restart))
+	_, err = mapConn.Write(restart.Bytes())
+	require.NoError(t, err)
+
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	ack := make([]byte, packet.RestartAckResponse{}.Size())
+	_, err = io.ReadFull(mapConn, ack)
+	require.NoError(t, err, "no ZC_RESTART_ACK received")
+	require.Equal(t, packet.HeaderZCRESTARTACK, binary.LittleEndian.Uint16(ack[0:2]), "expected ZC_RESTART_ACK")
+	assert.Equal(t, uint8(1), ack[2], "type=1 char-select allowed")
+
+	// --- The server closes the map connection after the ack; the client's next
+	// read hits EOF (not a timeout). A polling deadline bounds the wait. ---
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(3*time.Second)))
+	_, err = io.ReadFull(mapConn, make([]byte, 1))
+	assert.ErrorIs(t, err, io.EOF, "map connection closed by the server after ZC_RESTART_ACK")
+
+	// --- Reconnect and re-enter on a fresh map connection. This is the proof the
+	// teardown ran: a lingering registry entry would make SpawnService.Register
+	// reject the duplicate account and the spawn frame would never arrive. ---
+	reenterConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eReturn")
+	defer reenterConn.Close()
+}
+
+// --- WebSocket dual-client helpers (roBrowser transport) ---
+//
+// roBrowser reaches the server over WebSocket, not raw TCP. Unlike the TCP
+// listeners, a WS connection is message-framed: every server-side Encode→Write
+// is one discrete WS message, so a client Read returns one whole packet rather
+// than a partial byte stream. The TCP-oriented readMapFrame/awaitFrame/drain
+// helpers therefore do not apply here; these helpers read whole messages.
+
+// wsDial opens a coder/websocket client to the WS upgrade path on addr and
+// registers a CloseNow cleanup. The path is the "/ws/" constant both WS
+// listeners serve (the config's ws.path is informational; the handler binds the
+// fixed route).
+func wsDial(t *testing.T, addr string) *websocket.Conn {
+	t.Helper()
+	c, _, err := websocket.Dial(context.Background(), "ws://"+addr+"/ws/", nil)
+	require.NoError(t, err, "dial WS %s", addr)
+	t.Cleanup(func() { _ = c.CloseNow() })
+	return c
+}
+
+// wsWrite sends one binary WS message. A RO client frames one packet per message.
+func wsWrite(t *testing.T, c *websocket.Conn, p []byte) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, c.Write(ctx, websocket.MessageBinary, p), "ws write")
+}
+
+// wsRead reads one binary WS message within timeout, returning (msg, false) on
+// any error/timeout. Each server packet is its own WS message, so the returned
+// slice is exactly one packet (with its 2-byte header at [0:2]).
+func wsRead(t *testing.T, c *websocket.Conn, timeout time.Duration) ([]byte, bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	_, data, err := c.Read(ctx)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
+// wsReadUntil reads whole-packet WS messages until one whose little-endian
+// header == want arrives, or timeout elapses (then (nil, false)). Intervening
+// frames — the enter status burst queued ahead of a request's reply — are
+// discarded. In the happy path ZC_NOTIFY_TIME always arrives before the budget
+// is spent; the timeout is only a bound for failure diagnostics.
+func wsReadUntil(t *testing.T, c *websocket.Conn, want uint16, timeout time.Duration) ([]byte, bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, false
+		}
+		msg, ok := wsRead(t, c, remaining)
+		if !ok {
+			return nil, false
+		}
+		if binary.LittleEndian.Uint16(msg) == want {
+			return msg, true
+		}
+	}
+}
+
+// TestServe_WS_DualClient_LoginEnterRoundTrip is the M7e dual-client proof: the
+// same combat slice the TCP e2e drives is reachable over WebSocket, the transport
+// roBrowser must use (a browser cannot open the raw TCP map socket). It exercises
+// both WS listeners the M7e wiring added — the login/char WS listener (CA_LOGIN →
+// AC_ACCEPT_LOGIN) and the dedicated map-role WS listener (CZ_ENTER → ZC_ACCEPT_ENTER
+// → ZC_SPAWN_UNIT, then a CZ_REQUEST_TIME → ZC_NOTIFY_TIME round-trip) — proving
+// the map decoder, dispatch table, and response encode all work over WS messages,
+// not just the login framing the infra-level ws_test already covers. The combat
+// loop itself is transport-agnostic and TCP-proven; this test covers the
+// transport-specific risk surface (message framing through the world core).
+func TestServe_WS_DualClient_LoginEnterRoundTrip(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	wsLoginAddr := cfg.Gateway.WS.Addr
+	mapWSAddr := cfg.Gateway.MapWSAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eBrowser", "prontera", 53, 111)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, wsLoginAddr, serveErr) // login/char WS listener
+	waitGatewayOrFatal(t, mapWSAddr, serveErr)   // map-role WS listener (M7e)
+
+	// --- Login over the login/char WS listener: CA_LOGIN → AC_ACCEPT_LOGIN. ---
+	loginWS := wsDial(t, wsLoginAddr)
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	wsWrite(t, loginWS, login.Bytes())
+
+	accept, ok := wsRead(t, loginWS, 5*time.Second)
+	require.True(t, ok, "no AC_ACCEPT_LOGIN over WS; login likely failed against the DB")
+	require.Equal(t, packet.HeaderACACCEPTLOGIN, binary.LittleEndian.Uint16(accept[0:2]),
+		"expected AC_ACCEPT_LOGIN over WS")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1, "AC_ACCEPT_LOGIN over WS carried no login_id1")
+	// The map conn is a separate listener; close the login-WS conn (cleanup also
+	// CloseNows it, idempotently).
+	require.NoError(t, loginWS.Close(websocket.StatusNormalClosure, ""), "close login WS conn")
+
+	// --- Enter the map over the dedicated map-role WS listener. ---
+	mapWS := wsDial(t, mapWSAddr)
+	var enter bytes.Buffer
+	require.NoError(t, packet.CZEnterRequest{
+		AccountID: seededAccountID, CharID: seedCharID, AuthCode: loginID1, ClientTime: 0, Sex: sexByte,
+	}.Encode(&enter))
+	wsWrite(t, mapWS, enter.Bytes())
+
+	enterResp, ok := wsRead(t, mapWS, 5*time.Second)
+	require.True(t, ok, "no ZC_ACCEPT_ENTER over WS; CZ_ENTER verification likely failed")
+	require.Equal(t, packet.HeaderZCACCEPTENTER, binary.LittleEndian.Uint16(enterResp[0:2]),
+		"expected ZC_ACCEPT_ENTER over WS")
+
+	// The self-spawn is its own WS message right after the enter ack.
+	spawn, ok := wsRead(t, mapWS, 5*time.Second)
+	require.True(t, ok, "no ZC_SPAWN_UNIT over WS; spawn-on-enter likely failed (ErrPlayerAlreadyRegistered?)")
+	require.Equal(t, packet.HeaderZCSPAWNUNIT, binary.LittleEndian.Uint16(spawn[0:2]),
+		"expected ZC_SPAWN_UNIT over WS")
+	assert.Equal(t, seededAccountID, binary.LittleEndian.Uint32(spawn[5:9]),
+		"spawn AID = account_id over WS")
+	assert.Equal(t, seedCharID, binary.LittleEndian.Uint32(spawn[9:13]),
+		"spawn GID = char_id over WS")
+
+	// --- A map-role request/response round-trip proves bidirectional framing
+	// over WS (request decode → dispatch → TimeHandler → ZC_NOTIFY_TIME encode →
+	// WS write). CZ_REQUEST_TIME → ZC_NOTIFY_TIME is a clean 1:1 reply; the enter
+	// status burst frames queued ahead of it are scanned past by wsReadUntil. ---
+	var reqTime bytes.Buffer
+	require.NoError(t, packet.CZRequestTimeRequest{ClientTick: 0}.Encode(&reqTime))
+	wsWrite(t, mapWS, reqTime.Bytes())
+	timeResp, ok := wsReadUntil(t, mapWS, packet.HeaderZCNOTIFYTIME, 5*time.Second)
+	require.True(t, ok, "no ZC_NOTIFY_TIME over WS; the map-role WS round-trip failed")
+	assert.Len(t, timeResp, packet.NotifyTimeResponse{}.Size(), "ZC_NOTIFY_TIME is 6 bytes")
+}
+
 // readMapFrame reads exactly one framed map-role packet from conn, dispatching on
 // the 2-byte opcode: variable-length packets (spawn-unit, unit-walking) carry
 // their total wire length at [2:4]; fixed-length packets are read to their known
@@ -983,12 +1279,18 @@ func readMapFrame(t *testing.T, conn net.Conn) ([]byte, bool) {
 	t.Helper()
 	opBuf := make([]byte, 2)
 	// The opcode read is the drain's idle sentinel: a read deadline or close
-	// here ends the drain, not the test. Once an opcode is read the rest of its
-	// frame is already buffered (gnet writes whole frames), so any later short
-	// read is a genuine desync/disconnect and fails loudly.
+	// here ends the drain, not the test. Once an opcode is read the frame is in
+	// flight and MUST be fully consumed — aborting mid-frame (returning false
+	// after the opcode) would leave the stream desynced. The caller's polling
+	// deadline is short (idle detection), so it can fire between the opcode read
+	// and the body read when the writer is briefly scheduled out; re-arm a
+	// generous deadline for the length-prefix + body so a polling-deadline split
+	// is not mistaken for a genuine desync. A real desync still fails loudly once
+	// this window elapses.
 	if _, err := io.ReadFull(conn, opBuf); err != nil {
 		return nil, false
 	}
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
 	op := binary.LittleEndian.Uint16(opBuf)
 	if op == packet.HeaderZCSPAWNUNIT || op == packet.HeaderZCUNITWALKING {
 		lenBuf := make([]byte, 2)
@@ -1029,13 +1331,38 @@ func mapFrameSize(op uint16) int {
 		return packet.NotifyActResponse{}.Size()
 	case packet.HeaderZCNOTIFYVANISH:
 		return packet.NotifyVanishResponse{}.Size()
+	case packet.HeaderZCSTATUS:
+		return packet.StatusResponse{}.Size()
 	case packet.HeaderZCPARCHANGE:
 		return packet.ParChangeResponse{}.Size()
 	case packet.HeaderZCLONGPARCHANGE:
 		return packet.LongParChangeResponse{}.Size()
+	case packet.HeaderZCLONGLONGPARCHANGE:
+		return packet.LongLongParChangeResponse{}.Size()
 	default:
 		return 0
 	}
+}
+
+// drainEnterStatusBurst consumes the enter status burst SpawnService emits right
+// after the PC self-spawn — ZC_STATUS, then the 16 ZC_PAR_CHANGE frames, the
+// ZC_LONGPAR_CHANGE zeny, and the two ZC_LONGLONGPAR_CHANGE exp frames — so the
+// caller's next raw read lands on the frame that follows it (a mob spawn or the
+// move ack). The burst is fixed in width regardless of stat values, so its size is
+// the sum of the encoders it is built from; the leading ZC_STATUS header pins that
+// the consumed bytes are indeed the burst, not a desynced stream.
+func drainEnterStatusBurst(t *testing.T, conn net.Conn) {
+	t.Helper()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	size := packet.StatusResponse{}.Size() +
+		16*packet.ParChangeResponse{}.Size() +
+		packet.LongParChangeResponse{}.Size() +
+		2*packet.LongLongParChangeResponse{}.Size()
+	buf := make([]byte, size)
+	_, err := io.ReadFull(conn, buf)
+	require.NoError(t, err, "no enter status burst received after the PC self-spawn")
+	require.Equal(t, packet.HeaderZCSTATUS, binary.LittleEndian.Uint16(buf[0:2]),
+		"status burst must begin with ZC_STATUS (0x00bd)")
 }
 
 // drainFrames reads framed packets from conn, dispatching each to handle, until

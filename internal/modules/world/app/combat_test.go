@@ -34,10 +34,10 @@ import (
 func splitFixedFrames(t *testing.T, b []byte) [][]byte {
 	t.Helper()
 	sizes := map[uint16]int{
-		packet.HeaderZCNOTIFYACT:     packet.NotifyActResponse{}.Size(),
-		packet.HeaderZCNOTIFYVANISH:  packet.NotifyVanishResponse{}.Size(),
-		packet.HeaderZCLONGPARCHANGE: packet.LongParChangeResponse{}.Size(),
-		packet.HeaderZCPARCHANGE:     packet.ParChangeResponse{}.Size(),
+		packet.HeaderZCNOTIFYACT:         packet.NotifyActResponse{}.Size(),
+		packet.HeaderZCNOTIFYVANISH:      packet.NotifyVanishResponse{}.Size(),
+		packet.HeaderZCLONGLONGPARCHANGE: packet.LongLongParChangeResponse{}.Size(),
+		packet.HeaderZCPARCHANGE:         packet.ParChangeResponse{}.Size(),
 	}
 	var out [][]byte
 	for len(b) >= 2 {
@@ -88,13 +88,14 @@ func expectNotifyVanish(t *testing.T, gid uint32) []byte {
 	return buf.Bytes()
 }
 
-// expectLongParChange encodes a ZC_LONGPAR_CHANGE (32-bit status update) frame
-// for the EXP path — built independently so a drift in the var id or amount is
-// caught as a byte mismatch.
-func expectLongParChange(t *testing.T, varID uint16, amount int32) []byte {
+// expectLongLongParChange encodes a ZC_LONGLONGPAR_CHANGE (64-bit status update)
+// frame for the EXP path — at PACKETVER >= 20170830 EXP rides int64, so the
+// expected frame is built from the 64-bit variant. Built independently so a drift
+// in the var id or amount surfaces as a byte mismatch.
+func expectLongLongParChange(t *testing.T, varID uint16, amount int64) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	require.NoError(t, (packet.LongParChangeResponse{VarID: varID, Amount: amount}).Encode(&buf))
+	require.NoError(t, (packet.LongLongParChangeResponse{VarID: varID, Amount: amount}).Encode(&buf))
 	return buf.Bytes()
 }
 
@@ -577,7 +578,7 @@ func newProgressionFixture(t *testing.T, mobID int32, mobHP int32) (*memProgress
 
 // TestCombatService_Kill_AwardsExpNoLevelUp kills a Poring (BaseExp 5) from a
 // fresh novice (level 1, base_exp 0). The award (5) is below the level-2
-// threshold (10), so the kill broadcasts exactly the EXP update (LongParChange)
+// threshold (10), so the kill broadcasts exactly the EXP update (LongLongParChange)
 // and no level/status-point frames. The persisted progression carries base_exp=5,
 // base_level unchanged at 1.
 func TestCombatService_Kill_AwardsExpNoLevelUp(t *testing.T) {
@@ -593,7 +594,7 @@ func TestCombatService_Kill_AwardsExpNoLevelUp(t *testing.T) {
 	frames := splitFixedFrames(t, f.conn.buf.Bytes())
 	require.Len(t, frames, 3, "act + vanish + exp update")
 	assert.Equal(t,
-		expectLongParChange(t, packet.SPBaseExp, 5), frames[2],
+		expectLongLongParChange(t, packet.SPBaseExp, 5), frames[2],
 		"base EXP update to the killer only",
 	)
 
@@ -620,7 +621,7 @@ func TestCombatService_Kill_LevelUpsAndGrantsStatusPoints(t *testing.T) {
 	// 100 EXP → levels 1→2 (10), 2→3 (30), 3→4 (70); 100 < 150 so stops at L4.
 	frames := splitFixedFrames(t, f.conn.buf.Bytes())
 	require.Len(t, frames, 5, "act + vanish + exp + level + statuspoint")
-	assert.Equal(t, expectLongParChange(t, packet.SPBaseExp, 100), frames[2], "EXP update")
+	assert.Equal(t, expectLongLongParChange(t, packet.SPBaseExp, 100), frames[2], "EXP update")
 	assert.Equal(t, expectParChange(t, packet.SPBaseLevel, 4), frames[3], "base level → 4")
 	assert.Equal(t, expectParChange(t, packet.SPStatusPoint, 57), frames[4], "status points 48 + 3*3")
 
@@ -698,7 +699,7 @@ func TestCombatService_Kill_AtCapAccruesExpNoLevel(t *testing.T) {
 	// 6000 + 5 = 6005 EXP; at the cap, only the EXP frame goes out.
 	frames := splitFixedFrames(t, f.conn.buf.Bytes())
 	require.Len(t, frames, 3, "act + vanish + exp; no level/status at cap")
-	assert.Equal(t, expectLongParChange(t, packet.SPBaseExp, 6005), frames[2])
+	assert.Equal(t, expectLongLongParChange(t, packet.SPBaseExp, 6005), frames[2])
 
 	require.True(t, store.savedOK)
 	assert.Equal(t, uint16(10), store.saved.BaseLevel, "level pinned at the table cap")

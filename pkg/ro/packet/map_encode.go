@@ -628,6 +628,40 @@ func (r NotifyTimeResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// RestartAckResponse encodes ZC_RESTART_ACK (0x00b3) — the server's reply to a
+// client CZ_RESTART. The Type byte is an OK/refuse flag, not a mirror of the
+// request's selector: clif_charselectok(id, ok) sets type=ok, where ok=1 lets the
+// client leave for char select and ok=0 keeps it on the map. The char-select path
+// always succeeds in this monolith (no out-of-process char-server round-trip), so
+// the world sends type=1; the field stays configurable for the future refuse path.
+//
+// Wire layout (rathena/src/map/packets.hpp:598-602):
+//
+//	int16 packetType = 0x00b3 (HeaderZCRESTARTACK)
+//	uint8 type        (0 = refused, 1 = leave-for-char-select)
+type RestartAckResponse struct {
+	Type uint8
+}
+
+// Size returns the on-wire byte length that Encode will write (always 3).
+func (r RestartAckResponse) Size() int {
+	return sizeZCRestartAck
+}
+
+// Encode writes the ZC_RESTART_ACK packet to w.
+func (r RestartAckResponse) Encode(w io.Writer) error {
+	var buf [sizeZCRestartAck]byte
+	// int16 packetType = 0x00b3 (HeaderZCRESTARTACK).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCRESTARTACK)
+	// uint8 type at offset 2.
+	buf[2] = r.Type
+
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_RESTART_ACK: %w", err)
+	}
+	return nil
+}
+
 // StatusResponse encodes ZC_STATUS (0x00bd) — the initial character
 // status block sent after map load. Carries base stats, their upgrade
 // costs, and derived combat values (ATK/DEF/MATK/MDEF/HIT/FLEE/CRIT/ASPD).
@@ -778,6 +812,39 @@ func (r LongParChangeResponse) Encode(w io.Writer) error {
 	binary.LittleEndian.PutUint32(buf[4:], uint32(r.Amount)) //nolint:gosec // wire slot is unsigned
 	if _, err := w.Write(buf[:]); err != nil {
 		return fmt.Errorf("packet: write ZC_LONGPAR_CHANGE: %w", err)
+	}
+	return nil
+}
+
+// LongLongParChangeResponse encodes ZC_LONGLONGPAR_CHANGE (0x0acb) — a single
+// 64-bit status parameter update. At PACKETVER >= 20170830 clif_updatestatus
+// routes SP_BASEEXP / SP_JOBEXP (and the next-exp thresholds) through this
+// variant instead of the 32-bit ZC_LONGPAR_CHANGE, so the exp bar carries a full
+// int64. SP_ZENY stays on the 32-bit variant.
+//
+// Wire layout (rathena/src/map/packets_struct.hpp:399-404):
+//
+//	int16  packetType
+//	uint16 varID
+//	int64  amount
+type LongLongParChangeResponse struct {
+	VarID  uint16
+	Amount int64
+}
+
+// Size returns the on-wire byte length that Encode will write (always 12).
+func (r LongLongParChangeResponse) Size() int {
+	return sizeZCLongLongParChange
+}
+
+// Encode writes the ZC_LONGLONGPAR_CHANGE packet to w.
+func (r LongLongParChangeResponse) Encode(w io.Writer) error {
+	var buf [sizeZCLongLongParChange]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCLONGLONGPARCHANGE)
+	binary.LittleEndian.PutUint16(buf[2:], r.VarID)
+	binary.LittleEndian.PutUint64(buf[4:], uint64(r.Amount)) //nolint:gosec // wire slot is unsigned
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_LONGLONGPAR_CHANGE: %w", err)
 	}
 	return nil
 }

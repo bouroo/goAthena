@@ -37,6 +37,18 @@ type Handlers struct {
 	// OnCZActionRequest serves CZ_ACTION_REQUEST (0x0089), the attack/motion
 	// request. Provided by the world module (M6).
 	OnCZActionRequest domain.PacketHandler
+	// OnCZRequestTime serves CZ_REQUEST_TIME (0x007e), the clock-skew probe.
+	// Provided by the world module (M7).
+	OnCZRequestTime domain.PacketHandler
+	// OnCZChangeDir serves CZ_CHANGE_DIR (0x009b), the facing-change request.
+	// Provided by the world module (M7).
+	OnCZChangeDir domain.PacketHandler
+	// OnCZReqEmotion serves CZ_REQ_EMOTION (0x00bf), the emotion-icon request.
+	// Provided by the world module (M7).
+	OnCZReqEmotion domain.PacketHandler
+	// OnCZRestart serves CZ_RESTART (0x00b2), the leave-world request (respawn
+	// or return to char select). Provided by the world module (M7).
+	OnCZRestart domain.PacketHandler
 }
 
 // BuildDispatcher assembles the three role-keyed dispatch tables from the
@@ -67,6 +79,18 @@ func BuildDispatcher(h Handlers) *domain.Dispatcher {
 	}
 	if h.OnCZActionRequest != nil {
 		mapT[packet.HeaderCZACTIONREQUEST] = h.OnCZActionRequest
+	}
+	if h.OnCZRequestTime != nil {
+		mapT[packet.HeaderCZREQUESTTIME] = h.OnCZRequestTime
+	}
+	if h.OnCZChangeDir != nil {
+		mapT[packet.HeaderCZCHANGEDIR] = h.OnCZChangeDir
+	}
+	if h.OnCZReqEmotion != nil {
+		mapT[packet.HeaderCZREQEMOTION] = h.OnCZReqEmotion
+	}
+	if h.OnCZRestart != nil {
+		mapT[packet.HeaderCZRESTART] = h.OnCZRestart
 	}
 	return domain.NewDispatcher(login, char, mapT)
 }

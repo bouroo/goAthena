@@ -1288,6 +1288,44 @@ func TestLongParChangeResponse_Encode(t *testing.T) {
 	}
 }
 
+// ZC_LONGLONGPAR_CHANGE (0x0acb, 12 bytes) tests. At PACKETVER >= 20170830 the
+// exp parameters ride this 64-bit variant, not the 32-bit ZC_LONGPAR_CHANGE.
+
+func TestLongLongParChangeResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r LongLongParChangeResponse
+	if got, want := r.Size(), sizeZCLongLongParChange; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestLongLongParChangeResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	// An exp value that overflows int32: the whole point of the 64-bit variant.
+	resp := LongLongParChangeResponse{VarID: SPBaseExp, Amount: 5_000_000_000}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 12
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+	if got[0] != 0xcb || got[1] != 0x0a {
+		t.Errorf("header bytes = %02x %02x, want cb 0a (LE 0x0acb)", got[0], got[1])
+	}
+	if vid := binary.LittleEndian.Uint16(got[2:4]); vid != SPBaseExp {
+		t.Errorf("varID = %d, want %d (SPBaseExp)", vid, SPBaseExp)
+	}
+	if amt := int64(binary.LittleEndian.Uint64(got[4:12])); amt != 5_000_000_000 {
+		t.Errorf("amount = %d, want 5000000000", amt)
+	}
+}
+
 // StatusPointCost tests — pre-Renewal formula (rathena/src/map/pc.cpp:8803).
 // cost = 1 + (val + 9) / 10.
 func TestStatusPointCost(t *testing.T) {
@@ -2943,5 +2981,55 @@ func TestNotifyVanishResponse_Encode(t *testing.T) {
 	// type at [6].
 	if out[6] != VanishDead {
 		t.Errorf("type = %d, want %d (CLR_DEAD)", out[6], VanishDead)
+	}
+}
+
+func TestRestartAckResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	var r RestartAckResponse
+	if got, want := r.Size(), sizeZCRestartAck; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestRestartAckResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	// clif_charselectok sets type=1 to let the client leave for char select.
+	resp := RestartAckResponse{Type: 1}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 3
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Opcode at [0:2] = 0x00b3 LE → 0xb3 0x00.
+	if got[0] != 0xb3 || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want b3 00 (LE 0x00b3)", got[0], got[1])
+	}
+	// type at [2] = 1 (char-select allowed).
+	if got[2] != 1 {
+		t.Errorf("type = %d, want 1", got[2])
+	}
+}
+
+func TestRestartAckResponse_Encode_Refused(t *testing.T) {
+	t.Parallel()
+
+	// type=0 is the refuse flag (clif_charselectok(id, 0)): the client stays.
+	var buf bytes.Buffer
+	if err := (RestartAckResponse{Type: 0}).Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+	if len(got) != 3 || got[0] != 0xb3 || got[1] != 0x00 || got[2] != 0 {
+		t.Errorf("refuse bytes = %02x, want b3 00 00", got)
 	}
 }
