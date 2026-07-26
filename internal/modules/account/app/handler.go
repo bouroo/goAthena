@@ -56,6 +56,17 @@ func (h *CALoginHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame g
 		// server-list request) instead of login. rAthena performs this state
 		// transition on AC_ACCEPT_LOGIN.
 		conn.SetRole(gwdomain.RoleChar)
+		// Cache the credentials the char/map enter flows will verify against. The
+		// connection itself is proof the login that minted them was accepted, so
+		// this cache is the trust anchor for CH_ENTER and CZ_ENTER — they compare
+		// the packet's echoed credentials to it rather than re-querying the
+		// session store.
+		conn.SetAuth(gwdomain.ConnAuth{
+			AccountID: res.Account.AccountID,
+			LoginID1:  res.LoginID1,
+			LoginID2:  res.LoginID2,
+			Sex:       res.Account.Sex.WireByte(),
+		})
 		accept := packet.AcceptLoginResponse{
 			LoginID1: res.LoginID1,
 			AID:      res.Account.AccountID,

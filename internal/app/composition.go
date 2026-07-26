@@ -18,6 +18,8 @@ import (
 	"github.com/bouroo/goAthena/internal/infrastructure/messaging/valkey"
 	"github.com/bouroo/goAthena/internal/modules/account"
 	accountapp "github.com/bouroo/goAthena/internal/modules/account/app"
+	"github.com/bouroo/goAthena/internal/modules/character"
+	characterapp "github.com/bouroo/goAthena/internal/modules/character/app"
 	"github.com/bouroo/goAthena/internal/modules/gateway"
 	gwapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
 	gwdomain "github.com/bouroo/goAthena/internal/modules/gateway/domain"
@@ -104,16 +106,35 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 		return fmt.Errorf("register account: %w", err)
 	}
 
-	// Thread the account CA_LOGIN handler into the gateway dispatch tables. The
-	// gateway cannot import account/app (the architecture guard forbids
-	// cross-module impl imports), so the composition root — the one place
-	// allowed to see both modules — provides the handler contribution as a
-	// gateway/domain.PacketHandler function value.
+	// Character: CH_ENTER (char list) + CH_SELECT_CHAR (zone redirect) handlers
+	// over the GORM char repo. Provides *characterapp.CharEnterHandler and
+	// *characterapp.CharSelectHandler.
+	if err := character.Register(ctx, injector); err != nil {
+		return fmt.Errorf("register character: %w", err)
+	}
+
+	// Thread the feature-module handlers into the gateway dispatch tables. The
+	// gateway cannot import account/app or character/app (the architecture guard
+	// forbids cross-module impl imports), so the composition root — the one
+	// place allowed to see all modules — provides each handler contribution as
+	// a gateway/domain.PacketHandler function value.
 	loginHandler, err := do.Invoke[*accountapp.CALoginHandler](injector)
 	if err != nil {
 		return fmt.Errorf("resolve CA_LOGIN handler: %w", err)
 	}
-	do.ProvideValue(injector, gwapp.Handlers{OnCALogin: loginHandler.Handle})
+	enterHandler, err := do.Invoke[*characterapp.CharEnterHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CH_ENTER handler: %w", err)
+	}
+	selectHandler, err := do.Invoke[*characterapp.CharSelectHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CH_SELECT_CHAR handler: %w", err)
+	}
+	do.ProvideValue(injector, gwapp.Handlers{
+		OnCALogin:      loginHandler.Handle,
+		OnCHEnter:      enterHandler.Handle,
+		OnCHSelectChar: selectHandler.Handle,
+	})
 
 	if err := gateway.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register gateway: %w", err)

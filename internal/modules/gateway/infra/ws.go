@@ -31,14 +31,17 @@ const wsReadHeaderTimeout = 10 * time.Second
 type wsConn struct {
 	c      *websocket.Conn
 	role   domain.Role
+	auth   domain.ConnAuth
 	remote string
 	dec    *netcodec.Decoder
 	ctx    context.Context
 }
 
-func (w *wsConn) Role() domain.Role     { return w.role }
-func (w *wsConn) SetRole(r domain.Role) { w.role = r }
-func (w *wsConn) RemoteAddr() string    { return w.remote }
+func (w *wsConn) Role() domain.Role         { return w.role }
+func (w *wsConn) SetRole(r domain.Role)     { w.role = r }
+func (w *wsConn) Auth() domain.ConnAuth     { return w.auth }
+func (w *wsConn) SetAuth(a domain.ConnAuth) { w.auth = a }
+func (w *wsConn) RemoteAddr() string        { return w.remote }
 
 // Write sends raw response bytes as a single binary WS message. roBrowser
 // carries the RO protocol over binary frames; the Write serializes with the

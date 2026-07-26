@@ -19,18 +19,22 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
-// captureConn is a gateway/domain.Conn that records writes and role transitions.
+// captureConn is a gateway/domain.Conn that records writes, role transitions,
+// and auth cache writes.
 type captureConn struct {
 	role   gwdomain.Role
+	auth   gwdomain.ConnAuth
 	remote string
 	buf    bytes.Buffer
 }
 
-func (c *captureConn) Role() gwdomain.Role     { return c.role }
-func (c *captureConn) SetRole(r gwdomain.Role) { c.role = r }
-func (c *captureConn) RemoteAddr() string      { return c.remote }
-func (c *captureConn) Write(p []byte) error    { _, err := c.buf.Write(p); return err }
-func (c *captureConn) Close() error            { return nil }
+func (c *captureConn) Role() gwdomain.Role         { return c.role }
+func (c *captureConn) SetRole(r gwdomain.Role)     { c.role = r }
+func (c *captureConn) Auth() gwdomain.ConnAuth     { return c.auth }
+func (c *captureConn) SetAuth(a gwdomain.ConnAuth) { c.auth = a }
+func (c *captureConn) RemoteAddr() string          { return c.remote }
+func (c *captureConn) Write(p []byte) error        { _, err := c.buf.Write(p); return err }
+func (c *captureConn) Close() error                { return nil }
 
 // dispatchLogin feeds a raw CA_LOGIN frame through the real codec + real
 // dispatcher to the handler, returning the captured response bytes and the conn.

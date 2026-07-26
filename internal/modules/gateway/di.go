@@ -47,12 +47,19 @@ func Register(_ context.Context, c do.Injector) error {
 	disp := gwapp.BuildDispatcher(handlers)
 	do.ProvideValue(c, disp)
 
-	// The login codec is identical for every connection; the per-version map
-	// codec swap lands at M3. A fresh decoder per connection is required
-	// because the codec holds partial-frame buffering that is not
-	// concurrency-safe across connections.
+	// The gateway multiplexes the login, char, and (at M3) map roles on a single
+	// connection: the role advances in-connection rather than the client
+	// reconnecting to a separate char server. So the connection's decoder must
+	// frame every C→S opcode it will see on that one stream — login (CA_*) and
+	// char (CH_*). A login-only DB would reject CH_ENTER (0x0065) as an unknown
+	// opcode and drop the connection the moment the client entered the char
+	// flow. Merge the char-server C→S set into the login DB once; packet.DB is
+	// concurrency-read-safe after construction, so one shared DB backs every
+	// connection. The per-version map codec swap lands at M3.
+	db := packet.NewLoginServerDB()
+	db.Merge(packet.NewCharServerDB())
 	newDec := infra.DecoderFactory(func() *netcodec.Decoder {
-		return netcodec.NewLoginDecoder(packet.NewLoginServerDB())
+		return netcodec.NewLoginDecoder(db)
 	})
 	do.ProvideValue(c, newDec)
 

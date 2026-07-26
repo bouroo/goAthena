@@ -18,17 +18,20 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
-// fakeConn is an in-memory domain.Conn: it records written bytes and tracks the
-// role the dispatcher advanced it to. No real socket is involved.
+// fakeConn is an in-memory domain.Conn: it records written bytes, role
+// transitions, and auth cache writes. No real socket is involved.
 type fakeConn struct {
 	role    domain.Role
+	auth    domain.ConnAuth
 	written bytes.Buffer
 	closed  bool
 }
 
-func (c *fakeConn) Role() domain.Role     { return c.role }
-func (c *fakeConn) SetRole(r domain.Role) { c.role = r }
-func (c *fakeConn) RemoteAddr() string    { return "test:0" }
+func (c *fakeConn) Role() domain.Role         { return c.role }
+func (c *fakeConn) SetRole(r domain.Role)     { c.role = r }
+func (c *fakeConn) Auth() domain.ConnAuth     { return c.auth }
+func (c *fakeConn) SetAuth(a domain.ConnAuth) { c.auth = a }
+func (c *fakeConn) RemoteAddr() string        { return "test:0" }
 func (c *fakeConn) Write(p []byte) error {
 	_, err := c.written.Write(p)
 	return err

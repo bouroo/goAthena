@@ -40,15 +40,18 @@ type DecoderFactory func() *netcodec.Decoder
 type tcpConn struct {
 	raw    gnet.Conn
 	role   domain.Role
+	auth   domain.ConnAuth
 	remote string
 	dec    *netcodec.Decoder
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-func (c *tcpConn) Role() domain.Role     { return c.role }
-func (c *tcpConn) SetRole(r domain.Role) { c.role = r }
-func (c *tcpConn) RemoteAddr() string    { return c.remote }
+func (c *tcpConn) Role() domain.Role         { return c.role }
+func (c *tcpConn) SetRole(r domain.Role)     { c.role = r }
+func (c *tcpConn) Auth() domain.ConnAuth     { return c.auth }
+func (c *tcpConn) SetAuth(a domain.ConnAuth) { c.auth = a }
+func (c *tcpConn) RemoteAddr() string        { return c.remote }
 func (c *tcpConn) Write(p []byte) error {
 	if _, err := c.raw.Write(p); err != nil {
 		return fmt.Errorf("tcp write: %w", err)

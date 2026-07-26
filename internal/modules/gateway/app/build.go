@@ -19,16 +19,29 @@ type Handlers struct {
 	// OnCALogin serves CA_LOGIN (0x0064), the login-server entry point.
 	// Provided by the account module.
 	OnCALogin domain.PacketHandler
+	// OnCHEnter serves CH_ENTER (0x0065), the char-server entry point that
+	// returns the account's character list. Provided by the character module.
+	OnCHEnter domain.PacketHandler
+	// OnCHSelectChar serves CH_SELECT_CHAR (0x0066), which redirects the
+	// client to the zone server. Provided by the character module.
+	OnCHSelectChar domain.PacketHandler
 }
 
 // BuildDispatcher assembles the three role-keyed dispatch tables from the
 // contributed handlers and returns the immutable Dispatcher the TCP and
-// WebSocket transports share. Only login-role handlers exist through M1; the
-// char and map tables fill in as those milestones land (M2/M3).
+// WebSocket transports share. The char table (CH_ENTER, CH_SELECT_CHAR) fills
+// in at M2; the map table lands at M3.
 func BuildDispatcher(h Handlers) *domain.Dispatcher {
 	login := domain.PacketHandlerTable{}
 	if h.OnCALogin != nil {
 		login[packet.HeaderCALOGIN] = h.OnCALogin
 	}
-	return domain.NewDispatcher(login, nil, nil)
+	char := domain.PacketHandlerTable{}
+	if h.OnCHEnter != nil {
+		char[packet.HeaderCHENTER] = h.OnCHEnter
+	}
+	if h.OnCHSelectChar != nil {
+		char[packet.HeaderCHSELECTCHAR] = h.OnCHSelectChar
+	}
+	return domain.NewDispatcher(login, char, nil)
 }

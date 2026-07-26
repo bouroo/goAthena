@@ -16,6 +16,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 
 	"github.com/bouroo/goAthena/internal/app"
 	"github.com/bouroo/goAthena/internal/config"
@@ -171,4 +173,169 @@ func freePort(t *testing.T) int {
 	require.NoError(t, err)
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// TestServe_CharListAndSelect_RoundTrip is the M2a end-to-end proof. On one TCP
+// connection it replays the real multiplexed login→char flow the gateway serves:
+// CA_LOGIN → AC_ACCEPT_LOGIN (capture the per-conn session token), CH_ENTER →
+// HC_ACCEPT_ENTER (the char list for the seeded account), CH_SELECT_CHAR →
+// HC_NOTIFY_ZONESVR (the zone redirect carrying the chosen char's GID and last
+// map). It exercises the M2a seams end to end: the codec DB merge (one login
+// decoder framing both CA_* and CH_* on the same stream), the per-conn auth
+// cache as the CH_ENTER trust anchor, the GORM CharacterRepository against a
+// real MariaDB char row, the MapCharacterInfo builder, and the zone-redirect
+// handler reading cfg.Gateway.MapAddr.
+func TestServe_CharListAndSelect_RoundTrip(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	// Pin the advertised zone address to a numeric loopback so the redirect's
+	// IP/port wire bytes are deterministic (no localhost IPv4/IPv6 resolution
+	// skew). ParseZoneAddr encodes 127.0.0.1 as 0x0100007F (inet_order).
+	cfg.Gateway.MapAddr = "127.0.0.1:5121"
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	// Seed a char row for the migration-seeded `test` account so the list is
+	// non-empty and the select resolves a known GID. account 2000000 is the
+	// dedicated test account; clearing its chars at setup keeps the slot-0
+	// pick deterministic across runs.
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eHero", "prontera")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+
+	conn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+
+	// --- CA_LOGIN → AC_ACCEPT_LOGIN; capture the session token the gateway
+	// caches on this connection (the CH_ENTER trust anchor). ---
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = conn.Write(login.Bytes())
+	require.NoError(t, err)
+
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(conn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN received; login likely failed against the DB")
+	require.Equal(t, packet.HeaderACACCEPTLOGIN, binary.LittleEndian.Uint16(accept[0:2]),
+		"expected AC_ACCEPT_LOGIN header")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	loginID2 := binary.LittleEndian.Uint32(accept[12:16])
+	sexByte := accept[46]
+	require.NotZero(t, loginID2, "AC_ACCEPT_LOGIN carried no session token (login_id2)")
+
+	// --- CH_ENTER → HC_ACCEPT_ENTER. The gateway's single login decoder must
+	// frame this char-role opcode on the same stream (the DB-merge fix); the
+	// handler verifies the echoed token against the per-conn auth cache. ---
+	var enter bytes.Buffer
+	require.NoError(t, packet.CHEnterRequest{
+		AccountID: seededAccountID, LoginID1: loginID1, LoginID2: loginID2, Sex: sexByte,
+	}.Encode(&enter))
+	_, err = conn.Write(enter.Bytes())
+	require.NoError(t, err)
+
+	charList := readLengthPrefixedPacket(t, conn)
+	require.Equal(t, packet.HeaderHCACCEPTENTER, binary.LittleEndian.Uint16(charList[0:2]),
+		"expected HC_ACCEPT_ENTER header")
+	require.Len(t, charList, 27+175, "HC_ACCEPT_ENTER with exactly one CHARACTER_INFO")
+	// The char-list header defaults: total=premiumStart=premiumEnd=15.
+	assert.Equal(t, uint8(15), charList[4], "total slots")
+	info := charList[27:]
+	assert.Equal(t, seedCharID, binary.LittleEndian.Uint32(info[0:4]), "CHARACTER_INFO GID = seeded char_id")
+	assert.Equal(t, "E2eHero", string(bytes.TrimRight(info[108:108+24], "\x00")), "char name")
+
+	// --- CH_SELECT_CHAR(slot 0) → HC_NOTIFY_ZONESVR. The redirect carries the
+	// chosen char's GID and last_map, and the configured zone address. ---
+	var sel bytes.Buffer
+	require.NoError(t, packet.CHSelectCharRequest{Slot: 0}.Encode(&sel))
+	_, err = conn.Write(sel.Bytes())
+	require.NoError(t, err)
+
+	redirect := make([]byte, 156)
+	_, err = io.ReadFull(conn, redirect)
+	require.NoError(t, err, "no HC_NOTIFY_ZONESVR received")
+	require.Equal(t, packet.HeaderHCNOTIFYZONESVR, binary.LittleEndian.Uint16(redirect[0:2]),
+		"expected HC_NOTIFY_ZONESVR header")
+	assert.Equal(t, seedCharID, binary.LittleEndian.Uint32(redirect[2:6]), "redirect CID = char GID")
+	assert.Equal(t, "prontera", string(bytes.TrimRight(redirect[6:6+16], "\x00")), "redirect map name")
+	// The redirect carries the configured zone address as inet_order bytes:
+	// 127.0.0.1 → 0x0100007F at [22:26], port 5121 at [26:28].
+	assert.Equal(t, uint32(0x0100007F), binary.LittleEndian.Uint32(redirect[22:26]), "zone IP encodes 127.0.0.1")
+	assert.Equal(t, uint16(5121), binary.LittleEndian.Uint16(redirect[26:28]), "zone port")
+
+	cancel()
+	select {
+	case err := <-serveErr:
+		assert.NoError(t, err, "app.Serve returned an error on shutdown")
+	case <-time.After(15 * time.Second):
+		t.Fatal("app.Serve did not shut down within 15s")
+	}
+}
+
+// readLengthPrefixedPacket reads one rAthena packet whose uint16 length at byte
+// offset 2 is the total wire length (header included) — the framing of
+// HC_ACCEPT_ENTER. It peeks the 4-byte header, then reads the remainder.
+func readLengthPrefixedPacket(t *testing.T, r io.Reader) []byte {
+	t.Helper()
+	hdr := make([]byte, 4)
+	_, err := io.ReadFull(r, hdr)
+	require.NoError(t, err, "short read on packet header")
+	total := int(binary.LittleEndian.Uint16(hdr[2:4]))
+	require.GreaterOrEqual(t, total, 4, "packet length field < header size")
+	body := make([]byte, total-4)
+	_, err = io.ReadFull(r, body)
+	require.NoError(t, err, "short read on packet body")
+	return append(hdr, body...)
+}
+
+// seedCharForAccount inserts a single char row for accountID at slot 0 with the
+// given name and last_map, returns its auto-increment char_id, and registers a
+// cleanup that removes every char row it created. It connects to MariaDB with
+// the same DSN app.Serve uses, and clears any pre-existing chars for the account
+// first so the slot-0 selection in the test is deterministic.
+func seedCharForAccount(t *testing.T, cfg *config.Config, accountID uint32, name, lastMap string) uint32 {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to seed char")
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	// t.Cleanup is LIFO: register the pool close FIRST so it runs LAST, after
+	// the row-delete cleanup below, which must execute on an open connection.
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	// accountID is the migration-seeded `test` account (test infra, no real
+	// chars); clearing its rows keeps slot 0 deterministic across runs.
+	require.NoError(t, gdb.Exec("DELETE FROM `char` WHERE account_id = ?", accountID).Error,
+		"clear existing chars for test account")
+
+	require.NoError(t, gdb.Exec(
+		`INSERT INTO `+"`char`"+` (account_id, char_num, name, class, base_level, job_level,
+		   base_exp, job_exp, zeny, str, agi, vit, `+"`int`"+`, dex, luk,
+		   max_hp, hp, max_sp, sp, status_point, skill_point,
+		   hair, hair_color, clothes_color, body, weapon, shield,
+		   head_top, head_mid, head_bottom, robe,
+		   last_map, last_x, last_y, sex, option, karma, manner)
+		 VALUES (?, 0, ?, 0, 12, 10, 500, 200, 3000, 9,1,1,1,1,1, 200,100,50,50,0,0, 2,1,0,0,0,0, 0,0,0,0, ?, 53,111, 1, 0, 0, 0)`,
+		accountID, name, lastMap).Error, "insert seed char row")
+
+	var charID uint32
+	require.NoError(t, gdb.Raw(
+		"SELECT char_id FROM `char` WHERE account_id = ? AND char_num = 0", accountID).
+		Scan(&charID).Error, "read back seeded char_id")
+	require.NotZero(t, charID, "seeded char_id is 0")
+
+	// Remove the row we inserted; runs before the pool close above.
+	t.Cleanup(func() {
+		_ = gdb.Exec("DELETE FROM `char` WHERE char_id = ?", charID).Error
+	})
+	return charID
 }
