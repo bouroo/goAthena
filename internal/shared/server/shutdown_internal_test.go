@@ -228,7 +228,7 @@ func TestServerErrorChannel_StartsBothServers(t *testing.T) {
 	gs := grpc.NewServer()
 	app.grpcServer = gs
 
-	ch := app.serverErrorChannel()
+	ch := app.serverErrorChannel(context.Background())
 
 	app.httpStartCancel()
 	require.NoError(t, lis.Close())
