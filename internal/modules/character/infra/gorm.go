@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -19,7 +20,7 @@ import (
 // more (party_id, guild_id, homun_id, hotkey_*, title_id, …) that CH_ENTER /
 // CH_SELECT_CHAR do not touch. GORM maps by column name, so omitting them is
 // safe — SELECTs name their columns. The SQL column `int` is a reserved word
-// in Go; it maps to the field Int_ via an explicit gorm column tag.
+// in Go; it maps to the field Int via an explicit gorm column tag.
 type charModel struct {
 	CharID       uint32 `gorm:"column:char_id;primaryKey"`
 	AccountID    uint32 `gorm:"column:account_id"`
@@ -34,7 +35,7 @@ type charModel struct {
 	Str          uint16 `gorm:"column:str"`
 	Agi          uint16 `gorm:"column:agi"`
 	Vit          uint16 `gorm:"column:vit"`
-	Int_         uint16 `gorm:"column:int"`
+	Int          uint16 `gorm:"column:int"`
 	Dex          uint16 `gorm:"column:dex"`
 	Luk          uint16 `gorm:"column:luk"`
 	MaxHP        uint32 `gorm:"column:max_hp"`
@@ -94,7 +95,7 @@ func (m charModel) toDomain() domain.Character {
 		Str:          m.Str,
 		Agi:          m.Agi,
 		Vit:          m.Vit,
-		Int:          m.Int_,
+		Int:          m.Int,
 		Dex:          m.Dex,
 		Luk:          m.Luk,
 		MaxHP:        m.MaxHP,
@@ -183,4 +184,113 @@ func (r *GORMCharacterRepository) GetBySlot(ctx context.Context, accountID uint3
 	}
 	c := m.toDomain()
 	return &c, nil
+}
+
+// Create inserts a new character with the server-assigned novice defaults and
+// returns the persisted row (char_id is the DB-assigned auto-increment). It
+// guards name uniqueness and slot occupancy at the DB before insert and maps a
+// lost concurrent-name race onto ErrCharNameTaken via the UNIQUE(name) backstop.
+// The handler has already run the pure input validation; this method trusts
+// that and concerns itself only with persistence-level integrity.
+func (r *GORMCharacterRepository) Create(ctx context.Context, in domain.CreateCharacter) (*domain.Character, error) {
+	name := normalizeCharName(in.Name)
+
+	var hit charModel
+	// Name uniqueness — char.name has a UNIQUE KEY. Default collation is
+	// case-insensitive, matching rAthena's name_ignoring_case=false path.
+	if err := r.db.WithContext(ctx).Select("char_id").Where("name = ?", name).Limit(1).Take(&hit).Error; err == nil {
+		return nil, domain.ErrCharNameTaken
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("create char: check name %q: %w", name, err)
+	}
+	// Slot occupancy — no UNIQUE KEY on (account_id, char_num), so this is the
+	// only guard for slot reuse.
+	if err := r.db.WithContext(ctx).Select("char_id").
+		Where("account_id = ? AND char_num = ?", in.AccountID, in.Slot).
+		Limit(1).Take(&hit).Error; err == nil {
+		return nil, domain.ErrSlotOccupied
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("create char: check slot account %d slot %d: %w", in.AccountID, in.Slot, err)
+	}
+
+	m := newNoviceModel(in, name)
+	if err := r.db.WithContext(ctx).Create(&m).Error; err != nil {
+		// Concurrent name-create raced the check above; the UNIQUE(name) key
+		// is the authority. The mysql driver translates 1062 → ErrDuplicatedKey.
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return nil, domain.ErrCharNameTaken
+		}
+		return nil, fmt.Errorf("create char account %d slot %d: %w", in.AccountID, in.Slot, err)
+	}
+	c := m.toDomain()
+	return &c, nil
+}
+
+// Novice starting values, mirroring char_make_new_char (char.cpp:1504-1509) and
+// the rAthena defaults start_status_points (inter_athena.conf:16 = 48),
+// start_zeny (char_athena.conf:129 = 0), and the novice base/job levels. HP/SP
+// follow the create formula 40*(100+vit)/100 and 11*(100+int)/100 with vit=int=1.
+//
+// startMap is Prontera for the combat slice, not rAthena's new_1-1/iz_int training
+// grounds — the slice only ships Prontera, so a created character must spawn there.
+const (
+	noviceMaxHP        = 40
+	noviceMaxSP        = 11
+	noviceStatusPoints = 48
+	noviceStartMap     = "prontera"
+	noviceStartX       = 53
+	noviceStartY       = 111
+)
+
+// newNoviceModel builds the char row for a freshly created character. Every
+// column with a non-zero DB default (base_level, job_level, last_x/y) is set
+// explicitly so GORM's full-row INSERT does not overwrite it with the struct
+// zero. Columns the char-list path never reads (party_id, guild_id, save_map,
+// …) are left to their DB defaults.
+func newNoviceModel(in domain.CreateCharacter, name string) charModel {
+	return charModel{
+		AccountID:   in.AccountID,
+		Slot:        in.Slot,
+		Name:        name,
+		Class:       uint16(in.Job), //nolint:gosec // G115: packet job→uint16 (char class/body columns are smallint), rAthena narrows on store
+		BaseLevel:   1,
+		JobLevel:    1,
+		Zeny:        0,
+		Str:         1,
+		Agi:         1,
+		Vit:         1,
+		Int:         1,
+		Dex:         1,
+		Luk:         1,
+		MaxHP:       noviceMaxHP,
+		HP:          noviceMaxHP,
+		MaxSP:       noviceMaxSP,
+		SP:          noviceMaxSP,
+		StatusPoint: noviceStatusPoints,
+		SkillPoint:  0,
+		Hair:        uint8(in.HairStyle), //nolint:gosec // G115: packet hair_style→uint8 (char hair column is tinyint), rAthena narrows on store
+		HairColor:   in.HairColor,
+		Body:        uint16(in.Job), //nolint:gosec // G115: packet job→uint16 (char class/body columns are smallint), rAthena narrows on store
+		LastMap:     noviceStartMap,
+		LastX:       noviceStartX,
+		LastY:       noviceStartY,
+		Sex:         wireToSex(in.Sex),
+	}
+}
+
+// wireToSex is the inverse of sexToWire: the CH_MAKE_CHAR sex byte (0 = female,
+// 1 = male) → the char.sex ENUM value the column stores. Mirrors
+// char_make_new_char's SEX_FEMALE→'F' / SEX_MALE→'M' switch (char.cpp:1424-1430).
+func wireToSex(sex uint8) string {
+	if sex == 0 {
+		return "F"
+	}
+	return "M"
+}
+
+// normalizeCharName trims surrounding whitespace, mirroring rAthena's
+// normalize_name(name, TRIM_CHARS). Control-character and length validation is
+// the handler's job (pure rules); the repository only stores the trimmed form.
+func normalizeCharName(name string) string {
+	return strings.TrimSpace(name)
 }

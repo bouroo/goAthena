@@ -15,14 +15,17 @@ func TestNewCharServerDB_HasAllEntries(t *testing.T) {
 		length    int
 		direction Direction
 	}
-	// 2 C→S fixed + 3 S→C (2 fixed, 1 variable) = 5 total entries.
+	// 3 C→S fixed + 5 S→C (4 fixed, 1 variable) = 8 total entries.
 	checks := []expect{
 		{HeaderCHENTER, "CH_ENTER", sizeCHEnter, DirectionClientToServer},
 		{HeaderCHSELECTCHAR, "CH_SELECT_CHAR", sizeCHSelectChar, DirectionClientToServer},
+		{HeaderCHMAKECHAR, "CH_MAKE_CHAR", sizeCHMakeChar, DirectionClientToServer},
 
 		{HeaderHCREFUSEENTER, "HC_REFUSE_ENTER", sizeHCRefuseEnter, DirectionServerToClient},
 		{HeaderHCACCEPTENTER, "HC_ACCEPT_ENTER", VariableLength, DirectionServerToClient},
 		{HeaderHCNOTIFYZONESVR, "HC_NOTIFY_ZONESVR", sizeHCNotifyZone, DirectionServerToClient},
+		{HeaderHCACCEPTMAKECHAR, "HC_ACCEPT_MAKECHAR", sizeHCAcceptMakeChar, DirectionServerToClient},
+		{HeaderHCREFUSEMAKECHAR, "HC_REFUSE_MAKECHAR", sizeHCRefuseMakeChar, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -47,8 +50,8 @@ func TestNewCharServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewCharServerDB()
-	// 2 C→S + 3 S→C = 5.
-	const want = 5
+	// 3 C→S + 5 S→C = 8.
+	const want = 8
 	if db.Size() != want {
 		t.Errorf("NewCharServerDB Size() = %d, want %d", db.Size(), want)
 	}

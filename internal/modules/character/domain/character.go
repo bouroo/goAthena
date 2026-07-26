@@ -11,8 +11,53 @@ import (
 	"errors"
 )
 
-// ErrCharacterNotFound: no char row matched the lookup key.
-var ErrCharacterNotFound = errors.New("character not found")
+// Sentinel errors returned by the repository and the application layer. Service
+// code compares with errors.Is so wrapping is preserved; repository adapters
+// must return these (wrapped) rather than their own driver-specific types.
+// Character-creation sentinels map each to the matching HC_REFUSE_MAKECHAR error
+// byte (rathena char_clif.cpp chclif_createnewchar_refuse: -1→0x00, -2→0xFF,
+// -3→0x01, -4→0x03) — typed errors, not string matches, so the handler switches
+// on errors.Is rather than message text.
+var (
+	// ErrCharacterNotFound: no char row matched the lookup key.
+	ErrCharacterNotFound = errors.New("character not found")
+	// ErrCharNameTaken: the requested name is already in use or reserved
+	// (char_check_char_name -1; HC_REFUSE_MAKECHAR 0x00).
+	ErrCharNameTaken = errors.New("character name already taken")
+	// ErrSlotOccupied: the requested slot already holds a character
+	// (char_make_new_char -2 path; HC_REFUSE_MAKECHAR 0xFF).
+	ErrSlotOccupied = errors.New("character slot occupied")
+	// ErrInvalidSlot: the slot index is outside [0, char_slots)
+	// (char_make_new_char -4; HC_REFUSE_MAKECHAR 0x03).
+	ErrInvalidSlot = errors.New("invalid character slot")
+	// ErrInvalidInput: any other client-controlled input rejected by the
+	// create path (empty/short/control-char/'#'/reserved name, bad sex, job not
+	// allowed) — the -2 catch-all (HC_REFUSE_MAKECHAR 0xFF).
+	ErrInvalidInput = errors.New("invalid character creation input")
+)
+
+// CreateCharacter is the validated input to CharacterRepository.Create. The
+// fields mirror what the PACKETVER>=20151001 CH_MAKE_CHAR packet carries
+// (packets.hpp:123-132): name, slot, hair_color, hair_style, job, sex. The
+// server supplies base stats (1 each) and the starting economy/position, so
+// those are not client inputs here.
+type CreateCharacter struct {
+	// AccountID is the owning account, trusted from the per-conn auth cache
+	// (never from the packet).
+	AccountID uint32
+	// Name is the requested name (raw client bytes; validation trims/normalizes).
+	Name string
+	// Slot is the target char_num (0..char_slots-1).
+	Slot uint8
+	// HairColor is the requested hair-color palette.
+	HairColor uint16
+	// HairStyle is the requested hair style (stored in the char.hair column).
+	HairStyle uint16
+	// Job is the requested starting job (JOB_NOVICE etc.).
+	Job uint32
+	// Sex is the requested sex byte (0 = female, 1 = male).
+	Sex uint8
+}
 
 // Character is the char-list slice of a `char`-table row: exactly the fields
 // the CH_ENTER (char list) and CH_SELECT_CHAR (map redirect) flows read. The
@@ -77,4 +122,12 @@ type CharacterRepository interface {
 	// ErrCharacterNotFound when no row matches — the handler maps this to a
 	// HC_REFUSE_ENTER or a silent drop depending on the flow.
 	GetBySlot(ctx context.Context, accountID uint32, slot uint8) (*Character, error)
+	// Create inserts a new character for the account at the requested slot,
+	// applying the server-side novice defaults (base stats, starting HP/SP,
+	// status points, zeny, position). It validates name uniqueness and slot
+	// availability and returns a typed sentinel (ErrCharNameTaken,
+	// ErrSlotOccupied, ErrInvalidSlot, ErrInvalidInput) on client-controlled
+	// rejection, so the handler can map it to the right HC_REFUSE_MAKECHAR byte
+	// without inspecting the underlying message.
+	Create(ctx context.Context, in CreateCharacter) (*Character, error)
 }

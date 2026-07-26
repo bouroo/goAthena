@@ -1,8 +1,7 @@
 // Package character is the composition point for the character bounded
-// context's DI. It wires the GORM character repository into the CH_ENTER and
-// CH_SELECT_CHAR gateway handlers and provides the concrete
-// *app.CharEnterHandler and *app.CharSelectHandler for the composition root to
-// thread into the gateway dispatch tables.
+// context's DI. It wires the GORM character repository into the CH_ENTER,
+// CH_SELECT_CHAR, and CH_MAKE_CHAR gateway handlers and provides the concrete
+// handlers for the composition root to thread into the gateway dispatch tables.
 //
 // This file lives at the module root rather than under app/ or infra/ because
 // it must import both its own app and infra layers. The clean-architecture
@@ -23,11 +22,11 @@ import (
 )
 
 // Register builds the character bounded context over the GORM char repository:
-// the CH_ENTER (char-list) and CH_SELECT_CHAR (zone redirect) handlers. It
-// provides *app.CharEnterHandler and *app.CharSelectHandler on the injector for
-// the composition root to thread into gwapp.Handlers. ctx is accepted to match
-// the samber/do v2 Register convention but is unused — the repository derives a
-// per-request context from the handler call.
+// the CH_ENTER (char-list), CH_SELECT_CHAR (zone redirect), and CH_MAKE_CHAR
+// (character creation) handlers. It provides the concrete handlers on the
+// injector for the composition root to thread into gwapp.Handlers. ctx is
+// accepted to match the samber/do v2 Register convention but is unused — the
+// repository derives a per-request context from the handler call.
 func Register(_ context.Context, c do.Injector) error {
 	db, err := do.Invoke[*gorm.DB](c)
 	if err != nil {
@@ -46,5 +45,9 @@ func Register(_ context.Context, c do.Injector) error {
 
 	do.ProvideValue(c, app.NewCharEnterHandler(chars))
 	do.ProvideValue(c, app.NewCharSelectHandler(chars, zone))
+	// MaxChars is the per-account slot ceiling (config Identity.MaxChars,
+	// validated [0,15], default 15 = rAthena's MAX_CHARS). The make-char handler
+	// rejects slot indices >= it with ErrInvalidSlot.
+	do.ProvideValue(c, app.NewCharMakeHandler(chars, uint8(cfg.Identity.MaxChars))) //nolint:gosec // G115: MaxChars is config-validated [0,15]
 	return nil
 }

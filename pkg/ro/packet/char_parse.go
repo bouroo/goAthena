@@ -1,6 +1,7 @@
 package packet
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -107,6 +108,89 @@ func (r CHSelectCharRequest) Encode(w io.Writer) error {
 
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CH_SELECT_CHAR: %w", err)
+	}
+	return nil
+}
+
+// CHMakeCharRequest is the decoded form of a client → char-server CH_MAKE_CHAR
+// packet (header 0x0a39, 36 bytes). Source: rathena/src/common/packets.hpp
+// PACKET_CH_MAKE_CHAR (PACKETVER >= 20151001 branch, active for 20250604) and
+// rathena/src/char/char_clif.cpp chclif_parse_createnewchar:1265-1284.
+//
+// For this packetver the client does not send stats (str/agi/vit/int/dex/luk);
+// the server assigns them (char_make_new_char uses 1 for each).
+type CHMakeCharRequest struct {
+	// Name is the requested character name (NAME_LENGTH = 24 on the wire).
+	Name string
+	// Slot is the target character slot (char_num), 0..char_slots-1.
+	Slot uint8
+	// HairColor is the requested hair-color palette (hair_color).
+	HairColor uint16
+	// HairStyle is the requested hair style (hairstyle); stored in the char.hair
+	// column by char_make_new_char.
+	HairStyle uint16
+	// Job is the requested starting job (JOB_NOVICE, JOB_SUMMONER, …).
+	Job uint32
+	// Sex is the requested sex byte (0 = female, 1 = male).
+	Sex uint8
+}
+
+// ParseCHMakeChar parses a full 36-byte CH_MAKE_CHAR frame (including the
+// 2-byte cmd header) into a CHMakeCharRequest. Returns a wrapped error if the
+// frame is not exactly 36 bytes or its cmd header is not HeaderCHMAKECHAR
+// (0x0a39).
+func ParseCHMakeChar(frame []byte) (CHMakeCharRequest, error) {
+	if len(frame) != sizeCHMakeChar {
+		return CHMakeCharRequest{}, fmt.Errorf("packet: parse CH_MAKE_CHAR: want %d bytes, got %d", sizeCHMakeChar, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHMAKECHAR {
+		return CHMakeCharRequest{}, fmt.Errorf("packet: parse CH_MAKE_CHAR: unexpected cmd 0x%04x", cmd)
+	}
+
+	return CHMakeCharRequest{
+		Name:      string(bytes.TrimRight(frame[2:26], "\x00")),
+		Slot:      frame[26],
+		HairColor: binary.LittleEndian.Uint16(frame[27:29]),
+		HairStyle: binary.LittleEndian.Uint16(frame[29:31]),
+		Job:       binary.LittleEndian.Uint32(frame[31:35]),
+		Sex:       frame[35],
+	}, nil
+}
+
+// Encode writes the CH_MAKE_CHAR packet to w, mirroring the on-wire layout
+// documented on CHMakeCharRequest: [2:cmd=0x0a39][24:name][1:slot]
+// [2:hair_color][2:hair_style][4:job][1:sex] = 36 bytes. Source:
+// rathena/src/common/packets.hpp:123-132. The name field is zero-padded to
+// NAME_LENGTH (24) and the request must fit or Encode returns an error.
+func (r CHMakeCharRequest) Encode(w io.Writer) error {
+	if err := r.validate(); err != nil {
+		return err
+	}
+	buf := make([]byte, sizeCHMakeChar)
+	// int16 packetType = 0x0a39 (HeaderCHMAKECHAR).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCHMAKECHAR)
+	// char name[24] at offset 2 — zero-padded by writeFixedString.
+	writeFixedString(buf[2:26], r.Name)
+	// uint8 slot at offset 26.
+	buf[26] = r.Slot
+	// uint16 hair_color at offset 27.
+	binary.LittleEndian.PutUint16(buf[27:29], r.HairColor)
+	// uint16 hair_style at offset 29.
+	binary.LittleEndian.PutUint16(buf[29:31], r.HairStyle)
+	// uint32 job at offset 31.
+	binary.LittleEndian.PutUint32(buf[31:35], r.Job)
+	// uint8 sex at offset 35.
+	buf[35] = r.Sex
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CH_MAKE_CHAR: %w", err)
+	}
+	return nil
+}
+
+func (r CHMakeCharRequest) validate() error {
+	if len(r.Name) > nameSlot {
+		return fmt.Errorf("packet: encode CH_MAKE_CHAR: %w", ErrCharNameTooLong)
 	}
 	return nil
 }

@@ -106,9 +106,9 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 		return fmt.Errorf("register account: %w", err)
 	}
 
-	// Character: CH_ENTER (char list) + CH_SELECT_CHAR (zone redirect) handlers
-	// over the GORM char repo. Provides *characterapp.CharEnterHandler and
-	// *characterapp.CharSelectHandler.
+	// Character: CH_ENTER (char list) + CH_SELECT_CHAR (zone redirect) +
+	// CH_MAKE_CHAR (create) handlers over the GORM char repo. Provides the
+	// concrete character-app handlers.
 	if err := character.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register character: %w", err)
 	}
@@ -130,10 +130,15 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 	if err != nil {
 		return fmt.Errorf("resolve CH_SELECT_CHAR handler: %w", err)
 	}
+	makeHandler, err := do.Invoke[*characterapp.CharMakeHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CH_MAKE_CHAR handler: %w", err)
+	}
 	do.ProvideValue(injector, gwapp.Handlers{
 		OnCALogin:      loginHandler.Handle,
 		OnCHEnter:      enterHandler.Handle,
 		OnCHSelectChar: selectHandler.Handle,
+		OnCHMakeChar:   makeHandler.Handle,
 	})
 
 	if err := gateway.Register(ctx, injector); err != nil {

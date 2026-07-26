@@ -54,6 +54,75 @@ func (r RefuseEnterResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// RefuseMakeCharResponse encodes an HC_REFUSE_MAKECHAR packet (command 0x006e,
+// 3 bytes). Source: rathena/src/common/packets.hpp:273-277 and
+// rathena/src/char/char_clif.cpp chclif_createnewchar_refuse:1208-1235.
+//
+// Wire layout: [2:cmd=0x006e][1:error] = 3 bytes. The error byte mirrors
+// rAthena's mapping of the (negative) char_make_new_char return code:
+//
+//	0x00 = charname already exists / reserved name (-1)
+//	0xFF = char creation denied / invalid input (-2)
+//	0x01 = underaged (-3)
+//	0x03 = slot not eligible (-4)
+type RefuseMakeCharResponse struct {
+	// Error is the 8-bit HC_REFUSE_MAKECHAR error code (see map above).
+	Error uint8
+}
+
+// Size returns the on-wire byte length that Encode will write (always 3).
+func (r RefuseMakeCharResponse) Size() int {
+	return sizeHCRefuseMakeChar
+}
+
+// Encode writes the HC_REFUSE_MAKECHAR packet to w.
+func (r RefuseMakeCharResponse) Encode(w io.Writer) error {
+	buf := make([]byte, sizeHCRefuseMakeChar)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCREFUSEMAKECHAR)
+	buf[2] = r.Error
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write HC_REFUSE_MAKECHAR: %w", err)
+	}
+	return nil
+}
+
+// AcceptMakeCharResponse encodes an HC_ACCEPT_MAKECHAR packet (command 0x0b6f,
+// 177 bytes) — a single CHARACTER_INFO preceded by the 2-byte cmd header. No
+// length prefix: the packet is a fixed 177 bytes. Source:
+// rathena/src/common/packets.hpp:260-263 (PACKET_HC_ACCEPT_MAKECHAR,
+// PACKETVER_MAIN_NUM >= 20201007 → opcode 0x0b6f, active for 20250604).
+//
+// Wire layout: [2:cmd=0x0b6f][175:CHARACTER_INFO] = 177 bytes.
+type AcceptMakeCharResponse struct {
+	// Character is the freshly created character, encoded via CharacterInfo.
+	Character CharacterInfo
+}
+
+// Size returns the on-wire byte length that Encode will write (always 177).
+func (r AcceptMakeCharResponse) Size() int {
+	return sizeHCAcceptMakeChar
+}
+
+// Encode writes the HC_ACCEPT_MAKECHAR packet to w. Returns a wrapped error
+// (sentinel + %w) if the CHARACTER_INFO's Name or MapName overflows its slot;
+// in that case no bytes are written to w.
+func (r AcceptMakeCharResponse) Encode(w io.Writer) error {
+	var charBuf [CharacterInfoSize]byte
+	if err := r.Character.encodeInto(charBuf[:0]); err != nil {
+		return fmt.Errorf("packet: encode HC_ACCEPT_MAKECHAR: %w", err)
+	}
+
+	buf := make([]byte, sizeHCAcceptMakeChar)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCACCEPTMAKECHAR)
+	copy(buf[2:], charBuf[:])
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write HC_ACCEPT_MAKECHAR: %w", err)
+	}
+	return nil
+}
+
 // NotifyZoneServerResponse encodes an HC_NOTIFY_ZONESVR packet (command
 // 0x0ac5, used for PACKETVER >= 20170315). Layout source:
 // rathena/src/common/packets.hpp:290-299.

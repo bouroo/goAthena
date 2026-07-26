@@ -35,16 +35,16 @@ const ridingOptionMask = 0x20 |
 func MapCharacterInfo(c domain.Character) packet.CharacterInfo {
 	return packet.CharacterInfo{
 		GID:      c.CharID,
-		Exp:      int64(c.BaseExp),
-		Money:    int32(c.Zeny),
-		JobExp:   int64(c.JobExp),
+		Exp:      int64(c.BaseExp), //nolint:gosec // G115: base_exp→int64, rAthena casts directly
+		Money:    int32(c.Zeny),    //nolint:gosec // G115: zeny→int32, rAthena casts directly
+		JobExp:   int64(c.JobExp),  //nolint:gosec // G115: job_exp→int64, rAthena casts directly
 		JobLevel: int32(c.JobLevel),
 
 		// rAthena hardcodes bodystate/healthstate to 0 in the char-info builder;
 		// the option bitmask is carried in effectstate.
 		BodyState:   0,
 		HealthState: 0,
-		EffectState: int32(c.Option),
+		EffectState: int32(c.Option), //nolint:gosec // G115: option→int32, rAthena casts directly
 
 		Virtue: int32(c.Karma),
 		Honor:  int32(c.Manner),
@@ -59,22 +59,22 @@ func MapCharacterInfo(c domain.Character) packet.CharacterInfo {
 		MaxSP: clampSP(c.MaxSP),
 
 		Speed: defaultWalkSpeed,
-		Job:   int16(c.Class),
+		Job:   int16(c.Class), //nolint:gosec // G115: class→int16, rAthena casts directly
 		Head:  int16(c.Hair),
-		Body:  int16(c.Body),
+		Body:  int16(c.Body), //nolint:gosec // G115: body→int16, rAthena casts directly
 		// Suppress the weapon when the option indicates a mount (client-crash
 		// guard). M2a chars do not ride, so this is a no-op for seeded data.
 		Weapon: weaponFor(c.Option, c.Weapon),
-		Level:  int16(c.BaseLevel),
+		Level:  int16(c.BaseLevel), //nolint:gosec // G115: base_level→int16, rAthena casts directly
 
 		SPPoint: clampI16(c.SkillPoint),
 
-		Accessory:   int16(c.HeadBottom),
-		Shield:      int16(c.Shield),
-		Accessory2:  int16(c.HeadTop),
-		Accessory3:  int16(c.HeadMid),
-		HeadPalette: int16(c.HairColor),
-		BodyPalette: int16(c.ClothesColor),
+		Accessory:   int16(c.HeadBottom),   //nolint:gosec // G115: head_bottom→int16, rAthena casts directly
+		Shield:      int16(c.Shield),       //nolint:gosec // G115: shield→int16, rAthena casts directly
+		Accessory2:  int16(c.HeadTop),      //nolint:gosec // G115: head_top→int16, rAthena casts directly
+		Accessory3:  int16(c.HeadMid),      //nolint:gosec // G115: head_mid→int16, rAthena casts directly
+		HeadPalette: int16(c.HairColor),    //nolint:gosec // G115: hair_color→int16, rAthena casts directly
+		BodyPalette: int16(c.ClothesColor), //nolint:gosec // G115: clothes_color→int16, rAthena casts directly
 
 		Name: c.Name,
 
@@ -97,7 +97,7 @@ func MapCharacterInfo(c domain.Character) packet.CharacterInfo {
 		// DelRevDate is seconds-until-deletion for a pending delete, 0 otherwise.
 		// M2a seeds carry delete_date=0, so this is 0; the live time-delta is
 		// computed when the delete flow lands (deferred).
-		DelRevDate: int32(c.DeleteDate),
+		DelRevDate: int32(c.DeleteDate), //nolint:gosec // G115: delete_date→int32, rAthena casts directly
 
 		RobePalette: int32(c.Robe),
 		// goAthena has no char-move feature flag yet; rAthena reports 0 while it
@@ -115,7 +115,7 @@ func weaponFor(option uint32, weapon uint16) int16 {
 	if option&ridingOptionMask != 0 {
 		return 0
 	}
-	return int16(weapon)
+	return int16(weapon) //nolint:gosec // G115: weapon→int16, rAthena casts directly
 }
 
 // renameToChanged maps the rename quota to the bIsChangedCharName wire byte:

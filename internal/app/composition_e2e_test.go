@@ -281,6 +281,117 @@ func TestServe_CharListAndSelect_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestServe_MakeChar_RoundTrip is the M2b end-to-end proof. On one TCP
+// connection it replays login → CH_ENTER (empty char list) → CH_MAKE_CHAR →
+// HC_ACCEPT_MAKECHAR, then re-enters (CH_ENTER) to confirm the freshly created
+// novice now appears in the char list read back from the real MariaDB. It
+// exercises the M2b seams together: the CH_MAKE_CHAR handler sourcing the owning
+// account from the per-conn auth cache (CH_MAKE_CHAR carries no account_id, so a
+// stray/default owner would be an impersonation bug), the GORM
+// CharacterRepository.Create writing a real char row with novice defaults, the
+// name/slot guards, and the HC_ACCEPT_MAKECHAR encoder.
+func TestServe_MakeChar_RoundTrip(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	cfg.Gateway.MapAddr = "127.0.0.1:5121"
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	// Start from an empty char list so slot 0 is free and the create is the only
+	// row for the account. The returned session cleans up the created row.
+	gdb := resetCharsForAccount(t, cfg, seededAccountID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+
+	conn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+
+	// --- CA_LOGIN → AC_ACCEPT_LOGIN; capture the per-conn session token. ---
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = conn.Write(login.Bytes())
+	require.NoError(t, err)
+
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(conn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN received; login likely failed against the DB")
+	require.Equal(t, packet.HeaderACACCEPTLOGIN, binary.LittleEndian.Uint16(accept[0:2]),
+		"expected AC_ACCEPT_LOGIN header")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	loginID2 := binary.LittleEndian.Uint32(accept[12:16])
+	sexByte := accept[46]
+
+	// --- CH_ENTER → HC_ACCEPT_ENTER with zero characters (slot 0 is free). ---
+	var enter bytes.Buffer
+	require.NoError(t, packet.CHEnterRequest{
+		AccountID: seededAccountID, LoginID1: loginID1, LoginID2: loginID2, Sex: sexByte,
+	}.Encode(&enter))
+	_, err = conn.Write(enter.Bytes())
+	require.NoError(t, err)
+
+	emptyList := readLengthPrefixedPacket(t, conn)
+	require.Equal(t, packet.HeaderHCACCEPTENTER, binary.LittleEndian.Uint16(emptyList[0:2]),
+		"expected HC_ACCEPT_ENTER header")
+	require.Len(t, emptyList, 27, "HC_ACCEPT_ENTER with zero CHARACTER_INFO blocks")
+
+	// --- CH_MAKE_CHAR → HC_ACCEPT_MAKECHAR (fixed 177B, no length prefix). ---
+	const makeName = "E2eMake"
+	var mk bytes.Buffer
+	require.NoError(t, packet.CHMakeCharRequest{
+		Name: makeName, Slot: 0, HairColor: 1, HairStyle: 2, Job: 0, Sex: 1,
+	}.Encode(&mk))
+	_, err = conn.Write(mk.Bytes())
+	require.NoError(t, err)
+
+	acceptMake := make([]byte, packet.AcceptMakeCharResponse{}.Size())
+	_, err = io.ReadFull(conn, acceptMake)
+	require.NoError(t, err, "no HC_ACCEPT_MAKECHAR received; make-char was refused")
+	require.Equal(t, packet.HeaderHCACCEPTMAKECHAR, binary.LittleEndian.Uint16(acceptMake[0:2]),
+		"expected HC_ACCEPT_MAKECHAR header")
+	createdGID := binary.LittleEndian.Uint32(acceptMake[2:6])
+	require.NotZero(t, createdGID, "HC_ACCEPT_MAKECHAR carried no char_id")
+	assert.Equal(t, makeName, string(bytes.TrimRight(acceptMake[110:134], "\x00")),
+		"CHARACTER_INFO name at offset 110")
+
+	// --- Persistence + trust anchor: the row landed under the conn-auth account
+	// with exactly the assigned char_id. ---
+	var dbCharID uint32
+	require.NoError(t, gdb.Raw(
+		"SELECT char_id FROM `char` WHERE account_id = ? AND char_num = 0", seededAccountID).
+		Scan(&dbCharID).Error, "read back created char_id from MariaDB")
+	assert.Equal(t, createdGID, dbCharID, "wire GID must equal the persisted char_id")
+
+	// --- Re-enter: the created novice round-trips through the read path, now as
+	// the single CHARACTER_INFO in the list. ---
+	_, err = conn.Write(enter.Bytes()) // CH_ENTER again on the same connection
+	require.NoError(t, err)
+	oneList := readLengthPrefixedPacket(t, conn)
+	require.Equal(t, packet.HeaderHCACCEPTENTER, binary.LittleEndian.Uint16(oneList[0:2]))
+	require.Len(t, oneList, 27+175, "HC_ACCEPT_ENTER with exactly one CHARACTER_INFO")
+	assert.Equal(t, createdGID, binary.LittleEndian.Uint32(oneList[27:27+4]),
+		"re-entered char list carries the created char_id")
+	assert.Equal(t, makeName, string(bytes.TrimRight(oneList[27+108:27+108+24], "\x00")),
+		"re-entered char list carries the created name")
+
+	cancel()
+	select {
+	case err := <-serveErr:
+		assert.NoError(t, err, "app.Serve returned an error on shutdown")
+	case <-time.After(15 * time.Second):
+		t.Fatal("app.Serve did not shut down within 15s")
+	}
+}
+
 // readLengthPrefixedPacket reads one rAthena packet whose uint16 length at byte
 // offset 2 is the total wire length (header included) — the framing of
 // HC_ACCEPT_ENTER. It peeks the 4-byte header, then reads the remainder.
@@ -338,4 +449,27 @@ func seedCharForAccount(t *testing.T, cfg *config.Config, accountID uint32, name
 		_ = gdb.Exec("DELETE FROM `char` WHERE char_id = ?", charID).Error
 	})
 	return charID
+}
+
+// resetCharsForAccount opens a GORM session against the same DSN app.Serve uses,
+// deletes every existing char row for accountID so the make-char test starts from
+// an empty slate (slot 0 free, no name collisions), and registers a cleanup
+// (LIFO: the row-delete registers second so it runs before the pool close) that
+// removes any chars created during the test. It returns the session so the test
+// can read back the created char_id.
+func resetCharsForAccount(t *testing.T, cfg *config.Config, accountID uint32) *gorm.DB {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to reset chars")
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	// t.Cleanup is LIFO: register the pool close first so it runs last.
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	require.NoError(t, gdb.Exec("DELETE FROM `char` WHERE account_id = ?", accountID).Error,
+		"clear existing chars for test account")
+	t.Cleanup(func() {
+		_ = gdb.Exec("DELETE FROM `char` WHERE account_id = ?", accountID).Error
+	})
+	return gdb
 }

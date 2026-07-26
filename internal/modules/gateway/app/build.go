@@ -25,12 +25,15 @@ type Handlers struct {
 	// OnCHSelectChar serves CH_SELECT_CHAR (0x0066), which redirects the
 	// client to the zone server. Provided by the character module.
 	OnCHSelectChar domain.PacketHandler
+	// OnCHMakeChar serves CH_MAKE_CHAR (0x0a39), the character-creation
+	// request. Provided by the character module.
+	OnCHMakeChar domain.PacketHandler
 }
 
 // BuildDispatcher assembles the three role-keyed dispatch tables from the
 // contributed handlers and returns the immutable Dispatcher the TCP and
-// WebSocket transports share. The char table (CH_ENTER, CH_SELECT_CHAR) fills
-// in at M2; the map table lands at M3.
+// WebSocket transports share. The char table (CH_ENTER, CH_SELECT_CHAR,
+// CH_MAKE_CHAR) fills in at M2; the map table lands at M3.
 func BuildDispatcher(h Handlers) *domain.Dispatcher {
 	login := domain.PacketHandlerTable{}
 	if h.OnCALogin != nil {
@@ -42,6 +45,9 @@ func BuildDispatcher(h Handlers) *domain.Dispatcher {
 	}
 	if h.OnCHSelectChar != nil {
 		char[packet.HeaderCHSELECTCHAR] = h.OnCHSelectChar
+	}
+	if h.OnCHMakeChar != nil {
+		char[packet.HeaderCHMAKECHAR] = h.OnCHMakeChar
 	}
 	return domain.NewDispatcher(login, char, nil)
 }

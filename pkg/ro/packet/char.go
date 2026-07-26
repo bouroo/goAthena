@@ -13,11 +13,20 @@ const (
 	// C→S — client → char server.
 	HeaderCHENTER      uint16 = 0x0065
 	HeaderCHSELECTCHAR uint16 = 0x0066
+	// CH_MAKE_CHAR: PACKETVER >= 20151001 branch (packets.hpp:122-132), the
+	// only branch active for Thai Classic (PACKETVER 20250604).
+	HeaderCHMAKECHAR uint16 = 0x0a39
 
 	// S→C — char server → client.
 	HeaderHCACCEPTENTER   uint16 = 0x006b
 	HeaderHCREFUSEENTER   uint16 = 0x006c
 	HeaderHCNOTIFYZONESVR uint16 = 0x0ac5
+	// HC_ACCEPT_MAKECHAR: PACKETVER_MAIN_NUM >= 20201007 (packets.hpp:259-264).
+	// 20250604 is on the MAIN path (src/config/packets.hpp:28; PACKETVER_RE is
+	// unset because 20250604 is outside the RE ranges), so the opcode is 0x0b6f,
+	// not the legacy 0x006d. Carries a single CHARACTER_INFO (no length prefix).
+	HeaderHCACCEPTMAKECHAR uint16 = 0x0b6f
+	HeaderHCREFUSEMAKECHAR uint16 = 0x006e
 )
 
 // Fixed on-wire byte lengths derived from the packed struct layouts in
@@ -37,9 +46,19 @@ const (
 	// sizeCHSelectChar = int16 cmd + uint8 slot = 2+1 = 3
 	// (rathena/src/common/packets.hpp:116-120).
 	sizeCHSelectChar = 3
+	// sizeCHMakeChar = int16 cmd + char name[24] + uint8 slot +
+	// uint16 hair_color + uint16 hair_style + uint32 job + uint8 sex
+	// = 2+24+1+2+2+4+1 = 36 (rathena/src/common/packets.hpp:123-132).
+	sizeCHMakeChar = 36
 	// sizeHCRefuseEnter = int16 packetType + uint8 error = 2+1 = 3
 	// (rathena/src/common/packets.hpp:253-257).
 	sizeHCRefuseEnter = 3
+	// sizeHCRefuseMakeChar = int16 packetType + uint8 error = 2+1 = 3
+	// (rathena/src/common/packets.hpp:273-277).
+	sizeHCRefuseMakeChar = 3
+	// sizeHCAcceptMakeChar = int16 packetType + one CHARACTER_INFO
+	// = 2 + 175 = 177 (rathena/src/common/packets.hpp:260-263).
+	sizeHCAcceptMakeChar = 2 + CharacterInfoSize
 	// sizeHCNotifyZone = int16 packetType + uint32 CID +
 	// char mapname[MAP_NAME_LENGTH_EXT] + uint32 ip + uint16 port +
 	// char domain[128] = 2+4+16+4+2+128 = 156.
@@ -81,6 +100,12 @@ func NewCharServerDB() *DB {
 		Length:    sizeCHSelectChar,
 		Direction: DirectionClientToServer,
 	})
+	db.Register(Definition{
+		ID:        HeaderCHMAKECHAR,
+		Name:      "CH_MAKE_CHAR",
+		Length:    sizeCHMakeChar,
+		Direction: DirectionClientToServer,
+	})
 
 	// --- S→C: char server → client.
 	db.Register(Definition{
@@ -104,6 +129,20 @@ func NewCharServerDB() *DB {
 		ID:        HeaderHCNOTIFYZONESVR,
 		Name:      "HC_NOTIFY_ZONESVR",
 		Length:    sizeHCNotifyZone,
+		Direction: DirectionServerToClient,
+	})
+	// HC_ACCEPT_MAKECHAR (packets.hpp:259-264) carries cmd + one CHARACTER_INFO
+	// (no length prefix). HC_REFUSE_MAKECHAR (packets.hpp:273-277) is cmd + error.
+	db.Register(Definition{
+		ID:        HeaderHCACCEPTMAKECHAR,
+		Name:      "HC_ACCEPT_MAKECHAR",
+		Length:    sizeHCAcceptMakeChar,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderHCREFUSEMAKECHAR,
+		Name:      "HC_REFUSE_MAKECHAR",
+		Length:    sizeHCRefuseMakeChar,
 		Direction: DirectionServerToClient,
 	})
 
