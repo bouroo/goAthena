@@ -45,17 +45,19 @@ type Frame struct {
 	Raw []byte
 }
 
-// ConnAuth is the per-connection auth state captured at login-accept and
-// verified at char/map enter. The gateway multiplexes the login, char, and map
-// roles on a single connection (the role advances in-connection; there is no
-// reconnect between login and char the way separate rAthena servers require),
-// so the auth minted at CA_LOGIN is a valid trust anchor for every later flow
-// on the same connection.
+// ConnAuth is the per-connection auth state. The login/char listener multiplexes
+// login and char on one connection (the role advances RoleLogin → RoleChar
+// in-connection), so the auth minted at CA_LOGIN is a valid trust anchor for
+// CH_ENTER on that same connection. The map listener is different: a client
+// reconnects to it after CH_SELECT_CHAR, so the fresh map connection carries no
+// cache yet — CZ_ENTER re-verifies against the session store and only then
+// populates this cache for the map packets that follow.
 //
 // Copy semantics: a single dispatch goroutine owns each connection's reads and
 // writes, so Auth/SetAuth need no synchronization until M4 introduces
 // cross-connection broadcast writes. A zero-value ConnAuth (AccountID == 0)
-// means the connection has not completed login-accept.
+// means the connection has not completed login-accept (or, on the map listener,
+// has not yet passed CZ_ENTER).
 type ConnAuth struct {
 	AccountID uint32
 	LoginID1  uint32
@@ -76,11 +78,12 @@ type Conn interface {
 	Role() Role
 	// SetRole advances the connection to a new table (login → char → map).
 	SetRole(Role)
-	// Auth returns the cached login credentials (zero-valued before a login
-	// accept). Downstream handlers (CH_ENTER, CZ_ENTER) verify the packet's
-	// echoed credentials against this rather than re-querying the session store,
-	// because the connection itself is proof the login that minted them was
-	// accepted.
+	// Auth returns the cached login credentials (zero-valued before they are
+	// populated). On the login/char listener, the cache is set at login-accept
+	// and CH_ENTER trusts it — the connection itself proves the login that
+	// minted it was accepted. On the map listener the connection is a fresh
+	// reconnect, so the cache is empty until CZ_ENTER verifies against the
+	// session store; CZ_ENTER then sets it for the map packets that follow.
 	Auth() ConnAuth
 	// SetAuth caches the login credentials at accept time.
 	SetAuth(ConnAuth)

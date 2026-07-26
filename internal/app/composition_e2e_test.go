@@ -121,10 +121,12 @@ func loadConfigForE2E(t *testing.T) *config.Config {
 	return cfg
 }
 
-// rebindListenersToEphemeralPorts moves HTTP, gRPC, and both gateway listeners
-// onto free loopback ports so the test never collides with a running goathena
-// serve, and returns the gateway TCP address the test dials. All Port fields
-// validate min=1, so 0 is unusable; freePort yields valid, non-conflicting ports.
+// rebindListenersToEphemeralPorts moves HTTP, gRPC, and all three gateway
+// listeners (login/char TCP, WS, and map TCP) onto free loopback ports so the
+// test never collides with a running goathena serve, and returns the gateway
+// TCP address the test dials. All Port fields validate min=1, so 0 is unusable;
+// freePort yields valid, non-conflicting ports. The map listener's address is
+// left on cfg.Gateway.MapAddr for the map-enter test to wait on and dial.
 func rebindListenersToEphemeralPorts(t *testing.T, cfg *config.Config) string {
 	t.Helper()
 	cfg.HTTP.Host, cfg.HTTP.Port = "127.0.0.1", freePort(t)
@@ -133,6 +135,7 @@ func rebindListenersToEphemeralPorts(t *testing.T, cfg *config.Config) string {
 	tcpAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(freePort(t)))
 	cfg.Gateway.TCP.Addr = tcpAddr
 	cfg.Gateway.WS.Addr = net.JoinHostPort("127.0.0.1", strconv.Itoa(freePort(t)))
+	cfg.Gateway.MapAddr = net.JoinHostPort("127.0.0.1", strconv.Itoa(freePort(t)))
 	return tcpAddr
 }
 
@@ -390,6 +393,90 @@ func TestServe_MakeChar_RoundTrip(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("app.Serve did not shut down within 15s")
 	}
+}
+
+// TestServe_MapEnter_RoundTrip is the M3 end-to-end proof of the secure map
+// enter. It boots the real modular monolith (now with the dedicated map
+// listener), logs in on the login/char TCP listener to mint a session in
+// Valkey, then opens a FRESH connection to the separate map listener and sends
+// CZ_ENTER echoing the login's login_id1 as the AuthCode. The map connection
+// starts at the map role, so CZ_ENTER routes to the map dispatch table, the
+// CZ_ENTER handler re-verifies login_id1 against the Valkey SessionStore
+// (constant-time), and the server replies ZC_ACCEPT_ENTER (0x02eb). This is the
+// first cross-listener boundary: it proves the gateway-map-tcp runnable binds,
+// NewMapTCPHandler seeds the map role + map decoder, and the reconnect trust
+// gate admits a verified session.
+func TestServe_MapEnter_RoundTrip(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr // ephemeral map listener from the rebind above
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr) // dedicated map listener must accept too
+
+	// --- Login on the login/char listener; capture the session token (login_id1)
+	// the CZ_ENTER trust gate will verify on the separate map connection. ---
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN received; login likely failed against the DB")
+	require.Equal(t, packet.HeaderACACCEPTLOGIN, binary.LittleEndian.Uint16(accept[0:2]),
+		"expected AC_ACCEPT_LOGIN header")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1, "AC_ACCEPT_LOGIN carried no login_id1 to echo in CZ_ENTER")
+	require.NoError(t, loginConn.Close(), "close the login/char connection (map is a reconnect)")
+
+	// --- Fresh reconnect to the dedicated map listener. This connection never
+	// touched CA_LOGIN, so the only proof that login was accepted is the Valkey
+	// session — exactly the threat model CZ_ENTER's trust gate exists for. ---
+	mapConn, err := net.Dial("tcp", mapAddr)
+	require.NoError(t, err)
+	defer mapConn.Close()
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+
+	var enter bytes.Buffer
+	require.NoError(t, packet.CZEnterRequest{
+		AccountID: seededAccountID, CharID: 0, AuthCode: loginID1, ClientTime: 0, Sex: sexByte,
+	}.Encode(&enter))
+	_, err = mapConn.Write(enter.Bytes())
+	require.NoError(t, err)
+
+	// --- ZC_ACCEPT_ENTER (0x02eb, 13B): the trust gate admitted the session. ---
+	resp := make([]byte, packet.MapAcceptEnterResponse{}.Size())
+	_, err = io.ReadFull(mapConn, resp)
+	require.NoError(t, err, "no ZC_ACCEPT_ENTER received; CZ_ENTER verification likely failed")
+	require.Equal(t, packet.HeaderZCACCEPTENTER, binary.LittleEndian.Uint16(resp[0:2]),
+		"expected ZC_ACCEPT_ENTER header")
+	require.Equal(t, uint32(0), binary.LittleEndian.Uint32(resp[2:6]), "StartTime")
+	assert.Equal(t, uint8(5), resp[9], "xSize (rAthena hardcode)")
+	assert.Equal(t, uint8(5), resp[10], "ySize (rAthena hardcode)")
 }
 
 // readLengthPrefixedPacket reads one rAthena packet whose uint16 length at byte

@@ -142,6 +142,34 @@ func (s *AuthService) Login(ctx context.Context, req domain.LoginRequest) (domai
 	}, nil
 }
 
+// VerifySession backs the CZ_ENTER trust gate. The map connection is a fresh
+// reconnect, so the only proof the CA_LOGIN that minted loginID1 was accepted is
+// the stored session. A missing session and a token mismatch are deliberately
+// indistinguishable: both return ErrSessionNotFound so the caller cannot leak
+// whether a session exists. The token compare is constant-time, mirroring the
+// password compare in Login. A cancelled context propagates so the caller can
+// drop the connection during shutdown without sending a refuse frame.
+func (s *AuthService) VerifySession(ctx context.Context, accountID, loginID1 uint32) (*domain.Session, error) {
+	sess, err := s.sessions.Get(ctx, accountID)
+	if err != nil {
+		if errors.Is(err, domain.ErrSessionNotFound) {
+			return nil, domain.ErrSessionNotFound
+		}
+		return nil, fmt.Errorf("load session for account %d: %w", accountID, err)
+	}
+
+	// loginID1 is the session token; compare it in constant time so a timing
+	// probe cannot recover it byte-by-byte. A mismatch is an expected auth
+	// failure, surfaced as ErrSessionNotFound (see the method doc).
+	var got, want [4]byte
+	binary.LittleEndian.PutUint32(got[:], sess.LoginID1)
+	binary.LittleEndian.PutUint32(want[:], loginID1)
+	if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+		return nil, domain.ErrSessionNotFound
+	}
+	return sess, nil
+}
+
 func refuse(code domain.AuthCode) domain.LoginResult {
 	return domain.LoginResult{Accepted: false, Code: code}
 }

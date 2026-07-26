@@ -28,12 +28,15 @@ type Handlers struct {
 	// OnCHMakeChar serves CH_MAKE_CHAR (0x0a39), the character-creation
 	// request. Provided by the character module.
 	OnCHMakeChar domain.PacketHandler
+	// OnCZEnter serves CZ_ENTER (0x0072), the map-server entry point and trust
+	// gate. Provided by the world module.
+	OnCZEnter domain.PacketHandler
 }
 
 // BuildDispatcher assembles the three role-keyed dispatch tables from the
-// contributed handlers and returns the immutable Dispatcher the TCP and
-// WebSocket transports share. The char table (CH_ENTER, CH_SELECT_CHAR,
-// CH_MAKE_CHAR) fills in at M2; the map table lands at M3.
+// contributed handlers and returns the immutable Dispatcher every transport
+// shares — including the dedicated map listener, whose fresh connections start
+// at the map role and so dispatch against the map table built here.
 func BuildDispatcher(h Handlers) *domain.Dispatcher {
 	login := domain.PacketHandlerTable{}
 	if h.OnCALogin != nil {
@@ -49,5 +52,9 @@ func BuildDispatcher(h Handlers) *domain.Dispatcher {
 	if h.OnCHMakeChar != nil {
 		char[packet.HeaderCHMAKECHAR] = h.OnCHMakeChar
 	}
-	return domain.NewDispatcher(login, char, nil)
+	mapT := domain.PacketHandlerTable{}
+	if h.OnCZEnter != nil {
+		mapT[packet.HeaderCZENTER] = h.OnCZEnter
+	}
+	return domain.NewDispatcher(login, char, mapT)
 }

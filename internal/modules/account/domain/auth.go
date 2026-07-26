@@ -52,8 +52,25 @@ type LoginResult struct {
 	LoginID2 uint32   // valid when Accepted — minted session-token half
 }
 
-// Authenticator is the inbound port for the CA_LOGIN use case. The gateway
-// CA_LOGIN handler depends on this port; account/app.AuthService implements it.
+// Authenticator is the inbound port for the CA_LOGIN use case and the map-enter
+// trust gate. The gateway CA_LOGIN handler depends on the Login method; the map
+// CZ_ENTER handler depends on VerifySession. account/app.AuthService implements
+// both.
 type Authenticator interface {
 	Login(ctx context.Context, req LoginRequest) (LoginResult, error)
+
+	// VerifySession confirms a CZ_ENTER's echoed credentials (accountID +
+	// loginID1) against the session minted at CA_LOGIN. It exists because the
+	// map-server connection is a fresh reconnect — unlike CH_ENTER, which rides
+	// the in-connection auth cache, CZ_ENTER arrives on a connection the login
+	// accept never touched, so the session store is the only trust anchor.
+	//
+	// A missing session or a loginID1 mismatch is an expected auth failure
+	// returned as ErrSessionNotFound — deliberately the same sentinel for both
+	// so the caller cannot distinguish them and leak whether a session exists
+	// (no account-enumeration oracle). The loginID1 compare is constant-time.
+	// A context cancellation (server shutdown mid-verify) is propagated as the
+	// context error so the caller can drop silently; any other error is an infra
+	// fault the caller surfaces for logging.
+	VerifySession(ctx context.Context, accountID, loginID1 uint32) (*Session, error)
 }

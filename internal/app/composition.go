@@ -24,6 +24,8 @@ import (
 	gwapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
 	gwdomain "github.com/bouroo/goAthena/internal/modules/gateway/domain"
 	gwinfra "github.com/bouroo/goAthena/internal/modules/gateway/infra"
+	"github.com/bouroo/goAthena/internal/modules/world"
+	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/internal/shared/server"
 	"github.com/bouroo/goAthena/internal/shared/telemetry"
 )
@@ -113,33 +115,22 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 		return fmt.Errorf("register character: %w", err)
 	}
 
+	// World: CZ_ENTER (map-enter trust gate) over the account Authenticator.
+	// M3 ships only this gate; M4 layers the entity registry, AOI, and tick. The
+	// handler lives on the dedicated map listener, whose fresh connections start
+	// at the map role and route CZ_ENTER through the map dispatch table.
+	if err := world.Register(ctx, injector); err != nil {
+		return fmt.Errorf("register world: %w", err)
+	}
+
 	// Thread the feature-module handlers into the gateway dispatch tables. The
 	// gateway cannot import account/app or character/app (the architecture guard
 	// forbids cross-module impl imports), so the composition root — the one
-	// place allowed to see all modules — provides each handler contribution as
-	// a gateway/domain.PacketHandler function value.
-	loginHandler, err := do.Invoke[*accountapp.CALoginHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CA_LOGIN handler: %w", err)
+	// place allowed to see all modules — resolves each concrete handler and
+	// provides it as a gateway/domain.PacketHandler function value.
+	if err := resolveGatewayHandlers(injector); err != nil {
+		return err
 	}
-	enterHandler, err := do.Invoke[*characterapp.CharEnterHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CH_ENTER handler: %w", err)
-	}
-	selectHandler, err := do.Invoke[*characterapp.CharSelectHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CH_SELECT_CHAR handler: %w", err)
-	}
-	makeHandler, err := do.Invoke[*characterapp.CharMakeHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CH_MAKE_CHAR handler: %w", err)
-	}
-	do.ProvideValue(injector, gwapp.Handlers{
-		OnCALogin:      loginHandler.Handle,
-		OnCHEnter:      enterHandler.Handle,
-		OnCHSelectChar: selectHandler.Handle,
-		OnCHMakeChar:   makeHandler.Handle,
-	})
 
 	if err := gateway.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register gateway: %w", err)
@@ -159,11 +150,61 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 	if err != nil {
 		return fmt.Errorf("resolve gateway decoder factory: %w", err)
 	}
+	newMapDec, err := do.Invoke[gwinfra.MapDecoderFactory](injector)
+	if err != nil {
+		return fmt.Errorf("resolve map decoder factory: %w", err)
+	}
 	application.RegisterRunnable("gateway-tcp", func(runCtx context.Context) error {
 		return gwinfra.NewTCPHandler(runCtx, logger, disp, newDec).Run("tcp://" + cfg.Gateway.TCP.Addr)
 	})
 	application.RegisterRunnable("gateway-ws", func(runCtx context.Context) error {
 		return gwinfra.NewWSServer(runCtx, logger, disp, newDec, cfg.Gateway.WS.AllowedOrigins).Run(cfg.Gateway.WS.Addr)
+	})
+	// The map listener is the separate endpoint HC_NOTIFY_ZONESVR redirects to
+	// after CH_SELECT_CHAR: every connection it accepts starts at the map role
+	// (NewMapTCPHandler), so CZ_ENTER routes to the map table. It shares the same
+	// dispatcher and differs from the login/char listener only in its initial
+	// role and map-framed decoder. M3 ships TCP only; the WS variant (NewMapWSServer)
+	// is wired with the dual-client e2e at M7.
+	application.RegisterRunnable("gateway-map-tcp", func(runCtx context.Context) error {
+		return gwinfra.NewMapTCPHandler(runCtx, logger, disp, newMapDec).Run("tcp://" + cfg.Gateway.MapAddr)
+	})
+	return nil
+}
+
+// resolveGatewayHandlers resolves the concrete feature-module handlers and
+// provides them as a single gwapp.Handlers value (the contribution
+// gateway.Register consumes to build the dispatch tables). Extracted from wire
+// so the lifecycle function stays readable: each module's handler is one invoke
+// + one error wrap, and threading them into the dispatch tables is a distinct
+// concern from binding the listeners.
+func resolveGatewayHandlers(injector do.Injector) error {
+	loginHandler, err := do.Invoke[*accountapp.CALoginHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CA_LOGIN handler: %w", err)
+	}
+	enterHandler, err := do.Invoke[*characterapp.CharEnterHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CH_ENTER handler: %w", err)
+	}
+	selectHandler, err := do.Invoke[*characterapp.CharSelectHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CH_SELECT_CHAR handler: %w", err)
+	}
+	makeHandler, err := do.Invoke[*characterapp.CharMakeHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CH_MAKE_CHAR handler: %w", err)
+	}
+	mapEnterHandler, err := do.Invoke[*worldapp.MapEnterHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_ENTER handler: %w", err)
+	}
+	do.ProvideValue(injector, gwapp.Handlers{
+		OnCALogin:      loginHandler.Handle,
+		OnCHEnter:      enterHandler.Handle,
+		OnCHSelectChar: selectHandler.Handle,
+		OnCHMakeChar:   makeHandler.Handle,
+		OnCZEnter:      mapEnterHandler.Handle,
 	})
 	return nil
 }

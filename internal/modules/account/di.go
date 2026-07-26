@@ -48,13 +48,14 @@ func Register(_ context.Context, c do.Injector) error {
 	auth := app.NewAuthService(accounts, sessions, nil, nil)
 	do.ProvideValue(c, domain.Authenticator(auth))
 
-	// charServers is the trailing server list embedded in every
-	// AC_ACCEPT_LOGIN. The modular monolith serves login+char+map on one
-	// listener, so the advertisement points back at the gateway itself — but
-	// that wiring (and the advertised address) lands with the character module
-	// (M2). An empty list is correct for the M1 done-condition
-	// (CA_LOGIN → AC_ACCEPT_LOGIN); a real client simply has no server to pick
-	// until M2 fills this from config.
+	// charServers is the trailing server list embedded in every AC_ACCEPT_LOGIN.
+	// Login and char are multiplexed on one listener (the role advances
+	// RoleLogin → RoleChar in-connection), so the client proceeds straight to
+	// CH_ENTER on the same connection without consulting this list; an empty list
+	// is correct. The login→char transition needs no advertisement. (The
+	// char→map transition is different: it is a reconnect, and CH_SELECT_CHAR
+	// advertises the map listener's address in HC_NOTIFY_ZONESVR, sourced from
+	// cfg.Gateway.MapAddr in the character module.)
 	login := app.NewCALoginHandler(auth, nil)
 	do.ProvideValue(c, login)
 

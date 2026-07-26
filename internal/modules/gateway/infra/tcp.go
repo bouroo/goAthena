@@ -25,10 +25,18 @@ import (
 // rAthena drops clients on SIGTERM without waiting for in-flight frames.
 const stopTimeout = 3 * time.Second
 
-// DecoderFactory builds a fresh per-connection login Decoder. The codec is not
-// concurrency-safe, so every connection owns its own; the factory is invoked
-// once per accepted connection.
+// DecoderFactory builds a fresh per-connection login/char Decoder. The codec is
+// not concurrency-safe, so every connection owns its own; the factory is invoked
+// once per accepted connection. The same underlying function type backs the map
+// listener (MapDecoderFactory) — the two named types exist only so the injector
+// can hand them out separately.
 type DecoderFactory func() *netcodec.Decoder
+
+// MapDecoderFactory builds a fresh per-connection map Decoder. Distinct from
+// DecoderFactory so the injector resolves it unambiguously; both share the same
+// underlying function type, so either is assignable to the handler's decoder
+// field.
+type MapDecoderFactory func() *netcodec.Decoder
 
 // tcpConn adapts a gnet v2 connection to the gateway domain.Conn. It carries
 // the connection's dispatch role and per-connection Decoder in the gnet Conn's
@@ -75,14 +83,18 @@ type TCPHandler struct {
 	baseCtx context.Context
 	log     *zerolog.Logger
 	disp    *domain.Dispatcher
-	newDec  DecoderFactory
+	// newDec is the underlying func type so both DecoderFactory (login/char)
+	// and MapDecoderFactory (map) are assignable without conversion.
+	newDec      func() *netcodec.Decoder
+	initialRole domain.Role
 
 	eng    atomic.Pointer[gnet.Engine]
 	booted chan struct{}
 }
 
-// NewTCPHandler builds a login-server TCP handler. baseCtx governs the server
-// lifetime: when it is cancelled, Run stops the engine.
+// NewTCPHandler builds a login/char TCP handler: every accepted connection
+// starts at the login role with the login/char decoder. baseCtx governs the
+// server lifetime: when it is cancelled, Run stops the engine.
 func NewTCPHandler(baseCtx context.Context, log *zerolog.Logger, disp *domain.Dispatcher, newDec DecoderFactory) *TCPHandler {
 	return &TCPHandler{
 		BuiltinEventEngine: &gnet.BuiltinEventEngine{},
@@ -90,6 +102,24 @@ func NewTCPHandler(baseCtx context.Context, log *zerolog.Logger, disp *domain.Di
 		log:                log,
 		disp:               disp,
 		newDec:             newDec,
+		initialRole:        domain.RoleLogin,
+		booted:             make(chan struct{}),
+	}
+}
+
+// NewMapTCPHandler builds a map-server TCP handler: every accepted connection
+// starts at the map role with the map decoder, so CZ_ENTER and the map opcode
+// set route to the map dispatch table. The client reaches this listener only
+// after HC_NOTIFY_ZONESVR redirects it from char-select, so login/char packets
+// are never seen here.
+func NewMapTCPHandler(baseCtx context.Context, log *zerolog.Logger, disp *domain.Dispatcher, newDec MapDecoderFactory) *TCPHandler {
+	return &TCPHandler{
+		BuiltinEventEngine: &gnet.BuiltinEventEngine{},
+		baseCtx:            baseCtx,
+		log:                log,
+		disp:               disp,
+		newDec:             newDec,
+		initialRole:        domain.RoleMap,
 		booted:             make(chan struct{}),
 	}
 }
@@ -110,6 +140,7 @@ func (h *TCPHandler) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 	ctx, cancel := context.WithCancel(h.baseCtx)
 	conn := &tcpConn{
 		raw:    c,
+		role:   h.initialRole,
 		remote: c.RemoteAddr().String(),
 		dec:    h.newDec(),
 		ctx:    ctx,

@@ -72,12 +72,16 @@ type WSServer struct {
 	baseCtx context.Context
 	log     *zerolog.Logger
 	disp    *domain.Dispatcher
-	newDec  DecoderFactory
-	opts    *websocket.AcceptOptions
-	server  *http.Server
+	// newDec is the underlying func type so both DecoderFactory (login/char)
+	// and MapDecoderFactory (map) are assignable without conversion.
+	newDec      func() *netcodec.Decoder
+	initialRole domain.Role
+	opts        *websocket.AcceptOptions
+	server      *http.Server
 }
 
-// NewWSServer builds the WebSocket endpoint. allowedOrigins configures
+// NewWSServer builds the login/char WebSocket endpoint: every accepted
+// connection starts at the login role. allowedOrigins configures
 // AcceptOptions.OriginPatterns; an empty list disables origin verification
 // (InsecureSkipVerify) — the documented way to permit any origin for local
 // development.
@@ -93,11 +97,39 @@ func NewWSServer(
 		opts = &websocket.AcceptOptions{InsecureSkipVerify: true}
 	}
 	return &WSServer{
-		baseCtx: baseCtx,
-		log:     log,
-		disp:    disp,
-		newDec:  newDec,
-		opts:    opts,
+		baseCtx:     baseCtx,
+		log:         log,
+		disp:        disp,
+		newDec:      newDec,
+		initialRole: domain.RoleLogin,
+		opts:        opts,
+	}
+}
+
+// NewMapWSServer builds the map-server WebSocket endpoint for roBrowser: every
+// accepted connection starts at the map role with the map decoder. The roBrowser
+// client reaches this endpoint only after HC_NOTIFY_ZONESVR redirects it from
+// char-select, mirroring NewMapTCPHandler on the WebSocket transport. The map
+// listener registration and its config land with the dual-client e2e (M7); the
+// constructor is map-capable now so that wiring is a one-liner then.
+func NewMapWSServer(
+	baseCtx context.Context,
+	log *zerolog.Logger,
+	disp *domain.Dispatcher,
+	newDec MapDecoderFactory,
+	allowedOrigins []string,
+) *WSServer {
+	opts := &websocket.AcceptOptions{OriginPatterns: allowedOrigins}
+	if len(allowedOrigins) == 0 {
+		opts = &websocket.AcceptOptions{InsecureSkipVerify: true}
+	}
+	return &WSServer{
+		baseCtx:     baseCtx,
+		log:         log,
+		disp:        disp,
+		newDec:      newDec,
+		initialRole: domain.RoleMap,
+		opts:        opts,
 	}
 }
 
@@ -143,6 +175,7 @@ func (s *WSServer) handle(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(s.baseCtx)
 	conn := &wsConn{
 		c:      c,
+		role:   s.initialRole,
 		remote: r.RemoteAddr,
 		dec:    s.newDec(),
 		ctx:    ctx,
