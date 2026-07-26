@@ -42,11 +42,16 @@ type MapDecoderFactory func() *netcodec.Decoder
 // the connection's dispatch role and per-connection Decoder in the gnet Conn's
 // user context.
 //
-// Write uses gnet's synchronous io.Writer, which is safe because the M1 model
-// is one goroutine per connection (the event-loop owns both read and write).
-// Cross-connection broadcast writes arrive at M4 and switch to AsyncWrite.
+// Write uses gnet's AsyncWrite so it is safe to call from a goroutine other
+// than the conn's own event loop — the M4 spawn broadcast writes to *other*
+// players' conns from the entering player's dispatch goroutine. The synchronous
+// return reports an enqueue failure (conn already closing); the per-write
+// callback reports the eventual socket outcome, and returning its error makes
+// gnet close the conn so OnClose runs the disconnect cleanup. A write to a
+// peer that has gone away is a routine disconnect, logged at debug.
 type tcpConn struct {
 	raw    gnet.Conn
+	log    *zerolog.Logger
 	role   domain.Role
 	auth   domain.ConnAuth
 	remote string
@@ -60,8 +65,23 @@ func (c *tcpConn) SetRole(r domain.Role)     { c.role = r }
 func (c *tcpConn) Auth() domain.ConnAuth     { return c.auth }
 func (c *tcpConn) SetAuth(a domain.ConnAuth) { c.auth = a }
 func (c *tcpConn) RemoteAddr() string        { return c.remote }
+
+// Write enqueues a frame for asynchronous delivery on the conn's event loop.
+// It copies p before returning because the caller (a packet encoder or a
+// broadcast fan-out) may reuse or discard the buffer immediately; gnet does
+// not document that AsyncWrite takes ownership before the callback runs.
 func (c *tcpConn) Write(p []byte) error {
-	if _, err := c.raw.Write(p); err != nil {
+	buf := make([]byte, len(p))
+	copy(buf, p)
+	if err := c.raw.AsyncWrite(buf, func(_ gnet.Conn, err error) error {
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			c.log.Debug().Err(err).Str("peer", c.remote).Msg("tcp async write")
+			// Return the error so gnet closes this conn — OnClose then runs
+			// the disconnect cleanup (cancel ctx; world unregisters the player).
+			return err
+		}
+		return nil
+	}); err != nil {
 		return fmt.Errorf("tcp write: %w", err)
 	}
 	return nil
@@ -140,6 +160,7 @@ func (h *TCPHandler) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 	ctx, cancel := context.WithCancel(h.baseCtx)
 	conn := &tcpConn{
 		raw:    c,
+		log:    h.log,
 		role:   h.initialRole,
 		remote: c.RemoteAddr().String(),
 		dec:    h.newDec(),

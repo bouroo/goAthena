@@ -51,14 +51,18 @@ type SpawnPoint struct {
 // Error policy mirrors CharEnterHandler: a parse/encode or infra fault is
 // returned so ProcessBytes logs it; an expected refusal is a nil error.
 type MapEnterHandler struct {
-	auth  accountdomain.Authenticator
-	spawn SpawnPoint
+	auth    accountdomain.Authenticator
+	spawn   SpawnPoint
+	spawner *SpawnService
 }
 
 // NewMapEnterHandler builds a CZ_ENTER handler over the account Authenticator
-// (for VerifySession) and the spawn point written into ZC_ACCEPT_ENTER.
-func NewMapEnterHandler(auth accountdomain.Authenticator, spawn SpawnPoint) *MapEnterHandler {
-	return &MapEnterHandler{auth: auth, spawn: spawn}
+// (for VerifySession), the spawn point written into ZC_ACCEPT_ENTER, and the
+// spawn use case that drives the enter-world flow after the gate accepts. M3
+// callers with no spawn-on-enter yet pass a nil spawner; the accept path then
+// stops after ZC_ACCEPT_ENTER exactly as M3 did.
+func NewMapEnterHandler(auth accountdomain.Authenticator, spawn SpawnPoint, spawner *SpawnService) *MapEnterHandler {
+	return &MapEnterHandler{auth: auth, spawn: spawn, spawner: spawner}
 }
 
 // Handle implements gateway/domain.PacketHandler for CZ_ENTER.
@@ -105,6 +109,18 @@ func (h *MapEnterHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame 
 	}
 	if err := resp.Encode(connWriter{conn}); err != nil {
 		return fmt.Errorf("encode ZC_ACCEPT_ENTER: %w", err)
+	}
+
+	// M4b: spawn the player into the world. Runs only after the gate has
+	// accepted and cached auth on the conn; the spawner reads the verified
+	// accountID off the auth cache (sess.AccountID), never req.AccountID. A nil
+	// spawner keeps the M3 behavior (accept then stop) for tests that exercise
+	// only the gate.
+	if h.spawner == nil {
+		return nil
+	}
+	if err := h.spawner.EnterWorld(ctx, conn, sess.AccountID, req.CharID, h.spawn); err != nil {
+		return fmt.Errorf("enter world account %d char %d: %w", sess.AccountID, req.CharID, err)
 	}
 	return nil
 }

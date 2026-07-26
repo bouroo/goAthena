@@ -115,9 +115,15 @@ func requireStack(t *testing.T) {
 // process's working directory.
 func loadConfigForE2E(t *testing.T) *config.Config {
 	t.Helper()
-	t.Setenv("CONFIG_FILE", filepath.Join(repoRoot(t), "config.yaml"))
+	root := repoRoot(t)
+	t.Setenv("CONFIG_FILE", filepath.Join(root, "config.yaml"))
 	cfg, err := config.Load()
 	require.NoError(t, err, "load config.yaml")
+	// zone.map_dir is a repo-root-relative path in config.yaml ("./data/maps"),
+	// resolved against the server's CWD at runtime. A test process runs with its
+	// own CWD (the package dir), so absolutize it against the repo root or the
+	// FileMapStore would look for maps under the test's CWD and fail to load.
+	cfg.Zone.MapDir = filepath.Join(root, filepath.Clean(cfg.Zone.MapDir))
 	return cfg
 }
 
@@ -395,17 +401,22 @@ func TestServe_MakeChar_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestServe_MapEnter_RoundTrip is the M3 end-to-end proof of the secure map
-// enter. It boots the real modular monolith (now with the dedicated map
-// listener), logs in on the login/char TCP listener to mint a session in
+// TestServe_MapEnter_RoundTrip is the M3+M4b end-to-end proof of the secure
+// map enter followed by spawn-on-enter. It boots the real modular monolith
+// (with the dedicated map listener), seeds a real char row for the test account
+// in MariaDB, logs in on the login/char TCP listener to mint a session in
 // Valkey, then opens a FRESH connection to the separate map listener and sends
-// CZ_ENTER echoing the login's login_id1 as the AuthCode. The map connection
-// starts at the map role, so CZ_ENTER routes to the map dispatch table, the
-// CZ_ENTER handler re-verifies login_id1 against the Valkey SessionStore
-// (constant-time), and the server replies ZC_ACCEPT_ENTER (0x02eb). This is the
-// first cross-listener boundary: it proves the gateway-map-tcp runnable binds,
-// NewMapTCPHandler seeds the map role + map decoder, and the reconnect trust
-// gate admits a verified session.
+// CZ_ENTER echoing the login's login_id1 as the AuthCode and the seeded char_id
+// as the CharID. The map connection starts at the map role, so CZ_ENTER routes
+// to the map dispatch table, the CZ_ENTER handler re-verifies login_id1 against
+// the Valkey SessionStore (constant-time), replies ZC_ACCEPT_ENTER (0x02eb), and
+// then the M4b SpawnService loads the seeded char, loads the Prontera map data,
+// builds the player, and emits a ZC_SPAWN_UNIT (0x09fe, 107B) self-spawn. This
+// is the first cross-listener boundary AND the first world-state boundary: it
+// proves the gateway-map-tcp runnable binds, NewMapTCPHandler seeds the map role
+// + map decoder, the reconnect trust gate admits a verified session, the
+// character repository resolves via DI, FileMapStore loads the Prontera gat/rsw,
+// and the SpawnService writes the spawn frame through the live TCP conn.
 func TestServe_MapEnter_RoundTrip(t *testing.T) {
 	requireStack(t)
 
@@ -413,6 +424,12 @@ func TestServe_MapEnter_RoundTrip(t *testing.T) {
 	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
 	mapAddr := cfg.Gateway.MapAddr // ephemeral map listener from the rebind above
 	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	// Seed a real char the SpawnService can load. last_map/last_x/last_y match
+	// the seedCharForAccount defaults ("prontera", 53, 111) so the self-spawn
+	// PosX/PosY are predictable; the cleanup inside seedCharForAccount removes
+	// the row after the test.
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eHero", "prontera")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -463,7 +480,7 @@ func TestServe_MapEnter_RoundTrip(t *testing.T) {
 
 	var enter bytes.Buffer
 	require.NoError(t, packet.CZEnterRequest{
-		AccountID: seededAccountID, CharID: 0, AuthCode: loginID1, ClientTime: 0, Sex: sexByte,
+		AccountID: seededAccountID, CharID: seedCharID, AuthCode: loginID1, ClientTime: 0, Sex: sexByte,
 	}.Encode(&enter))
 	_, err = mapConn.Write(enter.Bytes())
 	require.NoError(t, err)
@@ -477,6 +494,31 @@ func TestServe_MapEnter_RoundTrip(t *testing.T) {
 	require.Equal(t, uint32(0), binary.LittleEndian.Uint32(resp[2:6]), "StartTime")
 	assert.Equal(t, uint8(5), resp[9], "xSize (rAthena hardcode)")
 	assert.Equal(t, uint8(5), resp[10], "ySize (rAthena hardcode)")
+
+	// --- ZC_SPAWN_UNIT (0x09fe, 107B): the M4b SpawnService loaded the seeded
+	// char, loaded Prontera, and self-spawned the entering player. A lone
+	// enterer emits exactly one spawn frame (its own); there are no neighbors on
+	// a freshly booted map. ---
+	spawn := make([]byte, packet.SpawnUnitResponse{}.Size())
+	_, err = io.ReadFull(mapConn, spawn)
+	require.NoError(t, err, "no ZC_SPAWN_UNIT received; spawn-on-enter likely failed to load the char/map")
+	require.Equal(t, packet.HeaderZCSPAWNUNIT, binary.LittleEndian.Uint16(spawn[0:2]),
+		"expected ZC_SPAWN_UNIT header")
+	require.Equal(t, uint16(packet.SpawnUnitResponse{}.Size()), binary.LittleEndian.Uint16(spawn[2:4]),
+		"ZC_SPAWN_UNIT length")
+	// AID = account_id (the verified session's, not the packet's), GID = char_id.
+	assert.Equal(t, seededAccountID, binary.LittleEndian.Uint32(spawn[5:9]),
+		"spawn AID is the seeded account_id")
+	assert.Equal(t, seedCharID, binary.LittleEndian.Uint32(spawn[9:13]),
+		"spawn GID is the seeded char_id")
+	// ObjectType [4] = 0 (PC); PC self-spawn advertises no HP bar (MaxHP=HP=-1).
+	assert.Equal(t, uint8(0), spawn[4], "ObjectType = PC")
+	assert.Equal(t, int32(-1), int32(binary.LittleEndian.Uint32(spawn[72:76])), "MaxHP = -1 for PC")
+	assert.Equal(t, int32(-1), int32(binary.LittleEndian.Uint32(spawn[76:80])), "HP = -1 for PC")
+	// Name [83:107] is "E2eHero" null-padded to 24 bytes.
+	nameField := make([]byte, 24)
+	copy(nameField, []byte("E2eHero"))
+	assert.Equal(t, nameField, spawn[83:107], "spawn name field")
 }
 
 // readLengthPrefixedPacket reads one rAthena packet whose uint16 length at byte

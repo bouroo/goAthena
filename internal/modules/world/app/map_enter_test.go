@@ -65,9 +65,11 @@ func (f *fakeAuthenticator) VerifySession(ctx context.Context, accountID, loginI
 }
 
 // mapDispatcher wires a MapEnterHandler at CZ_ENTER over the map dispatch table.
+// The spawner is nil so these M3 tests exercise only the gate (accept/refuse/drop)
+// without a world/AOI/map load; the M4b SpawnService has its own app-level tests.
 func mapDispatcher(auth accountdomain.Authenticator) *gwdomain.Dispatcher {
 	return gwdomain.NewDispatcher(nil, nil, gwdomain.PacketHandlerTable{
-		packet.HeaderCZENTER: app.NewMapEnterHandler(auth, app.DefaultSpawn).Handle,
+		packet.HeaderCZENTER: app.NewMapEnterHandler(auth, app.DefaultSpawn, nil).Handle,
 	})
 }
 

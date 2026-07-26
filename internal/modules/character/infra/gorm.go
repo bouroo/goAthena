@@ -186,6 +186,28 @@ func (r *GORMCharacterRepository) GetBySlot(ctx context.Context, accountID uint3
 	return &c, nil
 }
 
+// GetByID returns one character at (accountID, charID). CZ_ENTER carries the
+// char_id, so the map-enter spawn flow resolves appearance + last position here
+// rather than by slot. Take (not First) avoids an implicit ORDER BY on a unique
+// (account_id, char_id) lookup. Scoping by account_id is the impersonation guard:
+// a replayed enter carrying another account's char_id yields ErrCharacterNotFound,
+// never a cross-account character.
+func (r *GORMCharacterRepository) GetByID(ctx context.Context, accountID uint32, charID uint32) (*domain.Character, error) {
+	var m charModel
+	err := r.db.WithContext(ctx).
+		Select(charColumns).
+		Where("account_id = ? AND char_id = ?", accountID, charID).
+		Take(&m).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrCharacterNotFound
+		}
+		return nil, fmt.Errorf("get character account %d char %d: %w", accountID, charID, err)
+	}
+	c := m.toDomain()
+	return &c, nil
+}
+
 // Create inserts a new character with the server-assigned novice defaults and
 // returns the persisted row (char_id is the DB-assigned auto-increment). It
 // guards name uniqueness and slot occupancy at the DB before insert and maps a

@@ -122,6 +122,12 @@ type CharacterRepository interface {
 	// ErrCharacterNotFound when no row matches — the handler maps this to a
 	// HC_REFUSE_ENTER or a silent drop depending on the flow.
 	GetBySlot(ctx context.Context, accountID uint32, slot uint8) (*Character, error)
+	// GetByID returns the character at (accountID, charID). CZ_ENTER carries the
+	// char_id (not the slot), so the map-enter flow resolves the spawn appearance
+	// + last position through this lookup. Returns ErrCharacterNotFound when no
+	// row matches — the world spawn use case treats a mismatch as a stale or
+	// replayed enter and drops the connection.
+	GetByID(ctx context.Context, accountID uint32, charID uint32) (*Character, error)
 	// Create inserts a new character for the account at the requested slot,
 	// applying the server-side novice defaults (base stats, starting HP/SP,
 	// status points, zeny, position). It validates name uniqueness and slot

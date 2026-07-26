@@ -55,6 +55,21 @@ func (r *MemoryCharacterRepository) GetBySlot(_ context.Context, accountID uint3
 	return &cp, nil
 }
 
+// GetByID returns the character at (accountID, charID). The store is keyed by
+// (accountID, slot), so this scans for a matching char_id within the account —
+// a linear cost that is fine for the hermetic unit-test seed sizes. Scoping by
+// accountID is the impersonation guard: a char_id from another account yields
+// ErrCharacterNotFound, never the wrong character.
+func (r *MemoryCharacterRepository) GetByID(_ context.Context, accountID uint32, charID uint32) (*domain.Character, error) {
+	for k, c := range r.bySlot {
+		if k.accountID == accountID && c.CharID == charID {
+			cp := c
+			return &cp, nil
+		}
+	}
+	return nil, domain.ErrCharacterNotFound
+}
+
 // Create mirrors GORMCharacterRepository.Create: it guards name uniqueness and
 // slot occupancy, then stores a novice-defaults character with a char_id chosen
 // to mirror the DB's AUTO_INCREMENT (next = max(existing)+1, or 150000 when

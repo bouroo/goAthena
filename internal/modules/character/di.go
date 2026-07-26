@@ -18,6 +18,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/config"
 	"github.com/bouroo/goAthena/internal/modules/character/app"
+	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
 	"github.com/bouroo/goAthena/internal/modules/character/infra"
 )
 
@@ -33,6 +34,12 @@ func Register(_ context.Context, c do.Injector) error {
 		return fmt.Errorf("character: resolve gorm db: %w", err)
 	}
 	chars := infra.NewGORMCharacterRepository(db)
+	// Provide the repository as the domain port so other bounded contexts (the
+	// world module's spawn-on-enter flow) can resolve it via structural
+	// satisfaction without importing character/infra. The handlers below keep
+	// their *GORMCharacterRepository dependency; the cast here only widens the
+	// injector's view to the port.
+	do.ProvideValue(c, chardomain.CharacterRepository(chars))
 
 	cfg, err := do.Invoke[*config.Config](c)
 	if err != nil {

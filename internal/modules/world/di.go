@@ -18,6 +18,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/config"
 	accountdomain "github.com/bouroo/goAthena/internal/modules/account/domain"
+	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
 	"github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/internal/modules/world/infra"
@@ -26,15 +27,15 @@ import (
 // Register builds the world bounded context. M3 provides the CZ_ENTER handler
 // (the map-enter trust gate) over the account Authenticator; M4a adds the
 // filesystem-backed MapStore that loads the per-map AOI grid and A* pathfinder.
-// M4b+ layer entity spawn, AOI broadcast, and the tick on top. ctx is accepted
-// to match the samber/do v2 Register convention but is unused — the map is
-// loaded lazily on first demand (spawn-on-enter), not eagerly at Register.
+// M4b layers the spawn-on-enter flow: the in-process PlayerRegistry and the
+// SpawnService the gate calls after ZC_ACCEPT_ENTER. ctx is accepted to match
+// the samber/do v2 Register convention but is unused — the map is loaded lazily
+// on first demand (spawn-on-enter), not eagerly at Register.
 func Register(_ context.Context, c do.Injector) error {
 	auth, err := do.Invoke[accountdomain.Authenticator](c)
 	if err != nil {
 		return fmt.Errorf("world: resolve account authenticator: %w", err)
 	}
-	do.ProvideValue(c, app.NewMapEnterHandler(auth, app.DefaultSpawn))
 
 	cfg, err := do.Invoke[*config.Config](c)
 	if err != nil {
@@ -44,6 +45,22 @@ func Register(_ context.Context, c do.Injector) error {
 	// .gat/.rsw when an entity enters a map (M4b), so a missing or relative
 	// map_dir cannot fail server boot. The dedicated map-listener listeners
 	// therefore still bind and the M3 e2e's app.Serve still comes up.
-	do.ProvideValue(c, domain.MapStore(infra.NewFileMapStore(cfg.Zone.MapDir)))
+	maps := domain.MapStore(infra.NewFileMapStore(cfg.Zone.MapDir))
+	do.ProvideValue(c, maps)
+
+	// M4b: the character repository (provided by the character module as its
+	// domain port) drives the spawn lookup; the PlayerRegistry is the live-PC
+	// index the SpawnService and the future disconnect/movement paths share.
+	// Provide it on the injector so M4c+ (movement, tick) resolve the same
+	// instance rather than each building their own.
+	chars, err := do.Invoke[chardomain.CharacterRepository](c)
+	if err != nil {
+		return fmt.Errorf("world: resolve character repository: %w", err)
+	}
+	registry := domain.NewPlayerRegistry()
+	do.ProvideValue(c, registry)
+
+	spawner := app.NewSpawnService(chars, maps, registry)
+	do.ProvideValue(c, app.NewMapEnterHandler(auth, app.DefaultSpawn, spawner))
 	return nil
 }
