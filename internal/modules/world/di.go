@@ -16,19 +16,34 @@ import (
 
 	"github.com/samber/do/v2"
 
+	"github.com/bouroo/goAthena/internal/config"
 	accountdomain "github.com/bouroo/goAthena/internal/modules/account/domain"
 	"github.com/bouroo/goAthena/internal/modules/world/app"
+	"github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/internal/modules/world/infra"
 )
 
 // Register builds the world bounded context. M3 provides the CZ_ENTER handler
-// (the map-enter trust gate) over the account Authenticator. M4 layers the
-// entity registry, AOI, and tick on top. ctx is accepted to match the samber/do
-// v2 Register convention but is unused.
+// (the map-enter trust gate) over the account Authenticator; M4a adds the
+// filesystem-backed MapStore that loads the per-map AOI grid and A* pathfinder.
+// M4b+ layer entity spawn, AOI broadcast, and the tick on top. ctx is accepted
+// to match the samber/do v2 Register convention but is unused — the map is
+// loaded lazily on first demand (spawn-on-enter), not eagerly at Register.
 func Register(_ context.Context, c do.Injector) error {
 	auth, err := do.Invoke[accountdomain.Authenticator](c)
 	if err != nil {
 		return fmt.Errorf("world: resolve account authenticator: %w", err)
 	}
 	do.ProvideValue(c, app.NewMapEnterHandler(auth, app.DefaultSpawn))
+
+	cfg, err := do.Invoke[*config.Config](c)
+	if err != nil {
+		return fmt.Errorf("world: resolve config: %w", err)
+	}
+	// The MapStore is constructed now but loads lazily: Load only reads
+	// .gat/.rsw when an entity enters a map (M4b), so a missing or relative
+	// map_dir cannot fail server boot. The dedicated map-listener listeners
+	// therefore still bind and the M3 e2e's app.Serve still comes up.
+	do.ProvideValue(c, domain.MapStore(infra.NewFileMapStore(cfg.Zone.MapDir)))
 	return nil
 }
