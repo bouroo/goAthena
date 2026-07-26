@@ -519,6 +519,38 @@ func TestServe_MapEnter_RoundTrip(t *testing.T) {
 	nameField := make([]byte, 24)
 	copy(nameField, []byte("E2eHero"))
 	assert.Equal(t, nameField, spawn[83:107], "spawn name field")
+
+	// --- M4c: CZ_REQUEST_MOVE (0x0085, 5B) → ZC_NOTIFY_PLAYERMOVE (0x0087, 12B).
+	// This crosses the move handler → MoveService queue → worker goroutine → real
+	// Prontera pathfinder (the single-goroutine contract the world-move Runnable
+	// owns) and back out the live TCP conn. The destination (60,115) is walkable
+	// and reachable from the spawn cell (53,111) on prontera.gat, so the worker
+	// resolves a path and emits the self-ack. ---
+	var moveReqBuf bytes.Buffer
+	require.NoError(t, packet.CZRequestMoveRequest{DestX: 60, DestY: 115}.Encode(&moveReqBuf))
+	_, err = mapConn.Write(moveReqBuf.Bytes())
+	require.NoError(t, err, "send CZ_REQUEST_MOVE")
+
+	notifyMove := make([]byte, packet.MapNotifyPlayerMoveResponse{}.Size()) // 12
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, err = io.ReadFull(mapConn, notifyMove)
+	require.NoError(t, err, "no ZC_NOTIFY_PLAYERMOVE received; move worker likely did not resolve the path")
+	require.Equal(t, packet.HeaderZCNOTIFYPLAYERMOVE, binary.LittleEndian.Uint16(notifyMove[0:2]),
+		"expected ZC_NOTIFY_PLAYERMOVE header")
+
+	// Build the expected frame with a DUMMY clock and compare only the
+	// deterministic slices: header [0:2] and the 3-byte packed src/dest [6:12].
+	// [2:6] is moveStartTime, the live systemClock's UnixMilli tick — it is
+	// correct (non-zero) but non-deterministic across runs, so it is not
+	// asserted byte-exact.
+	var expectMove bytes.Buffer
+	require.NoError(t, (packet.MapNotifyPlayerMoveResponse{
+		MoveStartTime: 0, SrcX: 53, SrcY: 111, DestX: 60, DestY: 115,
+	}).Encode(&expectMove))
+	want := expectMove.Bytes()
+	assert.Equal(t, want[0:2], notifyMove[0:2], "ZC_NOTIFY_PLAYERMOVE header")
+	assert.Equal(t, want[6:9], notifyMove[6:9], "self-ack packed src (53,111)")
+	assert.Equal(t, want[9:12], notifyMove[9:12], "self-ack packed dest (60,115)")
 }
 
 // readLengthPrefixedPacket reads one rAthena packet whose uint16 length at byte

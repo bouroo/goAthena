@@ -31,6 +31,9 @@ type Handlers struct {
 	// OnCZEnter serves CZ_ENTER (0x0072), the map-server entry point and trust
 	// gate. Provided by the world module.
 	OnCZEnter domain.PacketHandler
+	// OnCZRequestMove serves CZ_REQUEST_MOVE (0x0085), the click-to-walk
+	// request. Provided by the world module (M4c).
+	OnCZRequestMove domain.PacketHandler
 }
 
 // BuildDispatcher assembles the three role-keyed dispatch tables from the
@@ -55,6 +58,9 @@ func BuildDispatcher(h Handlers) *domain.Dispatcher {
 	mapT := domain.PacketHandlerTable{}
 	if h.OnCZEnter != nil {
 		mapT[packet.HeaderCZENTER] = h.OnCZEnter
+	}
+	if h.OnCZRequestMove != nil {
+		mapT[packet.HeaderCZREQUESTMOVE] = h.OnCZRequestMove
 	}
 	return domain.NewDispatcher(login, char, mapT)
 }

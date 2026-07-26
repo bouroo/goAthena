@@ -35,6 +35,16 @@ const PCWalkSpeed int16 = 150
 // that same value. The GID is the char_id. One account → one PC online, so
 // account_id is a unique entity key.
 type Player struct {
+	// mu guards the mutable post-enter fields PosX, PosY, Dir. Every other
+	// field is set once at enter-world and never mutated, so it is safe to
+	// read without the lock. PosX/PosY/Dir, however, are written by the
+	// movement worker (M4c) and read by a concurrent EnterWorld on a
+	// different connection when it builds a neighbor's SpawnUnit — a
+	// cross-goroutine read/write the Go race detector would flag without
+	// this lock. The worker is the sole writer; enter-world and the
+	// spawn/walk builders are readers.
+	mu sync.RWMutex
+
 	// Conn is the transport-agnostic link to the player's client. The spawn
 	// use case writes the self-spawn frame through it; the AOI broadcast
 	// writes neighbor spawns through other players' Conns. Write must be safe
@@ -100,6 +110,7 @@ type Player struct {
 //     novice (clif.cpp:1330).
 //   - xSize = ySize = 5 for a PC; ObjectType = 0 (PC).
 func (p *Player) SpawnUnit() packet.SpawnUnitResponse {
+	posX, posY, dir := p.Position()
 	return packet.SpawnUnitResponse{
 		ObjectType:  0, // PC
 		AID:         p.AccountID,
@@ -125,9 +136,9 @@ func (p *Player) SpawnUnit() packet.SpawnUnitResponse {
 		Virtue:      0,
 		IsPKModeON:  pkModeFlag(p.Karma),
 		Sex:         p.Sex,
-		PosX:        p.PosX,
-		PosY:        p.PosY,
-		Dir:         p.Dir,
+		PosX:        posX,
+		PosY:        posY,
+		Dir:         dir,
 		XSize:       5,
 		YSize:       5,
 		CLevel:      int16(p.CLevel), //nolint:gosec // G115: uint16 level → int16 wire slot
@@ -137,6 +148,78 @@ func (p *Player) SpawnUnit() packet.SpawnUnitResponse {
 		IsBoss:      0, // BOSSTYPE_NONE for a PC
 		Body:        0, // LOOK_BODY2 = 0 for novice
 		Name:        p.Name,
+	}
+}
+
+// Position returns the player's current cell and facing under the read lock.
+// SpawnUnit and the M4c movement worker read position through this so a
+// concurrent SetPosition (a move resolving on the worker goroutine) cannot
+// race a neighbor's spawn/walk broadcast building on a different goroutine.
+func (p *Player) Position() (posX, posY int16, dir uint8) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.PosX, p.PosY, p.Dir
+}
+
+// SetPosition updates the player's cell and facing under the write lock. The
+// movement worker is the sole caller (M4c): it pathfinds, then commits the
+// destination atomically so a concurrent SpawnUnit reads either the old or the
+// new cell, never a torn half-move.
+func (p *Player) SetPosition(posX, posY int16, dir uint8) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.PosX, p.PosY, p.Dir = posX, posY, dir
+}
+
+// WalkUnit builds the ZC_UNIT_WALKING frame this player emits to AOI observers
+// when it begins a move. The appearance slice is identical to SpawnUnit (same
+// PC defaults — a walk broadcast is a spawn-with-motion, not a different view);
+// only the position fields differ: SrcX/SrcY is the cell the move leaves,
+// DestX/DestY is the cell it targets, and MoveStartTime is the server's
+// monotone tick at acceptance so observers interpolate the sprite in sync.
+// rAthena clif_unit_walking (clif.cpp) writes the same appearance block as
+// clif_spawn_unit and inserts moveStartTime + the 6-byte moveData at the
+// PACKETVER >= 20131223 offsets the kernel encoder mirrors.
+func (p *Player) WalkUnit(srcX, srcY, destX, destY int16, moveStartTime uint32) packet.UnitWalkingResponse {
+	return packet.UnitWalkingResponse{
+		ObjectType:    0, // PC
+		AID:           p.AccountID,
+		GID:           p.CharID,
+		Speed:         PCWalkSpeed,
+		BodyState:     0,
+		HealthState:   0,
+		EffectState:   int32(p.Option), //nolint:gosec // G115: uint32 option → int32 wire slot
+		Job:           int16(p.Job),    //nolint:gosec // G115: uint16 class → int16 wire slot
+		Head:          uint16(p.Head),  //nolint:gosec // G115: uint8 hair → uint16 wire slot
+		Weapon:        uint32(p.Weapon),
+		Shield:        uint32(p.Shield),
+		Accessory:     p.HeadBottom, // LOOK_HEAD_BOTTOM
+		Accessory2:    p.HeadTop,    // LOOK_HEAD_TOP
+		Accessory3:    p.HeadMid,    // LOOK_HEAD_MID
+		MoveStartTime: moveStartTime,
+		HeadPalette:   int16(p.HeadPalette), //nolint:gosec // G115: uint16 → int16 wire slot
+		BodyPalette:   int16(p.BodyPalette), //nolint:gosec // G115: uint16 → int16 wire slot
+		HeadDir:       0,
+		Robe:          p.Robe,
+		GUID:          0,
+		GEmblemVer:    0,
+		Honor:         int16(p.Manner), //nolint:gosec // G115: uint16 manner → int16 wire slot
+		Virtue:        0,
+		IsPKModeON:    pkModeFlag(p.Karma),
+		Sex:           p.Sex,
+		SrcX:          srcX,
+		SrcY:          srcY,
+		DestX:         destX,
+		DestY:         destY,
+		XSize:         5,
+		YSize:         5,
+		CLevel:        int16(p.CLevel), //nolint:gosec // G115: uint16 level → int16 wire slot
+		Font:          0,
+		MaxHP:         -1, // PC: no HP bar (clif.cpp:1317-1318)
+		HP:            -1,
+		IsBoss:        0, // BOSSTYPE_NONE for a PC
+		Body:          0, // LOOK_BODY2 = 0 for novice
+		Name:          p.Name,
 	}
 }
 

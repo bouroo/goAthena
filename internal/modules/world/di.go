@@ -62,5 +62,16 @@ func Register(_ context.Context, c do.Injector) error {
 
 	spawner := app.NewSpawnService(chars, maps, registry)
 	do.ProvideValue(c, app.NewMapEnterHandler(auth, app.DefaultSpawn, spawner))
+
+	// M4c: the movement worker. A single MoveService owns every map's
+	// pathfinder — its Run goroutine is the sole caller of FindPath, so the
+	// pathfinder's mutable scratch buffers are never raced (the single-goroutine
+	// contract world/domain/map.go documents). queueSize 256 bounds the backlog;
+	// a full queue drops the oldest pending move (backpressure, not OOM). The
+	// worker is started as a Runnable from the composition root so SIGTERM
+	// reaches it; here we only provide the service + handler for resolution.
+	mover := app.NewMoveService(registry, maps, app.SystemClock(), 256)
+	do.ProvideValue(c, mover)
+	do.ProvideValue(c, app.NewMoveHandler(mover))
 	return nil
 }

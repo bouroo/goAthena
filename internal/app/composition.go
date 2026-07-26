@@ -169,6 +169,17 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 	application.RegisterRunnable("gateway-map-tcp", func(runCtx context.Context) error {
 		return gwinfra.NewMapTCPHandler(runCtx, logger, disp, newMapDec).Run("tcp://" + cfg.Gateway.MapAddr)
 	})
+	// M4c: the movement worker. A single goroutine owns every map's pathfinder
+	// (the single-goroutine contract world/domain/map.go documents), so CZ_REQUEST_MOVE
+	// handlers enqueue and this runnable resolves moves in arrival order. Registering
+	// it as a supervised runnable means SIGTERM cancels its context and Run drains
+	// (returns nil); a panic or future unrecoverable fault would fan into the error
+	// channel and tear the process down alongside the listeners.
+	mover, err := do.Invoke[*worldapp.MoveService](injector)
+	if err != nil {
+		return fmt.Errorf("resolve world move service: %w", err)
+	}
+	application.RegisterRunnable("world-move", mover.Run)
 	return nil
 }
 
@@ -199,12 +210,17 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return fmt.Errorf("resolve CZ_ENTER handler: %w", err)
 	}
+	moveHandler, err := do.Invoke[*worldapp.MoveHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_REQUEST_MOVE handler: %w", err)
+	}
 	do.ProvideValue(injector, gwapp.Handlers{
-		OnCALogin:      loginHandler.Handle,
-		OnCHEnter:      enterHandler.Handle,
-		OnCHSelectChar: selectHandler.Handle,
-		OnCHMakeChar:   makeHandler.Handle,
-		OnCZEnter:      mapEnterHandler.Handle,
+		OnCALogin:       loginHandler.Handle,
+		OnCHEnter:       enterHandler.Handle,
+		OnCHSelectChar:  selectHandler.Handle,
+		OnCHMakeChar:    makeHandler.Handle,
+		OnCZEnter:       mapEnterHandler.Handle,
+		OnCZRequestMove: moveHandler.Handle,
 	})
 	return nil
 }
