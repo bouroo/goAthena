@@ -104,6 +104,10 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      nats:
+        image: docker.io/library/nats:2
+        ports:
+          - 4222:4222
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -122,7 +126,7 @@ jobs:
           DB_PASSWORD: goathena
           DB_SSL_MODE: "false"
         run: |
-          go run ./cmd/migrate up
+          go run ./cmd/goathena migrate up
       - name: Run integration tests
         env:
           DB_DRIVER: mariadb
@@ -149,5 +153,5 @@ jobs:
         with:
           go-version: "stable"
           cache: true
-      - run: go build -ldflags="-s -w" -o bin/migrate ./cmd/migrate
+      - run: go build -ldflags="-s -w" -o bin/goathena ./cmd/goathena
       - run: docker build -f Containerfile -t goathena:ci .

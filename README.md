@@ -5,19 +5,42 @@
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/doc/go1.26)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
 
-A distributed, cloud-native emulator for **Ragnarok Online**, written in Go.
+A Go re-implementation of the **Ragnarok Online** server, built as a modular
+monolith on domain-driven / clean-architecture principles.
 
 ## What is this?
 
-**Ragnarok Online (RO)** is a long-running Korean MMORPG whose private-server scene has been kept alive for two decades by community emulators. **rAthena** is the most widely used one — a mature, single-process C/C++ project that handles login, characters, and the game world in tightly coupled daemons.
+**Ragnarok Online (RO)** is a long-running Korean MMORPG whose private-server
+scene has been kept alive for two decades by community emulators. **rAthena** is
+the most widely used one — a mature, single-process C/C++ project that handles
+login, characters, and the game world in tightly coupled daemons.
 
-**goAthena** is a from-scratch Go re-implementation of the same game logic, but redesigned for the cloud: instead of three monolithic daemons on one box, it's three independently deployable services connected over a message bus, scaled on Kubernetes, and capable of running thousands of concurrent players per game world. It preserves wire and data compatibility with rAthena so existing clients (the Korean RO client, *kRO*) and browser clients (*roBrowser*) just work, and existing NPC scripts and database schemas can be reused.
+**goAthena** is a from-scratch Go re-engineering of that game logic (not a line-
+for-line port) that preserves **wire and data compatibility** with rAthena, so
+existing clients (the **ClientROThailand** TCP client and the **roBrowser**
+WebSocket client) and the rAthena database schema and game-data YAMLs work as-is.
+It targets `PACKETVER 20250604` (Thai Classic). The process model is a single
+deployable **modular monolith** — one binary, supervised listeners — whose
+bounded-context modules are split-ready (every seam is a Go interface; the first
+real scale-out extracts a module into its own binary over the NATS bus).
+
+> **Project status — greenfield rebuild in progress.** The application layer was
+> rebuilt from an empty tree into a modular monolith, carrying the verified,
+> tested **kernel** verbatim (`pkg/ro` protocol/data libraries, the
+> infrastructure adapters, and the 11-wave SQL schema). **Milestone M0 (scaffold)
+> is complete:** the single binary boots, serves `/healthz` + `/readyz`, and
+> applies migrations. The gameplay milestones (login → character → world →
+> combat → commerce → script → transit) land in M1–M12. goAthena is **not yet a
+> drop-in replacement**; it is a usable, tested foundation under active rebuild.
 
 ## Who is this for?
 
-- **Curious developers** — anyone interested in MMORPG server architecture, distributed systems, or re-implementing legacy C++ in Go.
-- **Contributors** — people who want to run goAthena locally and start hacking on it.
-- **RO community** — server operators and scripters evaluating a modern alternative to rAthena.
+- **Curious developers** — anyone interested in MMORPG server architecture,
+  real-time networking, or re-implementing legacy C++ in Go.
+- **Contributors** — people who want to run goAthena locally and start hacking
+  on it.
+- **RO community** — server operators and scripters evaluating a modern
+  alternative to rAthena.
 
 ## Prerequisites
 
@@ -30,191 +53,154 @@ A distributed, cloud-native emulator for **Ragnarok Online**, written in Go.
 ## Quick start
 
 ```bash
-cp .env.example .env                          # create your local config
-docker compose up -d mariadb valkey nats      # start the three backing services
-task migrate-up                               # apply the database schema
-
-task run-identity                             # accounts & characters — HTTP 8080, gRPC 50051
-task run-gateway                              # front door — TCP 6900 (kRO clients), WS 6901 (roBrowser), HTTP 8081, gRPC 50052
-task run-zone                                 # the live game world — HTTP 8082, gRPC 7121 (Agones-managed)
+cp .env.example .env                       # local config defaults
+docker compose up -d mariadb valkey nats   # start the backing services
+task migrate-up                            # goathena migrate up — apply schema
+task serve                                 # build + run `goathena serve`
 ```
 
-Each `task run-<service>` command builds and runs one binary. Run the ones you need; they're independent processes that talk to each other over gRPC and NATS.
+`goathena` is the one binary. It speaks three subcommands:
 
-## The services at a glance
+| Command | What it does |
+|---|---|
+| `serve` | Run the modular-monolith server: HTTP health/gRPC now; login/char/map TCP + WebSocket game listeners arrive in M1+. Blocks until SIGINT/SIGTERM. |
+| `migrate up \| down [N] \| force VERSION \| version` | Apply/roll back the embedded SQL schema. Self-contained (`go:embed`), idempotent. |
+| `version` | Print build metadata (`main.Version`/`CommitSHA`/`BuildTime`, injected at release time). |
 
-goAthena is a multi-service monorepo. Every service has its own `cmd/<svc>/main.go` entry point and its own dependency-injection composition root.
-
-| Service | What it does, in plain terms | Binary | Transport | State |
-|---|---|---|---|---|
-| **gateway** | The front door. Decrypts the kRO client's TCP traffic, translates roBrowser's WebSocket traffic, and routes sessions to the right backend service. | `cmd/gateway` | TCP + WebSocket + HTTP + gRPC | Stateless |
-| **identity** | Accounts, logins, characters, and warehouses. The "who are you and what characters do you own" tier. | `cmd/identity` | HTTP + gRPC | Stateless |
-| **zone** | The live game world. Runs map instances, movement, pathfinding, combat, NPC scripts, and the per-tick simulation loop. | `cmd/zone` | HTTP + gRPC | Stateful (Agones) |
-| **migrate** | A one-shot CLI that applies or rolls back database migrations. | `cmd/migrate` | — | CLI |
-
-The **script engine** — the parser and virtual machine that runs rAthena's NPC scripts — is a library embedded inside the zone service, not a separate binary. It hot-reloads in place via an atomic pointer swap, so you can edit a script and see the change without restarting the server.
-
-### Port map
-
-| Service | HTTP | gRPC | TCP / WS |
-|---|---|---|---|
-| gateway | `8081` | `50052` | TCP `6900` (kRO), WS `6901` (roBrowser) |
-| identity | `8080` | `50051` | — |
-| zone | `8082` | `7121` | — |
-| MariaDB | — | — | `3306` |
-| Valkey | — | — | `6379` |
-| NATS | — | — | `4222` |
-
-## Project status
-
-goAthena has shipped all five planned phases. The core platform is in place: ingress, identity, script engine, physics/AOI, cluster scale, and QA. A few highlights:
-
-- **20,000+ legacy NPC scripts** parse, compile, and hot-reload cleanly
-- **2,000 concurrent players per zone** sustained at 50 ms ticks with substantial headroom
-- **Multi-zone transit** — players can walk between maps running on different zone pods
-- **Cloud-native** — designed for Kubernetes, orchestrated by [Agones](https://agones.dev/), autoscaled on player density
-
-For the full phase-by-phase breakdown (deliverables, exit gates, and metrics), see [`.agents/plans/go-athena-emulator/project-plan.md`](.agents/plans/go-athena-emulator/project-plan.md).
+In Docker the compose `goathena` service runs `serve` and the one-shot `migrate`
+service runs `migrate up` first; the app waits on `migrate` completing
+successfully.
 
 ## Architecture
 
-### Multi-service clean architecture
+A single process, structured as independent **bounded contexts** under
+`internal/modules/`. Each module owns its data and invariants and exposes a
+narrow domain port to the others; cross-module calls go through interfaces, not
+concrete types. Layering inside a module is clean-architecture: `domain`
+(ports + value objects, pure) → `app` (use cases) → `infra` (adapters) → `di`
+(wiring). Dependency direction is strictly inward.
 
-Each service follows clean architecture inside every feature package under `internal/features/<name>/`:
+Three boundary mechanisms are enforced from the first commit (merge-blocking in
+CI, not advisory):
 
-```
-domain/      entities + ports (interfaces) — no external deps
-repository/  GORM implementation of the outbound port (MariaDB or PostgreSQL driver)
-service/     use-case implementation of the inbound port
-handler/     transport (gnet TCP / WebSocket / echo HTTP / gRPC)
-di/          Register(injector) wires the feature into the container
-dto/         request/response shapes (where applicable)
-```
+1. **depguard** — a module may import another module's `domain` package only;
+   importing a peer's `app`/`infra`/`di` is denied. The composition root
+   (`internal/app`) is forbidden inside modules (it would form a cycle).
+2. **`internal/app/arch_test.go`** — a stdlib source-walk assertion that catches
+   intra-module drift the linter can't (e.g. a `domain` entity importing a
+   persistence driver). Runs in the unit gate with no build or exec.
+3. **shared value types** in `internal/shared/` — the type system enforces
+   cross-module agreement on primitives (`EntityID`, `Money`, `Position`, …).
 
-Composition uses [`samber/do/v2`](https://github.com/samber/do): every layer exposes `Register(c *do.Injector) error`. Each service has its own composition root in `internal/app/<svc>/app.go` that wires the dependency-injection (DI) container; `cmd/<svc>/main.go` is a thin entry point that loads config, sets build-time vars (`Version`, `CommitSHA`, `BuildTime`), and calls the service's `Run`.
+The composition root (`internal/app/composition.go`) wires the process with
+explicit, ordered factory calls: config → logger → telemetry → HTTP/gRPC
+servers, then (M1+) persistence and the gateway ingress + feature modules.
+Infra singletons (DB/Valkey/NATS/logger) live in a `samber/do/v2` injector;
+use-case services are plain constructors so wiring is auditable line-by-line.
 
-Bootstrap order:
+### Bounded contexts
 
-```
-config → telemetry → infrastructure (db/nats/valkey as needed) → shared servers → features
-```
-
-`internal/app/common/` provides shared bootstrap: signal handling, config loading, telemetry init, and version metadata. Configuration is loaded from `config.yaml` and the environment (no prefix) into a typed, validated struct via `spf13/viper` + `go-playground/validator`. Each service reads only the config blocks it needs — see [`.env.example`](.env.example) for the full key list.
-
-### RO protocol libraries (`pkg/ro/`)
-
-Reusable, publicly importable Ragnarok-Online-domain packages with **zero `internal/` dependencies** — meaning external tools (load testers, packet analyzers, replay tools) can use them without pulling in the rest of the codebase.
-
-| Package | What it does |
+| Module | Owns |
 |---|---|
-| `pkg/ro/packet` | Packet structures, `packet_db` parser, `PACKETVER` schema merge |
-| `pkg/ro/crypto` | Stream decryption (rolling pseudo-RNG — a deterministic number generator seeded per session) |
-| `pkg/ro/script` | Script types, opcodes, scope definitions |
-| `pkg/ro/romap` | `.gat`/`.rsw`/`.gnd` map-file loaders → walkability and height grids |
-| `pkg/ro/aoi` | **AOI** (Area of Interest) tower-grid engine — 18×18 cells, adaptive squeezing |
-| `pkg/ro/pathfinding` | **A\*** (a best-first pathfinding algorithm) on the walkability grid |
+| `account` | Authentication + the login/char-select session |
+| `character` | Character CRUD + progression (stats, skill points) |
+| `world` | Entity, AOI, tick, spawn, combat authority, Agones adapter |
+| `inventory` | Item-container aggregate per char/warehouse/storage |
+| `economy` | Zeny-ledger aggregate |
+| `commerce/{shop,trade,vending,storage}` | Use-case services over the economy + inventory ports |
+| `social` | Chat / friend / party / guild / mail (sub-packages) |
+| `transit` | Cross-map handshake |
+| `content` | The script engine (NPC dialog/quest/item script) |
+| `gateway` | Ingress: codec + table-driven dispatch + broadcast render |
 
-### Project layout
+Combat is a `world` app service, not its own context (no independent data),
+which avoids a `world → combat → world` cycle. Reference data (mob/item/skill
+tables) lives in `pkg/ro` as shared kernel; the `content` engine calls
+inventory/economy ports via injection, never the reverse.
 
-```
-goAthena/
-├── cmd/
-│   ├── gateway/main.go               # gateway (TCP/WS ingress)
-│   ├── identity/main.go              # identity service
-│   ├── zone/main.go                  # zone service (Agones)
-│   └── migrate/main.go               # database migration runner
-├── internal/
-│   ├── app/                          # per-service composition roots
-│   │   ├── common/                   # shared bootstrap (signal, config, telemetry)
-│   │   ├── gateway/                  # gateway DI wiring
-│   │   ├── identity/                 # identity DI wiring
-│   │   └── zone/                     # zone DI wiring
-│   ├── config/                       # typed multi-service config
-│   ├── features/
-│   │   ├── gateway/                  # packet codec, TCP/WS ingress
-│   │   ├── identity/                 # login, char, warehouse
-│   │   ├── zone/                     # map instances, AOI, tick loop
-│   │   └── script/                   # parser + VM (embedded in zone)
-│   ├── infrastructure/
-│   │   ├── db/                       # MariaDB (GORM) + migrations
-│   │   ├── messaging/{nats,valkey}/  # NATS pub/sub + Valkey sessions/locks
-│   │   ├── net/                      # kRO packet codec, stream crypto
-│   │   ├── assets/                   # GRF decoder, asset cache
-│   │   └── agones/                   # Agones SDK wrapper
-│   ├── shared/{errors,middleware,server,telemetry}/
-│   └── testutil/
-├── pkg/ro/                           # public RO protocol libraries (see above)
-├── api/{proto,pb}/                   # protobuf source + generated code
-├── deployments/{agones,kustomize,observability,docker}/
-├── test/e2e/
-├── compose.yml                       # MariaDB, NATS, Valkey, services
-├── config.yaml
-├── Taskfile.yml
-└── go.mod                            # github.com/bouroo/goAthena
-```
+## RO protocol & data libraries (`pkg/ro`)
 
-## Reference
+Carried verbatim and unit-tested — the spec everything else builds on:
 
-### Testing
-
-Every test file carries a build tag — `//go:build unit | integration | e2e` — and **`go test ./...` with no tag runs zero tests.** Always pass `-tags=unit` (or the appropriate tag); `task test` defaults to `unit`.
-
-| Task | What it does |
+| Package | Role |
 |---|---|
-| `task test` / `task test-unit` | Unit tests only (default). Hermetic — mocked with sqlmock + `go.uber.org/mock`. |
-| `task test-integration` | Requires live mariadb + valkey + nats. Migrations run first. |
-| `task test-e2e` | Boots the full server cluster (`test/e2e/`). |
+| `packet` | Typed request parsers (`Parse*`), `(*Response).Encode`, streaming `Decoder.Feed/Next`, opcode tables |
+| `packetdb` | Version-gated opcode compiler (`ForPacketVer`) — the dispatcher's per-`PACKETVER` seam |
+| `crypto` / `textenc` | Stream crypto and the multi-byte text encoding (Thai codepage) |
+| `aoi` / `pathfinding` / `romap` | Area-of-interest grid, A*, and map/tile models |
+| `script` | Script types/opcode/parse (the engine that runs them lands in `content`, M9) |
+| `itemdb`, `mobdb`, `skilldb`, `skilltree`, `jobdb`, `jobbasepoints`, `statpoint`, `constdb`, `rathenadb`, `athenaconf`, `mapindex` | Game-data registries loaded from rAthena YAMLs |
 
-Single-package / single-test (raw `go`, you supply the tag):
+## Project layout
+
+```
+cmd/
+  goathena/          # single binary: serve + migrate + version subcommands
+  genpacket/         # dev tool: regenerate packet tables from clif_packetdb
+  import-conf/       # dev tool: import rAthena conf into data/
+  healthcheck/       # minimal HTTP probe for distroless container healthchecks
+internal/
+  app/               # composition root (composition.go) + boundary arch_test.go
+  config/            # config.yaml + env loader, validation
+  modules/           # bounded contexts (see table above)
+  shared/            # cross-module value types, errors, middleware, server, telemetry
+  infrastructure/    # db (+ embedded migrations), messaging/{nats,valkey}, agones, assets, net
+  testutil/          # shared test helpers
+pkg/ro/              # RO protocol & data libraries (the kernel)
+api/                 # per-BC NATS event contracts — rebuilt alongside the modules
+deployments/         # agones, docker, kustomize, observability manifests
+data/                # game data: mob_db, mob_spawns, npc
+config.yaml          # default configuration (overridable per-env)
+compose.yml          # mariadb + valkey + nats + goathena (+ observability profile)
+```
+
+## Reference: testing, schema, codegen, lint
+
+### Tests (build tags)
 
 ```bash
-go test -race -tags=unit -run TestName ./internal/features/gateway/service/...
-go test -race -tags=integration ./internal/features/identity/repository/...
+task test-unit        # go test -race -tags=unit ./internal/... ./pkg/...   (60% coverage gate)
+task test-integration # go test -race -tags=integration ./...               (needs mariadb+valkey+nats)
 ```
 
-CI enforces a **60% coverage gate** on `./internal/... ./pkg/...` — don't drop coverage.
+Tests carry a `//go:build unit | integration | e2e` tag. Unit tests are
+hermetic; integration tests spin the real MariaDB/Valkey/NATS from compose.
 
 ### Migrations
 
-Two equivalent paths, kept in sync:
-
-- `task migrate-up` / `task migrate-down` — uses the `migrate` CLI pointed at `internal/infrastructure/db/migrations`.
-- `go run ./cmd/migrate up` — a self-contained binary that `go:embed`s the same SQL files (used by CI and the `Containerfile.migrate` image).
-
-Create new ones with `task migrate-create NAME=add_users` (writes to `internal/infrastructure/db/migrations`).
-
-The Identity Service must be read-compatible with the legacy rAthena schema at `rathena/sql-files/main.sql`. When creating migrations that touch login/char tables, cross-reference the legacy schema first.
-
-**Multi-DB support.** MariaDB is the primary driver (`db.driver: mariadb`, using `gorm.io/driver/mysql`). PostgreSQL is supported as an alternative (`db.driver: postgres`, using `gorm.io/driver/postgres`). The DB init layer selects the GORM (Go ORM) driver based on config; repository code is dialect-agnostic. Migrations are MariaDB-first; PostgreSQL migrations live in `internal/infrastructure/db/migrations/postgres/` when needed.
-
-### Code generation
-
-- **Mocks** — `go:generate` directives in feature `domain/{service,repository}.go` files produce `*/mock/*_mock.go` via `mockgen`. Run `go generate ./...` after touching a port interface, or tests won't compile.
-- **Protobuf** — `api/pb/**` is generated from `api/proto/**`. Run `task proto` after editing `.proto` files.
-- `api/pb/` and `*/mock/` are excluded from lint and formatting — do not hand-edit.
-
-`task generate` runs `go generate ./...` and then `task proto` in one shot. CI runs it before tests; if you skip it locally your tree will diverge.
+`goathena migrate up` applies the embedded SQL in
+`internal/infrastructure/db/migrations` (11 waves, MariaDB-first). The DSN scheme
+selects the engine: `mysql://` for MariaDB, `postgres://` for PostgreSQL.
+Create new ones with `task migrate-create NAME=add_users`. Migrations that touch
+login/char tables must stay read-compatible with the legacy
+`rathena/sql-files/main.sql` schema.
 
 ### Lint & format
 
-`task lint` runs `golangci-lint run --timeout=5m ./...` (v2). It enforces `wrapcheck`, `errcheck` (with `check-type-assertions: true`), `exhaustive`, `gocyclo` ≤ 15, `funlen` ≤ 120, `nestif`, `gocritic`, `gosec`, `revive`, and `testifylint`. Errors from outside the package must be wrapped with `fmt.Errorf("...: %w", err)`.
+`task lint` runs `golangci-lint run --timeout=5m ./...` (v2): `wrapcheck`,
+`errcheck` (with `check-type-assertions: true`), `exhaustive`, `gocyclo` ≤ 15,
+`funlen` ≤ 120, `nestif`, `gocritic`, `gosec`, `revive`, `depguard`,
+`testifylint`, and more. Errors from outside the package must be wrapped with
+`fmt.Errorf("...: %w", err)`. `task fmt` runs `gofumpt -w . && goimports -w .`;
+CI also checks `gofmt -s`. `task tidy && task verify` fails if `go.mod`/`go.sum`
+have diff.
 
-`task fmt` runs `gofumpt -w . && goimports -w .` — run it before committing; CI checks `gofmt -s`.
+## Deployment
 
-`task tidy` then `task verify` tidies modules and fails if `go.mod`/`go.sum` have diff.
-
-### Deployment
-
-- `Containerfile` — multi-stage distroless/non-root server image.
-- `Containerfile.migrate` — self-contained migration binary that `go:embed`s SQL files.
-- `compose.yml` — local stack (mariadb, nats, valkey, and the services).
+- `deployments/docker/` — the `Containerfile` builds the single `goathena`
+  image (`serve` by default; override `command: ["migrate", "up"]` for the init
+  container).
 - `deployments/kustomize/` — Kubernetes manifests (base + overlays).
-- `deployments/agones/` — Agones `Fleet` / `GameServer` Custom Resource Definitions (CRDs) for the zone service.
+- `deployments/agones/` — Agones `Fleet` / `GameServer` CRDs for the game world.
 - `deployments/observability/` — OpenTelemetry Collector + Prometheus configs.
 
 ## Reference: rAthena
 
-goAthena's source of truth for legacy RO behavior — packet formats, the script dialect, map file formats, the DB schema, and game-data YAMLs — is the upstream [rAthena](https://github.com/rathena/rathena/tree/7f080871c8b3bbe7a79027194633201c63422ee1) C/C++ codebase. It's checked out locally as `../rathena/` (outside this repo) and is read for reference only; nothing from it is vendored into goAthena.
+goAthena's source of truth for legacy RO behavior — packet formats, the script
+dialect, map file formats, the DB schema, and game-data YAMLs — is the upstream
+[rAthena](https://github.com/rathena/rathena) C/C++ codebase. It's checked out
+locally as `third_party/rathena` and is read for reference only; nothing from it
+is vendored into goAthena.
 
 Quick map (where to look in rAthena for a given concern):
 

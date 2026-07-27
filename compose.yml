@@ -12,7 +12,7 @@ services:
     ports:
       - "3306:3306"
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb-buffer-pool-size=1G"]
+      test: ["CMD", "healthcheck.sh", "--connect"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -56,10 +56,21 @@ services:
     networks:
       - goathena
 
+  # One-shot schema migration. It builds (and tags) the single goathena image
+  # that the `goathena` service below reuses, then runs `goathena migrate up`
+  # against MariaDB and exits. `restart: "no"` keeps it a true init container;
+  # the app service waits on service_completed_successfully.
   migrate:
     build:
       context: .
-      dockerfile: Containerfile.migrate
+      dockerfile: Containerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT_SHA: ${COMMIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    image: goathena:dev
+    container_name: goathena-migrate
+    command: ["migrate", "up"]
     environment:
       APP_ENVIRONMENT: ${APP_ENVIRONMENT:-development}
       DB_DRIVER: mariadb
@@ -76,25 +87,19 @@ services:
     depends_on:
       mariadb:
         condition: service_healthy
-    restart: unless-stopped
+    restart: "no"
     networks:
       - goathena
 
-  identity:
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: runtime
-      args:
-        BINARY: identity
-        VERSION: ${VERSION:-dev}
-        COMMIT_SHA: ${COMMIT_SHA:-unknown}
-        BUILD_TIME: ${BUILD_TIME:-unknown}
-    image: goathena/identity:dev
-    container_name: goathena-identity
+  # The modular-monolith server process (`goathena serve`). Single binary,
+  # single container: it serves HTTP health/gRPC now and grows the login/char/
+  # map game listeners in M1+. Reuses the image built by `migrate` above.
+  goathena:
+    image: goathena:dev
+    container_name: goathena
     environment:
       APP_ENVIRONMENT: ${APP_ENVIRONMENT:-development}
-      APP_NAME: goathena-identity
+      APP_NAME: goathena
       HTTP_HOST: 0.0.0.0
       HTTP_PORT: 8080
       GRPC_HOST: 0.0.0.0
@@ -110,11 +115,17 @@ services:
       VALKEY_PORT: 6379
       VALKEY_PASSWORD: ${VALKEY_PASSWORD:-}
       NATS_URL: nats://nats:4222
+      GATEWAY_TCP_ADDR: ":6900"
+      GATEWAY_WS_ADDR: ":6901"
+      GATEWAY_PACKETVER: "20250604"
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      OTEL_SERVICE_NAME: goathena-identity
+      OTEL_SERVICE_NAME: goathena
     ports:
       - "8080:8080"
       - "50051:50051"
+      # Game ports — login/char/map TCP :6900 and WebSocket :6901 — publish when
+      # the gateway listener lands (M1). The app already reads GATEWAY_TCP_ADDR
+      # and GATEWAY_WS_ADDR above.
     healthcheck:
       test: ["CMD", "/healthcheck", "-url", "http://localhost:8080/healthz"]
       interval: 10s
@@ -130,124 +141,6 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    restart: unless-stopped
-    networks:
-      - goathena
-
-  gateway:
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: runtime
-      args:
-        BINARY: gateway
-        VERSION: ${VERSION:-dev}
-        COMMIT_SHA: ${COMMIT_SHA:-unknown}
-        BUILD_TIME: ${BUILD_TIME:-unknown}
-    image: goathena/gateway:dev
-    container_name: goathena-gateway
-    environment:
-      APP_ENVIRONMENT: ${APP_ENVIRONMENT:-development}
-      APP_NAME: goathena-gateway
-      HTTP_HOST: 0.0.0.0
-      HTTP_PORT: 8081
-      GRPC_HOST: 0.0.0.0
-      GRPC_PORT: 50052
-      GATEWAY_TCP_HOST: 0.0.0.0
-      GATEWAY_TCP_PORT: 6900
-      GATEWAY_WS_HOST: 0.0.0.0
-      GATEWAY_WS_PORT: 6901
-      IDENTITY_HOST: identity
-      IDENTITY_GRPC_PORT: 50051
-      VALKEY_HOST: valkey
-      VALKEY_PORT: 6379
-      VALKEY_PASSWORD: ${VALKEY_PASSWORD:-}
-      NATS_URL: nats://nats:4222
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      OTEL_SERVICE_NAME: goathena-gateway
-    ports:
-      - "6900:6900"
-      - "6901:6901"
-      - "8081:8081"
-      - "50052:50052"
-    healthcheck:
-      test: ["CMD", "/healthcheck", "-url", "http://localhost:8081/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    depends_on:
-      mariadb:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
-      nats:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-      identity:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - goathena
-
-  zone:
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: runtime
-      args:
-        BINARY: zone
-        VERSION: ${VERSION:-dev}
-        COMMIT_SHA: ${COMMIT_SHA:-unknown}
-        BUILD_TIME: ${BUILD_TIME:-unknown}
-    image: goathena/zone:dev
-    container_name: goathena-zone-1
-    environment:
-      APP_ENVIRONMENT: ${APP_ENVIRONMENT:-development}
-      APP_NAME: goathena-zone-1
-      HTTP_HOST: 0.0.0.0
-      HTTP_PORT: 8082
-      GRPC_HOST: 0.0.0.0
-      GRPC_PORT: 7121
-      ZONE_ID: zone-1
-      ZONE_NAME: zone-1
-      DB_DRIVER: mariadb
-      DB_HOST: mariadb
-      DB_PORT: 3306
-      DB_USER: ${DB_USER:-goathena}
-      DB_PASSWORD: ${DB_PASSWORD:-goathena}
-      DB_NAME: ${DB_NAME:-goathena}
-      DB_SSL_MODE: "false"
-      VALKEY_HOST: valkey
-      VALKEY_PORT: 6379
-      VALKEY_PASSWORD: ${VALKEY_PASSWORD:-}
-      NATS_URL: nats://nats:4222
-      MAP_DATA_DIR: /var/lib/goathena/maps
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      OTEL_SERVICE_NAME: goathena-zone-1
-    ports:
-      - "8082:8082"
-      - "7121:7121"
-    healthcheck:
-      test: ["CMD", "/healthcheck", "-url", "http://localhost:8082/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    depends_on:
-      mariadb:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
-      nats:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-      identity:
-        condition: service_healthy
-    volumes:
-      - map-data:/var/lib/goathena/maps:ro
     mem_limit: 2g
     restart: unless-stopped
     networks:
@@ -309,7 +202,6 @@ volumes:
   valkey_data:
   prometheus_data:
   grafana_data:
-  map-data:
 
 networks:
   goathena:

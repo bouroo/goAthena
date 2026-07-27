@@ -42,6 +42,37 @@ type Application struct {
 	injector        do.Injector
 	startMu         sync.Mutex
 	httpStarted     chan struct{}
+
+	// runnables are supervised servers (the gateway TCP/WS listeners) started
+	// and fanned into the same error channel as HTTP/gRPC. runnableWG tracks
+	// their goroutines so Run can wait for them to finish draining before the
+	// process exits.
+	runnables  []namedRunnable
+	runnableWG sync.WaitGroup
+}
+
+// Runnable is a long-lived server the Application supervises alongside HTTP
+// and gRPC. Run blocks until ctx is cancelled (graceful shutdown, driven by
+// SIGINT/SIGTERM) or the server fails (fatal); returning a non-nil error tears
+// the whole process down. It is the seam the composition root uses to register
+// the gateway listeners without shared/server importing the gateway module.
+//
+// The runnable receives the run (signal) context as its argument; the gateway
+// listeners use it as the construction-time base context that TCPHandler.Run /
+// WSServer.Run block on, so SIGTERM reaches them.
+type Runnable func(ctx context.Context) error
+
+// namedRunnable pairs a Runnable with a name for error attribution.
+type namedRunnable struct {
+	name string
+	run  Runnable
+}
+
+// RegisterRunnable adds a supervised server. It must be called before Run.
+// Each runnable runs in its own goroutine under the run context; a non-nil
+// return is wrapped with its name and fanned into the HTTP/gRPC error channel.
+func (a *Application) RegisterRunnable(name string, r Runnable) {
+	a.runnables = append(a.runnables, namedRunnable{name: name, run: r})
 }
 
 // NewApplication builds the runtime orchestrator from a populated DI
@@ -116,12 +147,21 @@ func (a *Application) Run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		a.logger.Info().Msg("shutdown signal received")
-	case err := <-a.serverErrorChannel():
+	case err := <-a.serverErrorChannel(ctx):
+		// A supervised server failed. Cancel the run context so the gateway
+		// listeners (and any other Runnable) begin their ctx-driven drain
+		// before Run returns. shutdown() derives its timeout context via
+		// context.WithoutCancel, so cancelling here does not starve it.
+		stop()
 		a.logger.Error().Err(err).Msg("server error")
 		runErr = err
 	}
 
 	a.shutdown(ctx)
+	// Wait for the gateway listeners to finish draining so the process does
+	// not exit with in-flight connections. Each Runnable returns once its
+	// listener has stopped (on ctx cancellation or its own fatal error).
+	a.runnableWG.Wait()
 
 	return runErr
 }
@@ -201,10 +241,14 @@ func (a *Application) startGRPC() error {
 	return nil
 }
 
-// serverErrorChannel launches both servers and returns a channel that receives
-// the first fatal error from either.
-func (a *Application) serverErrorChannel() <-chan error {
-	errCh := make(chan error, 2)
+// serverErrorChannel launches HTTP, gRPC, and every registered Runnable, then
+// returns a channel that receives the first fatal error from any of them. The
+// run context is passed through to the runnables so they bind their listeners
+// under the same signal-governed lifetime as HTTP/gRPC. Each Runnable runs in
+// a tracked goroutine; on ctx cancellation (normal shutdown) they return nil
+// and the wait-group is satisfied for the post-shutdown Wait.
+func (a *Application) serverErrorChannel(ctx context.Context) <-chan error {
+	errCh := make(chan error, 2+len(a.runnables))
 
 	go func() {
 		errCh <- a.runHTTPServer()
@@ -212,6 +256,16 @@ func (a *Application) serverErrorChannel() <-chan error {
 	go func() {
 		errCh <- a.grpcServer.Serve(a.grpcListener)
 	}()
+
+	for _, r := range a.runnables {
+		a.runnableWG.Add(1)
+		go func(nr namedRunnable) {
+			defer a.runnableWG.Done()
+			if err := nr.run(ctx); err != nil {
+				errCh <- fmt.Errorf("%s: %w", nr.name, err)
+			}
+		}(r)
+	}
 
 	return errCh
 }

@@ -46,3 +46,4 @@ testdata/
 
 # Profiling output
 *.prof
+.agents/

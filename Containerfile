@@ -1,19 +1,24 @@
 # syntax=docker/dockerfile:1
 #
-# Multi-service Containerfile for goAthena.
+# Single-binary Containerfile for the goAthena modular monolith.
 #
-# Build a specific service binary with --build-arg BINARY=<gateway|identity|zone|migrate>.
-# Defaults to `identity` when BINARY is unset.
+# The image runs the one `goathena` binary, which dispatches to its subcommands:
+#   - `serve`    (default, ENTRYPOINT CMD) the long-running server
+#   - `migrate`  schema migrations (used by the one-shot compose service)
+#   - `version`  build metadata
 #
 # Example:
-#   docker build --build-arg BINARY=zone -t goathena/zone:dev .
+#   docker build -t goathena:dev .
+#   docker run --rm goathena:dev serve
+#   docker run --rm goathena:dev migrate up
 #
 # Notes:
-#   - Runtime base is `distroless/base-debian12:nonroot` — no shell, no wget.
-#     A dedicated /healthcheck binary (cmd/healthcheck) is compiled into the
-#     image so Docker healthchecks work without CMD-SHELL.
-#   - Version metadata is injected into the binary via -ldflags at
-#     github.com/bouroo/goAthena/internal/app/common (Version/CommitSHA/BuildTime).
+#   - Runtime base is `gcr.io/distroless/base-debian13:nonroot` — no shell, no
+#     wget. A dedicated /healthcheck binary (cmd/healthcheck) is compiled into
+#     the image so Docker healthchecks can probe /healthz without CMD-SHELL.
+#   - Version metadata is injected via -ldflags into the binary's main package
+#     (main.Version / main.CommitSHA / main.BuildTime), surfaced by
+#     `goathena version`.
 
 # -----------------------------------------------------------------------------
 # Builder
@@ -27,17 +32,16 @@ RUN go mod download
 
 COPY . .
 
-ARG BINARY=identity
 ARG VERSION=dev
 ARG COMMIT_SHA=unknown
 ARG BUILD_TIME=unknown
 
 RUN CGO_ENABLED=0 GOOS=linux go build \
   -ldflags="-s -w \
-  -X github.com/bouroo/goAthena/internal/app/common.Version=${VERSION} \
-  -X github.com/bouroo/goAthena/internal/app/common.CommitSHA=${COMMIT_SHA} \
-  -X github.com/bouroo/goAthena/internal/app/common.BuildTime=${BUILD_TIME}" \
-  -o /out/service ./cmd/${BINARY}
+  -X main.Version=${VERSION} \
+  -X main.CommitSHA=${COMMIT_SHA} \
+  -X main.BuildTime=${BUILD_TIME}" \
+  -o /out/goathena ./cmd/goathena
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/healthcheck ./cmd/healthcheck
 
@@ -46,12 +50,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/healthcheck ./cmd/healthcheck
 # -----------------------------------------------------------------------------
 FROM gcr.io/distroless/base-debian13:nonroot AS runtime
 
-ARG BINARY=identity
-
-COPY --from=builder --chown=nonroot:nonroot /out/service /service
+COPY --from=builder --chown=nonroot:nonroot /out/goathena /goathena
 COPY --from=builder --chown=nonroot:nonroot /out/healthcheck /healthcheck
 COPY --from=builder --chown=nonroot:nonroot /build/config.yaml /config.yaml
 
 USER nonroot:nonroot
 
-ENTRYPOINT ["/service"]
+ENTRYPOINT ["/goathena"]
+CMD ["serve"]

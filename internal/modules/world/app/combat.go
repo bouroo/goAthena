@@ -1,0 +1,488 @@
+// Package app: this file adds the M6 combat use case — a player attacks a mob,
+// the server resolves melee damage, broadcasts the hit to AOI observers, and on
+// the killing blow broadcasts the mob's vanish and tears it down. Combat is a
+// world use case (not its own bounded context): it crosses the player and mob
+// registries and the map AOI, exactly the collaborators the spawn and movement
+// use cases already hold.
+//
+// Concurrency: unlike movement, combat needs no pathfinder, so it resolves
+// synchronously on the connection's dispatch goroutine. Mob HP is mutated only
+// through Mob.ApplyDamage (locked, atomic kill-credit); two players striking the
+// same mob in the same tick cannot double-award a death. Each observer write
+// goes to that player's own Conn (gnet AsyncWrite under TCP), so one slow
+// socket never blocks another's broadcast.
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	gwdomain "github.com/bouroo/goAthena/internal/modules/gateway/domain"
+	"github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/pkg/ro/aoi"
+	"github.com/bouroo/goAthena/pkg/ro/mobdb"
+	"github.com/bouroo/goAthena/pkg/ro/packet"
+)
+
+// meleeRange is the maximum Chebyshev distance at which a player may strike a
+// mob with a bare-handed melee attack. The client pathfinds adjacent to the
+// target before issuing CZ_ACTION_REQUEST, so this is a guard against
+// out-of-range attacks rather than the authoritative reach — rAthena derives
+// range from weapon/size, which this slice does not model.
+const meleeRange = 1
+
+// Melee-damage constants for the combat slice. rAthena's damage formula folds
+// in STR, weapon ATK, element, crit, and per-class status tables; this slice
+// uses a deterministic level-scaling approximation so an L3 test can assert
+// exact damage bytes (no RNG variance). noviceBaseATK is a bare-handed novice's
+// attack power; atkPerLevel grows it as the player levels so leveling is felt.
+const (
+	noviceBaseATK int32 = 15
+	atkPerLevel   int32 = 3
+)
+
+// Motion timings written into ZC_NOTIFY_ACT's amotion slots, in milliseconds.
+// rAthena derives these from status (src amotion = attacker's, dmg amotion =
+// target's); the slice approximates them with fixed constants since the result
+// of combat (HP/death) does not depend on them — they only pace the client's
+// hit animation.
+const (
+	noviceAmotion  int32 = 432 // attacker attack-motion (rAthena NOVICE amotion)
+	defaultDmotion int32 = 288 // target damage-motion delay
+)
+
+// statusPointsPerBaseLevel is the flat status-point grant per base level gained
+// in the combat slice. rAthena derives status points from a per-level table
+// (statpoint.Registry.Points, keyed by level alone — no class resolver needed),
+// but a created novice starts with a fixed 48 status points that do not match
+// that table's level-1 entry, so granting the table's cumulative delta would
+// diverge. The flat +3 keeps the level-up math decoupled from the starting
+// grant and directly assertable; the stance mirrors meleeDamage's slice
+// approximation.
+const statusPointsPerBaseLevel uint32 = 3
+
+// noviceBaseExpThresholds[L-1] is the cumulative base EXP required to reach base
+// level L for the combat slice's novice approximation; index 0 (level 1) is 0
+// (a fresh novice starts there). The authoritative table lives in jobdb
+// (BaseExpForLevel, which is cumulative and keyed by job name) but is not used
+// here: resolving a char.class to a job name is a speculative feature outside
+// the combat slice, and the table is only consulted to pace the level-up L3
+// assertion. The slice length is the cap — at or beyond it, EXP still accrues
+// and persists, but no further base level is granted.
+var noviceBaseExpThresholds = [...]uint64{
+	0,    // level 1
+	10,   // level 2
+	30,   // level 3
+	70,   // level 4
+	150,  // level 5
+	310,  // level 6
+	630,  // level 7
+	1270, // level 8
+	2550, // level 9
+	5110, // level 10 (cap)
+}
+
+// MobRespawnDelay is how long a killed mob stays gone before a fresh replacement
+// spawns at its home cell. rAthena derives this per spawn-group from the spawn
+// DB's delay field; the combat slice approximates it with one flat constant since
+// the result of combat (the kill) does not depend on the pacing — this only
+// governs how soon the world refills. Short enough that an L3 e2e can observe a
+// respawn without a long sleep.
+const MobRespawnDelay = 5 * time.Second
+
+// RespawnScheduler is the indirection over the respawn timer so unit tests can
+// capture the armed closure and fire it deterministically (a real timer would
+// make the respawn assertion timing-dependent). SystemRespawnScheduler is the
+// production implementation backed by time.AfterFunc. Mirrors the Clock seam the
+// movement and mob use cases already inject.
+type RespawnScheduler interface {
+	// After invokes fn exactly once after delay has elapsed, on its own goroutine.
+	After(delay time.Duration, fn func())
+}
+
+// SystemRespawnScheduler is the production RespawnScheduler: time.AfterFunc fires
+// the respawn closure off the connection's goroutine after the delay, so a kill
+// never blocks the dispatch loop on the respawn.
+type SystemRespawnScheduler struct{}
+
+// After implements RespawnScheduler via time.AfterFunc.
+func (SystemRespawnScheduler) After(delay time.Duration, fn func()) {
+	time.AfterFunc(delay, fn)
+}
+
+// CombatService resolves a player's attack against a mob: range check, melee
+// damage, AOI damage broadcast, and the death path (vanish + EXP/level/persist +
+// teardown). It holds the live-session player index (attacker lookup + observer
+// Conns), the mob index (target lookup + unregister), the map store (AOI
+// broadcast), the immutable mob_db (target stats + base EXP), the character
+// progression store (EXP/level read-modify-write + persist on kill), and the
+// clock (the ZC_NOTIFY_ACT server tick).
+type CombatService struct {
+	players *domain.PlayerRegistry
+	mobs    *domain.MobRegistry
+	maps    domain.MapStore
+	db      *mobdb.Registry
+	chars   domain.ProgressionStore
+	clock   Clock
+	respawn RespawnScheduler
+}
+
+// NewCombatService binds the combat collaborators. db may be nil (no mob_db):
+// damage then falls back to a flat novice hit and kills award no EXP. chars may
+// be nil (no character store, e.g. the M6b fixtures): kills then tear down the
+// mob with no EXP/level/persist step, keeping the two-frame (act+vanish)
+// assertions valid. clock supplies the per-attack server tick. respawn arms the
+// post-death respawn timer; a nil respawn (no scheduler) makes kills a final
+// teardown — the mob stays gone — which keeps the M6b/c fixtures' "mob torn down,
+// no reappearance" assertions valid.
+func NewCombatService(players *domain.PlayerRegistry, mobs *domain.MobRegistry, maps domain.MapStore, db *mobdb.Registry, chars domain.ProgressionStore, clock Clock, respawn RespawnScheduler) *CombatService {
+	return &CombatService{players: players, mobs: mobs, maps: maps, db: db, chars: chars, clock: clock, respawn: respawn}
+}
+
+// Attack resolves one CZ_ACTION_REQUEST from accountID against req.TargetGID.
+// Non-mob targets (a player, an NPC, or a stale id) and out-of-range attacks are
+// silent no-ops — the slice has no PvP/NPC combat, and the client is expected to
+// have moved adjacent first. A hit broadcasts ZC_NOTIFY_ACT to every player in
+// the mob's AOI (the attacker included, since it stands adjacent), and on the
+// killing blow drives the death path. It never returns an expected-outcome
+// error (a dropped attack is not a session fault); only an infra fault (map
+// load) is returned so ProcessBytes logs it.
+func (s *CombatService) Attack(ctx context.Context, accountID uint32, req packet.CZActionRequestRequest) error {
+	attacker, ok := s.players.ByAccount(accountID)
+	if !ok {
+		// No live session: the conn never entered the world or already
+		// disconnected. Drop the attack silently.
+		return nil
+	}
+	mob, ok := s.mobs.ByEntity(aoi.EntityID(req.TargetGID))
+	if !ok {
+		// Target is not a live mob. The slice attacks mobs only.
+		return nil
+	}
+	if !inMeleeRange(attacker, mob) {
+		return nil
+	}
+	mp, err := s.maps.Load(ctx, mob.MapName)
+	if err != nil {
+		return fmt.Errorf("combat: load map %q for mob %d: %w", mob.MapName, mob.EntityID, err)
+	}
+	if mp == nil {
+		return fmt.Errorf("combat: map %q loaded nil for mob %d", mob.MapName, mob.EntityID)
+	}
+
+	damage := meleeDamage(attacker.CLevel, s.mobEntry(mob.MobID))
+	mobX, mobY, _ := mob.Position()
+	s.broadcastDamage(mp, mobX, mobY, attacker.AccountID, mob.EntityID, damage)
+
+	if _, died := mob.ApplyDamage(damage); died {
+		return s.onMobDeath(ctx, mp, mob, attacker)
+	}
+	return nil
+}
+
+// mobEntry resolves the mob_db stats for a mob id, returning nil when no mob_db
+// is configured or the id is absent — callers treat nil as zero-stats.
+func (s *CombatService) mobEntry(mobID int32) *mobdb.MobEntry {
+	if s.db == nil {
+		return nil
+	}
+	return s.db.Get(mobID)
+}
+
+// onMobDeath handles a mob's killing blow: broadcast ZC_NOTIFY_VANISH (death) to
+// AOI observers, award the killer EXP/level and persist it, arm a deferred
+// respawn at the mob's home cell, then tear the mob out of the registry and grid.
+// Teardown is unconditional — a dead mob is removed from the world even if EXP
+// persistence faults, so a persist error never keeps a corpse alive; the persist
+// error is returned only so ProcessBytes logs it. The respawn is armed before
+// teardown because the dead mob's immutable spawn fields (id, map, SpawnX/Y,
+// level, MaxHP, name, speed) are a complete template for the replacement, and
+// Unregister only drops the registry index — it does not mutate the struct, so
+// the closure's captured pointer stays valid. Unregister is idempotent and
+// RemoveEntity on a missing entity is a no-op, so a concurrent path that already
+// cleaned up (e.g. the wander tick tearing down an OOB mob) stays consistent.
+func (s *CombatService) onMobDeath(ctx context.Context, mp *domain.Map, mob *domain.Mob, killer *domain.Player) error {
+	mobX, mobY, _ := mob.Position()
+	s.broadcastVanish(mp, mobX, mobY, mob.EntityID)
+	awardErr := s.awardKill(ctx, killer, s.mobEntry(mob.MobID))
+	s.scheduleRespawn(mob)
+	s.mobs.Unregister(mob.EntityID)
+	_ = mp.AOI.RemoveEntity(mob.EntityID)
+	return awardErr
+}
+
+// scheduleRespawn arms a deferred respawn of mob at its home cell via the
+// scheduler, unless no scheduler is wired (respawn nil ⇒ kills are final, used by
+// the M6b/c fixtures). The closure captures the dead mob pointer; every template
+// field respawnMob reads is immutable, so the teardown that runs between arming
+// and firing does not corrupt the read. Production fires the closure off the
+// connection goroutine after MobRespawnDelay.
+func (s *CombatService) scheduleRespawn(mob *domain.Mob) {
+	if s.respawn == nil {
+		return
+	}
+	s.respawn.After(MobRespawnDelay, func() { s.respawnMob(mob) })
+}
+
+// respawnMob re-creates a killed mob at its home cell: allocate a fresh EntityID
+// (a new lifetime — never the dead mob's id, so a client that cached the old GID
+// is not confused by its reuse), restore full HP, register the mob, insert it
+// into the map AOI, and broadcast ZC_SPAWN_UNIT to observing players so they see
+// it reappear. It runs off the connection goroutine (production: time.AfterFunc);
+// the registries and AOI are concurrency-safe (the MobRegistry doc comment
+// anticipates mid-tick respawn), and each observer write goes to that player's
+// own Conn. context.Background is used for the map load — respawn is a world
+// event, not bound to any connection: the mob must come back even if the killer
+// logged off, and the map is cached so the load is ctx-insensitive. Defensive
+// early-returns mirror MobService.spawnOne: a cached-map load fault, an
+// impossible double-register, or an AOI insertion failure simply leaves the mob
+// absent this cycle rather than panicking — respawn is best-effort world refill,
+// not a request whose error a caller can act on.
+func (s *CombatService) respawnMob(dead *domain.Mob) {
+	mp, err := s.maps.Load(context.Background(), dead.MapName)
+	if err != nil || mp == nil {
+		return
+	}
+	fresh := &domain.Mob{
+		EntityID:  s.mobs.NextEntityID(),
+		MobID:     dead.MobID,
+		MapName:   dead.MapName,
+		SpawnX:    dead.SpawnX,
+		SpawnY:    dead.SpawnY,
+		PosX:      dead.SpawnX,
+		PosY:      dead.SpawnY,
+		Dir:       0,
+		Level:     dead.Level,
+		MaxHP:     dead.MaxHP,
+		HP:        dead.MaxHP,
+		Name:      dead.Name,
+		WalkSpeed: dead.WalkSpeed,
+	}
+	if err := s.mobs.Register(fresh); err != nil {
+		return // impossible: NextEntityID is allocator-unique.
+	}
+	entity := &aoi.Entity{
+		ID:   fresh.EntityID,
+		Type: aoi.EntityMob,
+		X:    int(dead.SpawnX),
+		Y:    int(dead.SpawnY),
+	}
+	if err := mp.AOI.AddEntity(entity); err != nil {
+		s.mobs.Unregister(fresh.EntityID) // roll back the registration.
+		return
+	}
+	s.broadcastSpawn(mp, dead.SpawnX, dead.SpawnY, fresh)
+}
+
+// broadcastSpawn sends ZC_SPAWN_UNIT for a (re)spawned mob to every player within
+// AOI of its cell so observers see it appear. Same observer-resolution and
+// write-failure policy as broadcastDamage/broadcastVanish: non-player entities
+// are skipped, and a dead observer socket is ignored (its own dispatch goroutine
+// owns teardown).
+func (s *CombatService) broadcastSpawn(mp *domain.Map, x, y int16, mob *domain.Mob) {
+	spawn := mob.SpawnUnit()
+	for _, e := range mp.AOI.QueryVisible(int(x), int(y)) {
+		if e.Type != aoi.EntityPlayer {
+			continue
+		}
+		neighbor, ok := s.players.ByAccount(uint32(e.ID))
+		if !ok {
+			continue
+		}
+		_ = spawn.Encode(connWriter{neighbor.Conn})
+	}
+}
+
+// awardKill grants the dead mob's base EXP to the killer, resolves base
+// level-ups against the in-code novice EXP table (+statusPointsPerBaseLevel per
+// level), broadcasts the resulting status deltas to the killer's conn only
+// (EXP/level are personal state — distinct from the AOI damage/vanish
+// broadcasts), and persists the new progression. It is a no-op when no character
+// store is wired (chars == nil), the mob has no mob_db entry, or the entry
+// grants no base EXP — so nil-store fixtures and zero-EXP mobs produce no status
+// frames. The in-memory character is mutated before the persist write so the
+// live session reflects what the client was just told even if the save faults.
+func (s *CombatService) awardKill(ctx context.Context, killer *domain.Player, entry *mobdb.MobEntry) error {
+	if s.chars == nil || entry == nil || entry.BaseExp <= 0 {
+		return nil
+	}
+	c, err := s.chars.GetByID(ctx, killer.AccountID, killer.CharID)
+	if err != nil {
+		return fmt.Errorf("combat: load killer char account %d char %d: %w", killer.AccountID, killer.CharID, err)
+	}
+
+	oldLevel := c.BaseLevel
+	c.BaseExp += uint64(entry.BaseExp) //nolint:gosec // G115: int32 BaseExp→uint64; guarded >0, non-negative
+	maxLevel := uint16(len(noviceBaseExpThresholds))
+	for c.BaseLevel < maxLevel && c.BaseExp >= baseExpForLevel(c.BaseLevel+1) {
+		c.BaseLevel++
+	}
+	leveledUp := c.BaseLevel > oldLevel
+	if leveledUp {
+		c.StatusPoint += statusPointsPerBaseLevel * uint32(c.BaseLevel-oldLevel) //nolint:gosec // G115: level delta small
+	}
+
+	// Per-player status broadcast: base EXP always (every kill that grants EXP),
+	// base level + status points only on a level-up. Sent to the killer's conn
+	// alone — these are personal status params, not AOI-visible events. At
+	// PACKETVER >= 20170830 clif_updatestatus routes SP_BASEEXP through the 64-bit
+	// ZC_LONGLONGPAR_CHANGE (0x0acb), so EXP rides int64 here, never the 32-bit
+	// variant the client no longer parses for exp.
+	if err := (packet.LongLongParChangeResponse{VarID: packet.SPBaseExp, Amount: int64(c.BaseExp)}).Encode(connWriter{killer.Conn}); err != nil { //nolint:gosec // G115: uint64→int64 is value-preserving; EXP is the field's native width
+		return fmt.Errorf("combat: send base-exp update to account %d: %w", killer.AccountID, err)
+	}
+	if leveledUp {
+		if err := (packet.ParChangeResponse{VarID: packet.SPBaseLevel, Count: int32(c.BaseLevel)}).Encode(connWriter{killer.Conn}); err != nil { //nolint:gosec // G115: uint16 level→int32
+			return fmt.Errorf("combat: send base-level update to account %d: %w", killer.AccountID, err)
+		}
+		if err := (packet.ParChangeResponse{VarID: packet.SPStatusPoint, Count: int32(c.StatusPoint)}).Encode(connWriter{killer.Conn}); err != nil { //nolint:gosec // G115: uint32→int32, status points are small
+			return fmt.Errorf("combat: send status-point update to account %d: %w", killer.AccountID, err)
+		}
+	}
+
+	if err := s.chars.SaveProgression(ctx, killer.AccountID, killer.CharID, chardomain.ProgressionOf(c)); err != nil {
+		return fmt.Errorf("combat: persist killer progression account %d char %d: %w", killer.AccountID, killer.CharID, err)
+	}
+	return nil
+}
+
+// baseExpForLevel returns the cumulative base EXP required to reach the given
+// base level. level must be in [1, len(noviceBaseExpThresholds)]; the level-up
+// loop guarantees this by bounding on the table length. A corrupt level of 0 is
+// treated as 1 (novice start), and a level past the table returns the final
+// entry so the loop terminates rather than underflowing.
+func baseExpForLevel(level uint16) uint64 {
+	if level == 0 {
+		level = 1
+	}
+	if idx := int(level) - 1; idx < len(noviceBaseExpThresholds) {
+		return noviceBaseExpThresholds[idx]
+	}
+	return noviceBaseExpThresholds[len(noviceBaseExpThresholds)-1]
+}
+
+// meleeDamage computes one melee hit's damage for an attacker of playerLevel
+// against a mob whose stats come from mob_db. It is a deterministic slice
+// approximation of rAthena's battle_calc_weapon_attack: ATK scales with the
+// attacker's base level, reduced by the mob's DEF + VIT/2, floored at 1 so a hit
+// always connects. A nil entry (no mob_db) yields a flat novice hit.
+func meleeDamage(playerLevel uint16, entry *mobdb.MobEntry) int32 {
+	atk := noviceBaseATK + int32(playerLevel-1)*atkPerLevel //nolint:gosec // G115: uint16 level → int32, bounded
+	if entry == nil {
+		return atk
+	}
+	reduction := entry.Defense + entry.Vit/2
+	dmg := atk - reduction
+	if dmg < 1 {
+		return 1
+	}
+	return dmg
+}
+
+// inMeleeRange reports whether the attacker stands within meleeRange (Chebyshev)
+// of the mob. Position reads are locked, so a concurrent move/wander cannot tear
+// a cell read.
+func inMeleeRange(attacker *domain.Player, mob *domain.Mob) bool {
+	ax, ay, _ := attacker.Position()
+	mx, my, _ := mob.Position()
+	dx := absInt(int(ax) - int(mx))
+	dy := absInt(int(ay) - int(my))
+	if dx > dy {
+		return dx <= meleeRange
+	}
+	return dy <= meleeRange
+}
+
+// absInt returns the absolute value of x.
+func absInt(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// broadcastDamage sends ZC_NOTIFY_ACT for one hit to every player within AOI of
+// the mob's cell — the attacker included, since it stands adjacent, so the
+// client renders its own attack animation and damage. Non-player entities are
+// skipped (no Conn). A write failure means the observer's socket is dead; the
+// observer's own dispatch goroutine owns teardown, so the failed write is
+// ignored here.
+func (s *CombatService) broadcastDamage(mp *domain.Map, mobX, mobY int16, attackerAccountID uint32, mobEntityID aoi.EntityID, damage int32) {
+	act := packet.NotifyActResponse{
+		SrcID:      attackerAccountID,
+		TargetID:   uint32(mobEntityID),
+		ServerTick: s.clock.MoveStart(),
+		SrcSpeed:   noviceAmotion,
+		DmgSpeed:   defaultDmotion,
+		Damage:     damage,
+		IsSPDamage: 0, // HP damage
+		Div:        1, // single hit
+		Type:       packet.DMGNormal,
+		Damage2:    0, // no dual-wield second hand
+	}
+	for _, e := range mp.AOI.QueryVisible(int(mobX), int(mobY)) {
+		if e.Type != aoi.EntityPlayer {
+			continue
+		}
+		neighbor, ok := s.players.ByAccount(uint32(e.ID))
+		if !ok {
+			continue
+		}
+		_ = act.Encode(connWriter{neighbor.Conn})
+	}
+}
+
+// broadcastVanish sends ZC_NOTIFY_VANISH (death) for a mob to every player in
+// its AOI so observers see it disappear. Same observer-resolution and
+// write-failure policy as broadcastDamage.
+func (s *CombatService) broadcastVanish(mp *domain.Map, mobX, mobY int16, mobEntityID aoi.EntityID) {
+	vanish := packet.NotifyVanishResponse{
+		GID:  uint32(mobEntityID),
+		Type: packet.VanishDead,
+	}
+	for _, e := range mp.AOI.QueryVisible(int(mobX), int(mobY)) {
+		if e.Type != aoi.EntityPlayer {
+			continue
+		}
+		neighbor, ok := s.players.ByAccount(uint32(e.ID))
+		if !ok {
+			continue
+		}
+		_ = vanish.Encode(connWriter{neighbor.Conn})
+	}
+}
+
+// ActionHandler serves CZ_ACTION_REQUEST (0x0089) on the map-role dispatch
+// table. The packet carries only a target GID and an action byte; identity is
+// the connection's verified auth (set by the CZ_ENTER gate), never a client
+// field — the impersonation guard shared with the movement handler.
+type ActionHandler struct {
+	svc *CombatService
+}
+
+// NewActionHandler binds the handler to its combat service.
+func NewActionHandler(svc *CombatService) *ActionHandler {
+	return &ActionHandler{svc: svc}
+}
+
+// Handle implements gateway/domain.PacketHandler for CZ_ACTION_REQUEST.
+func (h *ActionHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
+	req, err := packet.ParseCZActionRequest(frame.Raw)
+	if err != nil {
+		return fmt.Errorf("parse CZ_ACTION_REQUEST: %w", err)
+	}
+	accountID := conn.Auth().AccountID
+	if accountID == 0 {
+		// No cached auth ⇒ the connection never passed the CZ_ENTER gate.
+		// Tolerated by the gateway (the conn stays open) but the attack is
+		// dropped.
+		return errors.New("action: connection has no verified account (CZ_ENTER not completed)")
+	}
+	return h.svc.Attack(ctx, accountID, req)
+}
+
+// Compile-time check that ActionHandler satisfies the gateway handler shape.
+var _ gwdomain.PacketHandler = (*ActionHandler)(nil).Handle

@@ -62,11 +62,16 @@ gateway:
     addr: ":6901"
     path: "/ws/"
     allowed_origins: []
-  packetver: 20130807
+  packetver: 20250604
+  identity_addr: "localhost:50051"
+  zone_addr: "localhost:50052"
+  map_addr: "localhost:5121"
+  map_ws_addr: "localhost:6902"
 
 identity:
   use_md5_passwords: false
   max_chars: 15
+  item_db_path: ""
 
 zone:
   tick_rate: 50ms
@@ -74,6 +79,20 @@ zone:
   default_map: prontera
   move_speed: 150
   shutdown_grace: 30s
+  mob_db_path: ./data/mob_db/mob_db.yml
+  # Optional rAthena skill database used by gateway skill dispatch.
+  skill_db_path: ""
+  # Optional rAthena job EXP database used by stats domain; empty falls back to the hardcoded BaseExp table.
+  job_exp_db_path: ""
+  mob_spawns_path: ./data/mob_spawns/prontera.yml
+  script_dir: ./data/npc
+  script_reload_interval: 0s
+  renewal: false
+
+assets:
+  enabled: false
+  grf_dir: ./data/grf
+  max_cache_mb: 256
 
 log:
   level: info

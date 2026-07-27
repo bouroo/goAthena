@@ -68,7 +68,8 @@ func New(ctx context.Context, url string, timeout time.Duration, logger *zerolog
 		timeout = defaultConnectTimeout
 	}
 
-	nc, err := natsgo.Connect(url,
+	nc, err := natsgo.Connect(
+		url,
 		natsgo.Name("goathena"),
 		natsgo.Timeout(timeout),
 		natsgo.ReconnectWait(defaultReconnectWait),

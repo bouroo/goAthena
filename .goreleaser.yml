@@ -8,9 +8,9 @@ before:
     - go generate ./...
 
 builds:
-  - id: migrate
-    main: ./cmd/migrate
-    binary: migrate
+  - id: goathena
+    main: ./cmd/goathena
+    binary: goathena
     goos:
       - linux
       - darwin

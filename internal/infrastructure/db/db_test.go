@@ -123,7 +123,8 @@ func TestNewDB_UnreachableHost(t *testing.T) {
 	require.Error(t, err, "expected an error when the host is unreachable")
 	assert.Nil(t, gormDB, "gorm.DB must be nil on connection failure")
 	msg := err.Error()
-	if !assert.True(t,
+	if !assert.True(
+		t,
 		strings.Contains(msg, "ping db") || strings.Contains(msg, "open gorm"),
 		"error should describe either ping or open failure; got: %s", msg,
 	) {

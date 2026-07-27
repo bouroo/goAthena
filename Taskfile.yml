@@ -5,6 +5,7 @@ dotenv:
 
 vars:
   BIN_DIR: bin
+  BINARY_NAME: goathena
   COVERAGE_OUT: coverage.out
   GIT_VERSION:
     sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
@@ -17,63 +18,25 @@ vars:
 
 tasks:
   build:
-    desc: Build all service binaries (gateway, identity, zone, migrate)
+    desc: Build the goathena modular-monolith binary (serve + migrate subcommands)
     env:
       CGO_ENABLED: "0"
+    cmds:
+      - go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/{{.BINARY_NAME}} ./cmd/goathena
+
+  serve:
+    desc: Build and run `goathena serve`
     deps:
-      - build-gateway
-      - build-identity
-      - build-zone
-      - build-migrate
-
-  build-gateway:
-    desc: Build the gateway service binary
-    env:
-      CGO_ENABLED: "0"
+      - build
     cmds:
-      - go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/gateway ./cmd/gateway
+      - ./{{.BIN_DIR}}/{{.BINARY_NAME}} serve
 
-  build-identity:
-    desc: Build the identity service binary
-    env:
-      CGO_ENABLED: "0"
-    cmds:
-      - go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/identity ./cmd/identity
-
-  build-zone:
-    desc: Build the zone service binary
-    env:
-      CGO_ENABLED: "0"
-    cmds:
-      - go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/zone ./cmd/zone
-
-  build-migrate:
-    desc: Build the migrate binary
-    env:
-      CGO_ENABLED: "0"
-    cmds:
-      - go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/migrate ./cmd/migrate
-
-  run-gateway:
-    desc: Build and run the gateway service
+  version:
+    desc: Build and print the goathena build version
     deps:
-      - build-gateway
+      - build
     cmds:
-      - ./{{.BIN_DIR}}/gateway
-
-  run-identity:
-    desc: Build and run the identity service
-    deps:
-      - build-identity
-    cmds:
-      - ./{{.BIN_DIR}}/identity
-
-  run-zone:
-    desc: Build and run the zone service
-    deps:
-      - build-zone
-    cmds:
-      - ./{{.BIN_DIR}}/zone
+      - ./{{.BIN_DIR}}/{{.BINARY_NAME}} version
 
   test:
     desc: Run all tests (default unit tag)
@@ -123,30 +86,26 @@ tasks:
     cmds:
       - go generate ./...
 
-  proto:
-    desc: Generate protobuf Go code from api/proto into api/pb
-    cmds:
-      - protoc
-        --go_out=api/pb
-        --go_opt=paths=source_relative
-        --go-grpc_out=api/pb
-        --go-grpc_opt=paths=source_relative
-        -I api/proto
-        api/proto/identity/v1/identity.proto
-        api/proto/zone/v1/zone.proto
-        api/proto/gateway/v1/gateway.proto
-
   migrate-up:
-    desc: Run database migrations (uses embedded migrations via the migrate binary)
+    desc: Apply all pending database migrations (`goathena migrate up`)
+    deps:
+      - build
     cmds:
-      - task: build-migrate
-      - ./{{.BIN_DIR}}/migrate up
+      - ./{{.BIN_DIR}}/{{.BINARY_NAME}} migrate up
 
   migrate-down:
-    desc: Rollback one database migration
+    desc: Roll back one database migration (`goathena migrate down 1`)
+    deps:
+      - build
     cmds:
-      - task: build-migrate
-      - ./{{.BIN_DIR}}/migrate down 1
+      - ./{{.BIN_DIR}}/{{.BINARY_NAME}} migrate down 1
+
+  migrate-version:
+    desc: Print the current migration version (`goathena migrate version`)
+    deps:
+      - build
+    cmds:
+      - ./{{.BIN_DIR}}/{{.BINARY_NAME}} migrate version
 
   migrate-create:
     desc: "Create a new migration: task migrate-create NAME=add_users"
@@ -154,10 +113,9 @@ tasks:
       - migrate create -ext sql -dir internal/infrastructure/db/migrations {{.NAME}}
 
   docker-build:
-    desc: Build all service container images (gateway, identity, zone, migrate)
+    desc: Build the goathena container image
     cmds:
-      # TODO: split Containerfile per service; for now build the migrate image
-      - docker build -f Containerfile.migrate -t goathena-migrate:latest .
+      - docker build -f Containerfile -t goathena:latest .
 
   cover-html:
     desc: Render coverage report to HTML

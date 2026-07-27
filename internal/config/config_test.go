@@ -132,6 +132,7 @@ otel:
 	t.Setenv("DB_DRIVER", "postgres")
 	t.Setenv("NATS_URL", "nats://env-host:4222")
 	t.Setenv("OTEL_SERVICE_NAME", "env-service")
+	t.Setenv("ZONE_RENEWAL", "true")
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
@@ -143,6 +144,8 @@ otel:
 	require.Equal(t, "postgres", cfg.DB.Driver)
 	require.Equal(t, "nats://env-host:4222", cfg.NATS.URL)
 	require.Equal(t, "env-service", cfg.OTel.ServiceName)
+	require.True(t, cfg.Zone.Renewal)
+	require.Equal(t, "db/re", cfg.Zone.DBRoot())
 }
 
 func TestLoad_SliceEnvVariable(t *testing.T) {
@@ -231,6 +234,9 @@ otel:
 	require.Equal(t, "false", cfg.DB.SSLMode)
 	require.Equal(t, "nats://localhost:4222", cfg.NATS.URL)
 	require.Equal(t, 5*time.Second, cfg.HTTP.HealthProbeTimeout)
+	require.Equal(t, "utf-8", cfg.Gateway.TextCodepage)
+	require.False(t, cfg.Zone.Renewal)
+	require.Equal(t, "db", cfg.Zone.DBRoot())
 }
 
 func TestValidate_InvalidEnvironment(t *testing.T) {
@@ -282,6 +288,31 @@ func TestValidate_InvalidOTLPURL(t *testing.T) {
 
 func TestValidate_AcceptsValidConfig(t *testing.T) {
 	cfg := validConfig()
+	require.NoError(t, cfg.Validate())
+}
+
+// TestValidate_GatewayPacketverMinGreaterThanMax verifies the gtefield
+// cross-field tag added in response to Gemini PR #88 review comment 1:
+// PacketverMax must be >= PacketverMin.
+func TestValidate_GatewayPacketverMinGreaterThanMax(t *testing.T) {
+	cfg := validConfig()
+	cfg.Gateway.PacketverMin = 20200000
+	cfg.Gateway.PacketverMax = 20150000 // strictly < min → validator must reject
+
+	err := cfg.Validate()
+	require.Error(t, err, "PacketverMax < PacketverMin must fail validation")
+	require.Contains(t, err.Error(), "PacketverMax",
+		"error should mention the offending field, got: %v", err)
+}
+
+// TestValidate_GatewayPacketverMinEqualMax documents that the boundary case
+// (Min == Max, single allowed version) is accepted by the gtefield
+// comparison.
+func TestValidate_GatewayPacketverMinEqualMax(t *testing.T) {
+	cfg := validConfig()
+	cfg.Gateway.PacketverMin = 20250604
+	cfg.Gateway.PacketverMax = 20250604
+
 	require.NoError(t, cfg.Validate())
 }
 
@@ -383,7 +414,16 @@ func validConfig() *config.Config {
 				Addr: ":6901",
 				Path: "/ws/",
 			},
-			Packetver: 20130807,
+			Packetver:    20250604,
+			IdentityAddr: "localhost:50051",
+			ZoneAddr:     "localhost:50052",
+			MapAddr:      "localhost:5121",
+			MapWSAddr:    "localhost:6902",
+		},
+		Assets: config.AssetsConfig{
+			Enabled:    false,
+			GRFDir:     "./data/grf",
+			MaxCacheMB: 256,
 		},
 		OTel: config.OTelConfig{
 			Exporter:    "none",

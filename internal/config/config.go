@@ -35,6 +35,7 @@ type Config struct {
 	Gateway  GatewayConfig  `mapstructure:"gateway" yaml:"gateway" validate:"required"`
 	Identity IdentityConfig `mapstructure:"identity" yaml:"identity" validate:"required"`
 	Zone     ZoneConfig     `mapstructure:"zone" yaml:"zone" validate:"required"`
+	Assets   AssetsConfig   `mapstructure:"assets" yaml:"assets"`
 	OTel     OTelConfig     `mapstructure:"otel" yaml:"otel" validate:"required"`
 	Log      LogConfig      `mapstructure:"log" yaml:"log" validate:"required"`
 }
@@ -110,11 +111,60 @@ type OTelConfig struct {
 	Sampling    float64 `mapstructure:"sampling" yaml:"sampling" env:"OTEL_TRACES_SAMPLER_ARG" validate:"min=0,max=1"`
 }
 
-// GatewayConfig configures the ingress gateway service (DEL-01).
+// GatewayConfig configures the ingress gateway service (DEL-01). IdentityAddr
+// is the gRPC target for the identity service (e.g. "identity:50051"); the
+// gateway forwards every decoded CA_LOGIN there.
+//
+// MapAddr is the "host:port" address of the zone service that the gateway
+// advertises to the client in HC_NOTIFY_ZONESVR (cmd 0x0ac5). It is not the
+// gateway's own listening address — it is the destination the client opens
+// a new TCP connection to after CH_SELECT_CHAR. Defaults to "localhost:5121"
+// (the Thai Classic map port).
 type GatewayConfig struct {
-	TCP       TCPConfig `mapstructure:"tcp" yaml:"tcp" validate:"required"`
-	WS        WSConfig  `mapstructure:"ws" yaml:"ws" validate:"required"`
-	Packetver int       `mapstructure:"packetver" yaml:"packetver" env:"GATEWAY_PACKETVER" validate:"min=20000000,max=20260000"`
+	TCP TCPConfig `mapstructure:"tcp" yaml:"tcp" validate:"required"`
+	WS  WSConfig  `mapstructure:"ws" yaml:"ws" validate:"required"`
+	// Packetver is the operator-chosen default PACKETVER. It is used as the
+	// fallback when a CA_LOGIN does not supply a usable client version (zero
+	// or outside [PacketverMin, PacketverMax]); see the N2 plan in
+	// .agents/plans/rathena-compat-roadmap/subplans/n2-per-session-packetver.md.
+	Packetver int `mapstructure:"packetver" yaml:"packetver" env:"GATEWAY_PACKETVER" validate:"min=20000000,max=20260000"`
+	// PacketverMin is the minimum client version the gateway accepts for
+	// per-session PACKETVER selection. A CA_LOGIN reporting a lower version
+	// falls back to Packetver.
+	//
+	// `omitempty` lets partial Config values used by unit tests (which
+	// bypass Load and so never receive viper defaults) skip range checks
+	// when unset. viper's setDefaults() still seeds 20000000 in production.
+	PacketverMin int `mapstructure:"packetver_min" yaml:"packetver_min" env:"GATEWAY_PACKETVER_MIN" validate:"omitempty,min=20000000,max=20260000"`
+	// PacketverMax is the maximum client version the gateway accepts for
+	// per-session PACKETVER selection. A CA_LOGIN reporting a higher version
+	// falls back to Packetver. See PacketverMin for the omitempty rationale.
+	PacketverMax int    `mapstructure:"packetver_max" yaml:"packetver_max" env:"GATEWAY_PACKETVER_MAX" validate:"omitempty,min=20000000,max=20260000,gtefield=PacketverMin"`
+	IdentityAddr string `mapstructure:"identity_addr" yaml:"identity_addr" env:"GATEWAY_IDENTITY_ADDR" validate:"required"`
+	// ZoneAddr is the gRPC endpoint of the zone service (DEL-03). The
+	// gateway forwards decoded map-server packets (CZ_ENTER,
+	// CZ_REQUEST_MOVE) here.
+	ZoneAddr string `mapstructure:"zone_addr" yaml:"zone_addr" env:"GATEWAY_ZONE_ADDR" validate:"required"`
+	// MapAddr is the "host:port" address of the zone service that the gateway
+	// advertises to the client in HC_NOTIFY_ZONESVR (cmd 0x0ac5). It is not the
+	// gateway's own listening address — it is the destination the client opens
+	// a new TCP connection to after CH_SELECT_CHAR. Defaults to "localhost:5121"
+	// (the Thai Classic map port).
+	MapAddr string `mapstructure:"map_addr" yaml:"map_addr" env:"GATEWAY_MAP_ADDR" validate:"required"`
+	// MapWSAddr is the WebSocket "host:port" of the dedicated map-role listener
+	// that roBrowser reconnects to after char select — the WS analogue of MapAddr
+	// for the second transport. A native TCP client (ClientROThailand) never dials
+	// it; roBrowser, which cannot speak raw TCP, reaches the map server here. Like
+	// the login/char WS listener it serves the "/ws/" upgrade path, but every
+	// accepted connection starts at the map role (NewMapWSServer) so CZ_ENTER
+	// routes through the map dispatch table. Defaults to "localhost:6902".
+	MapWSAddr string `mapstructure:"map_ws_addr" yaml:"map_ws_addr" env:"GATEWAY_MAP_WS_ADDR" validate:"required"`
+	// TextCodepage names the wire text encoding for native TCP sessions
+	// (character names, chat, NPC text). One of "utf-8" (default),
+	// "windows-874"/"cp874"/"tis-620" (Thai Classic), or "euc-kr". Parsed
+	// and validated at gateway DI time via textenc.ParseCodepage;
+	// WebSocket/roBrowser sessions always use UTF-8 regardless of this.
+	TextCodepage string `mapstructure:"text_codepage" yaml:"text_codepage" env:"GATEWAY_TEXT_CODEPAGE"`
 }
 
 // TCPConfig holds the gnet TCP listener settings for the kRO ingress port.
@@ -146,10 +196,12 @@ type WSConfig struct {
 // must match the encoding declared on every LoginRequest.Method; the
 // service rejects mismatches with AuthRejected (login.cpp:233).
 // MaxChars caps the character roster (effective = max(account.character_slots,
-// MIN_CHARS)); the default of 15 matches PACKETVER >= 20100413.
+// MIN_CHARS)); the default of 15 matches PACKETVER >= 20100413. ItemDBPath is
+// the optional rAthena item_db YAML file used to resolve inventory weights.
 type IdentityConfig struct {
-	UseMD5Passwords bool `mapstructure:"use_md5_passwords" yaml:"use_md5_passwords" env:"IDENTITY_USE_MD5_PASSWORDS"`
-	MaxChars        int  `mapstructure:"max_chars" yaml:"max_chars" env:"IDENTITY_MAX_CHARS" validate:"min=0,max=15"`
+	UseMD5Passwords bool   `mapstructure:"use_md5_passwords" yaml:"use_md5_passwords" env:"IDENTITY_USE_MD5_PASSWORDS"`
+	MaxChars        int    `mapstructure:"max_chars" yaml:"max_chars" env:"IDENTITY_MAX_CHARS" validate:"min=0,max=15"`
+	ItemDBPath      string `mapstructure:"item_db_path" yaml:"item_db_path" env:"IDENTITY_ITEM_DB_PATH" validate:"omitempty"`
 }
 
 // LogConfig holds the zerolog settings.
@@ -164,12 +216,67 @@ type LogConfig struct {
 // initial map loaded at startup when no zone is provided. MoveSpeed is the
 // baseline ms-per-cell used when an entity has no status data. ShutdownGrace
 // is the cooldown before Agones Shutdown after the last player leaves.
+// MobDBPath is the rAthena mob_db.yml (version 5) used to resolve mob stats;
+// MobSpawnsPath is the per-map spawn-group YAML applied at startup. Both are
+// optional: a missing or unreadable file logs a warning and disables mob
+// spawning rather than failing zone boot. ScriptDir is the on-disk root of
+// the NPC .txt script corpus loaded once at zone startup and compiled into
+// the in-memory script engine. ScriptReloadInterval drives hot reload of
+// that corpus; 0 disables scheduled reloads. Like MobDBPath, ScriptDir is
+// optional: an empty or unreadable directory logs a warning and leaves the
+// engine holding an empty compiled set rather than failing zone boot.
+// JobExpDBPath points at the rAthena db/pre-re/job_exp.yml (Header
+// JOB_STATS, Version 4) used to resolve per-job base-level EXP thresholds
+// at gateway runtime via statsdomain.ExpRegistry. Optional -- when unset,
+// stats/domain falls back to its hardcoded pre-Renewal BaseExp table so dev
+// and CI boots succeed without the YAML.
+// ItemDBPath points at the rAthena item_db.yml (version 3) the gateway
+// dispatch uses to resolve mob-drop AegisNames to the numeric nameid/type
+// the wire floor-item frames carry. Optional -- when unset, drops fall back
+// to nameid 0 / IT_ETC so the gateway still boots without drop resolution.
+// The identity service resolves inventory weights from its own
+// IdentityConfig.ItemDBPath, an independent consumer of the same file.
 type ZoneConfig struct {
-	TickRate      time.Duration `mapstructure:"tick_rate" yaml:"tick_rate" env:"ZONE_TICK_RATE" validate:"required,min=10ms"`
-	MapDir        string        `mapstructure:"map_dir" yaml:"map_dir" env:"ZONE_MAP_DIR" validate:"required"`
-	DefaultMap    string        `mapstructure:"default_map" yaml:"default_map" env:"ZONE_DEFAULT_MAP"`
-	MoveSpeed     int           `mapstructure:"move_speed" yaml:"move_speed" env:"ZONE_MOVE_SPEED" validate:"min=50,max=1000"`
-	ShutdownGrace time.Duration `mapstructure:"shutdown_grace" yaml:"shutdown_grace" env:"ZONE_SHUTDOWN_GRACE" validate:"min=0"`
+	TickRate             time.Duration `mapstructure:"tick_rate" yaml:"tick_rate" env:"ZONE_TICK_RATE" validate:"required,min=10ms"`
+	MapDir               string        `mapstructure:"map_dir" yaml:"map_dir" env:"ZONE_MAP_DIR" validate:"required"`
+	DefaultMap           string        `mapstructure:"default_map" yaml:"default_map" env:"ZONE_DEFAULT_MAP"`
+	MoveSpeed            int           `mapstructure:"move_speed" yaml:"move_speed" env:"ZONE_MOVE_SPEED" validate:"min=50,max=1000"`
+	ShutdownGrace        time.Duration `mapstructure:"shutdown_grace" yaml:"shutdown_grace" env:"ZONE_SHUTDOWN_GRACE" validate:"min=0"`
+	MobDBPath            string        `mapstructure:"mob_db_path" yaml:"mob_db_path" env:"ZONE_MOB_DB_PATH" validate:"omitempty"`
+	SkillDBPath          string        `mapstructure:"skill_db_path" yaml:"skill_db_path" env:"ZONE_SKILL_DB_PATH" validate:"omitempty"`
+	JobExpDBPath         string        `mapstructure:"job_exp_db_path" yaml:"job_exp_db_path" env:"ZONE_JOB_EXP_DB_PATH" validate:"omitempty"`
+	ItemDBPath           string        `mapstructure:"item_db_path" yaml:"item_db_path" env:"ZONE_ITEM_DB_PATH" validate:"omitempty"`
+	MobSpawnsPath        string        `mapstructure:"mob_spawns_path" yaml:"mob_spawns_path" env:"ZONE_MOB_SPAWNS_PATH" validate:"omitempty"`
+	ScriptDir            string        `mapstructure:"script_dir" yaml:"script_dir" env:"ZONE_SCRIPT_DIR" validate:"omitempty"`
+	ScriptReloadInterval time.Duration `mapstructure:"script_reload_interval" yaml:"script_reload_interval" env:"ZONE_SCRIPT_RELOAD_INTERVAL" validate:"omitempty,min=0"`
+	// Renewal toggles the rAthena Renewal game-mode data set. When true,
+	// loaders that read versioned game data should pull files from db/re/
+	// under the rAthena checkout; when false (the pre-Renewal default) they
+	// use db/. Existing *_db_path fields are unchanged; per-loader
+	// renewal-aware resolution is layered on top in subsequent roadmap phases.
+	Renewal bool `mapstructure:"renewal" yaml:"renewal" env:"ZONE_RENEWAL"`
+}
+
+// DBRoot returns the rAthena db/ subdirectory operators should load
+// versioned data files from — "db/re" when Renewal is enabled, "db"
+// (pre-renewal) otherwise. Loaders that read files present in both
+// trees should prepend DBRoot() to the relative path. The value is
+// relative to the rAthena checkout root (third_party/rathena); callers
+// join it with their checkout path.
+func (z ZoneConfig) DBRoot() string {
+	if z.Renewal {
+		return "db/re"
+	}
+	return "db"
+}
+
+// AssetsConfig configures the GRF-backed HTTP asset server that serves
+// game files (sprites, textures, maps, Lua scripts) to roBrowser.
+// When Enabled is false, the asset server is not mounted.
+type AssetsConfig struct {
+	Enabled    bool   `mapstructure:"enabled" yaml:"enabled" env:"ASSETS_ENABLED"`
+	GRFDir     string `mapstructure:"grf_dir" yaml:"grf_dir" env:"ASSETS_GRF_DIR" validate:"required_with=Enabled"`
+	MaxCacheMB int64  `mapstructure:"max_cache_mb" yaml:"max_cache_mb" env:"ASSETS_MAX_CACHE_MB" validate:"min=0"`
 }
 
 // validate is the package-level validator instance.
@@ -330,16 +437,29 @@ func setDefaults(v *viper.Viper) {
 		"gateway.ws.addr":            ":6901",
 		"gateway.ws.path":            "/ws/",
 		"gateway.ws.allowed_origins": []string{},
-		"gateway.packetver":          20130807,
+		"gateway.packetver":          20250604,
+		"gateway.packetver_min":      20000000,
+		"gateway.packetver_max":      20260000,
+		"gateway.identity_addr":      "localhost:50051",
+		"gateway.zone_addr":          "localhost:50052",
+		"gateway.map_addr":           "localhost:5121",
+		"gateway.map_ws_addr":        "localhost:6902",
+		"gateway.text_codepage":      "utf-8",
 
 		"identity.use_md5_passwords": false,
 		"identity.max_chars":         15,
+		"identity.item_db_path":      "",
 
 		"zone.tick_rate":      50 * time.Millisecond,
+		"zone.renewal":        false,
 		"zone.map_dir":        "./data/maps",
 		"zone.default_map":    "prontera",
 		"zone.move_speed":     150,
 		"zone.shutdown_grace": 30 * time.Second,
+
+		"assets.enabled":      false,
+		"assets.grf_dir":      "./data/grf",
+		"assets.max_cache_mb": 256,
 
 		"otel.exporter":     "none",
 		"otel.service_name": "goathena",
@@ -405,15 +525,32 @@ func leafBindings() []leafBinding {
 		{"gateway.ws.path", "GATEWAY_WS_PATH"},
 		{"gateway.ws.allowed_origins", "GATEWAY_WS_ALLOWED_ORIGINS"},
 		{"gateway.packetver", "GATEWAY_PACKETVER"},
+		{"gateway.packetver_min", "GATEWAY_PACKETVER_MIN"},
+		{"gateway.packetver_max", "GATEWAY_PACKETVER_MAX"},
+		{"gateway.identity_addr", "GATEWAY_IDENTITY_ADDR"},
+		{"gateway.zone_addr", "GATEWAY_ZONE_ADDR"},
+		{"gateway.map_addr", "GATEWAY_MAP_ADDR"},
+		{"gateway.map_ws_addr", "GATEWAY_MAP_WS_ADDR"},
+		{"gateway.text_codepage", "GATEWAY_TEXT_CODEPAGE"},
 
 		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},
 		{"identity.max_chars", "IDENTITY_MAX_CHARS"},
+		{"identity.item_db_path", "IDENTITY_ITEM_DB_PATH"},
 
 		{"zone.tick_rate", "ZONE_TICK_RATE"},
 		{"zone.map_dir", "ZONE_MAP_DIR"},
 		{"zone.default_map", "ZONE_DEFAULT_MAP"},
 		{"zone.move_speed", "ZONE_MOVE_SPEED"},
 		{"zone.shutdown_grace", "ZONE_SHUTDOWN_GRACE"},
+		{"zone.mob_db_path", "ZONE_MOB_DB_PATH"},
+		{"zone.skill_db_path", "ZONE_SKILL_DB_PATH"},
+		{"zone.job_exp_db_path", "ZONE_JOB_EXP_DB_PATH"},
+		{"zone.mob_spawns_path", "ZONE_MOB_SPAWNS_PATH"},
+		{"zone.renewal", "ZONE_RENEWAL"},
+
+		{"assets.enabled", "ASSETS_ENABLED"},
+		{"assets.grf_dir", "ASSETS_GRF_DIR"},
+		{"assets.max_cache_mb", "ASSETS_MAX_CACHE_MB"},
 
 		{"log.level", "LOG_LEVEL"},
 		{"log.format", "LOG_FORMAT"},
