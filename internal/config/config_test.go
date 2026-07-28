@@ -28,6 +28,16 @@ func TestLoad_ExplicitConfigFileMissingFails(t *testing.T) {
 }
 
 func TestLoad_ReadsConfigFile(t *testing.T) {
+	// Ambient process env (e.g. an .env loaded by `task`'s `dotenv` directive)
+	// can override the YAML values this test asserts on. Override every env
+	// key that LeafBindings() exposes to the value the inlined YAML defines
+	// (or the value the test would otherwise read). t.Setenv records the prior
+	// value and restores it on test cleanup, so the global env is untouched
+	// after the test. Keys absent from the YAML fall back to viper's
+	// setDefaults(); we still pin them to match the default so an ambient
+	// override never leaks into this test.
+	neutralizeEnv(t)
+
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 
@@ -460,5 +470,111 @@ func validConfig() *config.Config {
 			Level:  "info",
 			Format: "json",
 		},
+	}
+}
+
+// neutralizeEnv pins every env key exposed via LeafBindings() to the value
+// the inlined YAML in TestLoad_ReadsConfigFile provides (or, when the YAML
+// does not define the key, to the viper default). t.Setenv restores all
+// prior values on test cleanup, so the host process is unaffected.
+//
+// Centralized here so adding a new config key only requires updating the
+// `bindings` table — no scattered env neutering inside the test body.
+func neutralizeEnv(t *testing.T) {
+	t.Helper()
+	// Each entry pairs the env var name bound in config.LeafBindings with the
+	// value the YAML under TestLoad_ReadsConfigFile provides (or the viper
+	// default when the key is absent). Values must match the YAML byte-for-byte
+	// so the YAML file is authoritative regardless of ambient overrides.
+	bindings := map[string]string{
+		"APP_NAME":             "test-app",
+		"APP_ENVIRONMENT":      "test",
+		"APP_HOST":             "127.0.0.1",
+		"APP_PORT":             "7000",
+		"APP_SHUTDOWN_TIMEOUT": "5s",
+
+		"HTTP_HOST":                 "127.0.0.1",
+		"HTTP_PORT":                 "7001",
+		"HTTP_READ_TIMEOUT":         "10s",
+		"HTTP_WRITE_TIMEOUT":        "10s",
+		"HTTP_IDLE_TIMEOUT":         "30s",
+		"HTTP_BODY_LIMIT":           "2M",
+		"HTTP_HEALTH_PROBE_TIMEOUT": "5s",
+		"HTTP_CORS_ALLOW_ORIGINS":   "",
+		"HTTP_CORS_ALLOW_METHODS":   "",
+		"HTTP_CORS_ALLOW_HEADERS":   "",
+
+		"GRPC_HOST": "127.0.0.1",
+		"GRPC_PORT": "7002",
+
+		"DB_DRIVER":          "mariadb",
+		"DB_HOST":            "127.0.0.1",
+		"DB_PORT":            "3306",
+		"DB_NAME":            "testdb",
+		"DB_USER":            "testuser",
+		"DB_PASSWORD":        "testpass",
+		"DB_SSL_MODE":        "false",
+		"DB_MAX_CONNS":       "5",
+		"DB_MAX_IDLE_CONNS":  "1",
+		"DB_MAX_CONN_IDLE":   "10m",
+		"DB_MAX_CONN_LIFE":   "20m",
+		"DB_CONNECT_TIMEOUT": "3s",
+
+		"VALKEY_HOST":            "127.0.0.1",
+		"VALKEY_PORT":            "6379",
+		"VALKEY_PASSWORD":        "",
+		"VALKEY_DB":              "0",
+		"VALKEY_CONNECT_TIMEOUT": "5s",
+
+		"NATS_URL":             "nats://127.0.0.1:4222",
+		"NATS_CONNECT_TIMEOUT": "3s",
+
+		"GATEWAY_TCP_ADDR":           ":6900",
+		"GATEWAY_WS_ADDR":            ":6901",
+		"GATEWAY_WS_PATH":            "/ws/",
+		"GATEWAY_WS_ALLOWED_ORIGINS": "",
+		"GATEWAY_PACKETVER":          "20250604",
+		"GATEWAY_PACKETVER_MIN":      "20000000",
+		"GATEWAY_PACKETVER_MAX":      "20260000",
+		"GATEWAY_IDENTITY_ADDR":      "localhost:50051",
+		"GATEWAY_ZONE_ADDR":          "localhost:50052",
+		"GATEWAY_MAP_ADDR":           "localhost:5121",
+		"GATEWAY_MAP_WS_ADDR":        "localhost:6902",
+		"GATEWAY_TEXT_CODEPAGE":      "utf-8",
+
+		"IDENTITY_USE_MD5_PASSWORDS": "false",
+		"IDENTITY_MAX_CHARS":         "15",
+		"IDENTITY_ITEM_DB_PATH":      "",
+
+		// Zone defaults from viper.setDefaults (the YAML omits zone).
+		"ZONE_TICK_RATE":              "50ms",
+		"ZONE_RENEWAL":                "false",
+		"ZONE_DB_PATH":                "./third_party/rathenaThailand/db",
+		"ZONE_MAP_DIR":                "./data/maps",
+		"ZONE_DEFAULT_MAP":            "prontera",
+		"ZONE_MOVE_SPEED":             "150",
+		"ZONE_SHUTDOWN_GRACE":         "30s",
+		"ZONE_MOB_DB_PATH":            "",
+		"ZONE_SKILL_DB_PATH":          "",
+		"ZONE_JOB_EXP_DB_PATH":        "",
+		"ZONE_ITEM_DB_PATH":           "",
+		"ZONE_MOB_SPAWNS_PATH":        "",
+		"ZONE_SCRIPT_DIR":             "",
+		"ZONE_SCRIPT_RELOAD_INTERVAL": "0s",
+
+		"ASSETS_ENABLED":      "false",
+		"ASSETS_GRF_DIR":      "./data/grf",
+		"ASSETS_MAX_CACHE_MB": "256",
+
+		"LOG_LEVEL":  "debug",
+		"LOG_FORMAT": "console",
+
+		"OTEL_EXPORTER":               "none",
+		"OTEL_EXPORTER_OTLP_ENDPOINT": "",
+		"OTEL_SERVICE_NAME":           "test-service",
+		"OTEL_TRACES_SAMPLER_ARG":     "0.5",
+	}
+	for key, value := range bindings {
+		t.Setenv(key, value)
 	}
 }

@@ -3,9 +3,12 @@ package app
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/rs/zerolog"
 
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
@@ -28,11 +31,30 @@ type NPCInfo struct {
 }
 
 // LoadScripts locates, reads, parses, and compiles all .txt script files found
-// in a directory tree. It extracts the placement metadata for placed NPCs using
-// the parser's NPCHeader.
-func LoadScripts(root string) (*ScriptStore, error) {
+// in a directory tree. Per-file failures (open, read, parse, compile) are
+// logged as warnings via lg and skipped — one bad or unsupported script must
+// not abort the whole walk, matching the documented graceful-degradation
+// contract used by world/di.go's loadMobDB/loadItemDB. The returned ScriptStore
+// contains every file that did compile; nil if no file did.
+//
+// Only a catastrophic walk error (e.g. root unreadable) is propagated; even
+// then, any scripts collected before the failure are returned alongside so the
+// caller can degrade rather than fail boot.
+//
+// When lg is nil, warnings are silently dropped (kept here so callers that
+// have not yet resolved a logger, e.g. tests, can still exercise the loader).
+func LoadScripts(root string, lg *zerolog.Logger) (*ScriptStore, error) {
 	set := script.NewCompiledScriptSet()
 	var npcs []NPCInfo
+
+	warn := func() func(string, error) {
+		if lg == nil {
+			return func(string, error) {}
+		}
+		return func(file string, err error) {
+			lg.Warn().Err(err).Str("file", file).Msg("content: skipping script file")
+		}
+	}()
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -42,67 +64,51 @@ func LoadScripts(root string) (*ScriptStore, error) {
 			return nil
 		}
 
-		f, oErr := os.Open(path)
+		f, oErr := os.Open(path) //nolint:gosec // path is a config-controlled script file
 		if oErr != nil {
-			return fmt.Errorf("open script %q: %w", path, oErr)
+			warn(path, fmt.Errorf("open: %w", oErr))
+			return nil
 		}
-		defer f.Close()
-
 		src, readErr := io.ReadAll(f)
+		_ = f.Close() //nolint:errcheck // best-effort close after read
 		if readErr != nil {
-			return fmt.Errorf("read script %q: %w", path, readErr)
+			warn(path, fmt.Errorf("read: %w", readErr))
+			return nil
 		}
 
-		// Use the compiler's Parse which returns the slice of files.
 		files, parseErr := script.Parse(src)
 		if parseErr != nil {
-			return fmt.Errorf("parse script %q: %w", path, parseErr)
+			warn(path, fmt.Errorf("parse: %w", parseErr))
+			return nil
 		}
-
-		// Feed each file to the compiler (which accepts one full src payload but we can compile block by block)
-		// For our interface though, `script.Compile` processes `src` wholesale.
-		// Since we want the Header for placement, we invoke Parse directly and compile from there?
-		// Or we can just use script.Compile(src) and then use the Parse to just get headers.
-		// A cleaner way is using script.Compile, then script.Parse to get the headers... but
-		// wait, script.Compile internally does Parse. Let's just do it directly.
 
 		compiledSet, compErr := script.Compile(src)
 		if compErr != nil {
-			return fmt.Errorf("compile script %q: %w", path, compErr)
+			warn(path, fmt.Errorf("compile: %w", compErr))
+			return nil
 		}
 
-		// Merge the compiled scripts into our global set
-		for name, cs := range compiledSet.Scripts {
-			set.Scripts[name] = cs
-		}
-		for name, cs := range compiledSet.Funcs {
-			set.Funcs[name] = cs
-		}
+		maps.Copy(set.Scripts, compiledSet.Scripts)
+		maps.Copy(set.Funcs, compiledSet.Funcs)
 
-		// Extract placed NPCs using the parsed files' headers.
 		for _, sf := range files {
 			h := sf.Header()
-			// Unplaced scripts and functions have a nil or invalid header.
 			if h != nil && h.Type == "script" {
 				npcs = append(npcs, NPCInfo{
 					Name:     h.Name,
 					MapName:  h.MapName,
-					X:        int16(h.X),
-					Y:        int16(h.Y),
-					Facing:   uint8(h.Facing),
+					X:        int16(h.X),         //nolint:gosec // G115: header X is a tile coord clamped by the script parser
+					Y:        int16(h.Y),         //nolint:gosec // G115: header Y is a tile coord clamped by the script parser
+					Facing:   uint8(h.Facing),    //nolint:gosec // G115: Facing is a 0–7 direction in the script header
 					SpriteID: uint16(h.SpriteID), //nolint:gosec // sprite IDs are small ints from the script header
 				})
 			}
 		}
 		return nil
 	})
-
 	if err != nil {
-		return nil, err
+		return &ScriptStore{Set: set, NPCs: npcs}, fmt.Errorf("walk scripts root %q: %w", root, err)
 	}
 
-	return &ScriptStore{
-		Set:  set,
-		NPCs: npcs,
-	}, nil
+	return &ScriptStore{Set: set, NPCs: npcs}, nil
 }

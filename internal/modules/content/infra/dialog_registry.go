@@ -3,6 +3,8 @@ package infra
 import (
 	"fmt"
 	"sync"
+
+	"github.com/bouroo/goAthena/internal/modules/content/domain"
 )
 
 type memoryDialogRegistry struct {
@@ -10,7 +12,10 @@ type memoryDialogRegistry struct {
 	dialogs map[uint32]chan bool
 }
 
-func NewMemoryDialogRegistry() *memoryDialogRegistry {
+// NewMemoryDialogRegistry constructs an in-memory dialog registry keyed by
+// account ID. One registry instance is constructed per content module boot
+// and provided to the injector as the dialog port.
+func NewMemoryDialogRegistry() domain.DialogRegistry {
 	return &memoryDialogRegistry{
 		dialogs: make(map[uint32]chan bool),
 	}

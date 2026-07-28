@@ -1,16 +1,9 @@
-prontera,150,150,4	script	SampleNPC	4_M_01,{
-	mes "Hello!";
+prontera,150,150,4	script	SampleNPC	46,{
+	mes "[SampleNPC]";
+	mes "Welcome to goAthena.";
 	next;
-	mes "How can I help?";
-	menu "Info",L_Info,"Bye",L_Bye;
-L_Info:
-	mes "We're goAthena!";
+	mes "This is a sample dialog.";
+	mes "The supported verb set is:";
+	mes "mes, next, close, end, set, warp, percentheal.";
 	close;
-L_Bye:
-	mes "Goodbye!";
-	close;
-
-OnInit:
-	set $sampleInit, 1;
-	end;
 }

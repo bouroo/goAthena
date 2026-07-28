@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/rs/zerolog"
+	"github.com/samber/do/v2"
+
 	"github.com/bouroo/goAthena/internal/modules/content/app"
-	"github.com/bouroo/goAthena/internal/modules/content/domain"
 	"github.com/bouroo/goAthena/internal/modules/content/infra"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
-	"github.com/samber/do/v2"
 )
 
 // Register configures and loads the content module boundaries.
@@ -36,14 +37,26 @@ func Register(c do.Injector, npcDataRoot string) error {
 	dialogRegistry := infra.NewMemoryDialogRegistry()
 	scriptWorld := infra.NewScriptWorld(players)
 
-	// 3. Load and compile all scripts
+	// 3. Load and compile all scripts.
 	// The NPC data usually lives in data/npc/ (provided by top-level parameter).
 	if npcDataRoot == "" { // fallback
 		npcDataRoot = filepath.Join("data", "npc")
 	}
-	scripts, err := app.LoadScripts(npcDataRoot)
-	if err != nil {
-		return fmt.Errorf("content: failed to load scripts: %w", err)
+	// Per the documented graceful-degradation contract (mirroring
+	// world/di.go's loadMobDB/loadItemDB), a missing, unreadable, or
+	// partially-unparseable script directory logs a warning and the zone
+	// still boots with whatever partial ScriptStore LoadScripts returned
+	// (possibly empty). One bad script file (e.g. an rAthena feature outside
+	// the M11 dialog subset) must never abort server boot.
+	lg := warnLogger(c)
+	scripts, err := app.LoadScripts(npcDataRoot, lg)
+	switch {
+	case err != nil:
+		lg.Warn().Err(err).Str("dir", npcDataRoot).
+			Msg("content: script walk failed; booting with partial script store")
+	case scripts == nil || (len(scripts.NPCs) == 0 && len(scripts.Set.Scripts) == 0 && len(scripts.Set.Funcs) == 0):
+		lg.Warn().Str("dir", npcDataRoot).
+			Msg("content: no scripts loaded; booting with empty script store")
 	}
 
 	// 4. Publish NPCs into the world: each placed NPC gets a unique EntityID
@@ -56,7 +69,8 @@ func Register(c do.Injector, npcDataRoot string) error {
 		// a map absent from the index) rather than aborting boot.
 		mp, err := mapStore.Load(context.Background(), n.MapName)
 		if err != nil {
-			fmt.Printf("content: skipping NPC %q, map %q not in map index: %v\n", n.Name, n.MapName, err)
+			lg.Warn().Err(err).Str("npc", n.Name).Str("map", n.MapName).
+				Msg("content: skipping NPC, map not in map index")
 			continue
 		}
 
@@ -71,7 +85,8 @@ func Register(c do.Injector, npcDataRoot string) error {
 			ScriptName: n.Name,
 		}
 		if err := npcRegistry.Register(npc); err != nil {
-			fmt.Printf("content: failed to register NPC %q: %v\n", n.Name, err)
+			lg.Warn().Err(err).Str("npc", n.Name).
+				Msg("content: failed to register NPC")
 			continue
 		}
 		if err := mp.AOI.AddEntity(&aoi.Entity{
@@ -82,7 +97,8 @@ func Register(c do.Injector, npcDataRoot string) error {
 		}); err != nil {
 			// Roll back the registry index so a half-placed NPC never resolves.
 			npcRegistry.Unregister(npc.EntityID)
-			fmt.Printf("content: failed to place NPC %q in AOI: %v\n", n.Name, err)
+			lg.Warn().Err(err).Str("npc", n.Name).
+				Msg("content: failed to place NPC in AOI")
 		}
 	}
 
@@ -94,8 +110,8 @@ func Register(c do.Injector, npcDataRoot string) error {
 	closeH := app.NewCloseDialogHandler(dialogService)
 
 	// 6. Provide to the injector
-	do.ProvideValue(c, domain.DialogRegistry(dialogRegistry))
-	do.ProvideValue(c, domain.World(scriptWorld))
+	do.ProvideValue(c, dialogRegistry)
+	do.ProvideValue(c, scriptWorld)
 	do.ProvideValue(c, scripts)
 
 	do.ProvideValue(c, contactH)
@@ -104,4 +120,17 @@ func Register(c do.Injector, npcDataRoot string) error {
 	do.ProvideValue(c, closeH)
 
 	return nil
+}
+
+// warnLogger resolves the process logger for non-fatal warnings; mirrors
+// internal/modules/world/di.go's warnLogger. If the logger is not on the
+// injector it falls back to zerolog.Nop so a warning is never dropped purely
+// because telemetry misconfigured, and so the content module never forces a
+// hard dependency on the logger being registered first.
+func warnLogger(c do.Injector) *zerolog.Logger {
+	if lg, err := do.Invoke[*zerolog.Logger](c); err == nil {
+		return lg
+	}
+	fallback := zerolog.Nop()
+	return &fallback
 }

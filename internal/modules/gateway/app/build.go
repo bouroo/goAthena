@@ -77,62 +77,56 @@ type Handlers struct {
 // shares — including the dedicated map listener, whose fresh connections start
 // at the map role and so dispatch against the map table built here.
 func BuildDispatcher(h Handlers) *domain.Dispatcher {
-	login := domain.PacketHandlerTable{}
-	if h.OnCALogin != nil {
-		login[packet.HeaderCALOGIN] = h.OnCALogin
+	return domain.NewDispatcher(buildLoginTable(h), buildCharTable(h), buildMapTable(h))
+}
+
+// addHandler installs h into table under header if h is non-nil. Returning
+// the table (rather than mutating in place) keeps the call-site one line
+// without forcing callers to declare a key variable for every entry.
+func addHandler(table domain.PacketHandlerTable, header uint16, h domain.PacketHandler) domain.PacketHandlerTable {
+	if h != nil {
+		table[header] = h
 	}
-	char := domain.PacketHandlerTable{}
-	if h.OnCHEnter != nil {
-		char[packet.HeaderCHENTER] = h.OnCHEnter
-	}
-	if h.OnCHSelectChar != nil {
-		char[packet.HeaderCHSELECTCHAR] = h.OnCHSelectChar
-	}
-	if h.OnCHMakeChar != nil {
-		char[packet.HeaderCHMAKECHAR] = h.OnCHMakeChar
-	}
-	mapT := domain.PacketHandlerTable{}
-	if h.OnCZEnter != nil {
-		mapT[packet.HeaderCZENTER] = h.OnCZEnter
-	}
-	if h.OnCZRequestMove != nil {
-		mapT[packet.HeaderCZREQUESTMOVE] = h.OnCZRequestMove
-	}
-	if h.OnCZActionRequest != nil {
-		mapT[packet.HeaderCZACTIONREQUEST] = h.OnCZActionRequest
-	}
-	if h.OnCZRequestTime != nil {
-		mapT[packet.HeaderCZREQUESTTIME] = h.OnCZRequestTime
-	}
-	if h.OnCZChangeDir != nil {
-		mapT[packet.HeaderCZCHANGEDIR] = h.OnCZChangeDir
-	}
-	if h.OnCZReqEmotion != nil {
-		mapT[packet.HeaderCZREQEMOTION] = h.OnCZReqEmotion
-	}
-	if h.OnCZRestart != nil {
-		mapT[packet.HeaderCZRESTART] = h.OnCZRestart
-	}
-	if h.OnCZItemPickup != nil {
-		mapT[packet.HeaderCZITEMPICKUP] = h.OnCZItemPickup
-	}
-	if h.OnCZReqWearEquip != nil {
-		mapT[packet.HeaderCZREQWEAREQUIPV5] = h.OnCZReqWearEquip
-	}
-	if h.OnCZReqTakeoffEquip != nil {
-		mapT[packet.HeaderCZREQTAKEOFFEQUIP] = h.OnCZReqTakeoffEquip
-	}
-	if h.OnCZContactNPC != nil {
-		mapT[packet.HeaderCZCONTACTNPC] = h.OnCZContactNPC
-	}
-	if h.OnCZReqNextScript != nil {
-		mapT[packet.HeaderCZREQNEXTSCRIPT] = h.OnCZReqNextScript
-	}
-	if h.OnCZChooseMenu != nil {
-		mapT[packet.HeaderCZCHOOSEMENU] = h.OnCZChooseMenu
-	}
-	if h.OnCZCloseDialog != nil {
-		mapT[packet.HeaderCZCLOSEDIALOG] = h.OnCZCloseDialog
-	}
-	return domain.NewDispatcher(login, char, mapT)
+	return table
+}
+
+// loginHandlers groups the single CA_LOGIN (0x0064) entry the login role owns;
+// the login role is the server's first entry point.
+func buildLoginTable(h Handlers) domain.PacketHandlerTable {
+	return addHandler(domain.PacketHandlerTable{}, packet.HeaderCALOGIN, h.OnCALogin)
+}
+
+// charHandlers groups the three char-server entry points: CH_ENTER returns
+// the roster, CH_SELECT_CHAR redirects to the zone, CH_MAKE_CHAR creates a
+// new character. All three share the same conn role so a partial milestone
+// (e.g. make missing) is still routable.
+func buildCharTable(h Handlers) domain.PacketHandlerTable {
+	return addHandler(
+		addHandler(
+			addHandler(domain.PacketHandlerTable{}, packet.HeaderCHMAKECHAR, h.OnCHMakeChar),
+			packet.HeaderCHSELECTCHAR, h.OnCHSelectChar),
+		packet.HeaderCHENTER, h.OnCHEnter)
+}
+
+// mapHandlers groups every map-role opcode the gateway ever dispatches:
+// the CZ_ENTER trust gate, every combat/movement/interaction packet the
+// world module ships, and the four content-dialog frames the content module
+// ships. Bundling them in one helper keeps BuildDispatcher readable and
+// makes the role-vs-module split obvious at a glance.
+func buildMapTable(h Handlers) domain.PacketHandlerTable {
+	table := domain.PacketHandlerTable{}
+	table = addHandler(table, packet.HeaderCZENTER, h.OnCZEnter)
+	table = addHandler(table, packet.HeaderCZREQUESTMOVE, h.OnCZRequestMove)
+	table = addHandler(table, packet.HeaderCZACTIONREQUEST, h.OnCZActionRequest)
+	table = addHandler(table, packet.HeaderCZREQUESTTIME, h.OnCZRequestTime)
+	table = addHandler(table, packet.HeaderCZCHANGEDIR, h.OnCZChangeDir)
+	table = addHandler(table, packet.HeaderCZREQEMOTION, h.OnCZReqEmotion)
+	table = addHandler(table, packet.HeaderCZRESTART, h.OnCZRestart)
+	table = addHandler(table, packet.HeaderCZITEMPICKUP, h.OnCZItemPickup)
+	table = addHandler(table, packet.HeaderCZREQWEAREQUIPV5, h.OnCZReqWearEquip)
+	table = addHandler(table, packet.HeaderCZREQTAKEOFFEQUIP, h.OnCZReqTakeoffEquip)
+	table = addHandler(table, packet.HeaderCZCONTACTNPC, h.OnCZContactNPC)
+	table = addHandler(table, packet.HeaderCZREQNEXTSCRIPT, h.OnCZReqNextScript)
+	table = addHandler(table, packet.HeaderCZCHOOSEMENU, h.OnCZChooseMenu)
+	return addHandler(table, packet.HeaderCZCLOSEDIALOG, h.OnCZCloseDialog)
 }

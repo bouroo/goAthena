@@ -54,8 +54,8 @@ func (w *scriptWorld) Heal(ctx context.Context, conn gwdomain.Conn, accountID, c
 		return fmt.Errorf("heal: player not found for account %d", accountID)
 	}
 
-	player.HP = (player.MaxHP * uint32(hpPct)) / 100
-	player.SP = (player.MaxSP * uint32(spPct)) / 100
+	player.HP = (player.MaxHP * uint32(hpPct)) / 100 //nolint:gosec // G115: HP/SP percentages are bounded 0–100 game values
+	player.SP = (player.MaxSP * uint32(spPct)) / 100 //nolint:gosec // G115: HP/SP percentages are bounded 0–100 game values
 
 	// Note: in RAthena, clipping happens if > max
 	if player.HP > player.MaxHP {
@@ -67,10 +67,10 @@ func (w *scriptWorld) Heal(ctx context.Context, conn gwdomain.Conn, accountID, c
 
 	cw := connWriter{conn: conn}
 
-	if err := (packet.ParChangeResponse{VarID: packet.SPHP, Count: int32(player.HP)}).Encode(cw); err != nil {
+	if err := (packet.ParChangeResponse{VarID: packet.SPHP, Count: int32(player.HP)}).Encode(cw); err != nil { //nolint:gosec // G115: HP/SP are bounded after Max-clip above
 		return fmt.Errorf("encode ZC_PAR_CHANGE SPHP: %w", err)
 	}
-	if err := (packet.ParChangeResponse{VarID: packet.SPSP, Count: int32(player.SP)}).Encode(cw); err != nil {
+	if err := (packet.ParChangeResponse{VarID: packet.SPSP, Count: int32(player.SP)}).Encode(cw); err != nil { //nolint:gosec // G115: HP/SP are bounded after Max-clip above
 		return fmt.Errorf("encode ZC_PAR_CHANGE SPSP: %w", err)
 	}
 

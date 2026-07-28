@@ -87,13 +87,32 @@ func Serve(ctx context.Context, cfg *config.Config) error {
 }
 
 // wire registers persistence and the feature modules on the injector and
-// attaches the gateway listeners to the application as supervised runnables.
-// It is extracted from Serve to keep the lifecycle top-level readable; every
-// step here is a dependency the injector or the application needs before Run.
+// attaches the gateway listeners and worker runnables to the application.
+// Each step is extracted into a helper so the lifecycle function here stays
+// readable and each piece stays under the gocyclo threshold.
 func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger *zerolog.Logger, application *server.Application) error {
-	// Persistence (real DB from the start): GORM accounts/chars, Valkey
-	// sessions, NATS (future scale-out seam). Each registers its own readiness
-	// probe, so /readyz reflects real dependency health.
+	if err := wirePersistence(ctx, injector); err != nil {
+		return err
+	}
+	if err := wireFeatureModules(ctx, injector, cfg); err != nil {
+		return err
+	}
+	if err := resolveGatewayHandlers(injector); err != nil {
+		return err
+	}
+	if err := gateway.Register(ctx, injector); err != nil {
+		return fmt.Errorf("register gateway: %w", err)
+	}
+	if err := wireRunnableListeners(ctx, injector, cfg, logger, application); err != nil {
+		return err
+	}
+	return nil
+}
+
+// wirePersistence registers the cross-module infrastructure: GORM accounts,
+// Valkey sessions, NATS bus. Each one owns its own readiness probe, so /readyz
+// reflects real dependency health.
+func wirePersistence(ctx context.Context, injector do.Injector) error {
 	if err := db.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register db: %w", err)
 	}
@@ -103,64 +122,38 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 	if err := nats.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register nats: %w", err)
 	}
+	return nil
+}
 
-	// Account/auth: AuthService + CA_LOGIN handler over the GORM account repo
-	// and the Valkey session store. Provides domain.Authenticator and
-	// *accountapp.CALoginHandler.
+// wireFeatureModules registers every bounded-context feature module in the
+// dependency order the injector requires. Inventory must register before
+// world so the pickup use case can resolve its port during world.Register;
+// world must register before content because content depends on the world's
+// NPCRegistry, MapStore, and PlayerRegistry.
+func wireFeatureModules(ctx context.Context, injector do.Injector, cfg *config.Config) error {
 	if err := account.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register account: %w", err)
 	}
-
-	// Character: CH_ENTER (char list) + CH_SELECT_CHAR (zone redirect) +
-	// CH_MAKE_CHAR (create) handlers over the GORM char repo. Provides the
-	// concrete character-app handlers.
 	if err := character.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register character: %w", err)
 	}
-
-	// Inventory: the per-character bag (migration 000003) provided under its
-	// domain port. Registered before world so the pickup use case can resolve
-	// the port during world.Register.
 	if err := inventory.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register inventory: %w", err)
 	}
-
-	// World: CZ_ENTER (map-enter trust gate) over the account Authenticator.
-	// M3 ships only this gate; M4 layers the entity registry, AOI, and tick. The
-	// handler lives on the dedicated map listener, whose fresh connections start
-	// at the map role and route CZ_ENTER through the map dispatch table.
 	if err := world.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register world: %w", err)
 	}
-
-	// Content: compiles the NPC script corpus and publishes the placed NPCs into
-	// the world's NPC registry + AOI grid, then provides the dialog handlers. It
-	// depends on world's NPCRegistry, MapStore, and PlayerRegistry, so it must
-	// register after world. An empty/unreadable ScriptDir logs warnings inside
-	// the loader and ships an empty script set rather than failing zone boot.
 	if err := content.Register(injector, cfg.Zone.ScriptDir); err != nil {
 		return fmt.Errorf("register content: %w", err)
 	}
+	return nil
+}
 
-	// Thread the feature-module handlers into the gateway dispatch tables. The
-	// gateway cannot import account/app or character/app (the architecture guard
-	// forbids cross-module impl imports), so the composition root — the one
-	// place allowed to see all modules — resolves each concrete handler and
-	// provides it as a gateway/domain.PacketHandler function value.
-	if err := resolveGatewayHandlers(injector); err != nil {
-		return err
-	}
-
-	if err := gateway.Register(ctx, injector); err != nil {
-		return fmt.Errorf("register gateway: %w", err)
-	}
-
-	// Register the gateway listeners as supervised runnables so a fatal
-	// listener error tears the process down and SIGTERM reaches them. They are
-	// constructed with the runnable's context (the run/signal context) as
-	// their base context — TCPHandler.Run and WSServer.Run block on it — so a
-	// signal cancels it and they drain on shutdown. The TCP address needs the
-	// gnet "tcp://" scheme prefix; the WS listener takes a bare host:port.
+// wireRunnableListeners resolves the dispatcher + decoder factories and
+// attaches every gateway listener and worker runnable to the application.
+// Runnables share the run/signal context so SIGTERM cancels them and they
+// drain on shutdown.
+func wireRunnableListeners(ctx context.Context, injector do.Injector, cfg *config.Config, logger *zerolog.Logger, application *server.Application) error {
 	disp, err := do.Invoke[*gwdomain.Dispatcher](injector)
 	if err != nil {
 		return fmt.Errorf("resolve gateway dispatcher: %w", err)
@@ -173,6 +166,7 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 	if err != nil {
 		return fmt.Errorf("resolve map decoder factory: %w", err)
 	}
+
 	application.RegisterRunnable("gateway-tcp", func(runCtx context.Context) error {
 		return gwinfra.NewTCPHandler(runCtx, logger, disp, newDec).Run("tcp://" + cfg.Gateway.TCP.Addr)
 	})
@@ -199,6 +193,7 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 		return gwinfra.NewMapWSServer(runCtx, logger, disp, newMapDec, cfg.Gateway.WS.AllowedOrigins).
 			Run(cfg.Gateway.MapWSAddr)
 	})
+
 	// M4c: the movement worker. A single goroutine owns every map's pathfinder
 	// (the single-goroutine contract world/domain/map.go documents), so CZ_REQUEST_MOVE
 	// handlers enqueue and this runnable resolves moves in arrival order. Registering
@@ -225,106 +220,141 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 	return nil
 }
 
+// invokeOr resolves a typed dependency from the injector and wraps the
+// not-found error with the supplied message so callers stay one line each.
+// The generic argument is inferred from the assignment target.
+func invokeOr[T any](c do.Injector, wrap string) (T, error) {
+	v, err := do.Invoke[T](c)
+	if err != nil {
+		var zero T
+		return zero, fmt.Errorf("%s: %w", wrap, err)
+	}
+	return v, nil
+}
+
+func resolveAccountHandlers(i do.Injector) (*accountapp.CALoginHandler, error) {
+	return invokeOr[*accountapp.CALoginHandler](i, "resolve CA_LOGIN handler")
+}
+
+func resolveCharacterHandlers(i do.Injector) (enter *characterapp.CharEnterHandler, sel *characterapp.CharSelectHandler, mk *characterapp.CharMakeHandler, err error) {
+	enter, err = invokeOr[*characterapp.CharEnterHandler](i, "resolve CH_ENTER handler")
+	if err != nil {
+		return
+	}
+	sel, err = invokeOr[*characterapp.CharSelectHandler](i, "resolve CH_SELECT_CHAR handler")
+	if err != nil {
+		return
+	}
+	mk, err = invokeOr[*characterapp.CharMakeHandler](i, "resolve CH_MAKE_CHAR handler")
+	return
+}
+
+func resolveWorldHandlers(i do.Injector) (
+	mapEnter *worldapp.MapEnterHandler, move *worldapp.MoveHandler, action *worldapp.ActionHandler,
+	timeH *worldapp.TimeHandler, changeDir *worldapp.ChangeDirHandler, emotion *worldapp.EmotionHandler,
+	restart *worldapp.RestartHandler, pickup *worldapp.PickupHandler, equip *worldapp.EquipHandler,
+	takeoff *worldapp.TakeoffHandler, err error,
+) {
+	mapEnter, err = invokeOr[*worldapp.MapEnterHandler](i, "resolve CZ_ENTER handler")
+	if err != nil {
+		return
+	}
+	move, err = invokeOr[*worldapp.MoveHandler](i, "resolve CZ_REQUEST_MOVE handler")
+	if err != nil {
+		return
+	}
+	action, err = invokeOr[*worldapp.ActionHandler](i, "resolve CZ_ACTION_REQUEST handler")
+	if err != nil {
+		return
+	}
+	timeH, err = invokeOr[*worldapp.TimeHandler](i, "resolve CZ_REQUEST_TIME handler")
+	if err != nil {
+		return
+	}
+	changeDir, err = invokeOr[*worldapp.ChangeDirHandler](i, "resolve CZ_CHANGE_DIR handler")
+	if err != nil {
+		return
+	}
+	emotion, err = invokeOr[*worldapp.EmotionHandler](i, "resolve CZ_REQ_EMOTION handler")
+	if err != nil {
+		return
+	}
+	restart, err = invokeOr[*worldapp.RestartHandler](i, "resolve CZ_RESTART handler")
+	if err != nil {
+		return
+	}
+	pickup, err = invokeOr[*worldapp.PickupHandler](i, "resolve CZ_ITEM_PICKUP handler")
+	if err != nil {
+		return
+	}
+	equip, err = invokeOr[*worldapp.EquipHandler](i, "resolve CZ_REQ_WEAR_EQUIP handler")
+	if err != nil {
+		return
+	}
+	takeoff, err = invokeOr[*worldapp.TakeoffHandler](i, "resolve CZ_REQ_TAKEOFF_EQUIP handler")
+	return
+}
+
+func resolveContentHandlers(i do.Injector) (contact *contentapp.ContactNPCHandler, next *contentapp.ReqNextScriptHandler, menu *contentapp.ChooseMenuHandler, closeDlg *contentapp.CloseDialogHandler, err error) {
+	contact, err = invokeOr[*contentapp.ContactNPCHandler](i, "resolve CZ_CONTACTNPC handler")
+	if err != nil {
+		return
+	}
+	next, err = invokeOr[*contentapp.ReqNextScriptHandler](i, "resolve CZ_REQ_NEXT_SCRIPT handler")
+	if err != nil {
+		return
+	}
+	menu, err = invokeOr[*contentapp.ChooseMenuHandler](i, "resolve CZ_CHOOSE_MENU handler")
+	if err != nil {
+		return
+	}
+	closeDlg, err = invokeOr[*contentapp.CloseDialogHandler](i, "resolve CZ_CLOSE_DIALOG handler")
+	return
+}
+
 // resolveGatewayHandlers resolves the concrete feature-module handlers and
 // provides them as a single gwapp.Handlers value (the contribution
-// gateway.Register consumes to build the dispatch tables). Extracted from wire
-// so the lifecycle function stays readable: each module's handler is one invoke
-// + one error wrap, and threading them into the dispatch tables is a distinct
-// concern from binding the listeners.
+// gateway.Register consumes to build the dispatch tables). The gateway cannot
+// import account/app or character/app (the architecture guard forbids
+// cross-module impl imports), so the composition root — the one place
+// allowed to see all modules — resolves each concrete handler here and
+// provides it as a gateway/domain.PacketHandler function value.
 func resolveGatewayHandlers(injector do.Injector) error {
-	loginHandler, err := do.Invoke[*accountapp.CALoginHandler](injector)
+	login, err := resolveAccountHandlers(injector)
 	if err != nil {
-		return fmt.Errorf("resolve CA_LOGIN handler: %w", err)
+		return err
 	}
-	enterHandler, err := do.Invoke[*characterapp.CharEnterHandler](injector)
+	enter, sel, mk, err := resolveCharacterHandlers(injector)
 	if err != nil {
-		return fmt.Errorf("resolve CH_ENTER handler: %w", err)
+		return err
 	}
-	selectHandler, err := do.Invoke[*characterapp.CharSelectHandler](injector)
+	mapEnter, move, action, timeH, changeDir, emotion, restart, pickup, equip, takeoff, err := resolveWorldHandlers(injector)
 	if err != nil {
-		return fmt.Errorf("resolve CH_SELECT_CHAR handler: %w", err)
+		return err
 	}
-	makeHandler, err := do.Invoke[*characterapp.CharMakeHandler](injector)
+	contact, next, menu, closeDlg, err := resolveContentHandlers(injector)
 	if err != nil {
-		return fmt.Errorf("resolve CH_MAKE_CHAR handler: %w", err)
+		return err
 	}
-	mapEnterHandler, err := do.Invoke[*worldapp.MapEnterHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_ENTER handler: %w", err)
-	}
-	moveHandler, err := do.Invoke[*worldapp.MoveHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_REQUEST_MOVE handler: %w", err)
-	}
-	actionHandler, err := do.Invoke[*worldapp.ActionHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_ACTION_REQUEST handler: %w", err)
-	}
-	timeHandler, err := do.Invoke[*worldapp.TimeHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_REQUEST_TIME handler: %w", err)
-	}
-	changeDirHandler, err := do.Invoke[*worldapp.ChangeDirHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_CHANGE_DIR handler: %w", err)
-	}
-	emotionHandler, err := do.Invoke[*worldapp.EmotionHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_REQ_EMOTION handler: %w", err)
-	}
-	restartHandler, err := do.Invoke[*worldapp.RestartHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_RESTART handler: %w", err)
-	}
-	pickupHandler, err := do.Invoke[*worldapp.PickupHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_ITEM_PICKUP handler: %w", err)
-	}
-	equipHandler, err := do.Invoke[*worldapp.EquipHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_REQ_WEAR_EQUIP handler: %w", err)
-	}
-	takeoffHandler, err := do.Invoke[*worldapp.TakeoffHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_REQ_TAKEOFF_EQUIP handler: %w", err)
-	}
-
-	contactNPCHandler, err := do.Invoke[*contentapp.ContactNPCHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_CONTACTNPC handler: %w", err)
-	}
-	reqNextScriptHandler, err := do.Invoke[*contentapp.ReqNextScriptHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_REQ_NEXT_SCRIPT handler: %w", err)
-	}
-	chooseMenuHandler, err := do.Invoke[*contentapp.ChooseMenuHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_CHOOSE_MENU handler: %w", err)
-	}
-	closeDialogHandler, err := do.Invoke[*contentapp.CloseDialogHandler](injector)
-	if err != nil {
-		return fmt.Errorf("resolve CZ_CLOSE_DIALOG handler: %w", err)
-	}
-
 	do.ProvideValue(injector, gwapp.Handlers{
-		OnCALogin:           loginHandler.Handle,
-		OnCHEnter:           enterHandler.Handle,
-		OnCHSelectChar:      selectHandler.Handle,
-		OnCHMakeChar:        makeHandler.Handle,
-		OnCZEnter:           mapEnterHandler.Handle,
-		OnCZRequestMove:     moveHandler.Handle,
-		OnCZActionRequest:   actionHandler.Handle,
-		OnCZRequestTime:     timeHandler.Handle,
-		OnCZChangeDir:       changeDirHandler.Handle,
-		OnCZReqEmotion:      emotionHandler.Handle,
-		OnCZRestart:         restartHandler.Handle,
-		OnCZItemPickup:      pickupHandler.Handle,
-		OnCZReqWearEquip:    equipHandler.Handle,
-		OnCZReqTakeoffEquip: takeoffHandler.Handle,
-		OnCZContactNPC:      contactNPCHandler.Handle,
-		OnCZReqNextScript:   reqNextScriptHandler.Handle,
-		OnCZChooseMenu:      chooseMenuHandler.Handle,
-		OnCZCloseDialog:     closeDialogHandler.Handle,
+		OnCALogin:           login.Handle,
+		OnCHEnter:           enter.Handle,
+		OnCHSelectChar:      sel.Handle,
+		OnCHMakeChar:        mk.Handle,
+		OnCZEnter:           mapEnter.Handle,
+		OnCZRequestMove:     move.Handle,
+		OnCZActionRequest:   action.Handle,
+		OnCZRequestTime:     timeH.Handle,
+		OnCZChangeDir:       changeDir.Handle,
+		OnCZReqEmotion:      emotion.Handle,
+		OnCZRestart:         restart.Handle,
+		OnCZItemPickup:      pickup.Handle,
+		OnCZReqWearEquip:    equip.Handle,
+		OnCZReqTakeoffEquip: takeoff.Handle,
+		OnCZContactNPC:      contact.Handle,
+		OnCZReqNextScript:   next.Handle,
+		OnCZChooseMenu:      menu.Handle,
+		OnCZCloseDialog:     closeDlg.Handle,
 	})
 	return nil
 }

@@ -5,21 +5,23 @@ import (
 	"fmt"
 
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
-	"github.com/bouroo/goAthena/internal/modules/content/infra"
 	gwdomain "github.com/bouroo/goAthena/internal/modules/gateway/domain"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
 
-// DI parameters.
-
+// DialogService is the application-layer facade that handlers delegate to. It
+// owns the per-NPC dialog state store, the script store, and the world port
+// the dialog VMs use to mutate player state.
 type DialogService struct {
 	world          domain.World
 	dialogRegistry domain.DialogRegistry
 	scripts        *ScriptStore
 }
 
+// NewDialogService wires the dependencies every dialog handler needs into a
+// single facade.
 func NewDialogService(
 	world domain.World,
 	dialogRegistry domain.DialogRegistry,
@@ -37,10 +39,15 @@ type ContactNPCHandler struct {
 	svc *DialogService
 }
 
+// NewContactNPCHandler builds a CZ_CONTACTNPC handler bound to the DialogService.
 func NewContactNPCHandler(svc *DialogService) *ContactNPCHandler {
 	return &ContactNPCHandler{svc: svc}
 }
 
+// Handle starts a dialog session for the NPC the client clicked. The compiled
+// script runs on its own goroutine, blocking on the dialog channel for Next/
+// Close advancement. Unauthenticated connections (never passed the
+// CZ_ENTER gate) drop the click silently.
 func (h *ContactNPCHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
 	req, err := packet.ParseCZContactNPC(frame.Raw)
 	if err != nil {
@@ -81,7 +88,7 @@ func (h *ContactNPCHandler) Handle(ctx context.Context, conn gwdomain.Conn, fram
 	// session owns charID. For M11c (dialog/heal/warp MVP) we pass 0 — Heal/Warp
 	// resolve the live char from the conn's world session when needed.
 	var charID uint32
-	host := infra.NewScriptHost(req.AID, conn, auth.AccountID, charID, ch, h.svc.world)
+	host := NewScriptHost(req.AID, conn, auth.AccountID, charID, ch, h.svc.world)
 	vars := map[string]script.Value{} // Fresh state per dialog session
 	vm := script.NewVM(cs, host, script.DefaultBuiltins(), vars)
 
@@ -99,10 +106,14 @@ type ReqNextScriptHandler struct {
 	svc *DialogService
 }
 
+// NewReqNextScriptHandler builds a CZ_REQ_NEXT_SCRIPT handler bound to the
+// DialogService.
 func NewReqNextScriptHandler(svc *DialogService) *ReqNextScriptHandler {
 	return &ReqNextScriptHandler{svc: svc}
 }
 
+// Handle advances the active dialog when the client presses Next; non-blocking
+// on the dialog channel (a timed-out dialog drops the click).
 func (h *ReqNextScriptHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
 	if _, err := packet.ParseCZReqNextScript(frame.Raw); err != nil {
 		return fmt.Errorf("parse CZ_REQ_NEXT_SCRIPT: %w", err)
@@ -123,10 +134,13 @@ type ChooseMenuHandler struct {
 	svc *DialogService
 }
 
+// NewChooseMenuHandler builds a CZ_CHOOSE_MENU handler bound to the DialogService.
 func NewChooseMenuHandler(svc *DialogService) *ChooseMenuHandler {
 	return &ChooseMenuHandler{svc: svc}
 }
 
+// Handle is a placeholder for menu/select responses; the M11d milestone will
+// implement the actual selection logic.
 func (h *ChooseMenuHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
 	if _, err := packet.ParseCZChooseMenu(frame.Raw); err != nil {
 		return fmt.Errorf("parse CZ_CHOOSE_MENU: %w", err)
@@ -140,10 +154,13 @@ type CloseDialogHandler struct {
 	svc *DialogService
 }
 
+// NewCloseDialogHandler builds a CZ_CLOSE_DIALOG handler bound to the DialogService.
 func NewCloseDialogHandler(svc *DialogService) *CloseDialogHandler {
 	return &CloseDialogHandler{svc: svc}
 }
 
+// Handle ends the active dialog by signalling false on the dialog channel;
+// the VM goroutine wakes from Next and falls through to its deferred Close.
 func (h *CloseDialogHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
 	if _, err := packet.ParseCZCloseDialog(frame.Raw); err != nil {
 		return fmt.Errorf("parse CZ_CLOSE_DIALOG: %w", err)
