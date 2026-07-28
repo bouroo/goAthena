@@ -20,6 +20,7 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/romap"
+	"github.com/bouroo/goAthena/pkg/ro/statcalc"
 )
 
 // newMobMap builds a domain.Map with a real AOI grid AND an all-walkable
@@ -152,7 +153,7 @@ func TestSpawnService_EnterWorld_ShowsMobToNewcomer(t *testing.T) {
 	maps := &memMapStore{maps: map[string]*domain.Map{"prontera": mp}}
 	registry := domain.NewPlayerRegistry()
 	mobs := domain.NewMobRegistry()
-	svc := app.NewSpawnService(chars, maps, registry, mobs)
+	svc := app.NewSpawnService(chars, maps, registry, mobs, statcalc.PreRenewalSet)
 
 	// Pre-place a Poring co-located with the novice spawn cell so it is in AOI range.
 	mob := &domain.Mob{

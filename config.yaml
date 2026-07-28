@@ -79,6 +79,10 @@ zone:
   default_map: prontera
   move_speed: 150
   shutdown_grace: 30s
+  # mob_db_path: an explicit mob_db.yml override. Non-empty wins over db_path
+  # (below), so this slim ./data set pins a populated world for CI boots that do
+  # not check out the rAthena submodule. To boot against the real fork, clear
+  # this ("") and set db_path to the submodule root.
   mob_db_path: ./data/mob_db/mob_db.yml
   # Optional rAthena skill database used by gateway skill dispatch.
   skill_db_path: ""
@@ -87,6 +91,12 @@ zone:
   mob_spawns_path: ./data/mob_spawns/prontera.yml
   script_dir: ./data/npc
   script_reload_interval: 0s
+  # db_path is the rAthena fork's db/ root. When a *_db_path override is empty,
+  # the loader resolves the mode subtree: db/re (renewal) or db/pre-re. Default
+  # points at the vendored rathenaThailand submodule.
+  db_path: ./third_party/rathenaThailand/db
+  # renewal selects the game-mode data subtree (db/re vs db/pre-re) and the
+  # formula set (statcalc.Registry). rathenaThailand ships RENEWAL ON.
   renewal: false
 
 assets:

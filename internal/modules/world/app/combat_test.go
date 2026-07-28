@@ -20,8 +20,11 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
+	"github.com/bouroo/goAthena/pkg/ro/mode"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/statcalc"
 )
 
 // splitFixedFrames slices a captured byte stream of fixed-length map packets into
@@ -38,6 +41,7 @@ func splitFixedFrames(t *testing.T, b []byte) [][]byte {
 		packet.HeaderZCNOTIFYVANISH:      packet.NotifyVanishResponse{}.Size(),
 		packet.HeaderZCLONGLONGPARCHANGE: packet.LongLongParChangeResponse{}.Size(),
 		packet.HeaderZCPARCHANGE:         packet.ParChangeResponse{}.Size(),
+		packet.HeaderZCItemFallEntry:     (&packet.ItemFallEntryResponse{}).Size(),
 	}
 	var out [][]byte
 	for len(b) >= 2 {
@@ -84,6 +88,28 @@ func expectNotifyVanish(t *testing.T, gid uint32) []byte {
 	require.NoError(t, (packet.NotifyVanishResponse{
 		GID:  gid,
 		Type: packet.VanishDead,
+	}).Encode(&buf))
+	return buf.Bytes()
+}
+
+// expectItemFallEntry encodes a ZC_ITEM_FALL_ENTRY (0x0ADD) frame for a dropped
+// item, built independently so a drift in any field — ground-item object id, name
+// id, IT_* type, cell, or amount — surfaces as a byte mismatch. Mirrors
+// broadcastFloorItem's field values (an unidentified drop, no MVP/random-option
+// drop effect, sub-cell at the tile center).
+func expectItemFallEntry(t *testing.T, id, nameID uint32, itemType uint16, x, y int16) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	require.NoError(t, (&packet.ItemFallEntryResponse{
+		ID:             id,
+		NameID:         nameID,
+		Type:           itemType,
+		Identified:     0,
+		X:              uint16(x), //nolint:gosec // G115: map cell in int16 wire slot
+		Y:              uint16(y), //nolint:gosec // G115: map cell in int16 wire slot
+		Amount:         1,
+		ShowDropEffect: 0,
+		DropEffectMode: 0,
 	}).Encode(&buf))
 	return buf.Bytes()
 }
@@ -187,25 +213,59 @@ func (r *recordingRespawnScheduler) Run() int {
 // and the attacker sits inside the mob's AOI tower (so broadcastDamage reaches its
 // conn). mobHP and mobDBEntry let each test dial the kill/level/DEF scenario.
 type combatFixture struct {
-	svc      *app.CombatService
-	mobs     *domain.MobRegistry
-	players  *domain.PlayerRegistry
-	mp       *domain.Map
-	mob      *domain.Mob
-	attacker *domain.Player
-	conn     *captureConn // attacker's capturing conn (owns its buf)
-	respawn  *recordingRespawnScheduler
+	svc        *app.CombatService
+	mobs       *domain.MobRegistry
+	players    *domain.PlayerRegistry
+	mp         *domain.Map
+	mob        *domain.Mob
+	attacker   *domain.Player
+	conn       *captureConn // attacker's capturing conn (owns its buf)
+	respawn    *recordingRespawnScheduler
+	floorItems *domain.FloorItemRegistry
+}
+
+// combatFixtureOpt configures an optional combat-fixture collaborator. Defaults
+// (drop-free testMobDB, no item_db) keep every non-drop test's frame counts
+// exact; drop tests pass withItemDB/withMobDB to arm the M9c-1 drop path.
+type combatFixtureOpt func(*combatFixtureCfg)
+
+type combatFixtureCfg struct {
+	items *itemdb.Registry
+	mobDB *mobdb.Registry
+}
+
+// withItemDB arms the M9c-1 drop path: a non-nil item_db lets dropLoot resolve a
+// winning drop's AegisName to an item id/type. The default (nil items) disables
+// drops so non-drop tests' frame counts stay exact.
+func withItemDB(db *itemdb.Registry) combatFixtureOpt {
+	return func(c *combatFixtureCfg) { c.items = db }
+}
+
+// withMobDB overrides the default drop-free testMobDB so a drop test can load a
+// mob_db carrying a drop table.
+func withMobDB(db *mobdb.Registry) combatFixtureOpt {
+	return func(c *combatFixtureCfg) { c.mobDB = db }
 }
 
 // newCombatFixture seeds one mob (id, hp) at (100,100) on "prontera" and one
 // level-clevel player at (101,100) whose conn buffers every broadcast. The mob_db
-// entry for mobID comes from testMobDB; combat reads DEF/VIT from it. chars is the
-// character progression store awardKill reads/writes on a kill; pass nil for the
-// M6b damage/vanish tests (awardKill then no-ops). The attacker's (accountID,
-// charID) pair is the fixed testIdentity below, so a fake store seeded against it
-// resolves the killer.
-func newCombatFixture(t *testing.T, mobID int32, mobHP int32, clevel uint16, chars domain.ProgressionStore) combatFixture {
+// entry for mobID comes from testMobDB (or a withMobDB override); combat reads
+// DEF/VIT from it. chars is the character progression store awardKill
+// reads/writes on a kill; pass nil for the M6b damage/vanish tests (awardKill then
+// no-ops). The drop path is armed only when withItemDB supplies an item_db;
+// otherwise dropLoot is a no-op so non-drop tests' frame counts stay exact. The
+// attacker's (accountID, charID) pair is the fixed testIdentity below, so a fake
+// store seeded against it resolves the killer.
+func newCombatFixture(t *testing.T, mobID int32, mobHP int32, clevel uint16, chars domain.ProgressionStore, opts ...combatFixtureOpt) combatFixture {
 	t.Helper()
+	cfg := combatFixtureCfg{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	mobDB := cfg.mobDB
+	if mobDB == nil {
+		mobDB = testMobDB(t)
+	}
 	mobs := domain.NewMobRegistry()
 	players := domain.NewPlayerRegistry()
 	mp := newTestMap(200, 200)
@@ -229,21 +289,27 @@ func newCombatFixture(t *testing.T, mobID int32, mobHP int32, clevel uint16, cha
 		EntityID:  aoi.EntityID(aid),
 		AccountID: aid, CharID: charID, MapName: "prontera",
 		PosX: 101, PosY: 100, CLevel: clevel,
+		// Naked-novice base stats (all 1) — what the world spawns. computeDamage
+		// reads these to build statcalc.Base; the damage-vectors test overrides
+		// Str/Dex/Luk on selected cases to exercise a non-floored BaseATK.
+		Str: 1, Agi: 1, Vit: 1, Int: 1, Dex: 1, Luk: 1,
 	}
 	require.NoError(t, players.Register(attacker))
 	require.NoError(t, mp.AOI.AddEntity(&aoi.Entity{ID: aoi.EntityID(aid), Type: aoi.EntityPlayer, X: 101, Y: 100}))
 
 	respawn := &recordingRespawnScheduler{}
-	svc := app.NewCombatService(players, mobs, maps, testMobDB(t), chars, fixedClock{0x11223344}, respawn)
-	return combatFixture{svc: svc, mobs: mobs, players: players, mp: mp, mob: mob, attacker: attacker, conn: conn, respawn: respawn}
+	floorItems := domain.NewFloorItemRegistry()
+	svc := app.NewCombatService(players, mobs, maps, mobDB, chars, fixedClock{0x11223344}, respawn, statcalc.PreRenewalSet, mode.PreRenewal, cfg.items, floorItems, nil)
+	return combatFixture{svc: svc, mobs: mobs, players: players, mp: mp, mob: mob, attacker: attacker, conn: conn, respawn: respawn, floorItems: floorItems}
 }
 
 // testMobDB returns a Registry with three mobs whose DEF/VIT exercise the
-// melee-damage paths the tests assert: Poring (flat novice hit at L1), Tank
-// (DEF+VIT reduction), and Floored (DEF so high the floor at 1 binds). BaseExp is
-// included so the M6c EXP tests have a nonzero award without a separate corpus;
-// the damage-only M6b tests never reach awardKill (they use chars=nil or non-killing
-// HP), so the BaseExp values do not perturb those assertions.
+// damage-reduction paths the tests assert: Poring (no hard DEF, vit 1), Tank
+// (hard DEF + vit soft-DEF), and Floored (hard DEF so high the pre-re floor at 1
+// binds). BaseExp is included so the EXP tests have a nonzero award without a
+// separate corpus; the damage-only tests never reach awardKill (they use
+// chars=nil or non-killing HP), so the BaseExp values do not perturb those
+// assertions.
 func testMobDB(t *testing.T) *mobdb.Registry {
 	t.Helper()
 	const yaml = `Header:
@@ -259,11 +325,174 @@ Body:
 	return reg
 }
 
+// dropItemDB is a minimal ITEM_DB v3 with the AegisNames the drop tests drop
+// (Jellopy → Etc, Knife_ → Weapon). Built once per test via itemdb.Load.
+func dropItemDB(t *testing.T) *itemdb.Registry {
+	t.Helper()
+	const yaml = `Header:
+  Type: ITEM_DB
+  Version: 3
+Body:
+  - {Id: 909, AegisName: Jellopy, Name: Jellopy, Type: Etc}
+  - {Id: 919, AegisName: Knife_,  Name: Knife,   Type: Weapon}
+`
+	reg, err := itemdb.Load(strings.NewReader(yaml))
+	require.NoError(t, err)
+	return reg
+}
+
+// dropMobDB is a MOB_DB v5 with three one-hit (Hp 1) mobs exercising the drop
+// paths the tests assert: 5001 Guaranteed (a rate-10000 Jellopy that always drops
+// plus a rate-10000 Z_Unknown whose AegisName the drop item_db cannot resolve, so
+// the unresolved path is covered in one kill); 5002 NeverDrops (a rate-0 entry
+// that never rolls a win); 5003 EquipDrop (a rate-10000 Knife_ weapon drop,
+// exercising the IT_WEAPON branch of itemdb.WireType).
+func dropMobDB(t *testing.T) *mobdb.Registry {
+	t.Helper()
+	const yaml = `Header:
+  Type: MOB_DB
+  Version: 5
+Body:
+  - Id: 5001
+    AegisName: GUARANTEED
+    Name: Guaranteed
+    Level: 1
+    Hp: 1
+    Defense: 0
+    Vit: 1
+    BaseExp: 0
+    WalkSpeed: 400
+    Drops:
+      - Item: Jellopy
+        Rate: 10000
+      - Item: Z_Unknown
+        Rate: 10000
+  - Id: 5002
+    AegisName: NEVERDROPS
+    Name: NeverDrops
+    Level: 1
+    Hp: 1
+    Defense: 0
+    Vit: 1
+    BaseExp: 0
+    WalkSpeed: 400
+    Drops:
+      - Item: Jellopy
+        Rate: 0
+  - Id: 5003
+    AegisName: EQUIPDROP
+    Name: EquipDrop
+    Level: 1
+    Hp: 1
+    Defense: 0
+    Vit: 1
+    BaseExp: 0
+    WalkSpeed: 400
+    Drops:
+      - Item: Knife_
+        Rate: 10000
+`
+	reg, err := mobdb.Load(strings.NewReader(yaml))
+	require.NoError(t, err)
+	return reg
+}
+
+// TestCombatService_Kill_DropsItemToGround is the M9c-1 happy path: killing a mob
+// whose drop table has a rate-10000 (guaranteed) Jellopy drop — with an item_db
+// that resolves Jellopy → id 909 (IT_ETC) — spawns exactly one floor item at the
+// mob's death cell and broadcasts one byte-exact ZC_ITEM_FALL_ENTRY (0x0ADD) to the
+// adjacent killer. The rate-10000 Z_Unknown drop in the same table is skipped
+// (AegisName unresolved in item_db), proving the skip-without-crash path.
+func TestCombatService_Kill_DropsItemToGround(t *testing.T) {
+	t.Parallel()
+	f := newCombatFixture(t, 5001, 1, 1, nil, withMobDB(dropMobDB(t)), withItemDB(dropItemDB(t)))
+
+	require.NoError(t, f.svc.Attack(context.Background(), f.attacker.AccountID, packet.CZActionRequestRequest{
+		TargetGID: uint32(f.mob.EntityID), Action: 0,
+	}))
+
+	// Exactly one floor item landed: Jellopy (909). Z_Unknown was skipped.
+	require.Equal(t, 1, f.floorItems.Len(), "exactly one resolved drop landed")
+	fi, ok := f.floorItems.ByEntity(aoi.EntityID(domain.FloorItemIDBase))
+	require.True(t, ok, "first floor item drew the base EntityID")
+	assert.Equal(t, uint32(909), fi.NameID, "Jellopy id")
+	assert.Equal(t, uint16(3), fi.Type, "IT_ETC")
+	assert.Equal(t, uint16(1), fi.Amount)
+	assert.Equal(t, "prontera", fi.MapName)
+	assert.Equal(t, int16(100), fi.PosX, "floor item lands on the mob's death cell")
+	assert.Equal(t, int16(100), fi.PosY)
+
+	// Frames: act, vanish, then the 0x0ADD drop frame.
+	frames := splitFixedFrames(t, f.conn.buf.Bytes())
+	require.Len(t, frames, 3, "act + vanish + drop")
+	assert.Equal(t,
+		expectItemFallEntry(t, uint32(fi.EntityID), 909, itemdb.WireType("Etc"), 100, 100),
+		frames[2], "byte-exact ItemFallEntry for the Jellopy drop",
+	)
+}
+
+// TestCombatService_Kill_RateZeroNeverDrops guards the roll floor: a rate-0 entry
+// never rolls a win (rand.Intn(10000) < 0 is always false), so no floor item is
+// spawned and no drop frame is broadcast — just act + vanish.
+func TestCombatService_Kill_RateZeroNeverDrops(t *testing.T) {
+	t.Parallel()
+	f := newCombatFixture(t, 5002, 1, 1, nil, withMobDB(dropMobDB(t)), withItemDB(dropItemDB(t)))
+
+	require.NoError(t, f.svc.Attack(context.Background(), f.attacker.AccountID, packet.CZActionRequestRequest{
+		TargetGID: uint32(f.mob.EntityID), Action: 0,
+	}))
+
+	assert.Equal(t, 0, f.floorItems.Len(), "a rate-0 drop never lands")
+	frames := splitFixedFrames(t, f.conn.buf.Bytes())
+	require.Len(t, frames, 2, "act + vanish only; no drop frame")
+}
+
+// TestCombatService_Kill_NoItemDBDisablesDrops guards the items-nil contract: with
+// no item_db wired, dropLoot is a no-op even for a rate-10000 drop, so a kill
+// emits no floor item and no drop frame. This is the production default for a zone
+// with no item_db configured.
+func TestCombatService_Kill_NoItemDBDisablesDrops(t *testing.T) {
+	t.Parallel()
+	// No withItemDB ⇒ items nil. Mob 5001 carries a rate-10000 Jellopy drop.
+	f := newCombatFixture(t, 5001, 1, 1, nil, withMobDB(dropMobDB(t)))
+
+	require.NoError(t, f.svc.Attack(context.Background(), f.attacker.AccountID, packet.CZActionRequestRequest{
+		TargetGID: uint32(f.mob.EntityID), Action: 0,
+	}))
+
+	assert.Equal(t, 0, f.floorItems.Len(), "no item_db ⇒ dropLoot no-ops")
+	frames := splitFixedFrames(t, f.conn.buf.Bytes())
+	require.Len(t, frames, 2, "act + vanish only")
+}
+
+// TestCombatService_Kill_DropsEquipmentType verifies the IT_* mapping for a
+// non-Etc drop: a rate-10000 Knife_ (Weapon) drop resolves to IT_WEAPON (5) in the
+// broadcast, exercising itemdb.WireType's weapon branch.
+func TestCombatService_Kill_DropsEquipmentType(t *testing.T) {
+	t.Parallel()
+	f := newCombatFixture(t, 5003, 1, 1, nil, withMobDB(dropMobDB(t)), withItemDB(dropItemDB(t)))
+
+	require.NoError(t, f.svc.Attack(context.Background(), f.attacker.AccountID, packet.CZActionRequestRequest{
+		TargetGID: uint32(f.mob.EntityID), Action: 0,
+	}))
+
+	require.Equal(t, 1, f.floorItems.Len())
+	fi, _ := f.floorItems.ByEntity(aoi.EntityID(domain.FloorItemIDBase))
+	assert.Equal(t, uint32(919), fi.NameID, "Knife_ id")
+	assert.Equal(t, uint16(5), fi.Type, "IT_WEAPON")
+	assert.Equal(t,
+		expectItemFallEntry(t, uint32(fi.EntityID), 919, itemdb.WireType("Weapon"), 100, 100),
+		splitFixedFrames(t, f.conn.buf.Bytes())[2],
+		"byte-exact ItemFallEntry for the Knife_ drop",
+	)
+}
+
 // TestCombatService_Attack_HitBroadcastsAndWounds is the M6b happy path: a level-1
 // player one cell east of a Poring attacks it. The hit broadcasts one byte-exact
 // ZC_NOTIFY_ACT to the attacker, the mob's HP drops by the computed damage
-// (15 = noviceBaseATK - (DEF0 + VIT1/2)), and the still-living mob is neither
-// unregistered nor removed from the AOI grid.
+// (1 = pre-re naked-novice BaseATK reduced by Poring's vit-softDEF and floored at
+// 1), and the still-living mob is neither unregistered nor removed from the AOI
+// grid.
 func TestCombatService_Attack_HitBroadcastsAndWounds(t *testing.T) {
 	t.Parallel()
 	f := newCombatFixture(t, 1002, 50, 1, nil)
@@ -272,15 +501,15 @@ func TestCombatService_Attack_HitBroadcastsAndWounds(t *testing.T) {
 		TargetGID: uint32(f.mob.EntityID), Action: 0,
 	}))
 
-	// HP 50 − 15 = 35; the mob is wounded but alive.
-	assert.Equal(t, int32(35), f.mob.HP, "mob HP reduced by exactly the melee damage")
+	// HP 50 − 1 = 49; the mob is wounded but alive.
+	assert.Equal(t, int32(49), f.mob.HP, "mob HP reduced by exactly the melee damage")
 
 	// Exactly one frame: the damage notification. No vanish on a non-killing hit.
 	frames := splitFixedFrames(t, f.conn.buf.Bytes())
 	require.Len(t, frames, 1, "one NotifyAct frame, no vanish while alive")
 	assert.Equal(t,
-		expectNotifyAct(t, f.attacker.AccountID, uint32(f.mob.EntityID), 0x11223344, 15),
-		frames[0], "NotifyAct bytes (damage=15, SrcID=attacker, TargetID=mob)",
+		expectNotifyAct(t, f.attacker.AccountID, uint32(f.mob.EntityID), 0x11223344, 1),
+		frames[0], "NotifyAct bytes (damage=1, SrcID=attacker, TargetID=mob)",
 	)
 
 	// The mob survives: still registered, still an AOI entity.
@@ -295,7 +524,7 @@ func TestCombatService_Attack_HitBroadcastsAndWounds(t *testing.T) {
 // byte-exact, and the mob is torn out of both the registry and the AOI grid.
 func TestCombatService_Attack_KillingBlowVanishesAndTearsDown(t *testing.T) {
 	t.Parallel()
-	f := newCombatFixture(t, 1002, 15, 1, nil) // HP == damage(15) ⇒ one-blow kill
+	f := newCombatFixture(t, 1002, 1, 1, nil) // HP == damage(1) ⇒ one-blow kill
 
 	require.NoError(t, f.svc.Attack(context.Background(), f.attacker.AccountID, packet.CZActionRequestRequest{
 		TargetGID: uint32(f.mob.EntityID), Action: 0,
@@ -308,7 +537,7 @@ func TestCombatService_Attack_KillingBlowVanishesAndTearsDown(t *testing.T) {
 	frames := splitFixedFrames(t, f.conn.buf.Bytes())
 	require.Len(t, frames, 2, "NotifyAct followed by NotifyVanish on the killing blow")
 	assert.Equal(t,
-		expectNotifyAct(t, f.attacker.AccountID, uint32(f.mob.EntityID), 0x11223344, 15),
+		expectNotifyAct(t, f.attacker.AccountID, uint32(f.mob.EntityID), 0x11223344, 1),
 		frames[0], "NotifyAct bytes on the killing blow",
 	)
 	assert.Equal(t,
@@ -322,30 +551,34 @@ func TestCombatService_Attack_KillingBlowVanishesAndTearsDown(t *testing.T) {
 	assert.Equal(t, 1, f.mp.AOI.EntityCount(), "mob removed from AOI; only the attacker remains")
 }
 
-// TestCombatService_Attack_DamageScalesAndFloorsAtOne asserts the melee-damage
-// formula through the emitted NotifyAct Damage field: ATK grows with base level,
-// DEF+VIT/2 reduces it, and the result is floored at 1. Each case is one attack
-// whose frame's damage bytes must match the hand-computed value.
-func TestCombatService_Attack_DamageScalesAndFloorsAtOne(t *testing.T) {
+// TestCombatService_Attack_DamageFollowsFormula asserts the pre-renewal damage
+// pipeline through the emitted NotifyAct Damage field: BaseATK (str + (str/10)² +
+// dex/5 + luk/5) is reduced by hard-DEF and the mob's vit-softDEF, then floored
+// at 1. The fixture's attacker starts as a naked novice (all stats 1); each case
+// overrides Str/Dex/Luk to dial the BaseATK. Pre-re BaseATK has no level term, so
+// a naked novice deals 1 to every mob — the strong-attacker cases exercise the
+// reduction paths distinctly.
+func TestCombatService_Attack_DamageFollowsFormula(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name    string
-		mobID   int32
-		clevel  uint16
-		wantDmg int32
+		name          string
+		mobID         int32
+		str, dex, luk uint16 // overrides the naked-novice baseline (all 1)
+		wantDmg       int32
 	}{
-		// atk = 15 + (level-1)*3; reduction = Defense + Vit/2; floor at 1.
-		{"poring_L1_flat", 1002, 1, 15},    // 15 - (0 + 0)
-		{"poring_L5_scaled", 1002, 5, 27},  // 15 + 4*3 - 0
-		{"tank_L1_reduced", 9001, 1, 8},    // 15 - (5 + 2)
-		{"floored_L1_clamped", 9002, 1, 1}, // 15 - 100 → clamp 1
+		// pre-re batk = str + (str/10)² + dex/5 + luk/5; dmg = batk*(100-def1)/100 - vit_def, floor 1
+		{"naked_novice_vs_poring_floored", 1002, 1, 1, 1, 1}, // batk 1; 1·100/100 − 1 = 0 → floor 1
+		{"strong_vs_poring", 1002, 50, 30, 10, 82},           // batk 83; 83·100/100 − 1 = 82
+		{"strong_vs_tank_reduced", 9001, 50, 30, 10, 74},     // batk 83; 83·95/100 − 4 = 78 − 4 = 74
+		{"strong_vs_floored_clamped", 9002, 50, 30, 10, 1},   // batk 83; 83·0/100 − 0 = 0 → floor 1
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newCombatFixture(t, tc.mobID, 10000, tc.clevel, nil) // HP huge ⇒ never kills
+			f := newCombatFixture(t, tc.mobID, 10000, 1, nil) // HP huge ⇒ never kills
+			f.attacker.Str, f.attacker.Dex, f.attacker.Luk = tc.str, tc.dex, tc.luk
 
 			require.NoError(t, f.svc.Attack(context.Background(), f.attacker.AccountID, packet.CZActionRequestRequest{
 				TargetGID: uint32(f.mob.EntityID), Action: 0,
@@ -510,11 +743,11 @@ func TestActionHandler_DelegatesToService(t *testing.T) {
 		gwdomain.Frame{Cmd: packet.HeaderCZACTIONREQUEST, Raw: req.Bytes()},
 	))
 
-	assert.Equal(t, int32(35), f.mob.HP, "handler drove the service's attack")
+	assert.Equal(t, int32(49), f.mob.HP, "handler drove the service's attack")
 	frames := splitFixedFrames(t, f.conn.buf.Bytes())
 	require.Len(t, frames, 1)
 	assert.Equal(t,
-		expectNotifyAct(t, f.attacker.AccountID, uint32(f.mob.EntityID), 0x11223344, 15),
+		expectNotifyAct(t, f.attacker.AccountID, uint32(f.mob.EntityID), 0x11223344, 1),
 		frames[0], "NotifyAct emitted through the handler path",
 	)
 }
@@ -583,7 +816,7 @@ func newProgressionFixture(t *testing.T, mobID int32, mobHP int32) (*memProgress
 // base_level unchanged at 1.
 func TestCombatService_Kill_AwardsExpNoLevelUp(t *testing.T) {
 	t.Parallel()
-	store, f := newProgressionFixture(t, 1002, 15) // HP 15 == one-blow kill
+	store, f := newProgressionFixture(t, 1002, 1) // HP 1 == one-blow kill (naked novice floors at 1)
 
 	require.NoError(t, f.svc.Attack(context.Background(), f.attacker.AccountID, packet.CZActionRequestRequest{
 		TargetGID: uint32(f.mob.EntityID), Action: 0,
@@ -612,7 +845,7 @@ func TestCombatService_Kill_AwardsExpNoLevelUp(t *testing.T) {
 // status_point=57.
 func TestCombatService_Kill_LevelUpsAndGrantsStatusPoints(t *testing.T) {
 	t.Parallel()
-	store, f := newProgressionFixture(t, 9001, 8) // Tank: BaseExp 100; dmg 15−(5+2)=8 ⇒ HP 8 one-blow kill
+	store, f := newProgressionFixture(t, 9001, 1) // Tank: BaseExp 100; HP 1 == one-blow kill (naked novice floors at 1)
 
 	require.NoError(t, f.svc.Attack(context.Background(), f.attacker.AccountID, packet.CZActionRequestRequest{
 		TargetGID: uint32(f.mob.EntityID), Action: 0,
@@ -658,7 +891,7 @@ func TestCombatService_Kill_ZeroExpMobAwardsNothing(t *testing.T) {
 // (best-effort), so the client saw the EXP even though the save failed.
 func TestCombatService_Kill_PersistFaultStillTearsDown(t *testing.T) {
 	t.Parallel()
-	store, f := newProgressionFixture(t, 1002, 15)
+	store, f := newProgressionFixture(t, 1002, 1)
 	store.saveErr = errors.New("disk full")
 
 	err := f.svc.Attack(context.Background(), f.attacker.AccountID, packet.CZActionRequestRequest{
@@ -685,7 +918,7 @@ func TestCombatService_Kill_PersistFaultStillTearsDown(t *testing.T) {
 // noviceBaseExpThresholds.
 func TestCombatService_Kill_AtCapAccruesExpNoLevel(t *testing.T) {
 	t.Parallel()
-	store, f := newProgressionFixture(t, 1002, 15) // Poring: BaseExp 5
+	store, f := newProgressionFixture(t, 1002, 1) // Poring: BaseExp 5; HP 1 == one-blow kill
 	// Place the character at the cap (level 10) with EXP already past the final
 	// threshold, so the award accrues but cannot level further.
 	store.char.BaseLevel = 10
@@ -717,7 +950,7 @@ func TestCombatService_Kill_AtCapAccruesExpNoLevel(t *testing.T) {
 // ZC_SPAWN_UNIT to the adjacent attacker.
 func TestCombatService_Kill_ArmsRespawnThenReappears(t *testing.T) {
 	t.Parallel()
-	f := newCombatFixture(t, 1002, 15, 1, nil) // Poring HP 15 == damage(15) ⇒ one-blow kill
+	f := newCombatFixture(t, 1002, 1, 1, nil) // Poring HP 1 == damage(1) ⇒ one-blow kill
 	deadID := f.mob.EntityID
 
 	require.NoError(t, f.svc.Attack(context.Background(), f.attacker.AccountID, packet.CZActionRequestRequest{
@@ -767,7 +1000,7 @@ func TestCombatService_Kill_ArmsRespawnThenReappears(t *testing.T) {
 // replacement still spawns.
 func TestCombatService_Kill_RespawnIsIndependentOfKillerSession(t *testing.T) {
 	t.Parallel()
-	f := newCombatFixture(t, 1002, 15, 1, nil)
+	f := newCombatFixture(t, 1002, 1, 1, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	require.NoError(t, f.svc.Attack(ctx, f.attacker.AccountID, packet.CZActionRequestRequest{

@@ -23,25 +23,12 @@ import (
 	gwdomain "github.com/bouroo/goAthena/internal/modules/gateway/domain"
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
+	"github.com/bouroo/goAthena/pkg/ro/combat"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
+	"github.com/bouroo/goAthena/pkg/ro/mode"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
-)
-
-// meleeRange is the maximum Chebyshev distance at which a player may strike a
-// mob with a bare-handed melee attack. The client pathfinds adjacent to the
-// target before issuing CZ_ACTION_REQUEST, so this is a guard against
-// out-of-range attacks rather than the authoritative reach — rAthena derives
-// range from weapon/size, which this slice does not model.
-const meleeRange = 1
-
-// Melee-damage constants for the combat slice. rAthena's damage formula folds
-// in STR, weapon ATK, element, crit, and per-class status tables; this slice
-// uses a deterministic level-scaling approximation so an L3 test can assert
-// exact damage bytes (no RNG variance). noviceBaseATK is a bare-handed novice's
-// attack power; atkPerLevel grows it as the player levels so leveling is felt.
-const (
-	noviceBaseATK int32 = 15
-	atkPerLevel   int32 = 3
+	"github.com/bouroo/goAthena/pkg/ro/statcalc"
 )
 
 // Motion timings written into ZC_NOTIFY_ACT's amotion slots, in milliseconds.
@@ -114,32 +101,50 @@ func (SystemRespawnScheduler) After(delay time.Duration, fn func()) {
 }
 
 // CombatService resolves a player's attack against a mob: range check, melee
-// damage, AOI damage broadcast, and the death path (vanish + EXP/level/persist +
-// teardown). It holds the live-session player index (attacker lookup + observer
-// Conns), the mob index (target lookup + unregister), the map store (AOI
-// broadcast), the immutable mob_db (target stats + base EXP), the character
-// progression store (EXP/level read-modify-write + persist on kill), and the
-// clock (the ZC_NOTIFY_ACT server tick).
+// damage, AOI damage broadcast, and the death path (vanish + ground drops +
+// EXP/level/persist + teardown). It holds the live-session player index (attacker
+// lookup + observer Conns), the mob index (target lookup + unregister), the map
+// store (AOI broadcast), the immutable mob_db (target stats + base EXP + drop
+// table), the immutable item_db (drop resolution AegisName→id/type), the floor
+// item index (drop register + future pickup), the character progression store
+// (EXP/level read-modify-write + persist on kill), and the clock (the
+// ZC_NOTIFY_ACT server tick).
 type CombatService struct {
-	players *domain.PlayerRegistry
-	mobs    *domain.MobRegistry
-	maps    domain.MapStore
-	db      *mobdb.Registry
-	chars   domain.ProgressionStore
-	clock   Clock
-	respawn RespawnScheduler
+	players    *domain.PlayerRegistry
+	mobs       *domain.MobRegistry
+	maps       domain.MapStore
+	db         *mobdb.Registry
+	chars      domain.ProgressionStore
+	clock      Clock
+	respawn    RespawnScheduler
+	fs         statcalc.FormulaSet
+	gm         mode.Mode
+	items      *itemdb.Registry
+	floorItems *domain.FloorItemRegistry
+	rng        stepSource
 }
 
 // NewCombatService binds the combat collaborators. db may be nil (no mob_db):
-// damage then falls back to a flat novice hit and kills award no EXP. chars may
-// be nil (no character store, e.g. the M6b fixtures): kills then tear down the
-// mob with no EXP/level/persist step, keeping the two-frame (act+vanish)
-// assertions valid. clock supplies the per-attack server tick. respawn arms the
-// post-death respawn timer; a nil respawn (no scheduler) makes kills a final
-// teardown — the mob stays gone — which keeps the M6b/c fixtures' "mob torn down,
-// no reappearance" assertions valid.
-func NewCombatService(players *domain.PlayerRegistry, mobs *domain.MobRegistry, maps domain.MapStore, db *mobdb.Registry, chars domain.ProgressionStore, clock Clock, respawn RespawnScheduler) *CombatService {
-	return &CombatService{players: players, mobs: mobs, maps: maps, db: db, chars: chars, clock: clock, respawn: respawn}
+// damage then resolves against a zero-stat defender and kills award no EXP and no
+// drops. chars may be nil (no character store, e.g. the M6b fixtures): kills then
+// tear down the mob with no EXP/level/persist step, keeping the two-frame
+// (act+vanish) assertions valid. clock supplies the per-attack server tick.
+// respawn arms the post-death respawn timer; a nil respawn (no scheduler) makes
+// kills a final teardown — the mob stays gone — which keeps the M6b/c fixtures'
+// "mob torn down, no reappearance" assertions valid. fs is the resolved game-mode
+// formula set (BaseATK source for the attacker); gm selects the mode-keyed DEF
+// reduction. Both come from cfg.Zone.Renewal via statcalc.Registry at composition
+// time. items is the item_db (drop resolution); a nil items (no item_db) makes
+// kills award no ground drops, mirroring the nil-mob_db contract. floorItems owns
+// the dropped-item index; a nil floorItems disables drops the same way. rng is the
+// shared stepSource RNG seam (mob-wander reuses it); the drop roller draws a per-
+// myriad rate check from it. A nil rng defaults to randStep (the global source),
+// matching NewMobService.
+func NewCombatService(players *domain.PlayerRegistry, mobs *domain.MobRegistry, maps domain.MapStore, db *mobdb.Registry, chars domain.ProgressionStore, clock Clock, respawn RespawnScheduler, fs statcalc.FormulaSet, gm mode.Mode, items *itemdb.Registry, floorItems *domain.FloorItemRegistry, rng stepSource) *CombatService {
+	if rng == nil {
+		rng = randStep{}
+	}
+	return &CombatService{players: players, mobs: mobs, maps: maps, db: db, chars: chars, clock: clock, respawn: respawn, fs: fs, gm: gm, items: items, floorItems: floorItems, rng: rng}
 }
 
 // Attack resolves one CZ_ACTION_REQUEST from accountID against req.TargetGID.
@@ -162,7 +167,9 @@ func (s *CombatService) Attack(ctx context.Context, accountID uint32, req packet
 		// Target is not a live mob. The slice attacks mobs only.
 		return nil
 	}
-	if !inMeleeRange(attacker, mob) {
+	ax, ay, _ := attacker.Position()
+	mx, my, _ := mob.Position()
+	if !combat.InMeleeRange(int(ax), int(ay), int(mx), int(my)) {
 		return nil
 	}
 	mp, err := s.maps.Load(ctx, mob.MapName)
@@ -173,9 +180,8 @@ func (s *CombatService) Attack(ctx context.Context, accountID uint32, req packet
 		return fmt.Errorf("combat: map %q loaded nil for mob %d", mob.MapName, mob.EntityID)
 	}
 
-	damage := meleeDamage(attacker.CLevel, s.mobEntry(mob.MobID))
-	mobX, mobY, _ := mob.Position()
-	s.broadcastDamage(mp, mobX, mobY, attacker.AccountID, mob.EntityID, damage)
+	damage := s.computeDamage(attacker, s.mobEntry(mob.MobID))
+	s.broadcastDamage(mp, mx, my, attacker.AccountID, mob.EntityID, damage)
 
 	if _, died := mob.ApplyDamage(damage); died {
 		return s.onMobDeath(ctx, mp, mob, attacker)
@@ -193,25 +199,106 @@ func (s *CombatService) mobEntry(mobID int32) *mobdb.MobEntry {
 }
 
 // onMobDeath handles a mob's killing blow: broadcast ZC_NOTIFY_VANISH (death) to
-// AOI observers, award the killer EXP/level and persist it, arm a deferred
-// respawn at the mob's home cell, then tear the mob out of the registry and grid.
-// Teardown is unconditional — a dead mob is removed from the world even if EXP
-// persistence faults, so a persist error never keeps a corpse alive; the persist
-// error is returned only so ProcessBytes logs it. The respawn is armed before
-// teardown because the dead mob's immutable spawn fields (id, map, SpawnX/Y,
-// level, MaxHP, name, speed) are a complete template for the replacement, and
-// Unregister only drops the registry index — it does not mutate the struct, so
-// the closure's captured pointer stays valid. Unregister is idempotent and
-// RemoveEntity on a missing entity is a no-op, so a concurrent path that already
-// cleaned up (e.g. the wander tick tearing down an OOB mob) stays consistent.
+// AOI observers, roll the drop table and spawn ground items (ZC_ITEM_FALL_ENTRY),
+// award the killer EXP/level and persist it, arm a deferred respawn at the mob's
+// home cell, then tear the mob out of the registry and grid. Teardown is
+// unconditional — a dead mob is removed from the world even if EXP persistence
+// faults, so a persist error never keeps a corpse alive; the persist error is
+// returned only so ProcessBytes logs it. The respawn is armed before teardown
+// because the dead mob's immutable spawn fields (id, map, SpawnX/Y, level, MaxHP,
+// name, speed) are a complete template for the replacement, and Unregister only
+// drops the registry index — it does not mutate the struct, so the closure's
+// captured pointer stays valid. Unregister is idempotent and RemoveEntity on a
+// missing entity is a no-op, so a concurrent path that already cleaned up (e.g.
+// the wander tick tearing down an OOB mob) stays consistent.
 func (s *CombatService) onMobDeath(ctx context.Context, mp *domain.Map, mob *domain.Mob, killer *domain.Player) error {
 	mobX, mobY, _ := mob.Position()
 	s.broadcastVanish(mp, mobX, mobY, mob.EntityID)
-	awardErr := s.awardKill(ctx, killer, s.mobEntry(mob.MobID))
+	entry := s.mobEntry(mob.MobID)
+	s.dropLoot(mp, mob, entry, mobX, mobY)
+	awardErr := s.awardKill(ctx, killer, entry)
 	s.scheduleRespawn(mob)
 	s.mobs.Unregister(mob.EntityID)
 	_ = mp.AOI.RemoveEntity(mob.EntityID)
 	return awardErr
+}
+
+// dropRateDenominator is the per-myriad (1/10000) base a mob_db drop Rate is
+// expressed against. rAthena applies server drop-rate multipliers (battle_config
+// item_rate_*) on top; M9c-1 rolls the raw Rate for a faithful baseline, and the
+// multiplier knob is deferred to the balance pass.
+const dropRateDenominator = 10000
+
+// dropLoot rolls the dead mob's drop table and spawns one floor item per winning
+// entry, broadcasting ZC_ITEM_FALL_ENTRY (0x0ADD) to observing players. It mirrors
+// rAthena mob_dead → mob_item_drop → map_addflooritem → clif_dropflooritem: each
+// drop entry rolls independently at Rate/Denom, and a win spawns a floor item at
+// the mob's death cell. No item_db (items nil), no floor registry (floorItems
+// nil), a mob with no drop table (entry nil / empty Drops), or a winning AegisName
+// the item_db cannot resolve skips that entry — the world stays playable (no drop)
+// rather than dropping an item the client cannot render. A Register fault on one
+// drop does not abort the rest, matching rAthena's per-drop independence.
+//
+// rAthena scatters dropped items on the tile with a random sub-cell offset
+// (fitem->subx = rnd_value(1,4)*3); M9c-1 drops at the cell center (subX=subY=0)
+// for a deterministic slice, and the scatter is a deferred visual nicety.
+func (s *CombatService) dropLoot(mp *domain.Map, mob *domain.Mob, entry *mobdb.MobEntry, x, y int16) {
+	if entry == nil || s.items == nil || s.floorItems == nil || len(entry.Drops) == 0 {
+		return
+	}
+	for _, d := range entry.Drops {
+		if s.rng.Intn(dropRateDenominator) >= d.Rate {
+			continue
+		}
+		item := s.items.ByAegisName(d.Item)
+		if item == nil {
+			continue
+		}
+		fi := &domain.FloorItem{
+			EntityID: s.floorItems.NextEntityID(),
+			MapName:  mob.MapName,
+			NameID:   uint32(item.Id), //nolint:gosec // G115: item_db Id is int32 but a valid item id is positive and well under uint32
+			Type:     itemdb.WireType(item.Type),
+			Amount:   1,
+			PosX:     x,
+			PosY:     y,
+		}
+		if err := s.floorItems.Register(fi); err != nil {
+			continue // NextEntityID is allocator-unique; unreachable, but a drop is best-effort.
+		}
+		s.broadcastFloorItem(mp, fi)
+	}
+}
+
+// broadcastFloorItem sends ZC_ITEM_FALL_ENTRY (0x0ADD) for a freshly dropped item
+// to every player within AOI of its cell, so observers see it land. This is the
+// sole drop-path packet in the rathenaThailand fork (map_addflooritem →
+// clif_dropflooritem). Same observer-resolution and write-failure policy as
+// broadcastDamage/broadcastVanish/broadcastSpawn: non-player entities are skipped,
+// and a dead observer socket is ignored (its own dispatch goroutine owns
+// teardown).
+func (s *CombatService) broadcastFloorItem(mp *domain.Map, fi *domain.FloorItem) {
+	msg := packet.ItemFallEntryResponse{
+		ID:             uint32(fi.EntityID), //nolint:gosec // G115: EntityID is a uint32-derived aoi.EntityID
+		NameID:         fi.NameID,
+		Type:           fi.Type,
+		Identified:     0,               // a mob drop is unidentified (fitem->item.identify == 0)
+		X:              uint16(fi.PosX), //nolint:gosec // G115: map cell in int16 wire slot
+		Y:              uint16(fi.PosY), //nolint:gosec // G115: map cell in int16 wire slot
+		Amount:         fi.Amount,
+		ShowDropEffect: 0, // no MVP/random-option drop effect for the basic slice
+		DropEffectMode: 0,
+	}
+	for _, e := range mp.AOI.QueryVisible(int(fi.PosX), int(fi.PosY)) {
+		if e.Type != aoi.EntityPlayer {
+			continue
+		}
+		neighbor, ok := s.players.ByAccount(uint32(e.ID))
+		if !ok {
+			continue
+		}
+		_ = msg.Encode(connWriter{neighbor.Conn})
+	}
 }
 
 // scheduleRespawn arms a deferred respawn of mob at its home cell via the
@@ -364,44 +451,41 @@ func baseExpForLevel(level uint16) uint64 {
 	return noviceBaseExpThresholds[len(noviceBaseExpThresholds)-1]
 }
 
-// meleeDamage computes one melee hit's damage for an attacker of playerLevel
-// against a mob whose stats come from mob_db. It is a deterministic slice
-// approximation of rAthena's battle_calc_weapon_attack: ATK scales with the
-// attacker's base level, reduced by the mob's DEF + VIT/2, floored at 1 so a hit
-// always connects. A nil entry (no mob_db) yields a flat novice hit.
-func meleeDamage(playerLevel uint16, entry *mobdb.MobEntry) int32 {
-	atk := noviceBaseATK + int32(playerLevel-1)*atkPerLevel //nolint:gosec // G115: uint16 level → int32, bounded
-	if entry == nil {
-		return atk
+// computeDamage resolves one melee hit for attacker against a mob whose stats
+// come from mob_db. A nil entry (no mob_db) yields a zero-stat defender, so the
+// hit is the attacker's raw BaseATK (mode-keyed, clamped/floored) — the slice
+// keeps resolving rather than fabricating a number. The pipeline is the
+// pkg/ro/combat package: BaseATK from s.fs, mode-keyed DEF reduction from s.gm.
+// This use case holds no formula logic of its own.
+func (s *CombatService) computeDamage(attacker *domain.Player, entry *mobdb.MobEntry) int32 {
+	base := statcalc.Base{
+		Level: attacker.CLevel,
+		Str:   attacker.Str, Agi: attacker.Agi, Vit: attacker.Vit,
+		Int: attacker.Int, Dex: attacker.Dex, Luk: attacker.Luk,
 	}
-	reduction := entry.Defense + entry.Vit/2
-	dmg := atk - reduction
-	if dmg < 1 {
-		return 1
+	var hardDEF, softDEF int32
+	if entry != nil {
+		hardDEF = entry.Defense
+		softDEF = mobSoftDEF(entry, s.gm)
 	}
-	return dmg
+	return combat.NormalMelee(
+		combat.Attacker{Base: base},
+		combat.Defender{HardDEF: hardDEF, SoftDEF: softDEF},
+		s.fs, s.gm,
+	).Damage
 }
 
-// inMeleeRange reports whether the attacker stands within meleeRange (Chebyshev)
-// of the mob. Position reads are locked, so a concurrent move/wander cannot tear
-// a cell read.
-func inMeleeRange(attacker *domain.Player, mob *domain.Mob) bool {
-	ax, ay, _ := attacker.Position()
-	mx, my, _ := mob.Position()
-	dx := absInt(int(ax) - int(mx))
-	dy := absInt(int(ay) - int(my))
-	if dx > dy {
-		return dx <= meleeRange
+// mobSoftDEF reduces a mob's status def2 to the mode-specific soft-DEF the damage
+// pipeline subtracts. rAthena stores the mob's def2 as Vit (pre-re,
+// status.cpp:2714-2715) or floor((Level+Vit)/2) (renewal, status.cpp:2654,
+// BL_MOB branch — the agi/5 term is BL_PC-only). The entry's Vit column is the
+// canonical def2 input for both; the pre-re rnd term (def2/20)² is 0 for the
+// low-Vit mobs the slice ships, so pre-re soft-DEF collapses to Vit.
+func mobSoftDEF(entry *mobdb.MobEntry, m mode.Mode) int32 {
+	if m == mode.Renewal {
+		return (entry.Level + entry.Vit) / 2
 	}
-	return dy <= meleeRange
-}
-
-// absInt returns the absolute value of x.
-func absInt(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
+	return entry.Vit
 }
 
 // broadcastDamage sends ZC_NOTIFY_ACT for one hit to every player within AOI of

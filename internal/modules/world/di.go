@@ -13,6 +13,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/rs/zerolog"
 	"github.com/samber/do/v2"
@@ -23,7 +24,10 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/internal/modules/world/infra"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
+	"github.com/bouroo/goAthena/pkg/ro/mode"
+	"github.com/bouroo/goAthena/pkg/ro/statcalc"
 )
 
 // Register builds the world bounded context. M3 provides the CZ_ENTER handler
@@ -71,7 +75,17 @@ func Register(ctx context.Context, c do.Injector) error {
 	// world.Register runs, but a missing logger must not itself fail boot.
 	mobs := domain.NewMobRegistry()
 	do.ProvideValue(c, mobs)
-	mobDB := loadMobDB(c, cfg.Zone.MobDBPath)
+	mobDB := loadMobDB(c, cfg.Zone)
+
+	// M8: resolve the game-mode formula set once. zone.renewal selects Renewal vs
+	// Pre-Renewal; every status/damage use case receives this FormulaSet instead
+	// of branching on the mode itself, so no formula logic leaks into a bounded
+	// context. The Registry dispatch keeps the two sets behind one seam.
+	gm := mode.PreRenewal
+	if cfg.Zone.Renewal {
+		gm = mode.Renewal
+	}
+	fs := statcalc.NewRegistry().Get(gm)
 
 	mobSvc := app.NewMobService(mobs, registry, maps, mobDB, cfg.Zone.MobSpawnsPath, app.SystemClock(), cfg.Zone.TickRate, nil)
 	// Eagerly populate the world so mobs exist before the first player can
@@ -82,7 +96,7 @@ func Register(ctx context.Context, c do.Injector) error {
 	}
 	do.ProvideValue(c, mobSvc)
 
-	spawner := app.NewSpawnService(chars, maps, registry, mobs)
+	spawner := app.NewSpawnService(chars, maps, registry, mobs, fs)
 	do.ProvideValue(c, app.NewMapEnterHandler(auth, app.DefaultSpawn, spawner))
 
 	// M4c: the movement worker. A single MoveService owns every map's
@@ -96,17 +110,24 @@ func Register(ctx context.Context, c do.Injector) error {
 	do.ProvideValue(c, mover)
 	do.ProvideValue(c, app.NewMoveHandler(mover))
 
-	// M6: the combat service. It resolves the attacker from the player registry,
-	// the target from the mob registry, stats + base EXP from the mob_db loaded
-	// above (may be nil when mob_db is unconfigured — combat then falls back to a
-	// flat hit and awards no EXP), and broadcasts damage/vanish through the map
-	// AOI. The character repository (chars, resolved above as the spawn lookup)
-	// is reused as the progression store for the EXP/level read-modify-write and
-	// persist on kill — CharacterRepository satisfies ProgressionStore
-	// structurally (GetByID + SaveProgression). Like movement it resolves
+	// M6/M9c-1: the combat service. It resolves the attacker from the player
+	// registry, the target from the mob registry, stats + base EXP + the drop
+	// table from the mob_db loaded above (may be nil when mob_db is unconfigured —
+	// combat then falls back to a flat hit and awards no EXP and no drops), and
+	// broadcasts damage/vanish/floor-item-drop through the map AOI. The character
+	// repository (chars, resolved above as the spawn lookup) is reused as the
+	// progression store for the EXP/level read-modify-write and persist on kill —
+	// CharacterRepository satisfies ProgressionStore structurally (GetByID +
+	// SaveProgression). itemDB resolves drop AegisNames → item id/type (may be nil
+	// when item_db is unconfigured — kills then award no ground drops); floorItems
+	// is the dropped-item index the M9c-1 drop path registers into. The drop
+	// roller draws from the shared stepSource RNG seam; a nil rng defaults to the
+	// global source inside NewCombatService. Like movement it resolves
 	// synchronously on the conn goroutine; the handler is provided for the
 	// composition root to thread into the map-role dispatch table.
-	combat := app.NewCombatService(registry, mobs, maps, mobDB, chars, app.SystemClock(), app.SystemRespawnScheduler{})
+	itemDB := loadItemDB(c, cfg.Zone)
+	floorItems := domain.NewFloorItemRegistry()
+	combat := app.NewCombatService(registry, mobs, maps, mobDB, chars, app.SystemClock(), app.SystemRespawnScheduler{}, fs, gm, itemDB, floorItems, nil)
 	do.ProvideValue(c, combat)
 	do.ProvideValue(c, app.NewActionHandler(combat))
 
@@ -132,13 +153,18 @@ func Register(ctx context.Context, c do.Injector) error {
 	return nil
 }
 
-// loadMobDB reads the mob_db YAML at path into a mobdb.Registry. An empty path
-// yields a nil registry (no mobs). A read or parse failure is logged but not
-// returned — the zone boots with no mobs rather than aborting — so a corrupt or
-// missing mob_db degrades gracefully instead of failing the whole process.
-func loadMobDB(c do.Injector, path string) *mobdb.Registry {
+// loadMobDB reads mob_db.yml into a mobdb.Registry. Resolution is two-tier: an
+// explicit zone.mob_db_path override wins (the committed ./data/mob_db slim set
+// pins this for CI boots without the rAthena submodule); when the override is
+// empty, the loader resolves <db_root>/mob_db.yml from the rAthena fork
+// (db/re or db/pre-re by zone.renewal). An empty path with no fork file yields a
+// nil registry (no mobs). A read or parse failure is logged but not returned —
+// the zone boots with no mobs rather than aborting — so a corrupt or missing
+// mob_db degrades gracefully instead of failing the whole process.
+func loadMobDB(c do.Injector, zone config.ZoneConfig) *mobdb.Registry {
+	path := zone.MobDBPath
 	if path == "" {
-		return nil
+		path = filepath.Join(zone.DBRoot(), "mob_db.yml")
 	}
 	reg, err := mobdb.LoadFile(path)
 	if err != nil {
@@ -147,6 +173,44 @@ func loadMobDB(c do.Injector, path string) *mobdb.Registry {
 		return nil
 	}
 	return reg
+}
+
+// loadItemDB reads the rAthena item_db sub-files into one itemdb.Registry.
+// Resolution is two-tier: an explicit zone.item_db_path override wins (pointed
+// at a single ITEM_DB v3 file); when the override is empty, the loader resolves
+// the fork's item_db_{usable,equip,etc}.yml sub-files from <db_root> (db/re or
+// db/pre-re by zone.renewal) — the fork ships item_db.yml as a router shell with
+// no Body, so the sub-files are where the entries live. itemdb.LoadFiles merges
+// the three and tolerates absent files (ENOENT) so a partial fork subtree still
+// yields whatever items are present. An empty override with no fork files yields a
+// non-nil empty registry (drops disabled, kills still playable). A read or parse
+// failure is logged but not returned — the zone boots with no item drops rather
+// than aborting — mirroring loadMobDB's graceful-degradation contract.
+func loadItemDB(c do.Injector, zone config.ZoneConfig) *itemdb.Registry {
+	paths := itemDBPaths(zone)
+	reg, err := itemdb.LoadFiles(paths...)
+	if err != nil {
+		warnLogger(c).Warn().Err(err).Strs("paths", paths).
+			Msg("world: item_db load failed; item drops disabled")
+		return nil
+	}
+	return reg
+}
+
+// itemDBPaths resolves the item_db file list for a zone. An explicit override is
+// used verbatim (a single-file deployment); otherwise the fork's three sub-files
+// under <db_root> are returned in a stable order. DBRoot already folds in the
+// re/pre-re branch, so no renewal suffix is added here.
+func itemDBPaths(zone config.ZoneConfig) []string {
+	if zone.ItemDBPath != "" {
+		return []string{zone.ItemDBPath}
+	}
+	root := zone.DBRoot()
+	return []string{
+		filepath.Join(root, "item_db_usable.yml"),
+		filepath.Join(root, "item_db_equip.yml"),
+		filepath.Join(root, "item_db_etc.yml"),
+	}
 }
 
 // warnLogger resolves the process logger for non-fatal warnings; if the logger

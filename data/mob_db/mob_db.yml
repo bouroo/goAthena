@@ -30,7 +30,7 @@ Body:
     Ai: 02
     Drops:
       - Item: Jellopy
-        Rate: 7000
+        Rate: 10000
       - Item: Knife_
         Rate: 100
       - Item: Sticky_Mucus

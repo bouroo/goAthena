@@ -135,6 +135,13 @@ func loadConfigForE2E(t *testing.T) *config.Config {
 	if cfg.Zone.MobSpawnsPath != "" {
 		cfg.Zone.MobSpawnsPath = filepath.Join(root, filepath.Clean(cfg.Zone.MobSpawnsPath))
 	}
+	if cfg.Zone.DBPath != "" {
+		// M9c-1: item_db resolves through DBRoot() (<db_path>/{re,pre-re}). The
+		// fork ships item_db as three sub-files there; without re-basing db_path to
+		// the repo root the item_db loader (and drop resolution) would look under
+		// the test CWD and find nothing.
+		cfg.Zone.DBPath = filepath.Join(root, filepath.Clean(cfg.Zone.DBPath))
+	}
 	return cfg
 }
 
@@ -716,10 +723,14 @@ func TestServe_MapEnter_ShowsSpawnedMobs(t *testing.T) {
 // and plays the full combat loop across every real boundary the milestone wires:
 //
 //   - CZ_ACTION_REQUEST over TCP → CombatService → ZC_NOTIFY_ACT broadcast back to
-//     the attacker, carrying the L1 damage formula (15 ATK − (0 DEF + 1 VIT/2=0)).
-//   - the killing blow → ZC_NOTIFY_VANISH + the killer-only EXP/level/status
-//     broadcasts: a level-1 novice at 8 EXP kills a Poring worth 2 BaseExp (8→10),
-//     crossing the level-2 threshold (10) → SPBaseExp, SPBaseLevel, SPStatusPoint.
+//     the attacker, carrying the pre-re naked-novice damage (BaseATK 1, reduced by
+//     Poring's vit-softDEF 1, floored at 1).
+//   - the killing blow → ZC_NOTIFY_VANISH, then the M9c-1 ground-drop broadcast
+//     ZC_ITEM_FALL_ENTRY (0x0ADD) for the guaranteed Jellopy (rate 10000 ⇒ always
+//     lands; NameID 909, IT_ETC=3 from the fork item_db), then the killer-only
+//     EXP/level/status broadcasts: a level-1 novice at 8 EXP kills a Poring worth
+//     2 BaseExp (8→10), crossing the level-2 threshold (10) → SPBaseExp,
+//     SPBaseLevel, SPStatusPoint.
 //   - MobRespawnDelay (5s) on the real time.AfterFunc → a fresh ZC_SPAWN_UNIT for
 //     sprite 1002 with a NEW EntityID (a new lifetime, never the dead mob's).
 //   - SaveProgression → committed to MariaDB; read back through a separate GORM
@@ -727,21 +738,27 @@ func TestServe_MapEnter_ShowsSpawnedMobs(t *testing.T) {
 //
 // The Poring wanders one cell per 400ms, so the test cannot hardcode the mob's
 // cell. It reads the mob's current position from the enter spawn frame (and from
-// each ZC_UNIT_WALKING thereafter), steps onto that cell, and bursts attacks —
-// re-chasing each cycle until the kill. A burst resolves in a few ms, so every
-// burst that reached the mob's cell lands all its hits; extra attacks past the
-// kill are silently dropped (the torn-down mob no longer resolves ByEntity).
+// each ZC_UNIT_WALKING thereafter), steps onto that cell, and bursts attacks. A
+// burst resolves in a few ms, so every in-range burst lands all its hits before
+// the wander tick can move the mob; extra attacks past the kill are silently
+// dropped (the torn-down mob no longer resolves ByEntity).
 // Combat e2e expectations, derived from the mob_db Poring (HP 50, BaseExp 2,
-// Defense 0, Vit 1, sprite 1002) and the L1 melee formula (15 ATK − 0 = 15 dmg):
-// four 15-dmg hits kill (60 ≥ 50), and 8 seed EXP + 2 kill EXP = 10 crosses the
+// Defense 0, Vit 1, sprite 1002) and the pre-re L1 naked-novice formula (BaseATK
+// 1 − vit-softDEF 1, floored at 1 = 1 dmg/hit): ~50 one-dmg hits kill, so one
+// 64-attack burst (≥50 dmg) kills in the first cycle before the Poring can
+// wander out of melee range; and 8 seed EXP + 2 kill EXP = 10 crosses the
 // level-2 threshold, granting one level (status_point 0 → 3).
 const (
 	poringSprite      uint16 = 1002
-	attacksPerBurst          = 6 // ≥4 needed; surplus hits a torn-down mob (silent drop)
-	expectedHitDamage int32  = 15
+	attacksPerBurst          = 64 // M9b floors naked-novice dmg at 1/hit; 64 ≥ 50 HP kills in ONE in-range burst, before the wandering Poring (1 cell/400ms) can slip out of melee range. Surplus hits a torn-down mob (silent drop). Calibrated for a single-cycle kill to mirror the pre-real-damage instant-kill behavior.
+	expectedHitDamage int32  = 1
 	expectedExp       int32  = 10 // 8 seed + 2 Poring
 	expectedLevel     int32  = 2
 	expectedStatus    int32  = 3 // statusPointsPerBaseLevel (3) × 1 level
+	// M9c-1: the guaranteed Poring drop (Jellopy, rate 10000) resolved through the
+	// fork's item_db_etc.yml (Id 909, Type Etc → itemdb.WireType = IT_ETC = 3).
+	jellopyNameID uint32 = 909
+	jellopyType   uint16 = 3
 )
 
 func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
@@ -752,10 +769,11 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 	mapAddr := cfg.Gateway.MapAddr
 	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
 
-	// A level-1 novice at base_exp 8 on the Poring's home cell (155,165). A Poring
-	// kill grants 2 BaseExp (8→10), crossing the level-2 threshold and so driving
-	// the full EXP + level-up + status-point broadcast. meleeDamage(L1, Poring) is
-	// 15 ATK − (0 DEF + 1 VIT/2=0) = 15; four hits (60 ≥ 50 HP) kill it.
+	// A level-1 naked novice (all stats 1) at base_exp 8 on the Poring's home cell
+	// (155,165). A Poring kill grants 2 BaseExp (8→10), crossing the level-2
+	// threshold and so driving the full EXP + level-up + status-point broadcast.
+	// The pre-re damage is BaseATK 1 − Poring vit-softDEF 1, floored at 1 = 1
+	// dmg/hit; 50 HP needs ~50 hits (a few 12-attack bursts).
 	seedCharID := seedCombatChar(t, cfg, seededAccountID, "E2eSlayer", "prontera", 155, 165)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -850,6 +868,12 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 		// it at whichever read site delivers it, so the assertion does not depend on
 		// which one ran first.
 		capturedRespawn []byte
+		// drops holds the ZC_ITEM_FALL_ENTRY (0x0ADD) frames the M9c-1 drop path
+		// broadcasts to the attacker on the kill. CombatService emits them between
+		// NotifyVanish and the EXP/level/status updates, so they arrive in the same
+		// post-burst drain as those frames; handleCombat captures them at whichever
+		// read site delivers the kill window.
+		drops [][]byte
 	)
 	handleCombat := func(op uint16, frame []byte) {
 		switch op {
@@ -874,6 +898,12 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 			if binary.LittleEndian.Uint32(frame[2:6]) == poringID {
 				vanishSeen = true
 			}
+		case packet.HeaderZCItemFallEntry:
+			// Capture every floor-item drop from the kill. The Poring's Jellopy
+			// (rate 10000) always lands; the four probabilistic drops (Knife_,
+			// Sticky_Mucus, Apple, Empty_Bottle) may or may not, so capture them
+			// all and assert only the guaranteed Jellopy below.
+			drops = append(drops, frame)
 		case packet.HeaderZCLONGLONGPARCHANGE:
 			// At PACKETVER >= 20170830 clif_updatestatus routes SP_BASEEXP through
 			// the 64-bit ZC_LONGLONGPAR_CHANGE (0x0acb), so EXP rides int64 (offset
@@ -921,8 +951,10 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 		// server has committed our position before the attack burst.
 		sendMove(mobX, mobY)
 		awaitFrame(t, mapConn, packet.HeaderZCNOTIFYPLAYERMOVE, 500*time.Millisecond, handleCombat)
-		// 6 attacks ≥ 4 needed (60 ≥ 50 HP); any past the kill hit a torn-down
-		// mob and are silently dropped, so the surplus is harmless insurance.
+		// 64 attacks per burst; at 1 dmg/hit that is ≥ 50 HP in a single in-range
+		// burst, killing the Poring before its 400ms wander tick can move it out of
+		// melee range. Any past the kill hit a torn-down mob and are silently
+		// dropped, so the surplus is harmless insurance.
 		for i := 0; i < attacksPerBurst; i++ {
 			sendAttack()
 		}
@@ -939,13 +971,32 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 	require.Equal(t, poringID, binary.LittleEndian.Uint32(hit[6:10]),
 		"ZC_NOTIFY_ACT TargetID is the Poring's EntityID")
 	require.Equal(t, expectedHitDamage, int32(binary.LittleEndian.Uint32(hit[22:26])),
-		"ZC_NOTIFY_ACT Damage matches meleeDamage at L1 (15 ATK − 0)")
+		"ZC_NOTIFY_ACT Damage matches pre-re naked-novice BaseATK reduced by vit-softDEF, floored at 1")
 	require.True(t, expSeen, "no SPBaseExp (ZC_LONGPAR_CHANGE) update observed")
 	require.Equal(t, expectedExp, expVal, "SPBaseExp = seed 8 + Poring 2 = 10")
 	require.True(t, levelSeen, "no SPBaseLevel (ZC_PAR_CHANGE) update observed — kill did not level the novice")
 	require.Equal(t, expectedLevel, levelVal, "SPBaseLevel = 2")
 	require.True(t, statusSeen, "no SPStatusPoint (ZC_PAR_CHANGE) update observed")
 	require.Equal(t, expectedStatus, statusVal, "SPStatusPoint = 0 seed + 3/level = 3")
+
+	// --- M9c-1 ground-drop proof: the kill must broadcast at least the guaranteed
+	// Jellopy drop. Jellopy is rate 10000 (per-myriad ⇒ always), so its absence
+	// means the drop path or item_db resolution failed; the probabilistic drops are
+	// intentionally not asserted. NameID 909 + IT_ETC (3) come from the fork's
+	// item_db_etc.yml (Id 909, Type Etc) via itemdb.WireType. ---
+	require.NotEmpty(t, drops,
+		"no ZC_ITEM_FALL_ENTRY observed for the kill — the guaranteed Jellopy (rate 10000) must always drop")
+	var jellopy *[]byte
+	for i := range drops {
+		if binary.LittleEndian.Uint32(drops[i][6:10]) == jellopyNameID &&
+			binary.LittleEndian.Uint16(drops[i][10:12]) == jellopyType {
+			jellopy = &drops[i]
+			break
+		}
+	}
+	require.NotNil(t, jellopy,
+		"no Jellopy drop (NameID %d, IT_ETC %d) among %d floor-item frames — item_db AegisName resolution or drop encoding failed",
+		jellopyNameID, jellopyType, len(drops))
 
 	// --- respawn: reposition on the home cell, then await the respawned Poring.
 	// di.go wires SystemRespawnScheduler (a real time.AfterFunc); the timer is
@@ -1339,6 +1390,10 @@ func mapFrameSize(op uint16) int {
 		return packet.LongParChangeResponse{}.Size()
 	case packet.HeaderZCLONGLONGPARCHANGE:
 		return packet.LongLongParChangeResponse{}.Size()
+	case packet.HeaderZCItemFallEntry:
+		// ItemFallEntryResponse.Size/Encode carry pointer receivers, so the zero
+		// struct is addressed before the call — a value receiver call won't compile.
+		return (&packet.ItemFallEntryResponse{}).Size()
 	default:
 		return 0
 	}

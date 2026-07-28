@@ -2,6 +2,7 @@
 package itemdb
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,36 +57,53 @@ type Registry struct {
 // yaml.NewDecoder to avoid buffering the entire (multi-MB) item_db.yml
 // in memory before decoding.
 func Load(r io.Reader) (*Registry, error) {
+	body, err := decode(r)
+	if err != nil {
+		return nil, err
+	}
+	return build(body), nil
+}
+
+// decode reads one ITEM_DB v3 document from r and returns its Body. It validates
+// the header (Type=="ITEM_DB", Version==3) so a wrong-format file fails fast
+// rather than silently yielding an empty registry. Unknown fields are ignored.
+func decode(r io.Reader) ([]*ItemEntry, error) {
 	var f fileFormat
 	if err := yaml.NewDecoder(r).Decode(&f); err != nil {
 		return nil, fmt.Errorf("parse item_db yaml: %w", err)
 	}
-
 	if f.Header.Type != "ITEM_DB" {
 		return nil, fmt.Errorf("item_db: unexpected Header.Type %q (want %q)", f.Header.Type, "ITEM_DB")
 	}
 	if f.Header.Version != 3 {
 		return nil, fmt.Errorf("item_db: unsupported Header.Version %d (want 3)", f.Header.Version)
 	}
+	return f.Body, nil
+}
 
-	entries := make(map[int32]*ItemEntry, len(f.Body))
-	aegis := make(map[string]*ItemEntry, len(f.Body))
-	for _, entry := range f.Body {
-		if entry == nil {
-			continue
-		}
-		if entry.Type == "" {
-			entry.Type = "Etc"
-		}
-		entries[entry.Id] = entry
-		// mob_db drop tables carry an AegisName, not a numeric id, so the
-		// reverse map is what lets a drop resolve its item. A duplicate
-		// AegisName is a data error; last write wins to stay deterministic.
-		if entry.AegisName != "" {
-			aegis[entry.AegisName] = entry
+// build constructs a Registry from one or more item bodies, merging them. A nil
+// entry is skipped; a blank Type defaults to "Etc". A duplicate Id or AegisName
+// across bodies is a data error; last write wins to stay deterministic. mob_db
+// drop tables carry an AegisName, not a numeric id, so the reverse map is what
+// lets a drop resolve its item.
+func build(bodies ...[]*ItemEntry) *Registry {
+	entries := make(map[int32]*ItemEntry)
+	aegis := make(map[string]*ItemEntry)
+	for _, body := range bodies {
+		for _, entry := range body {
+			if entry == nil {
+				continue
+			}
+			if entry.Type == "" {
+				entry.Type = "Etc"
+			}
+			entries[entry.Id] = entry
+			if entry.AegisName != "" {
+				aegis[entry.AegisName] = entry
+			}
 		}
 	}
-	return &Registry{entries: entries, aegis: aegis}, nil
+	return &Registry{entries: entries, aegis: aegis}
 }
 
 // LoadFile is a convenience wrapper that opens a file and calls Load.
@@ -96,6 +114,36 @@ func LoadFile(path string) (*Registry, error) {
 	}
 	defer func() { _ = f.Close() }()
 	return Load(f)
+}
+
+// LoadFiles loads and merges one or more ITEM_DB v3 files into one Registry.
+// rAthena ships item_db as a router file (item_db.yml) whose Footer.Imports point
+// at item_db_usable.yml / item_db_equip.yml / item_db_etc.yml — the actual item
+// bodies. That router has no Body, so loading it directly yields zero items;
+// LoadFiles consumes the sub-files directly and merges them. A missing file is
+// skipped (ENOENT) so a partial fork subtree still yields whatever items are
+// present; any other open error, or a parse error in any file, aborts. When every
+// path is absent the result is an empty (non-nil) Registry — callers treat
+// Len()==0 as "no items" (the world boots with no item drops, mirroring the
+// nil-mob_db contract).
+func LoadFiles(paths ...string) (*Registry, error) {
+	var bodies [][]*ItemEntry
+	for _, p := range paths {
+		f, err := os.Open(p) // #nosec G304 -- paths are operator-configured item_db files, not user input
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("open item_db %q: %w", p, err)
+		}
+		body, err := decode(f)
+		_ = f.Close()
+		if err != nil {
+			return nil, fmt.Errorf("item_db %q: %w", p, err)
+		}
+		bodies = append(bodies, body)
+	}
+	return build(bodies...), nil
 }
 
 // Get returns the ItemEntry for the given item ID, or nil if not found.
@@ -136,6 +184,42 @@ func (reg *Registry) Weight(nameID uint32) uint32 {
 		return 0
 	}
 	return uint32(entry.Weight)
+}
+
+// itemTypeZero is the IT_* value itemdb.cpp falls back to for an invalid or
+// blank Type (itemdb.cpp:145,151: "defaulting to IT_ETC"). Exported via WireType
+// so callers (and tests) share one source of truth for the default.
+const itemTypeEtc uint16 = 3
+
+// WireType maps an item_db Type string to the rAthena IT_* enum the wire format
+// carries in floor-item and inventory packets (clif_dropflooritem's itemtype();
+// itemdb.cpp resolves the same string to the enum at load via script constants).
+// Faithful to clif.cpp itemtype()'s clamps for the common drop types; an unknown
+// or empty string returns IT_ETC, matching itemdb.cpp's load-time default. Pet
+// eggs / pet armor / shadowgear (which the client renders as armor absent
+// equip-location data) approximate to IT_ARMOR — none appear in the basic
+// mob-drop corpus, so the clamp is a safe default rather than a verified path.
+func WireType(typeStr string) uint16 {
+	switch strings.ToLower(typeStr) {
+	case "healing":
+		return 0 // IT_HEALING
+	case "usable", "unknown", "delayconsume":
+		return 2 // IT_USABLE (DelayConsume folds to Usable at load, itemdb.cpp:1122)
+	case "etc", "":
+		return itemTypeEtc // IT_ETC
+	case "armor", "petegg", "petarmor", "shadowgear":
+		return 4 // IT_ARMOR (itemtype clamps pet/shadowgear absent equip data)
+	case "weapon":
+		return 5 // IT_WEAPON
+	case "card":
+		return 6 // IT_CARD
+	case "ammo":
+		return 10 // IT_AMMO
+	case "cash":
+		return 13 // IT_CASH
+	default:
+		return itemTypeEtc // IT_ETC (itemdb.cpp default)
+	}
 }
 
 // IsStackable reports whether the item type stacks in rAthena's inventory

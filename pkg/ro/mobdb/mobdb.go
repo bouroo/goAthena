@@ -161,12 +161,23 @@ func (m *MobEntry) UnmarshalYAML(node *yaml.Node) error {
 		m.Ai = 0
 	case int:
 		m.Ai = int32(v) //nolint:gosec // G115: Ai fits in int32 per rAthena mob_db spec
+	case int64:
+		m.Ai = int32(v) //nolint:gosec // G115: Ai fits in int32 per rAthena mob_db spec
+	case float64:
+		// rAthena emits Ai as a zero-padded string ("02"); a value like "08" is
+		// not valid octal, so yaml.v3 resolves it to float64. Ai is a small int.
+		m.Ai = int32(v) //nolint:gosec // G115: Ai fits in int32 per rAthena mob_db spec
 	case string:
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return fmt.Errorf("mob %d: parse Ai %q: %w", raw.Id, v, err)
+			// A named AI (e.g. "Abr_Offensive") or blank: the kernel does not
+			// model the AI enum yet (entry.Ai has no reader), so default to the
+			// passive value rather than aborting the whole mob_db load over one
+			// entry. Revisit when mob AI behavior consumes this field.
+			m.Ai = 0
+		} else {
+			m.Ai = int32(n) //nolint:gosec // G109: Ai fits in int32 per rAthena mob_db spec
 		}
-		m.Ai = int32(n) //nolint:gosec // G109: Ai fits in int32 per rAthena mob_db spec
 	default:
 		return fmt.Errorf("mob %d: unsupported Ai type %T", raw.Id, raw.Ai)
 	}

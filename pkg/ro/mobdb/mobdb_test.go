@@ -169,3 +169,37 @@ Body: []
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ITEM_DB")
 }
+
+// TestLoad_AiRobustness locks the Ai-field parsing edge cases found loading the
+// real rathenaThailand mob_db (2675 entries). yaml.v3 resolves a zero-padded
+// invalid-octal value like "08" to float64 (not int), and the fork emits named
+// AIs ("Abr_Offensive", "Abr_Passive") for summon-class mobs. Neither must abort
+// the whole load: "08" → 8, a named AI → 0 (the kernel does not read entry.Ai
+// yet). A single malformed entry tearing down 2675-good-entries load is the
+// regression this test guards against.
+func TestLoad_AiRobustness(t *testing.T) {
+	const aiYAML = `Header:
+  Type: MOB_DB
+  Version: 5
+Body:
+  - Id: 2001
+    Name: OctalLike
+    Ai: "08"
+  - Id: 2002
+    Name: NamedAI
+    Ai: "Abr_Offensive"
+  - Id: 2003
+    Name: PlainInt
+    Ai: 17
+  - Id: 2004
+    Name: BlankAI
+`
+	reg, err := Load(strings.NewReader(aiYAML))
+	require.NoError(t, err, "named/float64 Ai values must not fail the load")
+	require.Equal(t, 4, reg.Len())
+
+	assert.Equal(t, int32(8), reg.Get(2001).Ai, "Ai \"08\" (invalid octal → float64) must resolve to 8")
+	assert.Equal(t, int32(0), reg.Get(2002).Ai, "named Ai must default to 0, not error")
+	assert.Equal(t, int32(17), reg.Get(2003).Ai, "plain int Ai must pass through")
+	assert.Equal(t, int32(0), reg.Get(2004).Ai, "absent Ai must default to 0")
+}

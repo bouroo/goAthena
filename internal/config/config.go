@@ -249,25 +249,28 @@ type ZoneConfig struct {
 	MobSpawnsPath        string        `mapstructure:"mob_spawns_path" yaml:"mob_spawns_path" env:"ZONE_MOB_SPAWNS_PATH" validate:"omitempty"`
 	ScriptDir            string        `mapstructure:"script_dir" yaml:"script_dir" env:"ZONE_SCRIPT_DIR" validate:"omitempty"`
 	ScriptReloadInterval time.Duration `mapstructure:"script_reload_interval" yaml:"script_reload_interval" env:"ZONE_SCRIPT_RELOAD_INTERVAL" validate:"omitempty,min=0"`
-	// Renewal toggles the rAthena Renewal game-mode data set. When true,
-	// loaders that read versioned game data should pull files from db/re/
-	// under the rAthena checkout; when false (the pre-Renewal default) they
-	// use db/. Existing *_db_path fields are unchanged; per-loader
-	// renewal-aware resolution is layered on top in subsequent roadmap phases.
+	// DBPath is the rAthena db/ root the loaders read versioned game data
+	// from. DBRoot() resolves it to the mode-specific subtree (db/re or
+	// db/pre-re). When DBPath is empty DBRoot() returns the bare subtree
+	// name so loaders can still join it with a relative working dir.
+	DBPath string `mapstructure:"db_path" yaml:"db_path" env:"ZONE_DB_PATH" validate:"omitempty"`
+	// Renewal selects the game-mode data subtree: db/re/ when true, db/pre-re/
+	// when false. The per-file *_db_path overrides win over DBRoot() wherever a
+	// loader reads them, so a slim deployment can pin a single file.
 	Renewal bool `mapstructure:"renewal" yaml:"renewal" env:"ZONE_RENEWAL"`
 }
 
-// DBRoot returns the rAthena db/ subdirectory operators should load
-// versioned data files from — "db/re" when Renewal is enabled, "db"
-// (pre-renewal) otherwise. Loaders that read files present in both
-// trees should prepend DBRoot() to the relative path. The value is
-// relative to the rAthena checkout root (third_party/rathena); callers
-// join it with their checkout path.
+// DBRoot resolves DBPath to the mode-specific rAthena data subtree: <DBPath>/re
+// when Renewal is on, <DBPath>/pre-re when off. rAthena splits game data by mode
+// — db/re/ and db/pre-re/ hold the per-mode mob_db.yml, job_exp.yml, etc., while
+// the db/ root carries only shared/legacy files (its mob_db.yml is an empty shim).
+// Loaders join their relative filename to DBRoot(); the per-file *_db_path
+// overrides on ZoneConfig win when set.
 func (z ZoneConfig) DBRoot() string {
 	if z.Renewal {
-		return "db/re"
+		return filepath.Join(z.DBPath, "re")
 	}
-	return "db"
+	return filepath.Join(z.DBPath, "pre-re")
 }
 
 // AssetsConfig configures the GRF-backed HTTP asset server that serves
@@ -452,6 +455,7 @@ func setDefaults(v *viper.Viper) {
 
 		"zone.tick_rate":      50 * time.Millisecond,
 		"zone.renewal":        false,
+		"zone.db_path":        "./third_party/rathenaThailand/db",
 		"zone.map_dir":        "./data/maps",
 		"zone.default_map":    "prontera",
 		"zone.move_speed":     150,
@@ -546,6 +550,7 @@ func leafBindings() []leafBinding {
 		{"zone.skill_db_path", "ZONE_SKILL_DB_PATH"},
 		{"zone.job_exp_db_path", "ZONE_JOB_EXP_DB_PATH"},
 		{"zone.mob_spawns_path", "ZONE_MOB_SPAWNS_PATH"},
+		{"zone.db_path", "ZONE_DB_PATH"},
 		{"zone.renewal", "ZONE_RENEWAL"},
 
 		{"assets.enabled", "ASSETS_ENABLED"},

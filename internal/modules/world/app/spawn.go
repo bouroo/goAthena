@@ -43,15 +43,18 @@ type SpawnService struct {
 	maps     domain.MapStore
 	registry *domain.PlayerRegistry
 	mobs     *domain.MobRegistry
+	fs       statcalc.FormulaSet
 }
 
 // NewSpawnService binds the enter-world collaborators. The PC registry is shared
 // across the whole process (one per server), so callers must pass the same
 // instance to every SpawnService and to the disconnect/movement paths. mobs is
 // the mob registry MobService populates at boot; an empty registry (no mob_db)
-// makes the mob branch of the spawn exchange a no-op.
-func NewSpawnService(chars domain.CharacterGetter, maps domain.MapStore, registry *domain.PlayerRegistry, mobs *domain.MobRegistry) *SpawnService {
-	return &SpawnService{chars: chars, maps: maps, registry: registry, mobs: mobs}
+// makes the mob branch of the spawn exchange a no-op. fs is the resolved
+// game-mode formula set (PreRenewal or Renewal) used to build the enter status
+// burst; resolve it once from a statcalc.Registry at composition time.
+func NewSpawnService(chars domain.CharacterGetter, maps domain.MapStore, registry *domain.PlayerRegistry, mobs *domain.MobRegistry, fs statcalc.FormulaSet) *SpawnService {
+	return &SpawnService{chars: chars, maps: maps, registry: registry, mobs: mobs, fs: fs}
 }
 
 // EnterWorld is the spawn-on-enter use case. It runs after MapEnterHandler has
@@ -88,6 +91,12 @@ func (s *SpawnService) EnterWorld(ctx context.Context, conn gwdomain.Conn, accou
 		Name:        char.Name,
 		Job:         char.Class,
 		CLevel:      char.BaseLevel,
+		Str:         char.Str,
+		Agi:         char.Agi,
+		Vit:         char.Vit,
+		Int:         char.Int,
+		Dex:         char.Dex,
+		Luk:         char.Luk,
 		Head:        char.Hair,
 		HeadPalette: char.HairColor,
 		BodyPalette: char.ClothesColor,
@@ -180,7 +189,7 @@ func (s *SpawnService) sendEnterStatus(conn gwdomain.Conn, char *chardomain.Char
 		},
 		StatusPoint:    char.StatusPoint,
 		WeaponBaseASPD: noviceFistASPD,
-	})).Encode(w); err != nil {
+	}, s.fs)).Encode(w); err != nil {
 		return fmt.Errorf("spawn: encode ZC_STATUS: %w", err)
 	}
 

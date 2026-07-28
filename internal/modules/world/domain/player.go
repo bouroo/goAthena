@@ -73,9 +73,19 @@ type Player struct {
 	// Appearance — the char-table columns ZC_SPAWN_UNIT serializes. Field
 	// names match the kernel SpawnUnitResponse; the SpawnUnit builder below
 	// is the single place that maps Player → wire.
-	Name        string
-	Job         uint16 // class → SpawnUnitResponse.Job
-	CLevel      uint16 // base_level → CLevel
+	Name   string
+	Job    uint16 // class → SpawnUnitResponse.Job
+	CLevel uint16 // base_level → CLevel
+	// Base stats, snapshotted from the Character at enter-world. Combat reads
+	// them to derive BaseATK (Str/Dex/Luk) and the mode-specific mob soft-DEF; they
+	// are set once at spawn and, for the combat slice, never mutated (status-point
+	// spend and equipment land at M10/M12, which will refresh this snapshot).
+	Str         uint16
+	Agi         uint16
+	Vit         uint16
+	Int         uint16
+	Dex         uint16
+	Luk         uint16
 	Head        uint8  // hair → Head
 	HeadPalette uint16 // hair_color → HeadPalette
 	BodyPalette uint16 // clothes_color → BodyPalette

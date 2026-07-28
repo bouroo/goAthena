@@ -26,10 +26,13 @@ const (
 	sizeZCItemPickupAck = 70 // see ItemPickupAckResponse doc
 )
 
-// ItemFallEntryResponse encodes ZC_ITEM_FALL_ENTRY (0x0ADD, v5) — the
-// throw/fall animation played when an item lands on the ground. Distinct
-// from ZC_ITEM_ENTRY (0x009d) which spawns the *pickable* floor entity;
-// rAthena sends BOTH for a drop.
+// ItemFallEntryResponse encodes ZC_ITEM_FALL_ENTRY (0x0ADD, v5) — the only packet
+// the rathenaThailand fork sends when a new item lands on the ground. The drop
+// path is map_addflooritem (map.cpp) → clif_dropflooritem (clif.cpp:865), which
+// emits 0x0ADD alone. ZC_ITEM_ENTRY (0x009d) is NOT on the drop path: it is sent
+// by clif_getareachar_item only when a player's AOI reveal sweeps over an
+// already-present floor item (map-enter / walk-in). Sending 0x009d on a fresh
+// drop would be a vanilla-rAthena behavior the fork dropped.
 //
 // Wire layout at PACKETVER 20250604 (struct packet_dropflooritem, all
 // gates open). NOTE: the legacy clif.cpp:864 comment "<name id>.W" is

@@ -145,7 +145,8 @@ otel:
 	require.Equal(t, "nats://env-host:4222", cfg.NATS.URL)
 	require.Equal(t, "env-service", cfg.OTel.ServiceName)
 	require.True(t, cfg.Zone.Renewal)
-	require.Equal(t, "db/re", cfg.Zone.DBRoot())
+	// Default db_path joins the mode subtree: renewal → .../db/re.
+	require.Equal(t, "third_party/rathenaThailand/db/re", cfg.Zone.DBRoot())
 }
 
 func TestLoad_SliceEnvVariable(t *testing.T) {
@@ -236,7 +237,31 @@ otel:
 	require.Equal(t, 5*time.Second, cfg.HTTP.HealthProbeTimeout)
 	require.Equal(t, "utf-8", cfg.Gateway.TextCodepage)
 	require.False(t, cfg.Zone.Renewal)
-	require.Equal(t, "db", cfg.Zone.DBRoot())
+	// Default db_path joins the mode subtree: pre-renewal → .../db/pre-re.
+	require.Equal(t, "third_party/rathenaThailand/db/pre-re", cfg.Zone.DBRoot())
+}
+
+// TestDBRoot isolates DBRoot() resolution from config loading: it pins the
+// mode-subtree selection for a set DBPath and the bare-subtree fallback when
+// DBPath is empty. filepath.Join cleans the result, so a "./"-prefixed DBPath
+// loses its leading dot — the file still resolves relative to cwd.
+func TestDBRoot(t *testing.T) {
+	cases := []struct {
+		name string
+		zone config.ZoneConfig
+		want string
+	}{
+		{"renewal absolute", config.ZoneConfig{DBPath: "/srv/rathena/db", Renewal: true}, "/srv/rathena/db/re"},
+		{"pre-re absolute", config.ZoneConfig{DBPath: "/srv/rathena/db", Renewal: false}, "/srv/rathena/db/pre-re"},
+		{"renewal relative cleaned", config.ZoneConfig{DBPath: "./db", Renewal: true}, "db/re"},
+		{"renewal empty bare", config.ZoneConfig{DBPath: "", Renewal: true}, "re"},
+		{"pre-re empty bare", config.ZoneConfig{DBPath: "", Renewal: false}, "pre-re"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, tc.zone.DBRoot())
+		})
+	}
 }
 
 func TestValidate_InvalidEnvironment(t *testing.T) {
