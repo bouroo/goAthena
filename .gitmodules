@@ -2,11 +2,14 @@
 	path = third_party/rathena
 	url = https://github.com/rathena/rathena.git
 	branch = master
+	ignore = all
 [submodule "third_party/rathenaThailand"]
 	path = third_party/rathenaThailand
 	url = https://github.com/rAthena-Thailand/rathenaThailand.git
 	branch = thai_master
+	ignore = all
 [submodule "third_party/ClientROThailand"]
 	path = third_party/ClientROThailand
 	url = https://github.com/rAthena-Thailand/ClientROThailand.git
 	branch = main
+	ignore = all
