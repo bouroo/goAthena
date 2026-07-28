@@ -20,6 +20,8 @@ import (
 	accountapp "github.com/bouroo/goAthena/internal/modules/account/app"
 	"github.com/bouroo/goAthena/internal/modules/character"
 	characterapp "github.com/bouroo/goAthena/internal/modules/character/app"
+	"github.com/bouroo/goAthena/internal/modules/content"
+	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
 	"github.com/bouroo/goAthena/internal/modules/gateway"
 	gwapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
 	gwdomain "github.com/bouroo/goAthena/internal/modules/gateway/domain"
@@ -129,6 +131,15 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 	// at the map role and route CZ_ENTER through the map dispatch table.
 	if err := world.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register world: %w", err)
+	}
+
+	// Content: compiles the NPC script corpus and publishes the placed NPCs into
+	// the world's NPC registry + AOI grid, then provides the dialog handlers. It
+	// depends on world's NPCRegistry, MapStore, and PlayerRegistry, so it must
+	// register after world. An empty/unreadable ScriptDir logs warnings inside
+	// the loader and ships an empty script set rather than failing zone boot.
+	if err := content.Register(injector, cfg.Zone.ScriptDir); err != nil {
+		return fmt.Errorf("register content: %w", err)
 	}
 
 	// Thread the feature-module handlers into the gateway dispatch tables. The

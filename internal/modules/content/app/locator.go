@@ -84,19 +84,13 @@ func LoadScripts(root string) (*ScriptStore, error) {
 			h := sf.Header()
 			// Unplaced scripts and functions have a nil or invalid header.
 			if h != nil && h.Type == "script" {
-				// The M11c scope requires a numeric sprite.
-				spriteID, parseSpriteErr := ParseNumericSprite(h.SpriteID)
-				if parseSpriteErr != nil {
-					return fmt.Errorf("script %q NPC %q: %w", path, h.Name, parseSpriteErr)
-				}
-
 				npcs = append(npcs, NPCInfo{
 					Name:     h.Name,
 					MapName:  h.MapName,
 					X:        int16(h.X),
 					Y:        int16(h.Y),
-					Facing:   h.Facing,
-					SpriteID: spriteID,
+					Facing:   uint8(h.Facing),
+					SpriteID: uint16(h.SpriteID), //nolint:gosec // sprite IDs are small ints from the script header
 				})
 			}
 		}
@@ -111,16 +105,4 @@ func LoadScripts(root string) (*ScriptStore, error) {
 		Set:  set,
 		NPCs: npcs,
 	}, nil
-}
-
-// ParseNumericSprite strictly requires the sprite string to be a base-10 number,
-// failing for named sprites like `_M_01`.
-func ParseNumericSprite(spriteStr string) (uint16, error) {
-	// Parse as base 10 uint16
-	var sprite uint16
-	_, err := fmt.Sscanf(spriteStr, "%d", &sprite)
-	if err != nil {
-		return 0, fmt.Errorf("expected numeric sprite, got %q", spriteStr)
-	}
-	return sprite, nil
 }

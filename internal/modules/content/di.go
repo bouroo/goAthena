@@ -1,14 +1,15 @@
 package content
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 
 	"github.com/bouroo/goAthena/internal/modules/content/app"
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
 	"github.com/bouroo/goAthena/internal/modules/content/infra"
-	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/pkg/ro/aoi"
 	"github.com/samber/do/v2"
 )
 
@@ -30,11 +31,6 @@ func Register(c do.Injector, npcDataRoot string) error {
 	if err != nil {
 		return fmt.Errorf("content: failed to resolve NPCRegistry: %w", err)
 	}
-	// We need the NPC service to spawn them into the AOI
-	npcSvc, err := do.Invoke[*worldapp.NPCService](c)
-	if err != nil {
-		return fmt.Errorf("content: failed to resolve NPCService: %w", err)
-	}
 
 	// 2. Build our internal infrastructure (DialogRegistry, World impl)
 	dialogRegistry := infra.NewMemoryDialogRegistry()
@@ -50,20 +46,43 @@ func Register(c do.Injector, npcDataRoot string) error {
 		return fmt.Errorf("content: failed to load scripts: %w", err)
 	}
 
-	// 4. Publish NPCs into the world
+	// 4. Publish NPCs into the world: each placed NPC gets a unique EntityID
+	// from the shared registry, is indexed (so the spawn exchange and dialog
+	// handler resolve it), and is dropped into the map's AOI grid so players
+	// see it on enter. This mirrors MobService.spawnOne's allocate → register
+	// → AOI placement; boot is the sole writer, so no per-NPC lock is needed.
 	for _, n := range scripts.NPCs {
-		// Verify the map exists
-		if _, ok := mapStore.Get(n.MapName); !ok {
-			fmt.Printf("content: skipping NPC %q, map %q not in map index\n", n.Name, n.MapName)
+		// Skip NPCs whose map the world never loaded (e.g. a script referencing
+		// a map absent from the index) rather than aborting boot.
+		mp, err := mapStore.Load(context.Background(), n.MapName)
+		if err != nil {
+			fmt.Printf("content: skipping NPC %q, map %q not in map index: %v\n", n.Name, n.MapName, err)
 			continue
 		}
 
-		// Register the NPC entity
-		npcEntity := npcRegistry.Allocate(n.Name, n.MapName, n.X, n.Y, n.Facing, n.SpriteID)
-
-		// Insert into the AOI grid so players see them immediately on enter
-		if err := npcSvc.SpawnNPC(npcEntity); err != nil {
-			fmt.Printf("content: failed to spawn NPC %q: %v\n", n.Name, err)
+		npc := &worlddomain.NPC{
+			EntityID:   npcRegistry.NextEntityID(),
+			Name:       n.Name,
+			MapName:    n.MapName,
+			PosX:       n.X,
+			PosY:       n.Y,
+			Dir:        n.Facing,
+			Sprite:     int16(n.SpriteID), //nolint:gosec // G115: NPC view class is a small sprite number
+			ScriptName: n.Name,
+		}
+		if err := npcRegistry.Register(npc); err != nil {
+			fmt.Printf("content: failed to register NPC %q: %v\n", n.Name, err)
+			continue
+		}
+		if err := mp.AOI.AddEntity(&aoi.Entity{
+			ID:   npc.EntityID,
+			Type: aoi.EntityNPC,
+			X:    int(npc.PosX),
+			Y:    int(npc.PosY),
+		}); err != nil {
+			// Roll back the registry index so a half-placed NPC never resolves.
+			npcRegistry.Unregister(npc.EntityID)
+			fmt.Printf("content: failed to place NPC %q in AOI: %v\n", n.Name, err)
 		}
 	}
 
