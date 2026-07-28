@@ -3,7 +3,7 @@ package agones
 import (
 	"context"
 	"errors"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	agones "agones.dev/agones/sdks/go"
@@ -19,14 +19,18 @@ const sdkDialTimeout = 3 * time.Second
 // Agones is the Agones-backed Lifecycle implementation. It holds a connection
 // to the Agones sidecar and tracks which state transitions have been
 // performed so they are idempotent.
+//
+// Transition flags are independent single-word state, so each is an
+// atomic.Bool. CompareAndSwap makes the "first caller wins" race lock-free;
+// a failed SDK call rolls the flag back with Store(false) so a later retry
+// can re-enter.
 type Agones struct {
 	sdk    *agones.SDK
 	cancel context.CancelFunc
 
-	mu     sync.Mutex
-	ready  bool
-	alloc  bool
-	closed bool
+	ready  atomic.Bool
+	alloc  atomic.Bool
+	closed atomic.Bool
 	logger *zerolog.Logger
 }
 
@@ -76,23 +80,16 @@ func (a *Agones) Ready(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return errors.Join(errors.New("agones: ready"), err)
 	}
-	a.mu.Lock()
-	if a.closed {
-		a.mu.Unlock()
+	if a.closed.Load() {
 		return errors.New("agones: ready: lifecycle closed")
 	}
-	if a.ready {
-		a.mu.Unlock()
+	if !a.ready.CompareAndSwap(false, true) {
 		a.logger.Debug().Msg("agones: Ready already sent, skipping")
 		return nil
 	}
-	a.ready = true
-	a.mu.Unlock()
 
 	if err := a.sdk.Ready(); err != nil {
-		a.mu.Lock()
-		a.ready = false
-		a.mu.Unlock()
+		a.ready.Store(false)
 		return errors.Join(errors.New("agones: ready"), err)
 	}
 	a.logger.Info().Msg("agones: Ready sent")
@@ -104,23 +101,16 @@ func (a *Agones) Allocate(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return errors.Join(errors.New("agones: allocate"), err)
 	}
-	a.mu.Lock()
-	if a.closed {
-		a.mu.Unlock()
+	if a.closed.Load() {
 		return errors.New("agones: allocate: lifecycle closed")
 	}
-	if a.alloc {
-		a.mu.Unlock()
+	if !a.alloc.CompareAndSwap(false, true) {
 		a.logger.Debug().Msg("agones: Allocate already sent, skipping")
 		return nil
 	}
-	a.alloc = true
-	a.mu.Unlock()
 
 	if err := a.sdk.Allocate(); err != nil {
-		a.mu.Lock()
-		a.alloc = false
-		a.mu.Unlock()
+		a.alloc.Store(false)
 		return errors.Join(errors.New("agones: allocate"), err)
 	}
 	a.logger.Info().Msg("agones: Allocate sent")
@@ -130,24 +120,23 @@ func (a *Agones) Allocate(ctx context.Context) error {
 // Shutdown signals deletion to Agones. Unlike Ready/Allocate it is *not*
 // idempotent at the SDK level (sending it twice is harmless but wastes a
 // round-trip); we send it once and subsequent calls are no-ops.
+//
+// Shutdown reuses the closed flag (same as the previous mutex-backed code):
+// a successful Shutdown permanently marks the lifecycle closed so Health /
+// Ready / Allocate refuse further work. A failed SDK call rolls the flag
+// back so a deferred recovery path can retry.
 func (a *Agones) Shutdown(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return errors.Join(errors.New("agones: shutdown"), err)
 	}
-	a.mu.Lock()
-	if a.closed {
-		a.mu.Unlock()
+	if !a.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	a.closed = true
-	a.mu.Unlock()
 
 	if err := a.sdk.Shutdown(); err != nil {
 		// Roll back the closed flag so retries are possible if Shutdown
 		// is called again from a deferred recovery path.
-		a.mu.Lock()
-		a.closed = false
-		a.mu.Unlock()
+		a.closed.Store(false)
 		return errors.Join(errors.New("agones: shutdown"), err)
 	}
 	a.logger.Info().Msg("agones: Shutdown sent")
@@ -159,10 +148,7 @@ func (a *Agones) Health(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return errors.Join(errors.New("agones: health"), err)
 	}
-	a.mu.Lock()
-	closed := a.closed
-	a.mu.Unlock()
-	if closed {
+	if a.closed.Load() {
 		return errors.New("agones: health: lifecycle closed")
 	}
 	if err := a.sdk.Health(); err != nil {
@@ -174,13 +160,14 @@ func (a *Agones) Health(ctx context.Context) error {
 // Close cancels the internal context. The Agones SDK does not expose a Close
 // on its SDK struct, so we cannot close the underlying gRPC connection here;
 // process exit handles that. Idempotent.
+//
+// Note: if Shutdown already won the closed CAS, cancel is not invoked —
+// matching the previous mutex-backed behaviour where Shutdown set closed
+// first and Close then short-circuited.
 func (a *Agones) Close() error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.closed {
+	if !a.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	a.closed = true
 	if a.cancel != nil {
 		a.cancel()
 	}
