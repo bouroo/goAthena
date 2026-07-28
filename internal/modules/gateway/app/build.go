@@ -52,6 +52,12 @@ type Handlers struct {
 	// OnCZItemPickup serves CZ_ITEM_PICKUP (0x009f), the floor-item pickup
 	// request. Provided by the world module (M10a).
 	OnCZItemPickup domain.PacketHandler
+	// OnCZReqWearEquip serves CZ_REQ_WEAR_EQUIP_V5 (0x0998), the equip request.
+	// Provided by the world module (M10b).
+	OnCZReqWearEquip domain.PacketHandler
+	// OnCZReqTakeoffEquip serves CZ_REQ_TAKEOFF_EQUIP (0x00ab), the unequip
+	// request. Provided by the world module (M10b).
+	OnCZReqTakeoffEquip domain.PacketHandler
 }
 
 // BuildDispatcher assembles the three role-keyed dispatch tables from the
@@ -97,6 +103,12 @@ func BuildDispatcher(h Handlers) *domain.Dispatcher {
 	}
 	if h.OnCZItemPickup != nil {
 		mapT[packet.HeaderCZITEMPICKUP] = h.OnCZItemPickup
+	}
+	if h.OnCZReqWearEquip != nil {
+		mapT[packet.HeaderCZREQWEAREQUIPV5] = h.OnCZReqWearEquip
+	}
+	if h.OnCZReqTakeoffEquip != nil {
+		mapT[packet.HeaderCZREQTAKEOFFEQUIP] = h.OnCZReqTakeoffEquip
 	}
 	return domain.NewDispatcher(login, char, mapT)
 }

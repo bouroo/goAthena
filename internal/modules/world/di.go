@@ -150,6 +150,20 @@ func Register(ctx context.Context, c do.Injector) error {
 	pickup := app.NewPickupService(floorItems, registry, maps, invRepo, itemDB, app.SystemClock())
 	do.ProvideValue(c, app.NewPickupHandler(pickup))
 
+	// M10b: the equip service. It resolves the bag row + item_db to validate the
+	// wear/takeoff (permitted locations, level gate), persists the worn-location
+	// bitmask through the inventory port, acks the client, and recomputes
+	// ZC_STATUS so worn gear (weapon ATK → Atk2, armor DEF → Def1) shows up live.
+	// It shares the inventory port + item_db + player registry the pickup service
+	// holds and adds the two spawn service collaborators: chars (the character
+	// read port the recompute reloads the authoritative StatusPoint + base stats
+	// through — CharacterRepository satisfies CharacterGetter structurally) and fs
+	// (the mode's formula set ZC_STATUS derives from). Both handlers are provided
+	// for the composition root to thread into the map-role dispatch table.
+	equip := app.NewEquipService(invRepo, itemDB, registry, chars, fs)
+	do.ProvideValue(c, app.NewEquipHandler(equip))
+	do.ProvideValue(c, app.NewTakeoffHandler(equip))
+
 	// M7: player-expression handlers. The time handler echoes the shared server
 	// tick (ZC_NOTIFY_TIME) against the same Clock movement stamps MoveStartTime
 	// with. The social service owns the change-direction + emotion broadcasts;

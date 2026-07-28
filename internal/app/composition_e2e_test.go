@@ -23,6 +23,7 @@ import (
 	"github.com/bouroo/goAthena/internal/app"
 	"github.com/bouroo/goAthena/internal/config"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/pkg/ro/equip"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -1085,6 +1086,108 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 	assert.Equal(t, uint32(expectedStatus), prog.StatusPoint, "persisted status_point = 3")
 }
 
+// TestServe_Inventory_EquipWeaponRaisesATK is the M10b end-to-end: a Knife
+// (nameid 1201 — the fork's right-hand weapon, Attack 17, EquipLevelMin 1,
+// Right_Hand only, no View column) is seeded in the char's bag, the player
+// enters the world, sends CZ_REQ_WEAR_EQUIP for the Knife's grid slot, and the
+// server answers ZC_REQ_WEAR_EQUIP_ACK result=1 (right-hand bitmask, ItemSprite
+// 0 — weapons carry no View) plus a fresh ZC_STATUS whose right-side ATK rose to
+// the Knife's 17. This exercises every M10b seam together: the seeded bag row →
+// inventory port load → item_db resolution → level + location gate → equip
+// bitmask persist → wear ack encode → character reload + equipment fold into the
+// stat recompute → ZC_STATUS emit, all on the real map-role dispatch path.
+func TestServe_Inventory_EquipWeaponRaisesATK(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	// A level-1 naked novice (all stats 1) — the Knife's EquipLevelMin is 1, so the
+	// level gate passes. The Knife is seeded as the char's single bag row (grid slot 0).
+	seedCharID := seedCombatChar(t, cfg, seededAccountID, "E2eEquip", "prontera", 155, 165)
+	seedKnifeInBag(t, cfg, seedCharID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	// --- login to capture the session token the CZ_ENTER gate verifies. ---
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN; login likely failed against the DB")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1)
+	require.NoError(t, loginConn.Close())
+
+	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eEquip")
+	defer mapConn.Close()
+
+	// --- equip the Knife (grid slot 0) in the right hand, then drain for the
+	// wear ack and the refreshed ZC_STATUS. handle captures both at whichever read
+	// site delivers them; the bounded loop keeps the 5s respawn timer from starving
+	// it (no mob is engaged here, but the drain contract is the same as the loot
+	// loop). ---
+	var (
+		wearAck  []byte
+		eqStatus []byte
+	)
+	handle := func(op uint16, frame []byte) {
+		switch op {
+		case packet.HeaderZCREQWEAREQUIPACKV5:
+			wearAck = frame
+		case packet.HeaderZCSTATUS:
+			eqStatus = frame
+		}
+	}
+	var req bytes.Buffer
+	require.NoError(t, packet.CZReqWearEquipRequest{Index: 0, Position: equip.HandRight}.Encode(&req))
+	_, err = mapConn.Write(req.Bytes())
+	require.NoError(t, err, "send CZ_REQ_WEAR_EQUIP for the Knife")
+	equipEnd := time.Now().Add(3 * time.Second)
+	for (wearAck == nil || eqStatus == nil) && time.Now().Before(equipEnd) {
+		drainFrames(t, mapConn, 250*time.Millisecond, handle)
+	}
+
+	// --- assertions on the equip response stream ---
+	require.NotNil(t, wearAck,
+		"no ZC_REQ_WEAR_EQUIP_ACK observed — equip handler not wired or request rejected without a fail ack")
+	require.Equal(t, uint8(1), wearAck[10],
+		"ZC_REQ_WEAR_EQUIP_ACK result=1 (success)")
+	require.Equal(t, uint32(equip.HandRight), binary.LittleEndian.Uint32(wearAck[4:8]),
+		"ZC_REQ_WEAR_EQUIP_ACK wearLocation = right-hand bitmask")
+	require.Equal(t, uint16(0), binary.LittleEndian.Uint16(wearAck[8:10]),
+		"ZC_REQ_WEAR_EQUIP_ACK ItemSpriteNumber = 0 (the Knife carries no View column)")
+
+	require.NotNil(t, eqStatus,
+		"no ZC_STATUS observed after a successful equip — stat recompute not emitted")
+	require.Equal(t, int16(17), int16(binary.LittleEndian.Uint16(eqStatus[18:20])), //nolint:gosec // G115: ATK 17 fits int16
+		"ZC_STATUS Atk2 = Knife ATK 17 (weapon contribution folded into the recompute)")
+}
+
 // connectAndEnterMap opens a fresh connection to the dedicated map listener,
 // sends CZ_ENTER, and asserts the full enter exchange — ZC_ACCEPT_ENTER (trust
 // gate admitted the session) then ZC_SPAWN_UNIT (SpawnService loaded the char and
@@ -1441,6 +1544,12 @@ func mapFrameSize(op uint16) int {
 	case packet.HeaderZCItemDisappear:
 		// M10a: the post-pickup floor-vanish broadcast (0x00a1). Pointer receiver.
 		return (&packet.ItemDisappearResponse{}).Size()
+	case packet.HeaderZCREQWEAREQUIPACKV5:
+		// M10b: the equip ack (0x0999, result 0=fail/1=ok/2=low-level). Value receiver.
+		return packet.ReqWearEquipAckResponse{}.Size()
+	case packet.HeaderZCREQTAKEOFFEQUIPACK:
+		// M10b: the takeoff ack (0x099a, flag wire-inverted 0=success). Value receiver.
+		return packet.ReqTakeoffEquipAckResponse{}.Size()
 	default:
 		return 0
 	}
@@ -1609,6 +1718,25 @@ func seedCharForAccount(t *testing.T, cfg *config.Config, accountID uint32, name
 		_ = gdb.Exec("DELETE FROM `char` WHERE char_id = ?", charID).Error
 	})
 	return charID
+}
+
+// seedKnifeInBag inserts one Knife (nameid 1201, amount 1, equip 0) into the
+// char's `inventory` row set so the equip e2e has a wearable weapon at grid slot
+// 0 (the single row's id-ascending index). Every other inventory column has a
+// migration default, so the INSERT names only the columns the equip path reads.
+// It registers a cleanup (LIFO: row-delete before pool close) that removes the
+// seeded row.
+func seedKnifeInBag(t *testing.T, cfg *config.Config, charID uint32) {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to seed bag")
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, gdb.Exec(
+		`INSERT INTO inventory (char_id, nameid, amount, equip) VALUES (?, 1201, 1, 0)`,
+		charID).Error, "insert Knife (nameid 1201) into the char's bag")
+	t.Cleanup(func() { _ = gdb.Exec("DELETE FROM inventory WHERE char_id = ?", charID).Error })
 }
 
 // resetCharsForAccount opens a GORM session against the same DSN app.Serve uses,

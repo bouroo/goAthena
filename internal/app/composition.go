@@ -269,19 +269,29 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return fmt.Errorf("resolve CZ_ITEM_PICKUP handler: %w", err)
 	}
+	equipHandler, err := do.Invoke[*worldapp.EquipHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_REQ_WEAR_EQUIP handler: %w", err)
+	}
+	takeoffHandler, err := do.Invoke[*worldapp.TakeoffHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_REQ_TAKEOFF_EQUIP handler: %w", err)
+	}
 	do.ProvideValue(injector, gwapp.Handlers{
-		OnCALogin:         loginHandler.Handle,
-		OnCHEnter:         enterHandler.Handle,
-		OnCHSelectChar:    selectHandler.Handle,
-		OnCHMakeChar:      makeHandler.Handle,
-		OnCZEnter:         mapEnterHandler.Handle,
-		OnCZRequestMove:   moveHandler.Handle,
-		OnCZActionRequest: actionHandler.Handle,
-		OnCZRequestTime:   timeHandler.Handle,
-		OnCZChangeDir:     changeDirHandler.Handle,
-		OnCZReqEmotion:    emotionHandler.Handle,
-		OnCZRestart:       restartHandler.Handle,
-		OnCZItemPickup:    pickupHandler.Handle,
+		OnCALogin:           loginHandler.Handle,
+		OnCHEnter:           enterHandler.Handle,
+		OnCHSelectChar:      selectHandler.Handle,
+		OnCHMakeChar:        makeHandler.Handle,
+		OnCZEnter:           mapEnterHandler.Handle,
+		OnCZRequestMove:     moveHandler.Handle,
+		OnCZActionRequest:   actionHandler.Handle,
+		OnCZRequestTime:     timeHandler.Handle,
+		OnCZChangeDir:       changeDirHandler.Handle,
+		OnCZReqEmotion:      emotionHandler.Handle,
+		OnCZRestart:         restartHandler.Handle,
+		OnCZItemPickup:      pickupHandler.Handle,
+		OnCZReqWearEquip:    equipHandler.Handle,
+		OnCZReqTakeoffEquip: takeoffHandler.Handle,
 	})
 	return nil
 }
