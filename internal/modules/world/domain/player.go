@@ -99,6 +99,8 @@ type Player struct {
 	Sex         uint8  // wire byte (0=F, 1=M)
 	MaxHP       uint32 // held for M7 status burst; spawn writes -1, not this
 	HP          uint32
+	MaxSP       uint32
+	SP          uint32
 	Option      uint32 // effect bits → EffectState
 	Manner      uint16 // → Honor
 	Karma       uint8  // → IsPKModeON (1 when non-zero)

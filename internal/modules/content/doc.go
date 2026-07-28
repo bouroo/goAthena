@@ -1,8 +1,10 @@
-// Package content is the bounded context for content.
+// Package content is the NPC-script bounded context. It bridges the script VM
+// (pkg/ro/script) to the world module: loading and compiling the NPC script
+// corpus at boot, publishing NPC entities into the world's registry and AOI
+// grid, and serving the four dialog-handler opcodes (CZ_CONTACTNPC,
+// CZ_REQNEXTSCRIPT, CZ_CHOOSEMENU, CZ_CLOSEDIALOG) that drive the
+// goroutine-per-dialog VM execution.
 //
-// the script engine for NPC dialog, quest, and item scripts.
-//
-// At M0 this is an empty scaffold; domain/app/infra/di layers and value types
-// land as this bounded context's milestone begins. Import boundaries are
-// enforced by depguard (cross-module + intra-module) and internal/app/arch_test.
+// M11c ships the dialog subset (mes/next/close/percentheal) with a curated
+// minimal corpus; M11d adds menu/select/warp builtins and the warper NPC.
 package content

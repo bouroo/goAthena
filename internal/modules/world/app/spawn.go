@@ -113,6 +113,8 @@ func (s *SpawnService) EnterWorld(ctx context.Context, conn gwdomain.Conn, accou
 		Sex:         char.Sex,
 		MaxHP:       char.MaxHP,
 		HP:          char.HP,
+		MaxSP:       char.MaxSP,
+		SP:          char.SP,
 		Option:      char.Option,
 		Manner:      char.Manner,
 		Karma:       char.Karma,

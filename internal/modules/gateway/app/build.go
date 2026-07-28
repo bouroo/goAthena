@@ -58,6 +58,18 @@ type Handlers struct {
 	// OnCZReqTakeoffEquip serves CZ_REQ_TAKEOFF_EQUIP (0x00ab), the unequip
 	// request. Provided by the world module (M10b).
 	OnCZReqTakeoffEquip domain.PacketHandler
+	// OnCZContactNPC serves CZ_CONTACTNPC (0x0090), initiating an NPC dialog.
+	// Provided by the content module.
+	OnCZContactNPC domain.PacketHandler
+	// OnCZReqNextScript serves CZ_REQ_NEXT_SCRIPT (0x00b9), advancing the dialog.
+	// Provided by the content module.
+	OnCZReqNextScript domain.PacketHandler
+	// OnCZChooseMenu serves CZ_CHOOSE_MENU (0x00b8), responding to a dialog choice.
+	// Provided by the content module.
+	OnCZChooseMenu domain.PacketHandler
+	// OnCZCloseDialog serves CZ_CLOSE_DIALOG (0x0146), ending the dialog.
+	// Provided by the content module.
+	OnCZCloseDialog domain.PacketHandler
 }
 
 // BuildDispatcher assembles the three role-keyed dispatch tables from the
@@ -109,6 +121,18 @@ func BuildDispatcher(h Handlers) *domain.Dispatcher {
 	}
 	if h.OnCZReqTakeoffEquip != nil {
 		mapT[packet.HeaderCZREQTAKEOFFEQUIP] = h.OnCZReqTakeoffEquip
+	}
+	if h.OnCZContactNPC != nil {
+		mapT[packet.HeaderCZCONTACTNPC] = h.OnCZContactNPC
+	}
+	if h.OnCZReqNextScript != nil {
+		mapT[packet.HeaderCZREQNEXTSCRIPT] = h.OnCZReqNextScript
+	}
+	if h.OnCZChooseMenu != nil {
+		mapT[packet.HeaderCZCHOOSEMENU] = h.OnCZChooseMenu
+	}
+	if h.OnCZCloseDialog != nil {
+		mapT[packet.HeaderCZCLOSEDIALOG] = h.OnCZCloseDialog
 	}
 	return domain.NewDispatcher(login, char, mapT)
 }

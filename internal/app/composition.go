@@ -277,6 +277,24 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return fmt.Errorf("resolve CZ_REQ_TAKEOFF_EQUIP handler: %w", err)
 	}
+
+	contactNPCHandler, err := do.Invoke[*contentapp.ContactNPCHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_CONTACTNPC handler: %w", err)
+	}
+	reqNextScriptHandler, err := do.Invoke[*contentapp.ReqNextScriptHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_REQ_NEXT_SCRIPT handler: %w", err)
+	}
+	chooseMenuHandler, err := do.Invoke[*contentapp.ChooseMenuHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_CHOOSE_MENU handler: %w", err)
+	}
+	closeDialogHandler, err := do.Invoke[*contentapp.CloseDialogHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_CLOSE_DIALOG handler: %w", err)
+	}
+
 	do.ProvideValue(injector, gwapp.Handlers{
 		OnCALogin:           loginHandler.Handle,
 		OnCHEnter:           enterHandler.Handle,
@@ -292,6 +310,10 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCZItemPickup:      pickupHandler.Handle,
 		OnCZReqWearEquip:    equipHandler.Handle,
 		OnCZReqTakeoffEquip: takeoffHandler.Handle,
+		OnCZContactNPC:      contactNPCHandler.Handle,
+		OnCZReqNextScript:   reqNextScriptHandler.Handle,
+		OnCZChooseMenu:      chooseMenuHandler.Handle,
+		OnCZCloseDialog:     closeDialogHandler.Handle,
 	})
 	return nil
 }

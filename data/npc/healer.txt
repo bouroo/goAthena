@@ -1,0 +1,8 @@
+prontera,155,165,4	script	Healer#prt	46,3,3,{
+	mes "[Healer]";
+	mes "I shall heal you.";
+	next;
+	percentheal 100,100;
+	mes "Healed!";
+	close;
+}
