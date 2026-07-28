@@ -17,23 +17,6 @@ func (f *File) Header() *NPCHeader { return f.header }
 
 // ----- Statement constructors -----
 
-// NewMesStmt builds a message statement (`mes "..."`).
-func NewMesStmt(msg Expr, pos Position) *MesStmt {
-	return &MesStmt{Msg: msg, pos: pos}
-}
-
-// NewNextStmt builds a `next;` statement.
-func NewNextStmt(pos Position) *NextStmt { return &NextStmt{pos: pos} }
-
-// NewCloseStmt builds a `close;` statement.
-func NewCloseStmt(pos Position) *CloseStmt { return &CloseStmt{pos: pos} }
-
-// NewClose2Stmt builds a `close2;` statement.
-func NewClose2Stmt(pos Position) *Close2Stmt { return &Close2Stmt{pos: pos} }
-
-// NewEndStmt builds an `end;` statement.
-func NewEndStmt(pos Position) *EndStmt { return &EndStmt{pos: pos} }
-
 // NewMenuStmt builds a `menu(...);` statement.
 func NewMenuStmt(opts []MenuOption, pos Position) *MenuStmt {
 	return &MenuStmt{Options: opts, pos: pos}

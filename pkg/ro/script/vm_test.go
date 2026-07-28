@@ -1,0 +1,353 @@
+//go:build unit
+
+package script
+
+import (
+	"testing"
+)
+
+// fakeHost records every Host call so VM tests can assert dialog output and
+// effects without a network. Next returns true (advance) so dialog scripts
+// proceed; a future test can flip nextOK to model a cancelled dialog.
+type fakeHost struct {
+	mes    []string
+	nexts  int
+	closed bool
+	warps  []warpCall
+	heals  []healCall
+	nextOK bool
+}
+
+type warpCall struct {
+	mapName string
+	x, y    int
+}
+
+type healCall struct{ hp, sp int }
+
+func newFakeHost() *fakeHost { return &fakeHost{nextOK: true} }
+
+func (h *fakeHost) Mes(msg string)          { h.mes = append(h.mes, msg) }
+func (h *fakeHost) Next() bool              { h.nexts++; return h.nextOK }
+func (h *fakeHost) Close()                  { h.closed = true }
+func (h *fakeHost) Warp(m string, x, y int) { h.warps = append(h.warps, warpCall{m, x, y}) }
+func (h *fakeHost) PercentHeal(hp, sp int)  { h.heals = append(h.heals, healCall{hp, sp}) }
+
+// runFirstScript compiles src, takes the first script in the set, and runs it
+// against host with the given initial variables.
+func runFirstScript(t *testing.T, src string, host Host, vars map[string]Value) map[string]Value {
+	t.Helper()
+	set, err := Compile([]byte(src))
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	if len(set.Scripts) == 0 {
+		t.Fatalf("no scripts compiled from:\n%s", src)
+	}
+	var cs *CompiledScript
+	for _, s := range set.Scripts {
+		cs = s
+		break
+	}
+	vm := NewVM(cs, host, DefaultBuiltins(), vars)
+	if err := vm.Run(); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	return vm.Vars()
+}
+
+func TestVMDialogSequence(t *testing.T) {
+	const src = "-\tscript\tHealer\t-1,{\n" +
+		`mes "[Healer]";` + "\n" +
+		`mes "I will heal you.";` + "\n" +
+		`next;` + "\n" +
+		`percentheal 100,100;` + "\n" +
+		`mes "You are fully healed!";` + "\n" +
+		`close;` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+
+	want := []string{"[Healer]", "I will heal you.", "You are fully healed!"}
+	if len(h.mes) != len(want) {
+		t.Fatalf("mes lines = %v, want %v", h.mes, want)
+	}
+	for i, w := range want {
+		if h.mes[i] != w {
+			t.Errorf("mes[%d] = %q, want %q", i, h.mes[i], w)
+		}
+	}
+	if h.nexts != 1 {
+		t.Errorf("next count = %d, want 1", h.nexts)
+	}
+	if len(h.heals) != 1 || h.heals[0] != (healCall{100, 100}) {
+		t.Errorf("heals = %v, want [{100 100}]", h.heals)
+	}
+	if !h.closed {
+		t.Error("expected dialog closed")
+	}
+}
+
+func TestVMIfFalseBranch(t *testing.T) {
+	// .@Price = 0 ⇒ the if-body must NOT execute (no "costs" line).
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@Price = 0;\n" +
+		`if (.@Price > 0) mes "costs";` + "\n" +
+		`mes "done";` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.mes) != 1 || h.mes[0] != "done" {
+		t.Errorf("mes = %v, want [done] (if-body skipped)", h.mes)
+	}
+}
+
+func TestVMIfTrueBranch(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@Price = 50;\n" +
+		`if (.@Price > 0) mes "costs";` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.mes) != 1 || h.mes[0] != "costs" {
+		t.Errorf("mes = %v, want [costs]", h.mes)
+	}
+}
+
+func TestVMIfElse(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@n = 0;\n" +
+		`if (.@n == 1) mes "one"; else mes "other";` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.mes) != 1 || h.mes[0] != "other" {
+		t.Errorf("mes = %v, want [other]", h.mes)
+	}
+}
+
+func TestVMStringConcat(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@n = 42;\n" +
+		`mes "value is " + .@n + "!";` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.mes) != 1 || h.mes[0] != "value is 42!" {
+		t.Errorf("mes = %v, want [value is 42!]", h.mes)
+	}
+}
+
+func TestVMCompoundAssign(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		"Zeny = 100;\n" +
+		"Zeny += 50;\n" +
+		"Zeny -= 30;\n" +
+		`mes "Zeny: " + Zeny;` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	vars := runFirstScript(t, src, h, nil)
+	if h.mes[0] != "Zeny: 120" {
+		t.Errorf("mes = %q, want 'Zeny: 120'", h.mes[0])
+	}
+	if vars["Zeny"].Int != 120 {
+		t.Errorf("Zeny var = %d, want 120", vars["Zeny"].Int)
+	}
+}
+
+func TestVMSetBuiltin(t *testing.T) {
+	// `set var, value;` desugars to assignment.
+	const src = "-\tscript\tN\t-1,{\n" +
+		`set .@Count, 7;` + "\n" +
+		`mes "count " + .@Count;` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if h.mes[0] != "count 7" {
+		t.Errorf("mes = %q, want 'count 7'", h.mes[0])
+	}
+}
+
+func TestVMLogicalAndOr(t *testing.T) {
+	// 1 && 0 → 0 (falsy) ⇒ "no". Short-circuit: rhs evaluated only when lhs truthy.
+	cases := []struct {
+		name string
+		cond string
+		want string // "yes" if cond truthy else "no"
+	}{
+		{"and-true", "1 && 1", "yes"},
+		{"and-false", "1 && 0", "no"},
+		{"or-true", "0 || 1", "yes"},
+		{"or-false", "0 || 0", "no"},
+		{"and-short", "0 && 1", "no"},
+		{"or-short", "1 || 0", "yes"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "-\tscript\tN\t-1,{\nif (" + tc.cond + ") mes \"yes\"; else mes \"no\";\n}\n"
+			h := newFakeHost()
+			runFirstScript(t, src, h, nil)
+			if len(h.mes) != 1 || h.mes[0] != tc.want {
+				t.Errorf("cond %q → mes %v, want [%s]", tc.cond, h.mes, tc.want)
+			}
+		})
+	}
+}
+
+func TestVMWhileLoop(t *testing.T) {
+	// Count 0..3, mes each value.
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@i = 0;\n" +
+		"while (.@i < 3) {\n" +
+		`mes "i=" + .@i;` + "\n" +
+		".@i += 1;\n" +
+		"}\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	want := []string{"i=0", "i=1", "i=2"}
+	if len(h.mes) != len(want) {
+		t.Fatalf("mes = %v, want %v", h.mes, want)
+	}
+	for i, w := range want {
+		if h.mes[i] != w {
+			t.Errorf("mes[%d] = %q, want %q", i, h.mes[i], w)
+		}
+	}
+}
+
+func TestVMForLoop(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		"for (.@i = 0; .@i < 2; .@i += 1) {\n" +
+		`mes "loop " + .@i;` + "\n" +
+		"}\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	want := []string{"loop 0", "loop 1"}
+	if len(h.mes) != len(want) {
+		t.Fatalf("mes = %v, want %v", h.mes, want)
+	}
+}
+
+func TestVMGotoLabel(t *testing.T) {
+	// goto skips the middle statement.
+	const src = "-\tscript\tN\t-1,{\n" +
+		`mes "a";` + "\n" +
+		"goto L_End;\n" +
+		`mes "b";` + "\n" +
+		"L_End:\n" +
+		`mes "c";` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	want := []string{"a", "c"}
+	if len(h.mes) != len(want) {
+		t.Fatalf("mes = %v, want %v", h.mes, want)
+	}
+}
+
+func TestVMEndTerminates(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		`mes "before";` + "\n" +
+		`end;` + "\n" +
+		`mes "after";` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.mes) != 1 || h.mes[0] != "before" {
+		t.Errorf("mes = %v, want [before] (end stops)", h.mes)
+	}
+}
+
+func TestVMWarpBuiltin(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		`warp "geffen", 120, 150;` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.warps) != 1 || h.warps[0] != (warpCall{"geffen", 120, 150}) {
+		t.Errorf("warps = %v, want [{geffen 120 150}]", h.warps)
+	}
+}
+
+func TestVMArithmeticVectors(t *testing.T) {
+	cases := []struct {
+		expr string
+		want int64
+	}{
+		{"2 + 3", 5},
+		{"10 - 4", 6},
+		{"6 * 7", 42},
+		{"20 / 4", 5},
+		{"17 % 5", 2},
+		{"2 + 3 * 4", 14},
+		{"(2 + 3) * 4", 20},
+		{"-5 + 8", 3},
+		{"!0", 1},
+		{"!7", 0},
+		{"5 == 5", 1},
+		{"5 == 6", 0},
+		{"5 != 6", 1},
+		{"5 > 6", 0},
+		{"6 > 5", 1},
+		{"5 <= 5", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.expr, func(t *testing.T) {
+			src := "-\tscript\tN\t-1,{\n." +
+				"@r = " + tc.expr + ";\n" +
+				`mes "r=" + .@r;` + "\n}\n"
+			h := newFakeHost()
+			vars := runFirstScript(t, src, h, nil)
+			got := vars[".@r"].Int
+			if got != tc.want {
+				t.Errorf("expr %q = %d, want %d", tc.expr, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestVMNextCancelledEndsScript(t *testing.T) {
+	// When the client cancels at `next`, the script must stop without the
+	// trailing mes.
+	const src = "-\tscript\tN\t-1,{\n" +
+		`mes "first";` + "\n" +
+		`next;` + "\n" +
+		`mes "second";` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	h.nextOK = false // model a cancelled/failed next
+	runFirstScript(t, src, h, nil)
+	if len(h.mes) != 1 || h.mes[0] != "first" {
+		t.Errorf("mes = %v, want [first] (next cancelled stops script)", h.mes)
+	}
+}
+
+func TestVMHealerFlowWithSeedVars(t *testing.T) {
+	// A healer with a non-zero price the player CAN afford: charge and heal.
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@Price = 50;\n" +
+		"if (.@Price > 0) {\n" +
+		"if (Zeny < .@Price)\n" +
+		`mes "too poor";` + "\n" +
+		"else {\n" +
+		"Zeny -= .@Price;\n" +
+		`mes "charged " + .@Price;` + "\n" +
+		"}\n" +
+		"}\n" +
+		"if (Zeny >= 0)\n" +
+		"percentheal 100,100;\n" +
+		"}\n"
+	h := newFakeHost()
+	vars := runFirstScript(t, src, h, map[string]Value{"Zeny": IntVal(100)})
+	if len(h.mes) != 1 || h.mes[0] != "charged 50" {
+		t.Errorf("mes = %v, want [charged 50]", h.mes)
+	}
+	if vars["Zeny"].Int != 50 {
+		t.Errorf("Zeny = %d, want 50 (100-50)", vars["Zeny"].Int)
+	}
+	if len(h.heals) != 1 {
+		t.Errorf("heals = %v, want 1 heal", h.heals)
+	}
+}

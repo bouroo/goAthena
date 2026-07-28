@@ -144,7 +144,7 @@ func TestFilePos(t *testing.T) {
 		t.Errorf("empty File.Pos = %v", empty.Pos())
 	}
 	// File with body uses first body's pos.
-	body := &File{Body: []Stmt{&NextStmt{pos: Position{Line: 5, Column: 3}}}}
+	body := &File{Body: []Stmt{&CallStmt{Name: "next", pos: Position{Line: 5, Column: 3}}}}
 	if body.Pos() != (Position{Line: 5, Column: 3}) {
 		t.Errorf("File.Pos from body = %v", body.Pos())
 	}

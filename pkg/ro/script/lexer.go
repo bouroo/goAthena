@@ -346,8 +346,8 @@ func (l *lexer) readOperatorOrDelim(start Position) (Token, error) {
 
 	// 2-char operators and assignment compounds.
 	switch rest {
-	case "==", "!=", "<=", ">=", "&&", "||", "<<", ">>",
-		"+=", "-=", "*=", "/=", "%=",
+	case "==", "!=", "<=", ">=", "&&", "||", "<<", ">>", //nolint:goconst
+		"+=", "-=", "*=", "/=", "%=", //nolint:goconst
 		"++", "--":
 		l.advance()
 		l.advance()
