@@ -9,28 +9,35 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/bouroo/goAthena/pkg/ro/equip"
 )
 
 // ItemEntry holds scalar fields for a single item type.
 type ItemEntry struct {
-	Id            int32  `yaml:"Id"` //nolint:revive // yaml tag is "Id" to match rAthena item_db.yml
-	AegisName     string `yaml:"AegisName"`
-	Name          string `yaml:"Name"`
-	Type          string `yaml:"Type"`
-	SubType       string `yaml:"SubType"`
-	Buy           int32  `yaml:"Buy"`
-	Sell          int32  `yaml:"Sell"`
-	Weight        int32  `yaml:"Weight"`
-	Attack        int32  `yaml:"Attack"`
-	Defense       int32  `yaml:"Defense"`
-	Range         int32  `yaml:"Range"`
-	Slots         int32  `yaml:"Slots"`
-	WeaponLevel   int32  `yaml:"WeaponLevel"`
-	ArmorLevel    int32  `yaml:"ArmorLevel"`
-	EquipLevelMin int32  `yaml:"EquipLevelMin"`
-	EquipLevelMax int32  `yaml:"EquipLevelMax"`
-	Refineable    bool   `yaml:"Refineable"`
-	View          int32  `yaml:"View"`
+	Id            int32           `yaml:"Id"` //nolint:revive // yaml tag is "Id" to match rAthena item_db.yml
+	AegisName     string          `yaml:"AegisName"`
+	Name          string          `yaml:"Name"`
+	Type          string          `yaml:"Type"`
+	SubType       string          `yaml:"SubType"`
+	Buy           int32           `yaml:"Buy"`
+	Sell          int32           `yaml:"Sell"`
+	Weight        int32           `yaml:"Weight"`
+	Attack        int32           `yaml:"Attack"`
+	Defense       int32           `yaml:"Defense"`
+	Range         int32           `yaml:"Range"`
+	Slots         int32           `yaml:"Slots"`
+	WeaponLevel   int32           `yaml:"WeaponLevel"`
+	ArmorLevel    int32           `yaml:"ArmorLevel"`
+	EquipLevelMin int32           `yaml:"EquipLevelMin"`
+	EquipLevelMax int32           `yaml:"EquipLevelMax"`
+	Refineable    bool            `yaml:"Refineable"`
+	View          int32           `yaml:"View"`
+	Locations     map[string]bool `yaml:"Locations"`
+	// EquipLocations is the EQP_* bitmask derived from Locations in build()
+	// (the value the inventory.equip column stores and the equip use case reads).
+	// It is not a YAML field.
+	EquipLocations uint32 `yaml:"-"`
 }
 
 type fileFormat struct {
@@ -97,6 +104,7 @@ func build(bodies ...[]*ItemEntry) *Registry {
 			if entry.Type == "" {
 				entry.Type = "Etc"
 			}
+			entry.EquipLocations = equip.LocationBits(entry.Locations)
 			entries[entry.Id] = entry
 			if entry.AegisName != "" {
 				aegis[entry.AegisName] = entry

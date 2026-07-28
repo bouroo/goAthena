@@ -105,4 +105,18 @@ type InventoryRepository interface {
 	// insert takes the next free slot (the current row count), and pickups never
 	// reorder existing rows.
 	AddItem(ctx context.Context, accountID, charID uint32, item NewItem) (InventoryItem, error)
+	// EquipItem assigns the worn-location bitmask (EQP_*) to the bag row occupying
+	// the given grid slot — the slot the client names in CZ_REQ_WEAR_EQUIP — and
+	// returns the row as it now stands. The equip use case resolves and validates
+	// the bitmask (only bits within the item_db Locations the item permits); this
+	// method just persists the result, assigning rather than OR-ing (matching
+	// rAthena's inventory.u.items_inventory[n].equip = flag, since each row's
+	// bitmask describes where *that* item is worn). A slot holding no row (forged
+	// index, stale UI) yields ErrItemNotFound so the use case answers the fail ack
+	// rather than faulting.
+	EquipItem(ctx context.Context, accountID, charID uint32, index uint16, equip uint32) (InventoryItem, error)
+	// UnequipItem clears the worn-location bitmask on the bag row occupying the
+	// given grid slot — CZ_REQ_TAKEOFF_EQUIP names the slot — and returns the row
+	// as it now stands. As with EquipItem, a missing slot yields ErrItemNotFound.
+	UnequipItem(ctx context.Context, accountID, charID uint32, index uint16) (InventoryItem, error)
 }

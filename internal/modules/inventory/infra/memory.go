@@ -97,3 +97,40 @@ func (r *MemoryInventoryRepository) indexOf(charID, rowID uint32) uint16 {
 	rows := r.forChar(charID)
 	return uint16(slices.IndexFunc(rows, func(it domain.InventoryItem) bool { return it.ID == rowID })) //nolint:gosec // G115: pos < MaxInventorySlots (100) < uint16
 }
+
+// setEquip assigns the equip bitmask to the bag row occupying the char's grid
+// slot `index` and returns the row as it now stands. A slot past the last row
+// (forged index, stale UI) yields ErrItemNotFound. The assignment (not OR)
+// mirrors rAthena's inventory.u.items_inventory[n].equip = flag; passing 0
+// clears it (unequip).
+func (r *MemoryInventoryRepository) setEquip(charID uint32, index uint16, equip uint32) (domain.InventoryItem, error) {
+	rows := r.forChar(charID)
+	if int(index) >= len(rows) { //nolint:gosec // G115: index is a bag slot < 100; len fits int
+		return domain.InventoryItem{}, domain.ErrItemNotFound
+	}
+	target := rows[index]
+	i := slices.IndexFunc(r.items, func(it domain.InventoryItem) bool {
+		return it.CharID == charID && it.ID == target.ID
+	})
+	if i < 0 {
+		return domain.InventoryItem{}, domain.ErrItemNotFound
+	}
+	r.items[i].Equip = equip
+	cp := r.items[i]
+	cp.Index = index
+	return cp, nil
+}
+
+// EquipItem assigns the worn-location bitmask to the bag row at the given grid
+// slot, returning the row as it now stands. A missing slot yields
+// ErrItemNotFound.
+func (r *MemoryInventoryRepository) EquipItem(_ context.Context, _, charID uint32, index uint16, equip uint32) (domain.InventoryItem, error) {
+	return r.setEquip(charID, index, equip)
+}
+
+// UnequipItem clears the worn-location bitmask on the bag row at the given grid
+// slot, returning the row as it now stands. A missing slot yields
+// ErrItemNotFound.
+func (r *MemoryInventoryRepository) UnequipItem(_ context.Context, _, charID uint32, index uint16) (domain.InventoryItem, error) {
+	return r.setEquip(charID, index, 0)
+}

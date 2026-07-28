@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bouroo/goAthena/pkg/ro/equip"
 )
 
 const fixtureYAML = `Header:
@@ -36,6 +38,8 @@ Body:
     EquipLevelMax: 99
     Refineable: true
     View: 2
+    Locations:
+      Right_Hand: true
     UnknownScalar: ignored
     Jobs:
       All: true
@@ -78,6 +82,8 @@ func TestLoad_ParsesAllScalarFields(t *testing.T) {
 	assert.Equal(t, int32(99), sword.EquipLevelMax)
 	assert.True(t, sword.Refineable)
 	assert.Equal(t, int32(2), sword.View)
+	// Locations block folds into the EQP_* bitmask the equip use case reads.
+	assert.Equal(t, equip.HandRight, sword.EquipLocations, "Right_Hand → EQP_HAND_R (2)")
 }
 
 func TestLoad_DefaultsTypeAndIgnoresUnknownFields(t *testing.T) {
@@ -87,6 +93,9 @@ func TestLoad_DefaultsTypeAndIgnoresUnknownFields(t *testing.T) {
 	require.NotNil(t, jellopy)
 	assert.Equal(t, "Etc", jellopy.Type)
 	assert.Equal(t, int32(10), jellopy.Weight)
+	// A non-equip item has no Locations block, so its bitmask is zero — the value
+	// the equip use case reads to reject a non-equipment item.
+	assert.Equal(t, uint32(0), jellopy.EquipLocations)
 }
 
 func TestRegistry_GetLenAndWeight(t *testing.T) {

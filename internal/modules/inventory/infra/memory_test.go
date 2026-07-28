@@ -156,3 +156,109 @@ func TestMemoryRepo_LoadByChar_PreservesEquip(t *testing.T) {
 	assert.Equal(t, eqpArmor, rows[0].Equip)
 	assert.Equal(t, uint16(0), rows[0].Index, "seeded single row takes index 0")
 }
+
+// TestMemoryRepo_EquipItem_SetLoadClearRoundTrip is the M10b anchor: equip a
+// slot by its grid index, see it reflected through LoadByChar, then unequip and
+// see the bitmask cleared — the full equip-loop persistence contract the equip
+// use case (and its stat recompute) depends on.
+func TestMemoryRepo_EquipItem_SetLoadClearRoundTrip(t *testing.T) {
+	t.Parallel()
+	// Knife (1201, non-stackable) at index 0; Jellopy (909) at index 1. The equip
+	// request names the Knife's grid slot (0), which AddItem assigns id-ascending.
+	repo := infra.NewMemoryInventoryRepository()
+	ctx := context.Background()
+	_, err := repo.AddItem(ctx, memAccID, memCharID, domain.NewItem{NameID: 1201, Amount: 1, Stackable: false})
+	require.NoError(t, err)
+	_, err = repo.AddItem(ctx, memAccID, memCharID, domain.NewItem{NameID: 909, Amount: 1, Stackable: true})
+	require.NoError(t, err)
+
+	const eqpHandR uint32 = 0x0002
+	// Equip the Knife in the right hand. The returned row carries the new bitmask
+	// and the slot's stable index.
+	equipped, err := repo.EquipItem(ctx, memAccID, memCharID, 0, eqpHandR)
+	require.NoError(t, err)
+	assert.Equal(t, eqpHandR, equipped.Equip)
+	assert.Equal(t, uint16(0), equipped.Index)
+	assert.Equal(t, uint32(1201), equipped.NameID, "the equipped row is the Knife at slot 0")
+
+	// LoadByChar sees the persisted bitmask; the Jellopy row stays unequipped.
+	rows, err := repo.LoadByChar(ctx, memAccID, memCharID)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, eqpHandR, rows[0].Equip, "Knife slot reflects the worn bitmask")
+	assert.Equal(t, uint32(0), rows[1].Equip, "Jellopy slot is untouched")
+
+	// Unequip the Knife → bitmask cleared, row still present at the same index.
+	unequipped, err := repo.UnequipItem(ctx, memAccID, memCharID, 0)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0), unequipped.Equip)
+	assert.Equal(t, uint16(0), unequipped.Index)
+
+	rows, err = repo.LoadByChar(ctx, memAccID, memCharID)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0), rows[0].Equip, "Knife slot cleared after unequip")
+}
+
+// TestMemoryRepo_EquipItem_AssignsNotORs asserts a re-equip overwrites the prior
+// bitmask rather than OR-ing into it — faithful to rAthena's
+// inventory.u.items_inventory[n].equip = flag (each item is worn in one place).
+func TestMemoryRepo_EquipItem_AssignsNotORs(t *testing.T) {
+	t.Parallel()
+	repo := infra.NewMemoryInventoryRepository(domain.InventoryItem{
+		ID: 1, CharID: memCharID, NameID: 1201, Amount: 1,
+	})
+	ctx := context.Background()
+
+	const (
+		eqpHandR uint32 = 0x0002
+		eqpHandL uint32 = 0x0020
+	)
+	_, err := repo.EquipItem(ctx, memAccID, memCharID, 0, eqpHandR)
+	require.NoError(t, err)
+	re, err := repo.EquipItem(ctx, memAccID, memCharID, 0, eqpHandL)
+	require.NoError(t, err)
+	assert.Equal(t, eqpHandL, re.Equip, "re-equip assigns, leaving no leftover right-hand bit")
+}
+
+// TestMemoryRepo_EquipItem_MissingSlot asserts a slot past the last row (forged
+// index, stale client UI after a drop) yields ErrItemNotFound — the use case
+// maps it to the fail ack rather than faulting.
+func TestMemoryRepo_EquipItem_MissingSlot(t *testing.T) {
+	t.Parallel()
+	repo := infra.NewMemoryInventoryRepository(domain.InventoryItem{
+		ID: 1, CharID: memCharID, NameID: 1201, Amount: 1,
+	})
+	ctx := context.Background()
+
+	_, err := repo.EquipItem(ctx, memAccID, memCharID, 5, 0x0002)
+	assert.True(t, errors.Is(err, domain.ErrItemNotFound), "out-of-range equip index → ErrItemNotFound, got %v", err)
+
+	_, err = repo.UnequipItem(ctx, memAccID, memCharID, 5)
+	assert.True(t, errors.Is(err, domain.ErrItemNotFound), "out-of-range unequip index → ErrItemNotFound, got %v", err)
+}
+
+// TestMemoryRepo_EquipItem_CharScoped asserts the slot lookup is scoped by char:
+// equipping a slot on one character never touches another's row, and a slot that
+// is in range for char A but out of range for char B is ErrItemNotFound for B.
+func TestMemoryRepo_EquipItem_CharScoped(t *testing.T) {
+	t.Parallel()
+	const otherChar uint32 = 150099
+	repo := infra.NewMemoryInventoryRepository(
+		domain.InventoryItem{ID: 1, CharID: memCharID, NameID: 1201, Amount: 1},
+	)
+	ctx := context.Background()
+
+	equipped, err := repo.EquipItem(ctx, memAccID, memCharID, 0, 0x0002)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0x0002), equipped.Equip)
+
+	// Other char has no rows: slot 0 is out of range → ErrItemNotFound.
+	_, err = repo.EquipItem(ctx, memAccID, otherChar, 0, 0x0002)
+	assert.True(t, errors.Is(err, domain.ErrItemNotFound), "foreign char slot → ErrItemNotFound, got %v", err)
+
+	// The first char's row is untouched by the foreign equip attempt.
+	rows, err := repo.LoadByChar(ctx, memAccID, memCharID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, uint32(0x0002), rows[0].Equip)
+}

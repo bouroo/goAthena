@@ -60,6 +60,17 @@ type inventoryModel struct {
 // errors out.
 func (inventoryModel) TableName() string { return "inventory" }
 
+// inventoryColumns is the explicit SELECT list covering every modeled column. It
+// is shared by every read path (LoadByChar, the equip slot lookup) so a column
+// added to inventoryModel is surfaced here rather than silently round-tripping
+// as zero.
+const inventoryColumns = "id, char_id, nameid, amount, equip, identify, refine, attribute, " +
+	"card0, card1, card2, card3, " +
+	"option_id0, option_val0, option_parm0, option_id1, option_val1, option_parm1, " +
+	"option_id2, option_val2, option_parm2, option_id3, option_val3, option_parm3, " +
+	"option_id4, option_val4, option_parm4, expire_time, favorite, bound, unique_id, " +
+	"equip_switch, enchantgrade"
+
 // toDomain converts a model row to a domain item, assigning the grid Index from
 // the caller-supplied position (id-ascending order). Cards and options map
 // verbatim; the identify/favorite tinyints become bools.
@@ -112,12 +123,7 @@ func NewGORMInventoryRepository(db *gorm.DB) *GORMInventoryRepository {
 func (r *GORMInventoryRepository) LoadByChar(ctx context.Context, _, charID uint32) ([]domain.InventoryItem, error) {
 	var rows []inventoryModel
 	if err := r.db.WithContext(ctx).
-		Select("id, char_id, nameid, amount, equip, identify, refine, attribute, "+
-			"card0, card1, card2, card3, "+
-			"option_id0, option_val0, option_parm0, option_id1, option_val1, option_parm1, "+
-			"option_id2, option_val2, option_parm2, option_id3, option_val3, option_parm3, "+
-			"option_id4, option_val4, option_parm4, expire_time, favorite, bound, unique_id, "+
-			"equip_switch, enchantgrade").
+		Select(inventoryColumns).
 		Where("char_id = ?", charID).
 		Order("id").
 		Find(&rows).Error; err != nil {
@@ -199,4 +205,57 @@ func mergeIndex(charID, rowID uint32, tx *gorm.DB) uint16 {
 		return 0
 	}
 	return uint16(pos) //nolint:gosec // G115: pos < MaxInventorySlots (100) < uint16
+}
+
+// rowAtIndex loads the single bag row occupying the char's id-ascending grid slot
+// `index` — the wire slot CZ_REQ_WEAR_EQUIP / CZ_REQ_TAKEOFF_EQUIP name. ORDER BY
+// id with OFFSET keeps the slot aligned with LoadByChar's numbering (the client
+// reuses that slot from the pickup ack). A slot past the last row yields
+// gorm.ErrRecordNotFound so the caller maps it to the domain sentinel.
+func (r *GORMInventoryRepository) rowAtIndex(ctx context.Context, charID uint32, index uint16) (inventoryModel, error) {
+	var m inventoryModel
+	err := r.db.WithContext(ctx).
+		Select(inventoryColumns).
+		Where("char_id = ?", charID).
+		Order("id").
+		Offset(int(index)). //nolint:gosec // G115: index < MaxInventorySlots (100), far within int range
+		Limit(1).
+		Take(&m).Error
+	return m, err
+}
+
+// setEquip is the shared body of EquipItem / UnequipItem: locate the row at the
+// grid slot, assign its equip column (0 clears — faithful to rAthena's unequip),
+// and return the row as it now stands. A missing slot yields ErrItemNotFound so
+// the use case answers the fail ack rather than faulting.
+func (r *GORMInventoryRepository) setEquip(ctx context.Context, charID uint32, index uint16, equip uint32) (domain.InventoryItem, error) {
+	m, err := r.rowAtIndex(ctx, charID, index)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return domain.InventoryItem{}, domain.ErrItemNotFound //nolint:wrapcheck // sentinel must pass through unwrapped for errors.Is
+		}
+		return domain.InventoryItem{}, fmt.Errorf("inventory: find equip char %d index %d: %w", charID, index, err)
+	}
+	if err := r.db.WithContext(ctx).
+		Model(&inventoryModel{}).
+		Where("id = ? AND char_id = ?", m.ID, charID).
+		UpdateColumn("equip", equip).Error; err != nil {
+		return domain.InventoryItem{}, fmt.Errorf("inventory: update equip char %d id %d: %w", charID, m.ID, err)
+	}
+	m.Equip = equip
+	return toDomain(m, index), nil
+}
+
+// EquipItem assigns the worn-location bitmask to the bag row at the given grid
+// slot (CZ_REQ_WEAR_EQUIP names the slot), returning the row as it now stands.
+// A missing slot yields ErrItemNotFound.
+func (r *GORMInventoryRepository) EquipItem(ctx context.Context, _, charID uint32, index uint16, equip uint32) (domain.InventoryItem, error) {
+	return r.setEquip(ctx, charID, index, equip)
+}
+
+// UnequipItem clears the worn-location bitmask on the bag row at the given grid
+// slot (CZ_REQ_TAKEOFF_EQUIP names the slot), returning the row as it now stands.
+// A missing slot yields ErrItemNotFound.
+func (r *GORMInventoryRepository) UnequipItem(ctx context.Context, _, charID uint32, index uint16) (domain.InventoryItem, error) {
+	return r.setEquip(ctx, charID, index, 0)
 }
