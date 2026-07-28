@@ -874,6 +874,13 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 		// post-burst drain as those frames; handleCombat captures them at whichever
 		// read site delivers the kill window.
 		drops [][]byte
+		// M10a: pickupAck/pickupGone capture the loot-loop frames CZ_ITEM_PICKUP
+		// yields — the success ack (ZC_ITEM_PICKUP_ACK result=0) and the floor
+		// vanish (ZC_ITEM_DISAPPEAR). They may land in the same drain as the late
+		// kill/EXP frames or in the dedicated pickup drain, so capture at whichever
+		// read site delivers them.
+		pickupAck  []byte
+		pickupGone []byte
 	)
 	handleCombat := func(op uint16, frame []byte) {
 		switch op {
@@ -904,6 +911,10 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 			// Sticky_Mucus, Apple, Empty_Bottle) may or may not, so capture them
 			// all and assert only the guaranteed Jellopy below.
 			drops = append(drops, frame)
+		case packet.HeaderZCItemPickupAck:
+			pickupAck = frame
+		case packet.HeaderZCItemDisappear:
+			pickupGone = frame
 		case packet.HeaderZCLONGLONGPARCHANGE:
 			// At PACKETVER >= 20170830 clif_updatestatus routes SP_BASEEXP through
 			// the 64-bit ZC_LONGLONGPAR_CHANGE (0x0acb), so EXP rides int64 (offset
@@ -997,6 +1008,36 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 	require.NotNil(t, jellopy,
 		"no Jellopy drop (NameID %d, IT_ETC %d) among %d floor-item frames — item_db AegisName resolution or drop encoding failed",
 		jellopyNameID, jellopyType, len(drops))
+
+	// --- M10a: the loot loop. The player killed the Poring while standing on its
+	// death cell (the chase steps onto mobX/mobY then bursts), and the Jellopy
+	// drops onto that same cell, so the player is within pickup range (Chebyshev
+	// ≤ 2). Read the ground id + drop cell from the captured ZC_ITEM_FALL_ENTRY
+	// (ID at [2:6], X at [13:15], Y at [15:17]); reposition onto the cell to be
+	// range-safe even if a wander tick shifted the death cell; send CZ_ITEM_PICKUP;
+	// then drain for the success ack (ZC_ITEM_PICKUP_ACK result=0, nameid 909) and
+	// the floor vanish (ZC_ITEM_DISAPPEAR AID=groundID). The drain is bounded so
+	// the 5s respawn timer (armed at the kill) cannot starve it. ---
+	groundID := binary.LittleEndian.Uint32((*jellopy)[2:6])
+	dropX := int16(binary.LittleEndian.Uint16((*jellopy)[13:15]))
+	dropY := int16(binary.LittleEndian.Uint16((*jellopy)[15:17]))
+	sendMove(dropX, dropY)
+	drainFrames(t, mapConn, 150*time.Millisecond, handleCombat)
+	var pickup bytes.Buffer
+	require.NoError(t, packet.CZItemPickupRequest{GroundID: groundID}.Encode(&pickup))
+	_, err = mapConn.Write(pickup.Bytes())
+	require.NoError(t, err, "send CZ_ITEM_PICKUP for the Jellopy drop")
+	pickupEnd := time.Now().Add(3 * time.Second)
+	for (pickupAck == nil || pickupGone == nil) && time.Now().Before(pickupEnd) {
+		drainFrames(t, mapConn, 250*time.Millisecond, handleCombat)
+	}
+	require.NotNil(t, pickupAck, "no ZC_ITEM_PICKUP_ACK observed after CZ_ITEM_PICKUP — pickup handler not wired or request rejected without a fail ack")
+	require.Equal(t, uint8(0), pickupAck[33], "ZC_ITEM_PICKUP_ACK result=0 (success)")
+	require.Equal(t, jellopyNameID, binary.LittleEndian.Uint32(pickupAck[6:10]),
+		"ZC_ITEM_PICKUP_ACK nameid is the Jellopy (909) the player picked up")
+	require.NotNil(t, pickupGone, "no ZC_ITEM_DISAPPEAR observed after a successful pickup — floor vanish not broadcast")
+	require.Equal(t, groundID, binary.LittleEndian.Uint32(pickupGone[2:6]),
+		"ZC_ITEM_DISAPPEAR AID is the picked-up ground id")
 
 	// --- respawn: reposition on the home cell, then await the respawned Poring.
 	// di.go wires SystemRespawnScheduler (a real time.AfterFunc); the timer is
@@ -1394,6 +1435,12 @@ func mapFrameSize(op uint16) int {
 		// ItemFallEntryResponse.Size/Encode carry pointer receivers, so the zero
 		// struct is addressed before the call — a value receiver call won't compile.
 		return (&packet.ItemFallEntryResponse{}).Size()
+	case packet.HeaderZCItemPickupAck:
+		// M10a: the pickup success/fail ack (result=0 / result=6). Pointer receiver.
+		return (&packet.ItemPickupAckResponse{}).Size()
+	case packet.HeaderZCItemDisappear:
+		// M10a: the post-pickup floor-vanish broadcast (0x00a1). Pointer receiver.
+		return (&packet.ItemDisappearResponse{}).Size()
 	default:
 		return 0
 	}

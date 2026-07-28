@@ -49,6 +49,9 @@ type Handlers struct {
 	// OnCZRestart serves CZ_RESTART (0x00b2), the leave-world request (respawn
 	// or return to char select). Provided by the world module (M7).
 	OnCZRestart domain.PacketHandler
+	// OnCZItemPickup serves CZ_ITEM_PICKUP (0x009f), the floor-item pickup
+	// request. Provided by the world module (M10a).
+	OnCZItemPickup domain.PacketHandler
 }
 
 // BuildDispatcher assembles the three role-keyed dispatch tables from the
@@ -91,6 +94,9 @@ func BuildDispatcher(h Handlers) *domain.Dispatcher {
 	}
 	if h.OnCZRestart != nil {
 		mapT[packet.HeaderCZRESTART] = h.OnCZRestart
+	}
+	if h.OnCZItemPickup != nil {
+		mapT[packet.HeaderCZITEMPICKUP] = h.OnCZItemPickup
 	}
 	return domain.NewDispatcher(login, char, mapT)
 }

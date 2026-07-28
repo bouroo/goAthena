@@ -24,6 +24,7 @@ import (
 	gwapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
 	gwdomain "github.com/bouroo/goAthena/internal/modules/gateway/domain"
 	gwinfra "github.com/bouroo/goAthena/internal/modules/gateway/infra"
+	"github.com/bouroo/goAthena/internal/modules/inventory"
 	"github.com/bouroo/goAthena/internal/modules/world"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/internal/shared/server"
@@ -113,6 +114,13 @@ func wire(ctx context.Context, injector do.Injector, cfg *config.Config, logger 
 	// concrete character-app handlers.
 	if err := character.Register(ctx, injector); err != nil {
 		return fmt.Errorf("register character: %w", err)
+	}
+
+	// Inventory: the per-character bag (migration 000003) provided under its
+	// domain port. Registered before world so the pickup use case can resolve
+	// the port during world.Register.
+	if err := inventory.Register(ctx, injector); err != nil {
+		return fmt.Errorf("register inventory: %w", err)
 	}
 
 	// World: CZ_ENTER (map-enter trust gate) over the account Authenticator.
@@ -257,6 +265,10 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return fmt.Errorf("resolve CZ_RESTART handler: %w", err)
 	}
+	pickupHandler, err := do.Invoke[*worldapp.PickupHandler](injector)
+	if err != nil {
+		return fmt.Errorf("resolve CZ_ITEM_PICKUP handler: %w", err)
+	}
 	do.ProvideValue(injector, gwapp.Handlers{
 		OnCALogin:         loginHandler.Handle,
 		OnCHEnter:         enterHandler.Handle,
@@ -269,6 +281,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCZChangeDir:     changeDirHandler.Handle,
 		OnCZReqEmotion:    emotionHandler.Handle,
 		OnCZRestart:       restartHandler.Handle,
+		OnCZItemPickup:    pickupHandler.Handle,
 	})
 	return nil
 }

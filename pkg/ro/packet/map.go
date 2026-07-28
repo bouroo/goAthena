@@ -100,6 +100,17 @@ const (
 	// rathena/src/map/clif_packetdb.hpp:60 (`parseable_packet(0x00b9,6,clif_parse_ScriptContinue,2)`).
 	// Fixed 6 bytes: [2:cmd][4:NpcID uint32].
 	HeaderCZREQNEXTSCRIPT uint16 = 0x00b9
+	// P2A: CZ_ITEM_PICKUP (0x009f) — client requests to pick up a floor item.
+	// rathena/src/map/clif_packetdb.hpp:50
+	// (`parseable_packet(0x009f,6,clif_parse_TakeItem,2)`); this is the band
+	// PACKETVER 20250604 resolves to (the higher-line 0x009f entries are older
+	// PACKETVER bands that do not apply). Fixed 6 bytes:
+	// [2:cmd=0x009f][4:map_object_id uint32] — the floor item's ground id (the
+	// same id ZC_ITEM_FALL_ENTRY carries). clif_parse_TakeItem reads it with
+	// RFIFOL(fd,2); EVERY failure branch falls through to a fail ack, so the
+	// pickup handler must always answer (see map_item_drop.go
+	// ItemPickupAckResponse).
+	HeaderCZITEMPICKUP uint16 = 0x009f
 	// P2A: CZ_USE_ITEM2 (0x0439) — client requests to use a consumable
 	// item. rathena/src/map/clif_packetdb.hpp:1151
 	// (`parseable_packet(0x0439,8,clif_parse_UseItem,2,4)`).
@@ -538,6 +549,9 @@ const (
 	// sizeCZUseItem2 = int16 packetType + uint16 index + uint32 AID = 2+2+4 = 8
 	// (rathena/src/map/clif_packetdb.hpp:1151).
 	sizeCZUseItem2 = 8
+	// sizeCZItemPickup = int16 packetType + uint32 map_object_id = 2+4 = 6
+	// (rathena/src/map/clif_packetdb.hpp:50).
+	sizeCZItemPickup = 6
 	// sizeCZDropItem = int16 packetType + uint16 index + uint16 amount = 2+2+2 = 6.
 	// Shared by every modern DropItem opcode band (clif_packetdb.hpp:1385-1606).
 	sizeCZDropItem = 6
@@ -974,6 +988,12 @@ func NewMapServerDB() *DB {
 	// and three S→C acks. See the per-constant source citations above
 	// for the rAthena packetdb / packets.hpp / packets_struct.hpp
 	// lines that pin each opcode and on-wire size to PACKETVER 20250604.
+	db.Register(Definition{
+		ID:        HeaderCZITEMPICKUP,
+		Name:      "CZ_ITEM_PICKUP",
+		Length:    sizeCZItemPickup,
+		Direction: DirectionClientToServer,
+	})
 	db.Register(Definition{
 		ID:        HeaderCZUSEITEM2,
 		Name:      "CZ_USE_ITEM2",

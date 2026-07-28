@@ -21,6 +21,7 @@ import (
 	"github.com/bouroo/goAthena/internal/config"
 	accountdomain "github.com/bouroo/goAthena/internal/modules/account/domain"
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
 	"github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/internal/modules/world/infra"
@@ -130,6 +131,24 @@ func Register(ctx context.Context, c do.Injector) error {
 	combat := app.NewCombatService(registry, mobs, maps, mobDB, chars, app.SystemClock(), app.SystemRespawnScheduler{}, fs, gm, itemDB, floorItems, nil)
 	do.ProvideValue(c, combat)
 	do.ProvideValue(c, app.NewActionHandler(combat))
+
+	// M10a: the pickup service. It shares the combat floor-item index + player
+	// registry + map store + item_db, and adds the inventory port the bag
+	// mutation goes through. The inventory module registers its repository under
+	// this domain port (the interface-cast widen character/di.go uses), so the
+	// world module resolves it without importing inventory/infra — the cross-
+	// module license arch_test grants. inventory is a hard dependency (the loot
+	// loop is a core feature and the table always exists once migrated), so a
+	// missing registration fails boot with a clear error rather than silently
+	// disabling pickups. The clock stamps the pickup animation's ZC_NOTIFY_ACT,
+	// the same SystemClock movement stamps; the handler is provided for the
+	// composition root to thread into the map-role dispatch table.
+	invRepo, err := do.Invoke[invdomain.InventoryRepository](c)
+	if err != nil {
+		return fmt.Errorf("world: resolve inventory repository: %w", err)
+	}
+	pickup := app.NewPickupService(floorItems, registry, maps, invRepo, itemDB, app.SystemClock())
+	do.ProvideValue(c, app.NewPickupHandler(pickup))
 
 	// M7: player-expression handlers. The time handler echoes the shared server
 	// tick (ZC_NOTIFY_TIME) against the same Clock movement stamps MoveStartTime

@@ -122,7 +122,8 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// frames (ZC_ITEM_ENTRY/DISAPPEAR/THROW_ACK/PICKUP_ACK) → 73.
 	// M7c adds ZC_LONGLONGPAR_CHANGE (0x0acb) for the 64-bit exp parameters at
 	// PACKETVER >= 20170830 → 74.
-	const want = 74
+	// M10a adds CZ_ITEM_PICKUP (0x009f) → 75.
+	const want = 75
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -169,6 +170,7 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCSETUNITIDLE, sizeZCSetUnitIdle},
 		{HeaderZCUNITWALKING, sizeZCUnitWalking},
 		// P2A: inventory equip/use family.
+		{HeaderCZITEMPICKUP, sizeCZItemPickup},
 		{HeaderCZUSEITEM2, sizeCZUseItem2},
 		{HeaderCZREQWEAREQUIPV5, sizeCZReqWearEquipV5},
 		{HeaderCZREQTAKEOFFEQUIP, sizeCZReqTakeoffEquip},

@@ -14,11 +14,12 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
-	"gopkg.in/yaml.v3"
 )
 
 // stepSource is the indirection over the wander step's RNG so unit tests can

@@ -185,8 +185,16 @@ func (r *ItemThrowAckResponse) Encode(w io.Writer) error {
 }
 
 // ItemPickupAckResponse encodes ZC_ITEM_PICKUP_ACK (0x0b41) — the SELF ack
-// of a successful pickup. The >=20200916 band wins at PACKETVER 20250604;
-// every conditional gate below is open. Result: 0=fail, 1=success.
+// of a pickup. The >=20200916 band wins at PACKETVER 20250604; every conditional
+// gate below is open. Result byte (offset 33): 0 = success (the item fields are
+// valid and the client adds the row to the bag), nonzero = failure — clif_additem
+// (clif.cpp:2836) zeroes the whole frame and writes only result=fail, and
+// clif_parse_TakeItem's (clif.cpp:12024) every failure branch falls through to
+// clif_additem(sd,0,0,6) with the verbatim comment "Client REQUIRES a fail packet
+// or you can no longer pick items." So a pickup request must always yield one of
+// these frames: success result=0, or fail result=6. (The wire also carries
+// low-level/low-weight results elsewhere — ADDITEM_* — but the pickup path only
+// emits 0 and 6.)
 //
 //	int16  PacketType      (2) offset 0
 //	uint16 Index           (2) offset 2   destination inventory slot
