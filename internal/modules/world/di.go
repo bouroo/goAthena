@@ -78,6 +78,14 @@ func Register(ctx context.Context, c do.Injector) error {
 	do.ProvideValue(c, mobs)
 	mobDB := loadMobDB(c, cfg.Zone)
 
+	// M11b: the NPC registry, the live index of static script NPCs. World provides
+	// it empty; the content module (M11c) populates it at boot from the loaded
+	// scripts and the spawn exchange fans each NPC out to entering players. An
+	// empty registry makes the NPC branch of the spawn exchange a no-op, so a zone
+	// with no scripts still boots and plays.
+	npcs := domain.NewNPCRegistry()
+	do.ProvideValue(c, npcs)
+
 	// M8: resolve the game-mode formula set once. zone.renewal selects Renewal vs
 	// Pre-Renewal; every status/damage use case receives this FormulaSet instead
 	// of branching on the mode itself, so no formula logic leaks into a bounded
@@ -97,7 +105,7 @@ func Register(ctx context.Context, c do.Injector) error {
 	}
 	do.ProvideValue(c, mobSvc)
 
-	spawner := app.NewSpawnService(chars, maps, registry, mobs, fs)
+	spawner := app.NewSpawnService(chars, maps, registry, mobs, npcs, fs)
 	do.ProvideValue(c, app.NewMapEnterHandler(auth, app.DefaultSpawn, spawner))
 
 	// M4c: the movement worker. A single MoveService owns every map's

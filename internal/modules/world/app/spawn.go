@@ -43,6 +43,7 @@ type SpawnService struct {
 	maps     domain.MapStore
 	registry *domain.PlayerRegistry
 	mobs     *domain.MobRegistry
+	npcs     *domain.NPCRegistry
 	fs       statcalc.FormulaSet
 }
 
@@ -50,11 +51,13 @@ type SpawnService struct {
 // across the whole process (one per server), so callers must pass the same
 // instance to every SpawnService and to the disconnect/movement paths. mobs is
 // the mob registry MobService populates at boot; an empty registry (no mob_db)
-// makes the mob branch of the spawn exchange a no-op. fs is the resolved
-// game-mode formula set (PreRenewal or Renewal) used to build the enter status
-// burst; resolve it once from a statcalc.Registry at composition time.
-func NewSpawnService(chars domain.CharacterGetter, maps domain.MapStore, registry *domain.PlayerRegistry, mobs *domain.MobRegistry, fs statcalc.FormulaSet) *SpawnService {
-	return &SpawnService{chars: chars, maps: maps, registry: registry, mobs: mobs, fs: fs}
+// makes the mob branch of the spawn exchange a no-op. npcs is the NPC registry
+// the content module populates at boot; an empty registry makes the NPC branch of
+// the spawn exchange a no-op. fs is the resolved game-mode formula set
+// (PreRenewal or Renewal) used to build the enter status burst; resolve it once
+// from a statcalc.Registry at composition time.
+func NewSpawnService(chars domain.CharacterGetter, maps domain.MapStore, registry *domain.PlayerRegistry, mobs *domain.MobRegistry, npcs *domain.NPCRegistry, fs statcalc.FormulaSet) *SpawnService {
+	return &SpawnService{chars: chars, maps: maps, registry: registry, mobs: mobs, npcs: npcs, fs: fs}
 }
 
 // EnterWorld is the spawn-on-enter use case. It runs after MapEnterHandler has
@@ -277,8 +280,15 @@ func (s *SpawnService) exchangeSpawns(mp *domain.Map, player *domain.Player, sel
 				return fmt.Errorf("spawn: encode neighbor ZC_SPAWN_UNIT for account %d: %w", e.ID, err)
 			}
 		case aoi.EntityNPC:
-			// NPCs surface to the client via their own spawn path (M14+); they are
-			// not part of the PC/mob spawn exchange. Listed for exhaustiveness.
+			npc, ok := s.npcs.ByEntity(e.ID)
+			if !ok {
+				continue // a torn-down NPC the grid has not yet removed
+			}
+			// NPCs are static: the frame flows one way, NPC→entering-player, like
+			// mobs. There is no reverse reveal (the NPC has no Conn).
+			if err := npc.SpawnUnit().Encode(connWriter{player.Conn}); err != nil {
+				return fmt.Errorf("spawn: encode NPC ZC_SET_UNIT_IDLE for entity %d: %w", e.ID, err)
+			}
 		}
 	}
 	return nil
