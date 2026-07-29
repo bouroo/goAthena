@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -12,25 +13,33 @@ import (
 )
 
 // DialogService is the application-layer facade that handlers delegate to. It
-// owns the per-NPC dialog state store, the script store, and the world port
-// the dialog VMs use to mutate player state.
+// owns the per-NPC dialog state store, the script store, the shop-NPC index
+// (used to route CZ_CONTACTNPC for shop NPCs to the deal-type selector
+// instead of a script dialog), and the world port the dialog VMs use to
+// mutate player state.
 type DialogService struct {
 	world          domain.World
 	dialogRegistry domain.DialogRegistry
 	scripts        *ScriptStore
+	shopNPCs       map[uint32]bool
 }
 
 // NewDialogService wires the dependencies every dialog handler needs into a
-// single facade.
+// single facade. shopNPCs is the set of NPC EntityIDs that are shop NPCs;
+// these short-circuit CZ_CONTACTNPC to ZC_SELECT_DEALTYPE rather than running
+// a dialog script. A nil or empty map is acceptable: with no shop NPCs
+// registered, every NPC follows the script flow.
 func NewDialogService(
 	world domain.World,
 	dialogRegistry domain.DialogRegistry,
 	scripts *ScriptStore,
+	shopNPCs map[uint32]bool,
 ) *DialogService {
 	return &DialogService{
 		world:          world,
 		dialogRegistry: dialogRegistry,
 		scripts:        scripts,
+		shopNPCs:       shopNPCs,
 	}
 }
 
@@ -44,10 +53,12 @@ func NewContactNPCHandler(svc *DialogService) *ContactNPCHandler {
 	return &ContactNPCHandler{svc: svc}
 }
 
-// Handle starts a dialog session for the NPC the client clicked. The compiled
-// script runs on its own goroutine, blocking on the dialog channel for Next/
-// Close advancement. Unauthenticated connections (never passed the
-// CZ_ENTER gate) drop the click silently.
+// Handle starts a dialog session for the NPC the client clicked. Shop NPCs
+// short-circuit to the Buy/Sell/Cancel deal-type selector (ZC_SELECT_DEALTYPE)
+// instead of a script dialog; everything else runs its compiled script on
+// its own goroutine, blocking on the dialog channel for Next/Close
+// advancement. Unauthenticated connections (never passed the CZ_ENTER gate)
+// drop the click silently.
 func (h *ContactNPCHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
 	req, err := packet.ParseCZContactNPC(frame.Raw)
 	if err != nil {
@@ -58,6 +69,20 @@ func (h *ContactNPCHandler) Handle(ctx context.Context, conn gwdomain.Conn, fram
 	if auth.AccountID == 0 {
 		// Connection never passed the CZ_ENTER gate; the dialog is dropped but
 		// the session stays open.
+		return nil
+	}
+
+	// Shop NPCs bypass the script dialog entirely: the client pops up the
+	// Buy/Sell/Cancel selector and the deal-type response (U4) drives the
+	// rest of the shop flow. No dialog session is opened on this branch.
+	if h.svc.shopNPCs != nil && h.svc.shopNPCs[req.AID] {
+		var buf bytes.Buffer
+		if err := (packet.SelectDealtypeResponse{NpcID: req.AID}).Encode(&buf); err != nil {
+			return fmt.Errorf("encode ZC_SELECT_DEALTYPE: %w", err)
+		}
+		if err := conn.Write(buf.Bytes()); err != nil {
+			return fmt.Errorf("send ZC_SELECT_DEALTYPE: %w", err)
+		}
 		return nil
 	}
 

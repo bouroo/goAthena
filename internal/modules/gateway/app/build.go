@@ -72,6 +72,10 @@ type Handlers struct {
 	// OnCZCloseDialog serves CZ_CLOSE_DIALOG (0x0146), ending the dialog.
 	// Provided by the content module.
 	OnCZCloseDialog domain.PacketHandler
+	// OnCZAckSelectDealtype serves CZ_ACK_SELECT_DEALTYPE (0x00c5), the
+	// Buy/Sell/Cancel deal-type selection after contacting a shop NPC.
+	// Provided by the shop module (M13).
+	OnCZAckSelectDealtype domain.PacketHandler
 }
 
 // BuildDispatcher assembles the three role-keyed dispatch tables from the
@@ -131,5 +135,6 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table = addHandler(table, packet.HeaderCZCONTACTNPC, h.OnCZContactNPC)
 	table = addHandler(table, packet.HeaderCZREQNEXTSCRIPT, h.OnCZReqNextScript)
 	table = addHandler(table, packet.HeaderCZCHOOSEMENU, h.OnCZChooseMenu)
-	return addHandler(table, packet.HeaderCZCLOSEDIALOG, h.OnCZCloseDialog)
+	table = addHandler(table, packet.HeaderCZCLOSEDIALOG, h.OnCZCloseDialog)
+	return addHandler(table, packet.HeaderCZACKSELECTDEALTYPE, h.OnCZAckSelectDealtype)
 }
