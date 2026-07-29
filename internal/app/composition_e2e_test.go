@@ -130,6 +130,12 @@ func loadConfigForE2E(t *testing.T) *config.Config {
 	// only rebase the ones actually set (Clean("")=="." would otherwise turn an
 	// unset path into the repo root).
 	cfg.Zone.MapDir = filepath.Join(root, filepath.Clean(cfg.Zone.MapDir))
+	// ScriptDir is relative in config.yaml (e.g. ./data/npc); the shop data dir
+	// is derived from it (filepath.Dir(scriptDir) + "/shop"), so both must resolve
+	// from the repo root, not the test's package CWD.
+	if cfg.Zone.ScriptDir != "" {
+		cfg.Zone.ScriptDir = filepath.Join(root, filepath.Clean(cfg.Zone.ScriptDir))
+	}
 	if cfg.Zone.MobDBPath != "" {
 		cfg.Zone.MobDBPath = filepath.Join(root, filepath.Clean(cfg.Zone.MobDBPath))
 	}
@@ -694,25 +700,29 @@ func TestServe_MapEnter_ShowsSpawnedMobs(t *testing.T) {
 	// self-spawn and the mob spawns.
 	drainEnterStatusBurst(t, mapConn)
 
-	// Frames 1..4: the four mobs, keyed by sprite id (the spawn packet's job slot).
+	// Scan spawn frames collecting the 4 mobs. With scripts loaded (U3+), NPC
+	// spawn frames interleave with mob frames in the enter burst; filter by
+	// ObjectType == BL_MOB (5) and skip NPC spawns.
 	seen := make(map[int16]string, mobCount)
-	mobBurst := make([]byte, spawnSize*mobCount)
-	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
-	_, err = io.ReadFull(mapConn, mobBurst)
-	require.NoError(t, err, "no mob spawn burst received; SpawnAll likely placed no mobs in AOI range")
-	for i := 0; i < mobCount; i++ {
-		f := mobBurst[i*spawnSize : (1+i)*spawnSize]
-		require.Equal(t, packet.HeaderZCSPAWNUNIT, binary.LittleEndian.Uint16(f[0:2]),
-			"mob frame header is ZC_SPAWN_UNIT")
-		require.Equal(t, uint8(5), f[4], "mob ObjectType is BL_MOB (NPC_MOB_TYPE)")
-		assert.GreaterOrEqual(t, binary.LittleEndian.Uint32(f[5:9]), worlddomain.MobIDBase,
+	mobDeadline := time.Now().Add(5 * time.Second)
+	for len(seen) < mobCount && time.Now().Before(mobDeadline) {
+		require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+		frame, ok := readMapFrame(t, mapConn)
+		if !ok {
+			continue
+		}
+		if binary.LittleEndian.Uint16(frame) != packet.HeaderZCSPAWNUNIT || frame[4] != 5 {
+			continue // PC self-spawn, NPC spawn, or non-mob frame.
+		}
+		assert.GreaterOrEqual(t, binary.LittleEndian.Uint32(frame[5:9]), worlddomain.MobIDBase,
 			"mob AID is in the mob partition (>= START_NPC_NUM), disjoint from account_ids")
-		assert.Equal(t, uint32(0), binary.LittleEndian.Uint32(f[9:13]),
+		assert.Equal(t, uint32(0), binary.LittleEndian.Uint32(frame[9:13]),
 			"mob GID is 0 (no map_session_data)")
-		assert.Equal(t, int32(-1), int32(binary.LittleEndian.Uint32(f[72:76])), "mob MaxHP = -1 at full HP")
-		assert.Equal(t, int32(-1), int32(binary.LittleEndian.Uint32(f[76:80])), "mob HP = -1 at full HP")
-		seen[int16(binary.LittleEndian.Uint16(f[23:25]))] = string(bytes.TrimRight(f[83:107], "\x00"))
+		assert.Equal(t, int32(-1), int32(binary.LittleEndian.Uint32(frame[72:76])), "mob MaxHP = -1 at full HP")
+		assert.Equal(t, int32(-1), int32(binary.LittleEndian.Uint32(frame[76:80])), "mob HP = -1 at full HP")
+		seen[int16(binary.LittleEndian.Uint16(frame[23:25]))] = string(bytes.TrimRight(frame[83:107], "\x00"))
 	}
+	require.Len(t, seen, mobCount, "did not see all %d mob spawns in the enter burst", mobCount)
 
 	assert.Equal(t, map[int16]string{
 		1002: "Poring", 1063: "Lunatic", 1113: "Drops", 1014: "Spore",
@@ -1615,7 +1625,12 @@ func readMapFrame(t *testing.T, conn net.Conn) ([]byte, bool) {
 	}
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
 	op := binary.LittleEndian.Uint16(opBuf)
-	if op == packet.HeaderZCSPAWNUNIT || op == packet.HeaderZCUNITWALKING {
+	if op == packet.HeaderZCSPAWNUNIT || op == packet.HeaderZCUNITWALKING ||
+		op == packet.HeaderZCSETUNITIDLE ||
+		op == packet.HeaderZCPCPURCHASEITEMLIST ||
+		op == packet.HeaderZCINVENTORYITEMLISTNORMAL ||
+		op == packet.HeaderZCINVENTORYITEMLISTEQUIP ||
+		op == packet.HeaderZCINVENTORYSTART || op == packet.HeaderZCINVENTORYEND {
 		lenBuf := make([]byte, 2)
 		_, err := io.ReadFull(conn, lenBuf)
 		require.NoErrorf(t, err, "read length prefix of opcode 0x%04x", op)
@@ -1681,6 +1696,12 @@ func mapFrameSize(op uint16) int {
 	case packet.HeaderZCUSEITEMACK2:
 		// M12: the use-item ack (0x01c8, Result 0=fail/1=success). Value receiver.
 		return packet.UseItemAck2Response{}.Size()
+	case packet.HeaderZCSELECTDEALTYPE:
+		// M13: NPC shop deal-type selector (0x00c4, 6 bytes fixed).
+		return packet.SelectDealtypeResponse{}.Size()
+	case packet.HeaderZCPCPURCHASERESULT:
+		// M13: shop purchase result ack (0x00ca, 3 bytes fixed).
+		return packet.PurchaseResultResponse{}.Size()
 	default:
 		return 0
 	}
@@ -1936,4 +1957,153 @@ func resetCharsForAccount(t *testing.T, cfg *config.Config, accountID uint32) *g
 		_ = gdb.Exec("DELETE FROM `char` WHERE account_id = ?", accountID).Error
 	})
 	return gdb
+}
+
+// setCharZeny updates the zeny column for a char row so the e2e test can
+// seed a known balance before the player enters the map.
+func setCharZeny(t *testing.T, cfg *config.Config, charID uint32, zeny uint32) {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to set zeny")
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, gdb.Exec(
+		`UPDATE `+"`char`"+` SET zeny = ? WHERE char_id = ?`, zeny, charID).Error,
+		"set char zeny for shop test")
+}
+
+// readCharZeny queries the persisted zeny for post-purchase verification.
+func readCharZeny(t *testing.T, cfg *config.Config, charID uint32) uint32 {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to read zeny")
+	t.Cleanup(func() { sqlDB, _ := gdb.DB(); _ = sqlDB.Close() })
+	var zeny uint32
+	require.NoError(t, gdb.Raw(
+		`SELECT zeny FROM `+"`char`"+` WHERE char_id = ?`, charID).Scan(&zeny).Error,
+		"read persisted zeny")
+	return zeny
+}
+
+// readUntilCmd reads frames via readMapFrame until it finds one whose leading
+// opcode matches wantCmd, or findTimeout elapses. It returns the full frame.
+// Frames with other opcodes are silently discarded (drained).
+func readUntilCmd(t *testing.T, conn net.Conn, wantCmd uint16, findTimeout time.Duration) []byte {
+	t.Helper()
+	deadline := time.Now().Add(findTimeout)
+	for time.Now().Before(deadline) {
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+		frame, ok := readMapFrame(t, conn)
+		if !ok {
+			continue
+		}
+		if binary.LittleEndian.Uint16(frame) == wantCmd {
+			require.NoError(t, conn.SetReadDeadline(time.Time{}))
+			return frame
+		}
+	}
+	t.Fatalf("readUntilCmd: opcode 0x%04x not seen within %v", wantCmd, findTimeout)
+	return nil
+}
+
+// TestServe_ShopBuy exercises the full NPC shop buy loop: contact a shop NPC,
+// select Buy, purchase an item, and verify zeny is deducted and the purchase
+// succeeds. The shop NPC "Tool Shop" is loaded from data/shop/prontera.yml at
+// prontera(155,153). Script NPCs from data/npc/*.txt are allocated first
+// (alphabetical: healer.txt → sample.txt), then shop NPCs; the Tool Shop is
+// the 3rd NPC so its EntityID = NPCIDBase + 2.
+func TestServe_ShopBuy(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate())
+
+	const startZeny uint32 = 100000
+	seedCharID := seedCombatChar(t, cfg, seededAccountID, "E2eBuyer", "prontera", 155, 150)
+	setCharZeny(t, cfg, seedCharID, startZeny)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err)
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	// Login → CZ_ENTER → map enter
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1)
+	require.NoError(t, loginConn.Close())
+
+	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eBuyer")
+	defer mapConn.Close()
+
+	// --- Step 1: CZ_CONTACTNPC → ZC_SELECT_DEALTYPE ---
+	// Script NPCs (healer.txt, sample.txt) are allocated first, then shop NPCs.
+	shopNpcID := worlddomain.NPCIDBase + 2
+	var contact bytes.Buffer
+	require.NoError(t, (packet.CZContactNPCRequest{AID: shopNpcID, Type: 1}).Encode(&contact))
+	_, err = mapConn.Write(contact.Bytes())
+	require.NoError(t, err, "send CZ_CONTACTNPC")
+
+	resp := readUntilCmd(t, mapConn, packet.HeaderZCSELECTDEALTYPE, 5*time.Second)
+	require.Equal(t, shopNpcID, binary.LittleEndian.Uint32(resp[2:6]),
+		"ZC_SELECT_DEALTYPE NpcID must match the shop NPC EntityID")
+
+	// --- Step 2: CZ_ACK_SELECT_DEALTYPE(type=0=Buy) → ZC_PC_PURCHASE_ITEMLIST ---
+	var dealtype bytes.Buffer
+	require.NoError(t, (packet.CZAckSelectDealTypeRequest{NpcID: shopNpcID, Type: 0}).Encode(&dealtype))
+	_, err = mapConn.Write(dealtype.Bytes())
+	require.NoError(t, err, "send CZ_ACK_SELECT_DEALTYPE")
+
+	listFrame := readUntilCmd(t, mapConn, packet.HeaderZCPCPURCHASEITEMLIST, 5*time.Second)
+	totalLen := binary.LittleEndian.Uint16(listFrame[2:4])
+	require.Greater(t, totalLen, uint16(4), "purchase list must have at least one item")
+	// First item starts at offset 4. ShopBuyItem: [4:itemId][8:price][12:discountPrice]...
+	firstItemID := binary.LittleEndian.Uint32(listFrame[4:8])
+	firstPrice := binary.LittleEndian.Uint32(listFrame[8:12])
+	assert.Equal(t, uint32(501), firstItemID, "first shop item should be Red Potion (501)")
+	assert.Equal(t, uint32(50), firstPrice, "Red Potion price should be 50z")
+
+	// --- Step 3: CZ_PC_PURCHASE_ITEMLIST → ZC_PC_PURCHASE_RESULT ---
+	var purchase bytes.Buffer
+	require.NoError(t, (packet.CZPCPurchaseItemListRequest{
+		Entries: []packet.CZPCPurchaseItemListEntry{
+			{ItemID: 501, Amount: 2},
+		},
+	}).Encode(&purchase))
+	_, err = mapConn.Write(purchase.Bytes())
+	require.NoError(t, err, "send CZ_PC_PURCHASE_ITEMLIST")
+
+	resultFrame := readUntilCmd(t, mapConn, packet.HeaderZCPCPURCHASERESULT, 5*time.Second)
+	assert.Equal(t, uint8(0), resultFrame[2], "result=0 means purchase succeeded")
+
+	// --- Verify: zeny was deducted ---
+	finalZeny := readCharZeny(t, cfg, seedCharID)
+	expectedZeny := startZeny - 2*50 // 100000 - 100 = 99900
+	assert.Equal(t, expectedZeny, finalZeny, "zeny should be deducted by 2 Red Potions at 50z each")
 }

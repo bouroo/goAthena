@@ -20,6 +20,8 @@ import (
 	accountapp "github.com/bouroo/goAthena/internal/modules/account/app"
 	"github.com/bouroo/goAthena/internal/modules/character"
 	characterapp "github.com/bouroo/goAthena/internal/modules/character/app"
+	"github.com/bouroo/goAthena/internal/modules/commerce/shop"
+	shopapp "github.com/bouroo/goAthena/internal/modules/commerce/shop/app"
 	"github.com/bouroo/goAthena/internal/modules/content"
 	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
 	"github.com/bouroo/goAthena/internal/modules/gateway"
@@ -145,6 +147,9 @@ func wireFeatureModules(ctx context.Context, injector do.Injector, cfg *config.C
 	}
 	if err := content.Register(injector, cfg.Zone.ScriptDir); err != nil {
 		return fmt.Errorf("register content: %w", err)
+	}
+	if err := shop.Register(injector); err != nil {
+		return fmt.Errorf("register shop: %w", err)
 	}
 	return nil
 }
@@ -340,26 +345,32 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return err
 	}
+	buySvc, err := invokeOr[*shopapp.BuyService](injector, "resolve shop buy service")
+	if err != nil {
+		return err
+	}
 	do.ProvideValue(injector, gwapp.Handlers{
-		OnCALogin:           login.Handle,
-		OnCHEnter:           enter.Handle,
-		OnCHSelectChar:      sel.Handle,
-		OnCHMakeChar:        mk.Handle,
-		OnCZEnter:           mapEnter.Handle,
-		OnCZRequestMove:     move.Handle,
-		OnCZActionRequest:   action.Handle,
-		OnCZRequestTime:     timeH.Handle,
-		OnCZChangeDir:       changeDir.Handle,
-		OnCZReqEmotion:      emotion.Handle,
-		OnCZRestart:         restart.Handle,
-		OnCZItemPickup:      pickup.Handle,
-		OnCZUseItem:         useItem.Handle,
-		OnCZReqWearEquip:    equip.Handle,
-		OnCZReqTakeoffEquip: takeoff.Handle,
-		OnCZContactNPC:      contact.Handle,
-		OnCZReqNextScript:   next.Handle,
-		OnCZChooseMenu:      menu.Handle,
-		OnCZCloseDialog:     closeDlg.Handle,
+		OnCALogin:              login.Handle,
+		OnCHEnter:              enter.Handle,
+		OnCHSelectChar:         sel.Handle,
+		OnCHMakeChar:           mk.Handle,
+		OnCZEnter:              mapEnter.Handle,
+		OnCZRequestMove:        move.Handle,
+		OnCZActionRequest:      action.Handle,
+		OnCZRequestTime:        timeH.Handle,
+		OnCZChangeDir:          changeDir.Handle,
+		OnCZReqEmotion:         emotion.Handle,
+		OnCZRestart:            restart.Handle,
+		OnCZItemPickup:         pickup.Handle,
+		OnCZUseItem:            useItem.Handle,
+		OnCZReqWearEquip:       equip.Handle,
+		OnCZReqTakeoffEquip:    takeoff.Handle,
+		OnCZContactNPC:         contact.Handle,
+		OnCZReqNextScript:      next.Handle,
+		OnCZChooseMenu:         menu.Handle,
+		OnCZCloseDialog:        closeDlg.Handle,
+		OnCZAckSelectDealtype:  buySvc.HandleAckSelectDealtype,
+		OnCZPCPurchaseItemList: buySvc.HandlePurchaseItemList,
 	})
 	return nil
 }

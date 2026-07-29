@@ -135,6 +135,7 @@ func Register(ctx context.Context, c do.Injector) error {
 	// synchronously on the conn goroutine; the handler is provided for the
 	// composition root to thread into the map-role dispatch table.
 	itemDB := loadItemDB(c, cfg.Zone)
+	do.ProvideValue(c, itemDB)
 	floorItems := domain.NewFloorItemRegistry()
 	combat := app.NewCombatService(registry, mobs, maps, mobDB, chars, app.SystemClock(), app.SystemRespawnScheduler{}, fs, gm, itemDB, floorItems, nil)
 	do.ProvideValue(c, combat)
