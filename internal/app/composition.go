@@ -371,6 +371,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCZCloseDialog:        closeDlg.Handle,
 		OnCZAckSelectDealtype:  buySvc.HandleAckSelectDealtype,
 		OnCZPCPurchaseItemList: buySvc.HandlePurchaseItemList,
+		OnCZPCSellItemList:     buySvc.HandleSellItemList,
 	})
 	return nil
 }

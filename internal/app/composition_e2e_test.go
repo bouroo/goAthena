@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -1628,6 +1629,7 @@ func readMapFrame(t *testing.T, conn net.Conn) ([]byte, bool) {
 	if op == packet.HeaderZCSPAWNUNIT || op == packet.HeaderZCUNITWALKING ||
 		op == packet.HeaderZCSETUNITIDLE ||
 		op == packet.HeaderZCPCPURCHASEITEMLIST ||
+		op == packet.HeaderZCPCSELLITEMLIST ||
 		op == packet.HeaderZCINVENTORYITEMLISTNORMAL ||
 		op == packet.HeaderZCINVENTORYITEMLISTEQUIP ||
 		op == packet.HeaderZCINVENTORYSTART || op == packet.HeaderZCINVENTORYEND {
@@ -1702,6 +1704,8 @@ func mapFrameSize(op uint16) int {
 	case packet.HeaderZCPCPURCHASERESULT:
 		// M13: shop purchase result ack (0x00ca, 3 bytes fixed).
 		return packet.PurchaseResultResponse{}.Size()
+	case packet.HeaderZCPCSELLRESULT:
+		return packet.SellResultResponse{}.Size()
 	default:
 		return 0
 	}
@@ -1907,6 +1911,33 @@ func seedRedPotionInBag(t *testing.T, cfg *config.Config, charID uint32) {
 	t.Cleanup(func() { _ = gdb.Exec("DELETE FROM inventory WHERE char_id = ?", charID).Error })
 }
 
+// seedShopRedPotion inserts five Red Potions (nameid 501) at inventory index 0.
+func seedShopRedPotion(t *testing.T, cfg *config.Config, charID uint32) {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to seed shop inventory")
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, gdb.Exec(
+		`INSERT INTO inventory (char_id, nameid, amount, equip) VALUES (?, 501, 5, 0)`,
+		charID).Error, "insert Red Potion (nameid 501) into the char's bag")
+	t.Cleanup(func() { _ = gdb.Exec("DELETE FROM inventory WHERE char_id = ?", charID).Error })
+}
+
+// readInventoryAmount returns the persisted stack amount for a character item.
+func readInventoryAmount(t *testing.T, cfg *config.Config, charID, nameID uint32) uint32 {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to read inventory")
+	t.Cleanup(func() { sqlDB, _ := gdb.DB(); _ = sqlDB.Close() })
+	var amount uint32
+	require.NoError(t, gdb.Raw(
+		`SELECT amount FROM inventory WHERE char_id = ? AND nameid = ? ORDER BY id`, charID, nameID).
+		Scan(&amount).Error, "read persisted inventory amount")
+	return amount
+}
+
 // lowerCharHP drops the seeded char's HP to hp via UPDATE so the post-use
 // ZC_PAR_CHANGE SPHP must strictly exceed hp. The char is reloaded by SpawnService
 // on the next CZ_ENTER, so the seed-then-lower ordering is the only requirement.
@@ -2005,6 +2036,115 @@ func readUntilCmd(t *testing.T, conn net.Conn, wantCmd uint16, findTimeout time.
 	}
 	t.Fatalf("readUntilCmd: opcode 0x%04x not seen within %v", wantCmd, findTimeout)
 	return nil
+}
+
+func writeSellItemDB(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "item_db.yml")
+	const contents = `Header:
+  Type: ITEM_DB
+  Version: 3
+Body:
+  - Id: 501
+    AegisName: Red_Potion
+    Name: Red Potion
+    Type: Healing
+    Buy: 10
+    Sell: 100
+`
+	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600), "write sell item_db fixture")
+	return path
+}
+
+func TestServe_ShopSell(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	cfg.Zone.ItemDBPath = writeSellItemDB(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate())
+
+	const startZeny uint32 = 0
+	seedCharID := seedCombatChar(t, cfg, seededAccountID, "E2eSeller", "prontera", 155, 150)
+	setCharZeny(t, cfg, seedCharID, startZeny)
+	seedShopRedPotion(t, cfg, seedCharID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err)
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1)
+	require.NoError(t, loginConn.Close())
+
+	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eSeller")
+	defer mapConn.Close()
+
+	shopNpcID := worlddomain.NPCIDBase + 2
+	var contact bytes.Buffer
+	require.NoError(t, (packet.CZContactNPCRequest{AID: shopNpcID, Type: 1}).Encode(&contact))
+	_, err = mapConn.Write(contact.Bytes())
+	require.NoError(t, err, "send CZ_CONTACTNPC")
+	resp := readUntilCmd(t, mapConn, packet.HeaderZCSELECTDEALTYPE, 5*time.Second)
+	require.Equal(t, shopNpcID, binary.LittleEndian.Uint32(resp[2:6]))
+
+	var dealtype bytes.Buffer
+	require.NoError(t, (packet.CZAckSelectDealTypeRequest{NpcID: shopNpcID, Type: 1}).Encode(&dealtype))
+	_, err = mapConn.Write(dealtype.Bytes())
+	require.NoError(t, err, "send CZ_ACK_SELECT_DEALTYPE Sell")
+
+	listFrame := readUntilCmd(t, mapConn, packet.HeaderZCPCSELLITEMLIST, 5*time.Second)
+	require.Greater(t, binary.LittleEndian.Uint16(listFrame[2:4]), uint16(4), "sell list must contain Red Potion")
+	var redPotionIndex uint16
+	var redPotionPrice uint32
+	for off := 4; off+10 <= len(listFrame); off += 10 {
+		index := binary.LittleEndian.Uint16(listFrame[off : off+2])
+		if index == 0 {
+			redPotionIndex = index
+			redPotionPrice = binary.LittleEndian.Uint32(listFrame[off+2 : off+6])
+			break
+		}
+	}
+	require.Equal(t, uint16(0), redPotionIndex)
+	require.NotZero(t, redPotionPrice, "Red Potion must be sellable")
+
+	var sell bytes.Buffer
+	require.NoError(t, (packet.CZPCSellItemListRequest{
+		Entries: []packet.CZPCSellItemListEntry{{Index: redPotionIndex, Amount: 2}},
+	}).Encode(&sell))
+	_, err = mapConn.Write(sell.Bytes())
+	require.NoError(t, err, "send CZ_PC_SELL_ITEMLIST")
+
+	resultFrame := readUntilCmd(t, mapConn, packet.HeaderZCPCSELLRESULT, 5*time.Second)
+	assert.Equal(t, uint8(0), resultFrame[2], "result=0 means sale succeeded")
+	assert.Equal(t, startZeny+2*redPotionPrice, readCharZeny(t, cfg, seedCharID))
+	assert.Equal(t, uint32(3), readInventoryAmount(t, cfg, seedCharID, 501))
 }
 
 // TestServe_ShopBuy exercises the full NPC shop buy loop: contact a shop NPC,

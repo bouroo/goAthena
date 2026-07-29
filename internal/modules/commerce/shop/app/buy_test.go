@@ -18,6 +18,7 @@ import (
 	shopapp "github.com/bouroo/goAthena/internal/modules/commerce/shop/app"
 	shopdomain "github.com/bouroo/goAthena/internal/modules/commerce/shop/domain"
 	gwdomain "github.com/bouroo/goAthena/internal/modules/gateway/domain"
+	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
 	inventoryinfra "github.com/bouroo/goAthena/internal/modules/inventory/infra"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
@@ -119,7 +120,12 @@ Body:
   - Id: 501
     Name: Red_Potion
     Type: Healing
+    Sell: 100
     View: 1
+  - Id: 504
+    Name: White_Potion
+    Type: Healing
+    Sell: 0
   - Id: 909
     Name: Jellopy
     Type: Etc
@@ -149,6 +155,12 @@ func makePurchaseItemList(t *testing.T, entries ...packet.CZPCPurchaseItemListEn
 	return gwdomain.Frame{Cmd: packet.HeaderCZPCPURCHASEITEMLIST, Raw: buf.Bytes()}
 }
 
+func makeSellItemList(t *testing.T, entries ...packet.CZPCSellItemListEntry) gwdomain.Frame {
+	var buf bytes.Buffer
+	require.NoError(t, (packet.CZPCSellItemListRequest{Entries: entries}).Encode(&buf))
+	return gwdomain.Frame{Cmd: packet.HeaderCZPCSELLITEMLIST, Raw: buf.Bytes()}
+}
+
 func parseFrames(t *testing.T, b []byte) [][]byte {
 	t.Helper()
 	var out [][]byte
@@ -156,12 +168,14 @@ func parseFrames(t *testing.T, b []byte) [][]byte {
 		cmd := binary.LittleEndian.Uint16(b[0:2])
 		var size int
 		switch cmd {
-		case packet.HeaderZCPCPURCHASEITEMLIST:
-			require.GreaterOrEqual(t, len(b), 4, "ZC_PC_PURCHASE_ITEMLIST too short")
+		case packet.HeaderZCPCPURCHASEITEMLIST, packet.HeaderZCPCSELLITEMLIST:
+			require.GreaterOrEqual(t, len(b), 4, "variable shop response too short")
 			total := int(binary.LittleEndian.Uint16(b[2:4]))
 			size = total
 		case packet.HeaderZCPCPURCHASERESULT:
 			size = packet.PurchaseResultResponse{}.Size()
+		case packet.HeaderZCPCSELLRESULT:
+			size = packet.SellResultResponse{}.Size()
 		case packet.HeaderZCLONGPARCHANGE:
 			size = (&packet.LongParChangeResponse{}).Size()
 		default:
@@ -198,12 +212,84 @@ func TestBuy_AckSelectDealtype_SendsCatalog(t *testing.T) {
 	assert.Equal(t, uint16(1), binary.LittleEndian.Uint16(first[13:15]), "View=1 from itemdb")
 }
 
-func TestBuy_AckSelectDealtype_SellIsNoOp(t *testing.T) {
+func TestSell_AckSelectDealtype_SendsInventory(t *testing.T) {
 	t.Parallel()
 	f := newBuyFixture(t, buyItemDB(t))
+	ctx := context.Background()
+	_, err := f.inv.AddItem(ctx, buyAccID, buyCharID, invdomain.NewItem{
+		NameID: buyPriceID, Amount: 5, Stackable: true,
+	})
+	require.NoError(t, err)
+	_, err = f.inv.AddItem(ctx, buyAccID, buyCharID, invdomain.NewItem{
+		NameID: 504, Amount: 1, Stackable: true,
+	})
+	require.NoError(t, err)
 
-	require.NoError(t, f.svc.HandleAckSelectDealtype(context.Background(), f.conn, makeAckSelectDealtype(t, buyShopID, 1)))
-	assert.Empty(t, f.conn.Bytes(), "Sell/Cancel does not write a packet")
+	require.NoError(t, f.svc.HandleAckSelectDealtype(ctx, f.conn, makeAckSelectDealtype(t, buyShopID, 1)))
+
+	frames := parseFrames(t, f.conn.Bytes())
+	require.Len(t, frames, 1)
+	require.Equal(t, packet.HeaderZCPCSELLITEMLIST, binary.LittleEndian.Uint16(frames[0][0:2]))
+	require.Equal(t, uint16(14), binary.LittleEndian.Uint16(frames[0][2:4]), "one sellable 10-byte item")
+	assert.Equal(t, uint16(0), binary.LittleEndian.Uint16(frames[0][4:6]), "inventory index")
+	assert.Equal(t, uint32(50), binary.LittleEndian.Uint32(frames[0][6:10]), "Sell/2 price")
+	assert.Equal(t, uint32(50), binary.LittleEndian.Uint32(frames[0][10:14]), "no overcharge")
+}
+
+func TestSell_SellItemList_AddsZenyAndRemovesItems(t *testing.T) {
+	t.Parallel()
+	f := newBuyFixture(t, buyItemDB(t))
+	ctx := context.Background()
+	_, err := f.inv.AddItem(ctx, buyAccID, buyCharID, invdomain.NewItem{
+		NameID: buyPriceID, Amount: 5, Stackable: true,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, f.svc.HandleAckSelectDealtype(ctx, f.conn, makeAckSelectDealtype(t, buyShopID, 1)))
+	f.conn.Reset()
+	require.NoError(t, f.svc.HandleSellItemList(ctx, f.conn, makeSellItemList(t,
+		packet.CZPCSellItemListEntry{Index: 0, Amount: 2},
+	)))
+
+	frames := parseFrames(t, f.conn.Bytes())
+	require.Len(t, frames, 2, "sell success + zeny broadcast")
+	require.Equal(t, packet.HeaderZCPCSELLRESULT, binary.LittleEndian.Uint16(frames[0][0:2]))
+	assert.Equal(t, uint8(0), frames[0][2])
+	require.Equal(t, packet.HeaderZCLONGPARCHANGE, binary.LittleEndian.Uint16(frames[1][0:2]))
+	assert.Equal(t, packet.SPZeny, binary.LittleEndian.Uint16(frames[1][2:4]))
+	assert.Equal(t, int32(1100), int32(binary.LittleEndian.Uint32(frames[1][4:8]))) //nolint:gosec // G115: test wire decode
+
+	rows, err := f.inv.LoadByChar(ctx, buyAccID, buyCharID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, uint32(3), rows[0].Amount)
+	char, err := f.chars.GetByID(ctx, buyAccID, buyCharID)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(1100), char.Zeny)
+}
+
+func TestSell_SellItemList_ConsumesMultipleEntriesWithoutIndexShift(t *testing.T) {
+	t.Parallel()
+	f := newBuyFixture(t, buyItemDB(t))
+	ctx := context.Background()
+	_, err := f.inv.AddItem(ctx, buyAccID, buyCharID, invdomain.NewItem{NameID: buyPriceID, Amount: 1})
+	require.NoError(t, err)
+	_, err = f.inv.AddItem(ctx, buyAccID, buyCharID, invdomain.NewItem{NameID: buyPriceID, Amount: 1})
+	require.NoError(t, err)
+
+	require.NoError(t, f.svc.HandleAckSelectDealtype(ctx, f.conn, makeAckSelectDealtype(t, buyShopID, 1)))
+	f.conn.Reset()
+	require.NoError(t, f.svc.HandleSellItemList(ctx, f.conn, makeSellItemList(t,
+		packet.CZPCSellItemListEntry{Index: 0, Amount: 1},
+		packet.CZPCSellItemListEntry{Index: 1, Amount: 1},
+	)))
+
+	frames := parseFrames(t, f.conn.Bytes())
+	require.Len(t, frames, 2)
+	assert.Equal(t, uint8(0), frames[0][2])
+	rows, err := f.inv.LoadByChar(ctx, buyAccID, buyCharID)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
 }
 
 func TestBuy_PurchaseItemList_DeductsZenyAndAddsItems(t *testing.T) {

@@ -1,13 +1,4 @@
-// Package app: the shop buy use case completes the commerce loop the content
-// module opens at CZ_CONTACTNPC. The content module's ContactNPCHandler
-// short-circuits shop NPCs to ZC_SELECT_DEALTYPE (a Buy/Sell/Cancel selector);
-// this use case consumes the Buy selection (CZ_ACK_SELECT_DEALTYPE type=0),
-// ships the catalog as ZC_PC_PURCHASE_ITEMLIST, and resolves the subsequent
-// CZ_PC_PURCHASE_ITEMLIST by validating every entry against the catalog,
-// debiting zeny through the character repository, adding items through the
-// inventory repository, acking the result, and broadcasting the new zeny
-// balance via ZC_LONGPAR_CHANGE. Sell/Cancel are no-ops here — the sell loop
-// is a future milestone, cancel is the client closing the deal window.
+// Package app implements NPC shop buy and sell flows.
 package app
 
 import (
@@ -15,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"sync"
 
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
@@ -32,14 +25,8 @@ type buySession struct {
 	npcID uint32
 }
 
-// BuyService resolves the shop buy flow: the deal-type selector (Buy branch),
-// the catalog broadcast (ZC_PC_PURCHASE_ITEMLIST), and the purchase request
-// (CZ_PC_PURCHASE_ITEMLIST → zeny debit + inventory fill + ZC_PC_PURCHASE_RESULT
-// + ZC_LONGPAR_CHANGE). sessions tracks the active shop dialog per account;
-// the mutex guards the map so a player cannot race two CZ_ACK_SELECT_DEALTYPE
-// frames and double-spend. catalog, items, players, and itemDB are the
-// upstream ports the use case composes — every collaborator is a module's
-// domain port, never a cross-module impl import (the architecture guard).
+// BuyService resolves NPC shop purchases and sales. sessions tracks the active
+// shop dialog per account; the mutex guards the shared map.
 type BuyService struct {
 	catalog  shopdomain.ShopCatalog
 	chars    chardomain.CharacterRepository
@@ -71,44 +58,98 @@ func NewBuyService(
 	}
 }
 
-// HandleAckSelectDealtype serves CZ_ACK_SELECT_DEALTYPE (0x00c5). The Buy
-// selection (type=0) opens the catalog broadcast; Sell/Cancel are no-ops,
-// falling through to return nil so the connection stays open. A missing
-// session is the same outcome as Cancel — the request is rejected by the
-// dispatcher logging, not by a fail packet. An unauthenticated connection
-// (CZ_ENTER not completed) is rejected with a non-nil error so the
-// dispatcher can log it; the conn layer accepts the error and keeps the
-// socket open.
+// HandleAckSelectDealtype serves CZ_ACK_SELECT_DEALTYPE (0x00c5). Buy opens
+// the shop catalog, Sell opens the player's priced inventory, and Cancel leaves
+// the dialog without a response.
 func (s *BuyService) HandleAckSelectDealtype(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
 	req, err := packet.ParseCZAckSelectDealType(frame.Raw)
 	if err != nil {
 		return fmt.Errorf("parse CZ_ACK_SELECT_DEALTYPE: %w", err)
 	}
-	if req.Type != 0 {
-		// Sell (1) and Cancel (2) are out of scope for this use case.
+	if req.Type == 2 {
 		return nil
 	}
-	auth := conn.Auth()
-	if auth.AccountID == 0 {
-		return errors.New("shop buy: connection has no verified account (CZ_ENTER not completed)")
+	if req.Type != 0 && req.Type != 1 {
+		return nil
+	}
+	accountID, err := s.accountID(conn)
+	if err != nil {
+		return err
 	}
 	shop, ok := s.catalog.Get(req.NpcID)
 	if !ok {
-		// The deal-type selector only renders for shop NPCs, so an unknown
-		// NPC at this point is a stale or forged request — log + drop.
-		return fmt.Errorf("shop buy: unknown NPC entity id %d for account %d", req.NpcID, auth.AccountID)
+		return fmt.Errorf("shop: unknown NPC entity id %d for account %d", req.NpcID, accountID)
 	}
 	s.mu.Lock()
-	s.sessions[auth.AccountID] = buySession{npcID: req.NpcID}
+	s.sessions[accountID] = buySession{npcID: req.NpcID}
 	s.mu.Unlock()
 
+	if req.Type == 0 {
+		return s.sendPurchaseItemList(conn, accountID, req.NpcID, shop)
+	}
+	_, charID, err := s.activePlayer(conn)
+	if err != nil {
+		return err
+	}
+	return s.sendSellItemList(ctx, conn, accountID, charID, req.NpcID)
+}
+
+func (s *BuyService) accountID(conn gwdomain.Conn) (uint32, error) {
+	auth := conn.Auth()
+	if auth.AccountID == 0 {
+		return 0, errors.New("shop: connection has no verified account (CZ_ENTER not completed)")
+	}
+	return auth.AccountID, nil
+}
+
+func (s *BuyService) activePlayer(conn gwdomain.Conn) (accountID, charID uint32, err error) {
+	accountID, err = s.accountID(conn)
+	if err != nil {
+		return 0, 0, err
+	}
+	player, ok := s.players.ByAccount(accountID)
+	if !ok {
+		return 0, 0, fmt.Errorf("shop: account %d has no active player", accountID)
+	}
+	return accountID, player.CharID, nil
+}
+
+func (s *BuyService) sendPurchaseItemList(conn gwdomain.Conn, accountID, npcID uint32, shop shopdomain.Shop) error {
 	resp := packet.PurchaseItemListResponse{Items: s.buildShopItems(shop)}
 	var buf bytes.Buffer
 	if err := resp.Encode(&buf); err != nil {
-		return fmt.Errorf("shop buy: encode ZC_PC_PURCHASE_ITEMLIST for account %d npc %d: %w", auth.AccountID, req.NpcID, err)
+		return fmt.Errorf("shop buy: encode ZC_PC_PURCHASE_ITEMLIST for account %d npc %d: %w", accountID, npcID, err)
 	}
 	if err := conn.Write(buf.Bytes()); err != nil {
-		return fmt.Errorf("shop buy: send ZC_PC_PURCHASE_ITEMLIST for account %d npc %d: %w", auth.AccountID, req.NpcID, err)
+		return fmt.Errorf("shop buy: send ZC_PC_PURCHASE_ITEMLIST for account %d npc %d: %w", accountID, npcID, err)
+	}
+	return nil
+}
+
+func (s *BuyService) sendSellItemList(ctx context.Context, conn gwdomain.Conn, accountID, charID, npcID uint32) error {
+	inventory, err := s.items.LoadByChar(ctx, accountID, charID)
+	if err != nil {
+		return fmt.Errorf("shop sell: load inventory for account %d char %d: %w", accountID, charID, err)
+	}
+	items := make([]packet.ShopSellItem, 0, len(inventory))
+	for _, item := range inventory {
+		price := s.sellPrice(item.NameID)
+		if price == 0 {
+			continue
+		}
+		items = append(items, packet.ShopSellItem{
+			Index:      item.Index,
+			Price:      price,
+			Overcharge: price,
+		})
+	}
+
+	var buf bytes.Buffer
+	if err := (packet.SellItemListResponse{Items: items}).Encode(&buf); err != nil {
+		return fmt.Errorf("shop sell: encode ZC_PC_SELL_ITEMLIST for account %d npc %d: %w", accountID, npcID, err)
+	}
+	if err := conn.Write(buf.Bytes()); err != nil {
+		return fmt.Errorf("shop sell: send ZC_PC_SELL_ITEMLIST for account %d npc %d: %w", accountID, npcID, err)
 	}
 	return nil
 }
@@ -174,6 +215,119 @@ func mapItemType(typeStr string) uint8 {
 	default:
 		return 2
 	}
+}
+
+// HandleSellItemList serves CZ_PC_SELL_ITEMLIST (0x00c9). The flow mirrors the
+// buy path in reverse: resolve the active shop session, validate every sell
+// entry against the live inventory, consume items, credit zeny, and ack with
+// ZC_PC_SELL_RESULT. Items are consumed in descending index order to avoid slot
+// shifting mid-loop. Any rejection (no session, bad index, overflow) yields
+// result=1 and leaves inventory and zeny unchanged.
+func (s *BuyService) HandleSellItemList(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
+	req, err := packet.ParseCZPCSellItemList(frame.Raw)
+	if err != nil {
+		return fmt.Errorf("parse CZ_PC_SELL_ITEMLIST: %w", err)
+	}
+	accountID, charID, err := s.activePlayer(conn)
+	if err != nil {
+		return err
+	}
+	if sess, ok := s.session(accountID); !ok {
+		return s.sendSellResult(conn, 1)
+	} else if _, ok := s.catalog.Get(sess.npcID); !ok {
+		s.clearSession(accountID)
+		return s.sendSellResult(conn, 1)
+	}
+
+	inventory, err := s.items.LoadByChar(ctx, accountID, charID)
+	if err != nil {
+		return fmt.Errorf("shop sell: load inventory for account %d char %d: %w", accountID, charID, err)
+	}
+	total, sells, ok := s.validateSale(inventory, req.Entries)
+	if !ok {
+		return s.sendSellResult(conn, 1)
+	}
+
+	char, err := s.chars.GetByID(ctx, accountID, charID)
+	if err != nil {
+		return fmt.Errorf("shop sell: load character %d for account %d: %w", charID, accountID, err)
+	}
+	if uint64(char.Zeny)+total > math.MaxInt32 {
+		return s.sendSellResult(conn, 1)
+	}
+
+	for _, sale := range sells {
+		if _, _, err := s.items.ConsumeItem(ctx, accountID, charID, sale.Index, sale.Amount); err != nil {
+			if errors.Is(err, invdomain.ErrItemNotFound) {
+				return s.sendSellResult(conn, 1)
+			}
+			return fmt.Errorf("shop sell: consume inventory index %d x%d for account %d char %d: %w", sale.Index, sale.Amount, accountID, charID, err)
+		}
+	}
+
+	newZeny := char.Zeny + uint32(total) //nolint:gosec // G115: total is checked against the int32 wire limit
+	char.Zeny = newZeny
+	if err := s.chars.SaveProgression(ctx, accountID, charID, chardomain.ProgressionOf(char)); err != nil {
+		return fmt.Errorf("shop sell: save zeny for account %d char %d: %w", accountID, charID, err)
+	}
+	if err := s.sendSellResult(conn, 0); err != nil {
+		return err
+	}
+	return s.sendZenyUpdate(conn, newZeny)
+}
+
+type validatedSale struct {
+	Index  uint16
+	Amount uint16
+}
+
+func (s *BuyService) validateSale(inventory []invdomain.InventoryItem, entries []packet.CZPCSellItemListEntry) (total uint64, sells []validatedSale, ok bool) {
+	itemByIndex := make(map[uint16]invdomain.InventoryItem, len(inventory))
+	for _, item := range inventory {
+		itemByIndex[item.Index] = item
+	}
+	amountByIndex := make(map[uint16]uint64, len(entries))
+	sells = make([]validatedSale, 0, len(entries))
+	for _, entry := range entries {
+		item, exists := itemByIndex[entry.Index]
+		if !exists || entry.Amount == 0 {
+			return 0, nil, false
+		}
+		price := s.sellPrice(item.NameID)
+		if price == 0 {
+			return 0, nil, false
+		}
+		amountByIndex[entry.Index] += uint64(entry.Amount)
+		if amountByIndex[entry.Index] > uint64(item.Amount) {
+			return 0, nil, false
+		}
+		total += uint64(price) * uint64(entry.Amount)
+		sells = append(sells, validatedSale{Index: entry.Index, Amount: entry.Amount})
+	}
+	if total == 0 {
+		return 0, nil, false
+	}
+
+	sort.SliceStable(sells, func(i, j int) bool { return sells[i].Index > sells[j].Index })
+	return total, sells, true
+}
+
+func (s *BuyService) sellPrice(nameID uint32) uint32 {
+	if s.itemDB == nil {
+		return 0
+	}
+	entry := s.itemDB.Get(int32(nameID)) //nolint:gosec // G115: item_db nameids fit int32
+	if entry == nil || entry.Sell <= 0 {
+		return 0
+	}
+	return uint32(entry.Sell / 2) //nolint:gosec // G115: positive int32 price is value-preserving
+}
+
+func (s *BuyService) session(accountID uint32) (buySession, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessions[accountID]
+	return sess, ok
 }
 
 // HandlePurchaseItemList serves CZ_PC_PURCHASE_ITEMLIST (0x00c8). The flow:
@@ -287,8 +441,18 @@ func (s *BuyService) sendResult(conn gwdomain.Conn, result uint8) error {
 	return nil
 }
 
-// sendZenyUpdate broadcasts the new zeny balance via ZC_LONGPAR_CHANGE so the
-// client's zeny display updates immediately after a purchase.
+func (s *BuyService) sendSellResult(conn gwdomain.Conn, result uint8) error {
+	var buf bytes.Buffer
+	if err := (packet.SellResultResponse{Result: result}).Encode(&buf); err != nil {
+		return fmt.Errorf("shop sell: encode ZC_PC_SELL_RESULT result=%d: %w", result, err)
+	}
+	if err := conn.Write(buf.Bytes()); err != nil {
+		return fmt.Errorf("shop sell: send ZC_PC_SELL_RESULT result=%d: %w", result, err)
+	}
+	return nil
+}
+
+// sendZenyUpdate broadcasts the new zeny balance via ZC_LONGPAR_CHANGE.
 func (s *BuyService) sendZenyUpdate(conn gwdomain.Conn, newZeny uint32) error {
 	var buf bytes.Buffer
 	zeny := packet.LongParChangeResponse{
@@ -296,10 +460,10 @@ func (s *BuyService) sendZenyUpdate(conn gwdomain.Conn, newZeny uint32) error {
 		Amount: int32(newZeny), //nolint:gosec // G115: uint32 zeny fits the int32 wire slot
 	}
 	if err := zeny.Encode(&buf); err != nil {
-		return fmt.Errorf("shop buy: encode ZC_LONGPAR_CHANGE: %w", err)
+		return fmt.Errorf("shop: encode ZC_LONGPAR_CHANGE: %w", err)
 	}
 	if err := conn.Write(buf.Bytes()); err != nil {
-		return fmt.Errorf("shop buy: send ZC_LONGPAR_CHANGE: %w", err)
+		return fmt.Errorf("shop: send ZC_LONGPAR_CHANGE: %w", err)
 	}
 	return nil
 }

@@ -79,6 +79,9 @@ type Handlers struct {
 	// OnCZPCPurchaseItemList serves CZ_PC_PURCHASE_ITEMLIST (0x00c8), the
 	// shop buy request. Provided by the shop module (U4).
 	OnCZPCPurchaseItemList domain.PacketHandler
+	// OnCZPCSellItemList serves CZ_PC_SELL_ITEMLIST (0x00c9), the shop sell
+	// request. Provided by the shop module.
+	OnCZPCSellItemList domain.PacketHandler
 }
 
 // BuildDispatcher assembles the three role-keyed dispatch tables from the
@@ -140,5 +143,6 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table = addHandler(table, packet.HeaderCZCHOOSEMENU, h.OnCZChooseMenu)
 	table = addHandler(table, packet.HeaderCZCLOSEDIALOG, h.OnCZCloseDialog)
 	table = addHandler(table, packet.HeaderCZACKSELECTDEALTYPE, h.OnCZAckSelectDealtype)
-	return addHandler(table, packet.HeaderCZPCPURCHASEITEMLIST, h.OnCZPCPurchaseItemList)
+	table = addHandler(table, packet.HeaderCZPCPURCHASEITEMLIST, h.OnCZPCPurchaseItemList)
+	return addHandler(table, packet.HeaderCZPCSELLITEMLIST, h.OnCZPCSellItemList)
 }
