@@ -1100,6 +1100,83 @@ func TestServe_Combat_KillAwardsExpAndRespawns(t *testing.T) {
 	assert.Equal(t, uint32(expectedStatus), prog.StatusPoint, "persisted status_point = 3")
 }
 
+// TestServe_Chat_BroadcastsToAOI is the M11 end-to-end: a player enters the world,
+// sends CZ_GLOBAL_MESSAGE ("hello"), and the server replies ZC_NOTIFY_CHAT carrying
+// the player's account_id as GID and the message verbatim. This exercises every M11
+// seam together: the chat handler resolving the sender from the player registry,
+// loading the sender's map, and broadcasting ZC_NOTIFY_CHAT through the map AOI —
+// all on the real map-role dispatch path.
+func TestServe_Chat_BroadcastsToAOI(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eChat", "prontera", 53, 111)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	// --- Login to capture the session token the CZ_ENTER gate verifies. ---
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN; login likely failed against the DB")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1)
+	require.NoError(t, loginConn.Close())
+
+	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eChat")
+	defer mapConn.Close()
+
+	// --- Send CZ_GLOBAL_MESSAGE (0x008c) with "hello". ---
+	const chatMsg = "hello"
+	var chat bytes.Buffer
+	require.NoError(t, packet.CZGlobalMessageRequest{Message: chatMsg}.Encode(&chat))
+	_, err = mapConn.Write(chat.Bytes())
+	require.NoError(t, err, "send CZ_GLOBAL_MESSAGE")
+
+	// --- Drain for ZC_NOTIFY_CHAT (0x008d). The sender receives the echo.
+	var chatFrame []byte
+	chatFrame, ok := awaitFrame(t, mapConn, packet.HeaderZCNOTIFYCHAT, 5*time.Second, nil)
+	require.True(t, ok, "no ZC_NOTIFY_CHAT observed after CZ_GLOBAL_MESSAGE — chat handler not wired")
+
+	// [0:2] cmd = 0x008d, [2:4] length, [4:8] GID, [8:] message.
+	require.Equal(t, packet.HeaderZCNOTIFYCHAT, binary.LittleEndian.Uint16(chatFrame[0:2]),
+		"ZC_NOTIFY_CHAT header")
+	packetLen := binary.LittleEndian.Uint16(chatFrame[2:4])
+	assert.Greater(t, packetLen, uint16(8), "ZC_NOTIFY_CHAT must carry a non-empty message")
+	assert.Equal(t, seededAccountID, binary.LittleEndian.Uint32(chatFrame[4:8]),
+		"ZC_NOTIFY_CHAT GID is the sender's account_id")
+	gotMsg := string(bytes.TrimRight(chatFrame[8:], "\x00"))
+	assert.Equal(t, chatMsg, gotMsg, "ZC_NOTIFY_CHAT message matches the sent chat text")
+}
+
 // TestServe_Inventory_EquipWeaponRaisesATK is the M10b end-to-end: a Knife
 // (nameid 1201 — the fork's right-hand weapon, Attack 17, EquipLevelMin 1,
 // Right_Hand only, no View column) is seeded in the char's bag, the player
@@ -1636,7 +1713,8 @@ func readMapFrame(t *testing.T, conn net.Conn) ([]byte, bool) {
 		op == packet.HeaderZCINVENTORYITEMLISTNORMAL ||
 		op == packet.HeaderZCINVENTORYITEMLISTEQUIP ||
 		op == packet.HeaderZCINVENTORYSTART || op == packet.HeaderZCINVENTORYEND ||
-		op == packet.HeaderZCSAYDIALOG2 {
+		op == packet.HeaderZCSAYDIALOG2 ||
+		op == packet.HeaderZCNOTIFYCHAT {
 		lenBuf := make([]byte, 2)
 		_, err := io.ReadFull(conn, lenBuf)
 		require.NoErrorf(t, err, "read length prefix of opcode 0x%04x", op)
@@ -1726,6 +1804,10 @@ func mapFrameSize(op uint16) int {
 		// M14b: the skill cast result ack (0x0110, 14 bytes fixed; cause 12 =
 		// SP insufficient). Value receiver.
 		return packet.AckUseSkillResponse{}.Size()
+	case packet.HeaderZCNOTIFYCHAT:
+		// M11: variable-length chat broadcast (0x008d). Handled by the
+		// length-prefix branch in readMapFrame.
+		return 0
 	default:
 		return 0
 	}

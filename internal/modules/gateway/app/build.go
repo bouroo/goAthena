@@ -64,6 +64,9 @@ type Handlers struct {
 	// OnCZReqTakeoffEquip serves CZ_REQ_TAKEOFF_EQUIP (0x00ab), the unequip
 	// request. Provided by the world module (M10b).
 	OnCZReqTakeoffEquip domain.PacketHandler
+	// OnCZGlobalMessage serves CZ_GLOBAL_MESSAGE (0x008c), the public chat
+	// message broadcast. Provided by the world module (M11).
+	OnCZGlobalMessage domain.PacketHandler
 	// OnCZContactNPC serves CZ_CONTACTNPC (0x0090), initiating an NPC dialog.
 	// Provided by the content module.
 	OnCZContactNPC domain.PacketHandler
@@ -143,6 +146,7 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table = addHandler(table, packet.HeaderCZUSEITEM2, h.OnCZUseItem)
 	table = addHandler(table, packet.HeaderCZREQWEAREQUIPV5, h.OnCZReqWearEquip)
 	table = addHandler(table, packet.HeaderCZREQTAKEOFFEQUIP, h.OnCZReqTakeoffEquip)
+	table = addHandler(table, packet.HeaderCZGLOBALMESSAGE, h.OnCZGlobalMessage)
 	table = addHandler(table, packet.HeaderCZCONTACTNPC, h.OnCZContactNPC)
 	table = addHandler(table, packet.HeaderCZREQNEXTSCRIPT, h.OnCZReqNextScript)
 	table = addHandler(table, packet.HeaderCZCHOOSEMENU, h.OnCZChooseMenu)

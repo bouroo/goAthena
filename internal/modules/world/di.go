@@ -210,6 +210,14 @@ func Register(ctx context.Context, c do.Injector) error {
 	do.ProvideValue(c, app.NewChangeDirHandler(social))
 	do.ProvideValue(c, app.NewEmotionHandler(social))
 
+	// M11: the chat handler. It resolves the sender from the player registry,
+	// loads the sender's map, and broadcasts ZC_NOTIFY_CHAT to every player
+	// in AOI range (including the sender). It shares the same collaborators
+	// as social (registry + map store) and resolves synchronously on the conn
+	// goroutine, provided here for the composition root to thread into the
+	// map-role dispatch table.
+	do.ProvideValue(c, app.NewChatHandler(registry, maps))
+
 	// M7d: the char-select-return handler. CZ_RESTART type 1 sends
 	// ZC_RESTART_ACK, unregisters the player (so a fresh CZ_ENTER re-registers
 	// cleanly rather than hitting ErrPlayerAlreadyRegistered), removes its AOI
