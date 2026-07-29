@@ -158,6 +158,14 @@ func Register(ctx context.Context, c do.Injector) error {
 	pickup := app.NewPickupService(floorItems, registry, maps, invRepo, itemDB, app.SystemClock())
 	do.ProvideValue(c, app.NewPickupHandler(pickup))
 
+	// M12: the use-item service. It shares the inventory port + item_db + player
+	// registry the pickup service holds and extends the loot loop into a heal:
+	// one unit of a Healing item is consumed, the item's itemheal range is applied,
+	// and the player is told via ZC_USE_ITEM_ACK2 + ZC_PAR_CHANGE. The handler is
+	// provided for the composition root to thread into the map-role dispatch table.
+	useItem := app.NewUseItemService(invRepo, itemDB, registry)
+	do.ProvideValue(c, app.NewUseItemHandler(useItem))
+
 	// M10b: the equip service. It resolves the bag row + item_db to validate the
 	// wear/takeoff (permitted locations, level gate), persists the worn-location
 	// bitmask through the inventory port, acks the client, and recomputes

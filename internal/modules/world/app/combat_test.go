@@ -44,6 +44,7 @@ func splitFixedFrames(t *testing.T, b []byte) [][]byte {
 		packet.HeaderZCItemFallEntry:     (&packet.ItemFallEntryResponse{}).Size(),
 		packet.HeaderZCItemPickupAck:     (&packet.ItemPickupAckResponse{}).Size(),
 		packet.HeaderZCItemDisappear:     (&packet.ItemDisappearResponse{}).Size(),
+		packet.HeaderZCUSEITEMACK2:       packet.UseItemAck2Response{}.Size(),
 	}
 	var out [][]byte
 	for len(b) >= 2 {

@@ -52,7 +52,9 @@ type Handlers struct {
 	// OnCZItemPickup serves CZ_ITEM_PICKUP (0x009f), the floor-item pickup
 	// request. Provided by the world module (M10a).
 	OnCZItemPickup domain.PacketHandler
-	// OnCZReqWearEquip serves CZ_REQ_WEAR_EQUIP_V5 (0x0998), the equip request.
+	// OnCZUseItem serves CZ_USE_ITEM2 (0x0439), consuming and applying a Healing
+	// inventory item. Provided by the world module (M12).
+	OnCZUseItem domain.PacketHandler
 	// Provided by the world module (M10b).
 	OnCZReqWearEquip domain.PacketHandler
 	// OnCZReqTakeoffEquip serves CZ_REQ_TAKEOFF_EQUIP (0x00ab), the unequip
@@ -123,6 +125,7 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table = addHandler(table, packet.HeaderCZREQEMOTION, h.OnCZReqEmotion)
 	table = addHandler(table, packet.HeaderCZRESTART, h.OnCZRestart)
 	table = addHandler(table, packet.HeaderCZITEMPICKUP, h.OnCZItemPickup)
+	table = addHandler(table, packet.HeaderCZUSEITEM2, h.OnCZUseItem)
 	table = addHandler(table, packet.HeaderCZREQWEAREQUIPV5, h.OnCZReqWearEquip)
 	table = addHandler(table, packet.HeaderCZREQTAKEOFFEQUIP, h.OnCZReqTakeoffEquip)
 	table = addHandler(table, packet.HeaderCZCONTACTNPC, h.OnCZContactNPC)

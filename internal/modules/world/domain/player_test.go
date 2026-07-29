@@ -107,7 +107,26 @@ func TestPlayerRegistry_RegisterNilRejects(t *testing.T) {
 	assert.Error(t, r.Register(nil))
 }
 
-// TestPlayer_SpawnUnit_AIDGID asserts the PACKETVER 20250604 AID/GID
+func TestPlayer_HealClampsHPAndSP(t *testing.T) {
+	t.Parallel()
+	p := &domain.Player{HP: 90, MaxHP: 100, SP: 5, MaxSP: 10}
+	p.Heal(25, 8)
+	assert.Equal(t, uint32(100), p.HP)
+	assert.Equal(t, uint32(10), p.SP)
+
+	p.Heal(-150, -20)
+	assert.Zero(t, p.HP)
+	assert.Zero(t, p.SP)
+}
+
+func TestPlayer_HealLeavesZeroMaximumUnchanged(t *testing.T) {
+	t.Parallel()
+	p := &domain.Player{HP: 7, SP: 3}
+	p.Heal(10, 10)
+	assert.Equal(t, uint32(7), p.HP)
+	assert.Equal(t, uint32(3), p.SP)
+}
+
 // convention the spawnunit-aid-vs-gid memory documents: AID = account_id,
 // GID = char_id. The kernel doc comment saying "AID equals GID" is wrong for
 // this client; this test pins the correct mapping at the world layer so a

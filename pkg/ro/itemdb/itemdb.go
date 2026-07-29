@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -34,10 +36,71 @@ type ItemEntry struct {
 	Refineable    bool            `yaml:"Refineable"`
 	View          int32           `yaml:"View"`
 	Locations     map[string]bool `yaml:"Locations"`
+	Script        string          `yaml:"Script"`
 	// EquipLocations is the EQP_* bitmask derived from Locations in build()
 	// (the value the inventory.equip column stores and the equip use case reads).
 	// It is not a YAML field.
 	EquipLocations uint32 `yaml:"-"`
+
+	healHPMin int32
+	healHPMax int32
+	healSPMin int32
+	healSPMax int32
+	healOK    bool
+}
+
+var (
+	itemHealPattern      = regexp.MustCompile(`(?is)\bitemheal\s+((?:rand\s*\([^)]*\)|[^,;\s]+))\s*,\s*((?:rand\s*\([^)]*\)|[^;,\s]+))`)
+	itemHealValuePattern = regexp.MustCompile(`^(?:([+-]?\d+)|rand\(\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*\))$`)
+)
+
+func (e *ItemEntry) parseHeal() {
+	match := itemHealPattern.FindStringSubmatch(e.Script)
+	if len(match) != 3 {
+		return
+	}
+	hpMin, hpMax, ok := parseHealValue(match[1])
+	if !ok {
+		return
+	}
+	spMin, spMax, ok := parseHealValue(match[2])
+	if !ok {
+		return
+	}
+	e.healHPMin, e.healHPMax = hpMin, hpMax
+	e.healSPMin, e.healSPMax = spMin, spMax
+	e.healOK = true
+}
+
+func parseHealValue(value string) (lo, hi int32, ok bool) {
+	match := itemHealValuePattern.FindStringSubmatch(strings.TrimSpace(value))
+	if len(match) == 0 {
+		return 0, 0, false
+	}
+	if match[1] != "" {
+		n, err := strconv.ParseInt(match[1], 10, 32)
+		if err != nil {
+			return 0, 0, false
+		}
+		return int32(n), int32(n), true
+	}
+	lo64, err := strconv.ParseInt(match[2], 10, 32)
+	if err != nil {
+		return 0, 0, false
+	}
+	hi64, err := strconv.ParseInt(match[3], 10, 32)
+	if err != nil || lo64 > hi64 {
+		return 0, 0, false
+	}
+	return int32(lo64), int32(hi64), true
+}
+
+// Heal returns the inclusive HP/SP ranges parsed from the item's itemheal script.
+func (e *ItemEntry) Heal() (hpMin, hpMax, spMin, spMax int32, ok bool) {
+	if e == nil || !e.healOK {
+		return 0, 0, 0, 0, false
+	}
+	return e.healHPMin, e.healHPMax, e.healSPMin, e.healSPMax, true
 }
 
 type fileFormat struct {
@@ -105,6 +168,7 @@ func build(bodies ...[]*ItemEntry) *Registry {
 				entry.Type = "Etc"
 			}
 			entry.EquipLocations = equip.LocationBits(entry.Locations)
+			entry.parseHeal()
 			entries[entry.Id] = entry
 			if entry.AegisName != "" {
 				aegis[entry.AegisName] = entry

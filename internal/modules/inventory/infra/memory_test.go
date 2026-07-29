@@ -141,7 +141,36 @@ func TestMemoryRepo_AddItem_CharScoped(t *testing.T) {
 	require.Len(t, other, 1)
 }
 
-// TestMemoryRepo_LoadByChar_PreservesEquip asserts the EQP_* equip bitmask
+func TestMemoryRepo_ConsumeItem_DecrementsDeletesAndScopes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const otherChar uint32 = memCharID + 1
+	repo := infra.NewMemoryInventoryRepository(
+		domain.InventoryItem{ID: 1, CharID: memCharID, AccountID: memAccID, NameID: 503, Amount: 3},
+		domain.InventoryItem{ID: 2, CharID: otherChar, AccountID: memAccID, NameID: 503, Amount: 1},
+	)
+
+	item, deleted, err := repo.ConsumeItem(ctx, memAccID, memCharID, 0, 1)
+	require.NoError(t, err)
+	assert.False(t, deleted)
+	assert.Equal(t, uint32(2), item.Amount, "returned item describes the post-consume row")
+	rows, err := repo.LoadByChar(ctx, memAccID, memCharID)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), rows[0].Amount)
+
+	_, deleted, err = repo.ConsumeItem(ctx, memAccID, memCharID, 0, 2)
+	require.NoError(t, err)
+	assert.True(t, deleted)
+	rows, err = repo.LoadByChar(ctx, memAccID, memCharID)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+
+	_, _, err = repo.ConsumeItem(ctx, memAccID, memCharID, 0, 1)
+	assert.ErrorIs(t, err, domain.ErrItemNotFound)
+	_, _, err = repo.ConsumeItem(ctx, memAccID, otherChar, 1, 1)
+	assert.ErrorIs(t, err, domain.ErrItemNotFound)
+}
+
 // round-trips through LoadByChar — the M10b equip loop and the enter-burst
 // inventory list both read it from the loaded row.
 func TestMemoryRepo_LoadByChar_PreservesEquip(t *testing.T) {

@@ -253,7 +253,7 @@ func resolveWorldHandlers(i do.Injector) (
 	mapEnter *worldapp.MapEnterHandler, move *worldapp.MoveHandler, action *worldapp.ActionHandler,
 	timeH *worldapp.TimeHandler, changeDir *worldapp.ChangeDirHandler, emotion *worldapp.EmotionHandler,
 	restart *worldapp.RestartHandler, pickup *worldapp.PickupHandler, equip *worldapp.EquipHandler,
-	takeoff *worldapp.TakeoffHandler, err error,
+	takeoff *worldapp.TakeoffHandler, useItem *worldapp.UseItemHandler, err error,
 ) {
 	mapEnter, err = invokeOr[*worldapp.MapEnterHandler](i, "resolve CZ_ENTER handler")
 	if err != nil {
@@ -292,6 +292,10 @@ func resolveWorldHandlers(i do.Injector) (
 		return
 	}
 	takeoff, err = invokeOr[*worldapp.TakeoffHandler](i, "resolve CZ_REQ_TAKEOFF_EQUIP handler")
+	if err != nil {
+		return
+	}
+	useItem, err = invokeOr[*worldapp.UseItemHandler](i, "resolve CZ_USE_ITEM2 handler")
 	return
 }
 
@@ -328,7 +332,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return err
 	}
-	mapEnter, move, action, timeH, changeDir, emotion, restart, pickup, equip, takeoff, err := resolveWorldHandlers(injector)
+	mapEnter, move, action, timeH, changeDir, emotion, restart, pickup, equip, takeoff, useItem, err := resolveWorldHandlers(injector)
 	if err != nil {
 		return err
 	}
@@ -349,6 +353,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCZReqEmotion:      emotion.Handle,
 		OnCZRestart:         restart.Handle,
 		OnCZItemPickup:      pickup.Handle,
+		OnCZUseItem:         useItem.Handle,
 		OnCZReqWearEquip:    equip.Handle,
 		OnCZReqTakeoffEquip: takeoff.Handle,
 		OnCZContactNPC:      contact.Handle,

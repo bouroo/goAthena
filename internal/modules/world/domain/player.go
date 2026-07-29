@@ -163,10 +163,44 @@ func (p *Player) SpawnUnit() packet.SpawnUnitResponse {
 	}
 }
 
-// Position returns the player's current cell and facing under the read lock.
-// SpawnUnit and the M4c movement worker read position through this so a
-// concurrent SetPosition (a move resolving on the worker goroutine) cannot
-// race a neighbor's spawn/walk broadcast building on a different goroutine.
+// Vitals returns the current HP and SP under the player's read lock.
+func (p *Player) Vitals() (hp, sp uint32) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.HP, p.SP
+}
+
+// Heal restores the player's HP and SP by the given signed deltas, clamping each
+// resource to [0, Max]. A zero maximum leaves that resource unchanged.
+func (p *Player) Heal(hp, sp int32) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.HP = healedValue(p.HP, p.MaxHP, hp)
+	p.SP = healedValue(p.SP, p.MaxSP, sp)
+}
+
+func healedValue(current, maximum uint32, delta int32) uint32 {
+	if maximum == 0 {
+		return current
+	}
+	if delta >= 0 {
+		increase := uint32(delta) //nolint:gosec // G115: non-negative int32 is safe to represent as uint32
+		if increase >= maximum-current {
+			return maximum
+		}
+		return current + increase
+	}
+	decrease := uint32(-int64(delta)) //nolint:gosec // G115: int64 negation keeps MinInt32 representable before narrowing
+	if decrease >= current {
+		return 0
+	}
+	return current - decrease
+}
+
+// Position returns the player's cell and facing under the read lock. SpawnUnit
+// and the M4c movement worker read position through this so a concurrent
+// SetPosition (a move resolving on the worker goroutine) cannot race a
+// neighbor's spawn/walk broadcast building on a different goroutine.
 func (p *Player) Position() (posX, posY int16, dir uint8) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

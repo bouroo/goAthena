@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/bouroo/goAthena/internal/modules/inventory/domain"
 )
@@ -193,7 +194,57 @@ func (r *GORMInventoryRepository) AddItem(ctx context.Context, _, charID uint32,
 	return result, nil
 }
 
-// mergeIndex returns the grid index of an existing row by counting how many of
+// ConsumeItem atomically consumes qty units from the row at the character's grid
+// index. The row is locked in a transaction before validating and mutating it;
+// the returned item describes the row before consumption and deleted reports
+// whether the row was removed.
+func (r *GORMInventoryRepository) ConsumeItem(ctx context.Context, accountID, charID uint32, index, qty uint16) (item domain.InventoryItem, deleted bool, err error) {
+	if qty == 0 {
+		return domain.InventoryItem{}, false, domain.ErrItemNotFound
+	}
+	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var m inventoryModel
+		query := tx.Select(inventoryColumns).
+			Where("char_id = ?", charID).
+			Order("id").
+			Offset(int(index)). //nolint:gosec // G115: index is a bag slot < 100, far within int range
+			Limit(1).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Take(&m)
+		if errors.Is(query.Error, gorm.ErrRecordNotFound) {
+			return domain.ErrItemNotFound
+		}
+		if query.Error != nil {
+			return fmt.Errorf("inventory: find consume account %d char %d index %d: %w", accountID, charID, index, query.Error)
+		}
+		if uint64(qty) > uint64(m.Amount) {
+			return domain.ErrItemNotFound
+		}
+		item = toDomain(m, index)
+		if uint64(qty) == uint64(m.Amount) {
+			if err := tx.Delete(&inventoryModel{}, "id = ? AND char_id = ?", m.ID, charID).Error; err != nil {
+				return fmt.Errorf("inventory: delete consumed item account %d char %d id %d: %w", accountID, charID, m.ID, err)
+			}
+			deleted = true
+			return nil
+		}
+		if err := tx.Model(&inventoryModel{}).
+			Where("id = ? AND char_id = ? AND amount >= ?", m.ID, charID, qty).
+			UpdateColumn("amount", gorm.Expr("amount - ?", qty)).Error; err != nil {
+			return fmt.Errorf("inventory: decrement item account %d char %d id %d: %w", accountID, charID, m.ID, err)
+		}
+		item.Amount -= uint32(qty) //nolint:gosec // G115: qty is uint16 and validated not greater than uint32 Amount
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, domain.ErrItemNotFound) {
+			return domain.InventoryItem{}, false, err //nolint:wrapcheck // sentinel must pass through for errors.Is
+		}
+		return domain.InventoryItem{}, false, fmt.Errorf("inventory: consume account %d char %d index %d: %w", accountID, charID, index, err)
+	}
+	return item, deleted, nil
+}
+
 // the char's rows have a smaller id (its id-ascending position). This keeps the
 // merged row's index stable: a merge does not reorder rows, so the matched row
 // keeps the position LoadByChar would assign it.

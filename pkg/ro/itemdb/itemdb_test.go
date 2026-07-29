@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -57,6 +58,61 @@ func loadFixture(t *testing.T) *Registry {
 	require.NoError(t, err)
 	require.NotNil(t, reg)
 	return reg
+}
+
+func TestItemEntry_HealParsesItemhealForms(t *testing.T) {
+	t.Parallel()
+	const yaml = `Header:
+  Type: ITEM_DB
+  Version: 3
+Body:
+  - Id: 503
+    Name: Red_Potion
+    Type: Healing
+    Script: |
+      itemheal rand(175,235),0;
+  - Id: 504
+    Name: White_Potion
+    Type: Healing
+    Script: |
+      itemheal rand(325,405),0;
+  - Id: 505
+    Name: Blue_Potion
+    Type: Healing
+    Script: |
+      itemheal 0,rand(40,60);
+  - Id: 600
+    Name: Fixed
+    Type: Healing
+    Script: itemheal 100,50;
+  - Id: 601
+    Name: NoScript
+    Type: Etc
+`
+	reg, err := Load(strings.NewReader(yaml))
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		id           int32
+		hpMin, hpMax int32
+		spMin, spMax int32
+	}{
+		{503, 175, 235, 0, 0},
+		{504, 325, 405, 0, 0},
+		{505, 0, 0, 40, 60},
+		{600, 100, 100, 50, 50},
+	} {
+		t.Run(strconv.FormatInt(int64(test.id), 10), func(t *testing.T) {
+			hpMin, hpMax, spMin, spMax, ok := reg.Get(test.id).Heal()
+			assert.True(t, ok)
+			assert.Equal(t, test.hpMin, hpMin)
+			assert.Equal(t, test.hpMax, hpMax)
+			assert.Equal(t, test.spMin, spMin)
+			assert.Equal(t, test.spMax, spMax)
+		})
+	}
+	_, _, _, _, ok := reg.Get(601).Heal()
+	assert.False(t, ok)
 }
 
 func TestLoad_ParsesAllScalarFields(t *testing.T) {

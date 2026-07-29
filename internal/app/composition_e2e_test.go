@@ -1188,6 +1188,134 @@ func TestServe_Inventory_EquipWeaponRaisesATK(t *testing.T) {
 		"ZC_STATUS Atk2 = Knife ATK 17 (weapon contribution folded into the recompute)")
 }
 
+// TestServe_UseItem_HealsHPAndConsumesCount is the M12 end-to-end: a player
+// picks a Healing item from inventory (CZ_USE_ITEM2 0x0439), the server consumes
+// one unit, applies the item's itemheal HP, replies ZC_USE_ITEM_ACK2, and
+// broadcasts the new HP via ZC_PAR_CHANGE. The Red Potion (id 503, itemheal
+// 100,50) loaded from the forked item_db_usable.yml restores HP directly, so the
+// test seeds the char's HP below MaxHP and asserts the post-use HP is greater
+// than the pre-use value. The bag decrement is observed by replaying the
+// inventory load through the same GORM session the test already opens for
+// seeding, so the M10a success-only invariant (one unit consumed) is verified
+// without re-driving CZ_USE_ITEM2.
+func TestServe_UseItem_HealsHPAndConsumesCount(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	// Seed a char with HP=40, MaxHP=40 and immediately drop HP to 10 so the
+	// post-use ZC_PAR_CHANGE SPHP must rise above 10. Use seedCombatChar (HP=40)
+	// for the char shape, then UPDATE the row to lower HP.
+	seedCharID := seedCombatChar(t, cfg, seededAccountID, "E2eHealer", "prontera", 53, 111)
+	seedRedPotionInBag(t, cfg, seedCharID)
+	lowerCharHP(t, cfg, seedCharID, 10)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	// --- login → CZ_ENTER → ZC_ACCEPT_ENTER ---
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN received; login likely failed against the DB")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1)
+	require.NoError(t, loginConn.Close())
+
+	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eHealer")
+	defer mapConn.Close()
+
+	// --- capture pre-use HP from the bag so the assertion can require a strict
+	// increase. The bag row landed in the seed (amount=2) and the char's HP=10
+	// after the lowerCharHP update, so the post-use ZC_PAR_CHANGE SPHP must be
+	// strictly greater than 10. ---
+	preUseHP := uint32(10)
+	require.Equal(t, preUseHP, readCharHP(t, cfg, seedCharID), "seed HP must match the pre-use baseline")
+
+	// --- send CZ_USE_ITEM2 (0x0439, 8B) for grid slot 0 (the Red Potion). The
+	// AID field is informational; the dispatcher's per-conn auth is the trust
+	// anchor the handler uses. ---
+	var use bytes.Buffer
+	require.NoError(t, packet.CZUseItemRequest{Index: 0, AID: seededAccountID}.Encode(&use))
+	_, err = mapConn.Write(use.Bytes())
+	require.NoError(t, err, "send CZ_USE_ITEM2")
+
+	// --- drain for the ZC_USE_ITEM_ACK2 + ZC_PAR_CHANGE reply set. The handler
+	// emits the ack immediately, then the two par-change frames (SPHP, SPSP);
+	// no other opcode sits between them. ---
+	var useAck []byte
+	var hpPar []byte
+	useEnd := time.Now().Add(3 * time.Second)
+	for (useAck == nil || hpPar == nil) && time.Now().Before(useEnd) {
+		drainFrames(t, mapConn, 250*time.Millisecond, func(op uint16, frame []byte) {
+			switch op {
+			case packet.HeaderZCUSEITEMACK2:
+				useAck = frame
+			case packet.HeaderZCPARCHANGE:
+				if binary.LittleEndian.Uint16(frame[2:4]) == packet.SPHP {
+					hpPar = frame
+				}
+			}
+		})
+	}
+
+	require.NotNil(t, useAck, "no ZC_USE_ITEM_ACK2 observed after CZ_USE_ITEM2 — use-item handler not wired or rejected without an ack")
+	// Header [0:2] = 0x01c8; Index [2:4] == 0; ItemID [4:6] == 503; AID [6:10] ==
+	// seededAccountID; Amount [10:12] == 1 (the post-decrement stack); Result [12] == 1.
+	require.Equal(t, packet.HeaderZCUSEITEMACK2, binary.LittleEndian.Uint16(useAck[0:2]),
+		"ZC_USE_ITEM_ACK2 header")
+	assert.Equal(t, uint16(0), binary.LittleEndian.Uint16(useAck[2:4]),
+		"ZC_USE_ITEM_ACK2 index = 0 (the Red Potion's grid slot)")
+	assert.Equal(t, uint16(503), binary.LittleEndian.Uint16(useAck[4:6]),
+		"ZC_USE_ITEM_ACK2 itemID = 503 (Red_Potion)")
+	assert.Equal(t, seededAccountID, binary.LittleEndian.Uint32(useAck[6:10]),
+		"ZC_USE_ITEM_ACK2 AID = the verified account")
+	assert.Equal(t, uint16(1), binary.LittleEndian.Uint16(useAck[10:12]),
+		"ZC_USE_ITEM_ACK2 amount = 1 (the post-decrement stack)")
+	assert.Equal(t, uint8(1), useAck[12], "ZC_USE_ITEM_ACK2 Result = 1 (success)")
+
+	require.NotNil(t, hpPar, "no ZC_PAR_CHANGE SPHP observed after a successful use — HP broadcast missing")
+	hpAfter := int32(binary.LittleEndian.Uint32(hpPar[4:8])) //nolint:gosec // G115: HP well under int32 max
+	assert.Greater(t, hpAfter, int32(preUseHP),
+		"ZC_PAR_CHANGE SPHP must be greater than the pre-use HP (10): got %d", hpAfter)
+
+	// --- the bag was consumed by one unit. Read back through GORM: the seed
+	// inserted amount=2, so the post-use row should carry amount=1. ---
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to read back bag")
+	t.Cleanup(func() { sqlDB, _ := gdb.DB(); _ = sqlDB.Close() })
+	var postAmount uint32
+	require.NoError(t, gdb.Raw(
+		"SELECT amount FROM inventory WHERE char_id = ? AND nameid = 503 ORDER BY id", seedCharID).
+		Scan(&postAmount).Error, "read back post-use Red Potion amount")
+	assert.Equal(t, uint32(1), postAmount, "Red Potion stack decremented from 2 to 1")
+}
+
 // connectAndEnterMap opens a fresh connection to the dedicated map listener,
 // sends CZ_ENTER, and asserts the full enter exchange — ZC_ACCEPT_ENTER (trust
 // gate admitted the session) then ZC_SPAWN_UNIT (SpawnService loaded the char and
@@ -1550,6 +1678,9 @@ func mapFrameSize(op uint16) int {
 	case packet.HeaderZCREQTAKEOFFEQUIPACK:
 		// M10b: the takeoff ack (0x099a, flag wire-inverted 0=success). Value receiver.
 		return packet.ReqTakeoffEquipAckResponse{}.Size()
+	case packet.HeaderZCUSEITEMACK2:
+		// M12: the use-item ack (0x01c8, Result 0=fail/1=success). Value receiver.
+		return packet.UseItemAck2Response{}.Size()
 	default:
 		return 0
 	}
@@ -1737,6 +1868,51 @@ func seedKnifeInBag(t *testing.T, cfg *config.Config, charID uint32) {
 		`INSERT INTO inventory (char_id, nameid, amount, equip) VALUES (?, 1201, 1, 0)`,
 		charID).Error, "insert Knife (nameid 1201) into the char's bag")
 	t.Cleanup(func() { _ = gdb.Exec("DELETE FROM inventory WHERE char_id = ?", charID).Error })
+}
+
+// seedRedPotionInBag inserts one Red Potion (nameid 503, amount 2) for the use-item
+// e2e. Amount=2 lets the test fire a single CZ_USE_ITEM2 and still observe a non-zero
+// stack after the consume (the post-use ZC_USE_ITEM_ACK2 amount field = 1).
+func seedRedPotionInBag(t *testing.T, cfg *config.Config, charID uint32) {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to seed Red Potion")
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, gdb.Exec(
+		`INSERT INTO inventory (char_id, nameid, amount, equip) VALUES (?, 503, 2, 0)`,
+		charID).Error, "insert Red Potion (nameid 503) into the char's bag")
+	t.Cleanup(func() { _ = gdb.Exec("DELETE FROM inventory WHERE char_id = ?", charID).Error })
+}
+
+// lowerCharHP drops the seeded char's HP to hp via UPDATE so the post-use
+// ZC_PAR_CHANGE SPHP must strictly exceed hp. The char is reloaded by SpawnService
+// on the next CZ_ENTER, so the seed-then-lower ordering is the only requirement.
+func lowerCharHP(t *testing.T, cfg *config.Config, charID uint32, hp uint32) {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to lower HP")
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, gdb.Exec(
+		`UPDATE `+"`char`"+` SET hp = ? WHERE char_id = ?`, hp, charID).Error,
+		"lower char HP to expected pre-use value")
+}
+
+// readCharHP queries the persisted HP the SpawnService will load on the next
+// CZ_ENTER. Useful for asserting the pre-use baseline drifts the test expects.
+func readCharHP(t *testing.T, cfg *config.Config, charID uint32) uint32 {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to read HP")
+	t.Cleanup(func() { sqlDB, _ := gdb.DB(); _ = sqlDB.Close() })
+	var hp uint32
+	require.NoError(t, gdb.Raw(
+		`SELECT hp FROM `+"`char`"+` WHERE char_id = ?`, charID).Scan(&hp).Error,
+		"read persisted HP")
+	return hp
 }
 
 // resetCharsForAccount opens a GORM session against the same DSN app.Serve uses,

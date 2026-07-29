@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sort"
+	"sync"
 
 	"github.com/bouroo/goAthena/internal/modules/inventory/domain"
 )
@@ -15,6 +16,7 @@ import (
 // id) slot; the grid Index is the id-ascending position, recomputed on every
 // access so it matches LoadByChar.
 type MemoryInventoryRepository struct {
+	mu    sync.Mutex
 	items []domain.InventoryItem
 	next  uint32
 }
@@ -49,6 +51,8 @@ func (r *MemoryInventoryRepository) forChar(charID uint32) []domain.InventoryIte
 // LoadByChar returns defensive copies of the char's bag with id-ascending grid
 // indices. A character with no items yields an empty (non-nil) slice.
 func (r *MemoryInventoryRepository) LoadByChar(_ context.Context, _, charID uint32) ([]domain.InventoryItem, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	rows := r.forChar(charID)
 	out := make([]domain.InventoryItem, len(rows))
 	for i, it := range rows {
@@ -64,6 +68,8 @@ func (r *MemoryInventoryRepository) LoadByChar(_ context.Context, _, charID uint
 // yields ErrInventoryFull. The returned Index is the matched/inserted row's
 // id-ascending position — stable, since pickups only append.
 func (r *MemoryInventoryRepository) AddItem(_ context.Context, _, charID uint32, item domain.NewItem) (domain.InventoryItem, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if item.Stackable {
 		for i, it := range r.items {
 			if it.CharID == charID && it.NameID == item.NameID {
@@ -125,6 +131,8 @@ func (r *MemoryInventoryRepository) setEquip(charID uint32, index uint16, equip 
 // slot, returning the row as it now stands. A missing slot yields
 // ErrItemNotFound.
 func (r *MemoryInventoryRepository) EquipItem(_ context.Context, _, charID uint32, index uint16, equip uint32) (domain.InventoryItem, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.setEquip(charID, index, equip)
 }
 
@@ -132,5 +140,43 @@ func (r *MemoryInventoryRepository) EquipItem(_ context.Context, _, charID uint3
 // slot, returning the row as it now stands. A missing slot yields
 // ErrItemNotFound.
 func (r *MemoryInventoryRepository) UnequipItem(_ context.Context, _, charID uint32, index uint16) (domain.InventoryItem, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.setEquip(charID, index, 0)
+}
+
+// ConsumeItem atomically decrements or deletes the row at the character's grid index.
+func (r *MemoryInventoryRepository) ConsumeItem(_ context.Context, accountID, charID uint32, index, qty uint16) (domain.InventoryItem, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if qty == 0 {
+		return domain.InventoryItem{}, false, domain.ErrItemNotFound
+	}
+	rows := r.forChar(charID)
+	if int(index) >= len(rows) { //nolint:gosec // G115: index is a bag slot < 100; len fits int
+		return domain.InventoryItem{}, false, domain.ErrItemNotFound
+	}
+	target := rows[index]
+	if target.AccountID != 0 && target.AccountID != accountID {
+		return domain.InventoryItem{}, false, domain.ErrItemNotFound
+	}
+	if uint64(qty) > uint64(target.Amount) {
+		return domain.InventoryItem{}, false, domain.ErrItemNotFound
+	}
+	rowIndex := slices.IndexFunc(r.items, func(it domain.InventoryItem) bool {
+		return it.CharID == charID && it.ID == target.ID
+	})
+	if rowIndex < 0 {
+		return domain.InventoryItem{}, false, domain.ErrItemNotFound
+	}
+	before := r.items[rowIndex]
+	before.Index = index
+	if uint64(qty) == uint64(before.Amount) {
+		r.items = append(r.items[:rowIndex], r.items[rowIndex+1:]...)
+		return before, true, nil
+	}
+	r.items[rowIndex].Amount -= uint32(qty) //nolint:gosec // G115: qty is uint16 and validated not greater than uint32 Amount
+	post := r.items[rowIndex]
+	post.Index = index
+	return post, false, nil
 }

@@ -56,6 +56,7 @@ type ItemOption struct {
 type InventoryItem struct {
 	ID           uint32        // id (auto-increment PK; not the wire slot)
 	CharID       uint32        // char_id (owning character)
+	AccountID    uint32        // account_id scope used by in-memory ownership tests; not a DB column
 	Index        uint16        // grid slot (wire index; load-derived, not a column)
 	NameID       uint32        // nameid (item_db id → wire nameID)
 	Amount       uint32        // amount (stack count)
@@ -118,5 +119,13 @@ type InventoryRepository interface {
 	// UnequipItem clears the worn-location bitmask on the bag row occupying the
 	// given grid slot — CZ_REQ_TAKEOFF_EQUIP names the slot — and returns the row
 	// as it now stands. As with EquipItem, a missing slot yields ErrItemNotFound.
+	// UnequipItem clears the worn-location bitmask on the bag row occupying the
+	// given grid slot — CZ_REQ_TAKEOFF_EQUIP names the slot — and returns the row
+	// as it now stands. As with EquipItem, a missing slot yields ErrItemNotFound.
 	UnequipItem(ctx context.Context, accountID, charID uint32, index uint16) (InventoryItem, error)
+	// ConsumeItem atomically consumes qty units from the row occupying index. It
+	// returns the row before consumption and whether the row was deleted. A
+	// missing/foreign slot, zero quantity, or qty greater than Amount yields
+	// ErrItemNotFound and leaves the bag unchanged.
+	ConsumeItem(ctx context.Context, accountID, charID uint32, index uint16, qty uint16) (item InventoryItem, deleted bool, err error)
 }
