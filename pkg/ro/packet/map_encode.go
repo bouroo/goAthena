@@ -89,6 +89,51 @@ func (r MapRefuseEnterResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// MapMoveResponse encodes a ZC_NPCACK_MAPMOVE packet (command 0x0091) — the
+// server's reply to a warp/teleport that changes the client's map. The client
+// loads the named map and reconnects with a fresh CZ_ENTER. Layout source:
+// rathena/src/map/packets.hpp PACKET_ZC_NPCACK_MAPMOVE.
+//
+// Fixed wire length: 22 bytes (int16 packetType + char mapName[16] + uint16 xPos
+// + uint16 yPos). MapName is the zone-side name without ".gat", zero-padded to
+// fill the 16-byte slot (MAP_NAME_LENGTH_EXT).
+type MapMoveResponse struct {
+	// MapName is the destination map name (no extension, e.g. "izlude").
+	MapName string
+	// X is the destination cell X.
+	X uint16
+	// Y is the destination cell Y.
+	Y uint16
+}
+
+// Size returns the on-wire byte length that Encode will write (always 22).
+func (r MapMoveResponse) Size() int {
+	return sizeZCNPCAckMapMove
+}
+
+// Encode writes the ZC_NPCACK_MAPMOVE packet to w. Returns a wrapped error
+// (sentinel + %w) if MapName exceeds 16 bytes; in that case no bytes are written
+// to w.
+func (r MapMoveResponse) Encode(w io.Writer) error {
+	if len(r.MapName) > mapNameExtSlot {
+		return fmt.Errorf("packet: encode ZC_NPCACK_MAPMOVE: %w", ErrMapNameTooLong)
+	}
+
+	buf := make([]byte, sizeZCNPCAckMapMove)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNPCACKMAPMOVE)
+	// char mapName[16] at offset 2 — zero-padded.
+	writeFixedString(buf[2:2+mapNameExtSlot], r.MapName)
+	// uint16 xPos at offset 18 (2+16).
+	binary.LittleEndian.PutUint16(buf[18:], r.X)
+	// uint16 yPos at offset 20.
+	binary.LittleEndian.PutUint16(buf[20:], r.Y)
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_NPCACK_MAPMOVE: %w", err)
+	}
+	return nil
+}
+
 // MapNotifyPlayerMoveResponse encodes a ZC_NOTIFY_PLAYERMOVE packet
 // (command 0x0087). The server broadcasts this to nearby clients every
 // time a player's path is computed, so each peer can interpolate the

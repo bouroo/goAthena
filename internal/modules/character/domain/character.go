@@ -186,4 +186,11 @@ type CharacterRepository interface {
 	// account write. RowsAffected==0 (the char does not exist under that
 	// account) is reported as ErrCharacterNotFound.
 	SaveProgression(ctx context.Context, accountID, charID uint32, p Progression) error
+	// SavePosition writes the location columns (last_map, last_x, last_y) for the
+	// character at (accountID, charID) after a warp/teleport. These are
+	// deliberately outside Progression (identity/location, not levelable), so a
+	// map change needs its own column-selective write. Scoping by accountID is the
+	// same impersonation guard as SaveProgression; RowsAffected==0 is reported as
+	// ErrCharacterNotFound.
+	SavePosition(ctx context.Context, accountID, charID uint32, mapName string, x, y uint16) error
 }

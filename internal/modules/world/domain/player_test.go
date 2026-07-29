@@ -99,6 +99,43 @@ func TestPlayerRegistry_UnregisterCleansEmptyMapIndex(t *testing.T) {
 	assert.Empty(t, r.OnMap("prontera"))
 }
 
+// TestPlayerRegistry_Relocate asserts a warp re-keys the per-map inverted index
+// and updates MapName while keeping the player online (by-account unchanged) —
+// the invariants scriptWorld.Warp relies on for a cross-map transit. The old
+// bucket must drop the player (and clean its empty entry) and the new bucket
+// must hold it; ByAccount still resolves the same pointer. A relocate of an
+// unknown account is a no-op returning false, not a panic.
+func TestPlayerRegistry_Relocate(t *testing.T) {
+	t.Parallel()
+	r := domain.NewPlayerRegistry()
+
+	p := &domain.Player{AccountID: 1001, CharID: 150000, MapName: "prontera"}
+	require.NoError(t, r.Register(p))
+
+	ok := r.Relocate(1001, "izlude")
+	assert.True(t, ok, "relocate a live player succeeds")
+
+	// Stays online under the same pointer; map name adopted.
+	got, found := r.ByAccount(1001)
+	require.True(t, found)
+	assert.Same(t, p, got)
+	assert.Equal(t, "izlude", p.MapName, "MapName updated to the destination")
+
+	// Per-map index re-keyed: gone from the old map, present on the new one.
+	assert.Empty(t, r.OnMap("prontera"), "player left the source map bucket")
+	onIzlude := r.OnMap("izlude")
+	require.Len(t, onIzlude, 1)
+	assert.Same(t, p, onIzlude[0])
+
+	// A relocate to a third map re-keys again (old destination bucket cleaned).
+	require.True(t, r.Relocate(1001, "geffen"))
+	assert.Empty(t, r.OnMap("izlude"))
+	require.Len(t, r.OnMap("geffen"), 1)
+
+	// Unknown account is a no-op, not a panic.
+	assert.False(t, r.Relocate(9999, "izlude"), "relocate an unregistered account is a no-op")
+}
+
 // TestPlayerRegistry_RegisterNilRejects asserts the nil guard; a nil player
 // would otherwise nil-deref the AOI/broadcast paths.
 func TestPlayerRegistry_RegisterNilRejects(t *testing.T) {

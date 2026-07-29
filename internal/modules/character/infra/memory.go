@@ -138,6 +138,22 @@ func (r *MemoryCharacterRepository) SaveProgression(_ context.Context, accountID
 	return domain.ErrCharacterNotFound
 }
 
+// SavePosition writes last_map/last_x/last_y after a warp. Mirrors the
+// SaveProgression lookup contract: scoped by (accountID, charID), returns
+// ErrCharacterNotFound when no slot matches.
+func (r *MemoryCharacterRepository) SavePosition(_ context.Context, accountID, charID uint32, mapName string, x, y uint16) error {
+	for k, c := range r.bySlot {
+		if k.accountID == accountID && c.CharID == charID {
+			c.LastMap = mapName
+			c.LastX = x
+			c.LastY = y
+			r.bySlot[k] = c
+			return nil
+		}
+	}
+	return domain.ErrCharacterNotFound
+}
+
 // newNoviceDomain is the domain twin of newNoviceModel — same novice defaults,
 // expressed as a domain.Character for the in-memory adapter.
 func newNoviceDomain(in domain.CreateCharacter, charID uint32) domain.Character {

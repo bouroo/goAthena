@@ -15,28 +15,63 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
 )
 
-// Register configures and loads the content module boundaries.
-func Register(c do.Injector, npcDataRoot string) error {
-	// 1. Resolve necessary cross-module dependencies
-	// We depend on world's PlayerRegistry for domain.World implementation.
+// worldDeps bundles the cross-module world dependencies the content module
+// resolves at boot: the PlayerRegistry (for domain.World), MapStore + NPCRegistry
+// (to publish NPCs), and PositionStore (the M14a warp persist port). Grouping
+// them lets resolveWorldDeps return all four in one error-checked call so
+// Register stays under the gocyclo budget.
+type worldDeps struct {
+	players   *worlddomain.PlayerRegistry
+	mapStore  worlddomain.MapStore
+	npcReg    *worlddomain.NPCRegistry
+	positions worlddomain.PositionStore
+}
+
+// resolveWorldDeps resolves the four world domain dependencies from the injector,
+// wrapping each failure with the name of the missing service. Each is a hard
+// dependency — the content module cannot publish NPCs or drive a warp without
+// them — so a missing registration fails boot with a clear error.
+func resolveWorldDeps(c do.Injector) (worldDeps, error) {
 	players, err := do.Invoke[*worlddomain.PlayerRegistry](c)
 	if err != nil {
-		return fmt.Errorf("content: failed to resolve PlayerRegistry: %w", err)
+		return worldDeps{}, fmt.Errorf("content: failed to resolve PlayerRegistry: %w", err)
 	}
-
-	// We depend on world's MapStore and NPCRegistry to publish NPCs.
 	mapStore, err := do.Invoke[worlddomain.MapStore](c)
 	if err != nil {
-		return fmt.Errorf("content: failed to resolve MapStore: %w", err)
+		return worldDeps{}, fmt.Errorf("content: failed to resolve MapStore: %w", err)
 	}
 	npcRegistry, err := do.Invoke[*worlddomain.NPCRegistry](c)
 	if err != nil {
-		return fmt.Errorf("content: failed to resolve NPCRegistry: %w", err)
+		return worldDeps{}, fmt.Errorf("content: failed to resolve NPCRegistry: %w", err)
 	}
+	// M14a: PositionStore (re-exported by world from the character repository) is
+	// the warp persist port — scriptWorld.Warp writes last_map/last_x/last_y
+	// through it so a fresh CZ_ENTER re-enter spawns on the destination map.
+	positions, err := do.Invoke[worlddomain.PositionStore](c)
+	if err != nil {
+		return worldDeps{}, fmt.Errorf("content: failed to resolve PositionStore: %w", err)
+	}
+	return worldDeps{
+		players:   players,
+		mapStore:  mapStore,
+		npcReg:    npcRegistry,
+		positions: positions,
+	}, nil
+}
+
+// Register configures and loads the content module boundaries.
+func Register(c do.Injector, npcDataRoot string) error {
+	// 1. Resolve the cross-module world deps the dialog service and scriptWorld
+	// depend on (kept in a helper so Register stays under the gocyclo budget).
+	deps, err := resolveWorldDeps(c)
+	if err != nil {
+		return err
+	}
+	players, mapStore, npcRegistry, positions := deps.players, deps.mapStore, deps.npcReg, deps.positions
 
 	// 2. Build our internal infrastructure (DialogRegistry, World impl)
 	dialogRegistry := infra.NewMemoryDialogRegistry()
-	scriptWorld := infra.NewScriptWorld(players)
+	scriptWorld := infra.NewScriptWorld(players, mapStore, positions)
 
 	// 3. Load and compile all scripts.
 	// The NPC data usually lives in data/npc/ (provided by top-level parameter).

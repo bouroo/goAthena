@@ -5,6 +5,7 @@ package packet
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -3031,5 +3032,66 @@ func TestRestartAckResponse_Encode_Refused(t *testing.T) {
 	got := buf.Bytes()
 	if len(got) != 3 || got[0] != 0xb3 || got[1] != 0x00 || got[2] != 0 {
 		t.Errorf("refuse bytes = %02x, want b3 00 00", got)
+	}
+}
+
+func TestMapMoveResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	if got, want := (MapMoveResponse{}).Size(), 22; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestMapMoveResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	if err := (MapMoveResponse{MapName: "izlude", X: 128, Y: 200}).Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+	if len(got) != 22 {
+		t.Fatalf("len = %d, want 22", len(got))
+	}
+	if got[0] != 0x91 || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want 91 00 (LE 0x0091)", got[0], got[1])
+	}
+	// mapName[16] at [2:18] — "izlude" zero-padded.
+	wantMap := make([]byte, 16)
+	copy(wantMap, "izlude")
+	if nameBytes := got[2:18]; !bytes.Equal(nameBytes, wantMap) {
+		t.Errorf("mapName slot = % x, want % x", nameBytes, wantMap)
+	}
+	if x := binary.LittleEndian.Uint16(got[18:20]); x != 128 {
+		t.Errorf("xPos = %d, want 128", x)
+	}
+	if y := binary.LittleEndian.Uint16(got[20:22]); y != 200 {
+		t.Errorf("yPos = %d, want 200", y)
+	}
+}
+
+func TestMapMoveResponse_Encode_ExactFitAndOverflow(t *testing.T) {
+	t.Parallel()
+
+	// 16-byte map name — exact fit, no error.
+	var fit bytes.Buffer
+	fitName := strings.Repeat("M", 16)
+	if err := (MapMoveResponse{MapName: fitName}).Encode(&fit); err != nil {
+		t.Fatalf("exact-fit Encode() unexpected error: %v", err)
+	}
+	if got := fit.Bytes()[2:18]; !bytes.Equal(got, []byte(fitName)) {
+		t.Errorf("exact-fit mapName = % x, want % x", got, []byte(fitName))
+	}
+
+	// 17-byte map name — overflow, sentinel error, no bytes written.
+	var over bytes.Buffer
+	if err := (MapMoveResponse{MapName: strings.Repeat("M", 17)}).Encode(&over); err == nil {
+		t.Errorf("overflow Encode() error = nil, want ErrMapNameTooLong")
+	} else if !errors.Is(err, ErrMapNameTooLong) {
+		t.Errorf("overflow Encode() error = %v, want ErrMapNameTooLong", err)
+	}
+	if over.Len() != 0 {
+		t.Errorf("overflow wrote %d bytes, want 0", over.Len())
 	}
 }

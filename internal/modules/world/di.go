@@ -68,6 +68,14 @@ func Register(ctx context.Context, c do.Injector) error {
 	registry := domain.NewPlayerRegistry()
 	do.ProvideValue(c, registry)
 
+	// M14a: re-export the character repository as the world PositionStore port so
+	// the content module's scriptWorld.Warp can persist last_map/last_x/last_y
+	// after a warp without importing character/infra. CharacterRepository
+	// satisfies PositionStore structurally (SavePosition added in M14a), the same
+	// structural satisfaction ProgressionStore relies on for combat. Mirrors the
+	// maps re-export above.
+	do.ProvideValue(c, domain.PositionStore(chars))
+
 	// M5: the mob registry + spawn corpus. mob_db is optional per ZoneConfig —
 	// an empty path or an unreadable file logs a warning and the zone boots with
 	// no mobs (db stays nil; SpawnAll/Run become no-ops), matching the documented

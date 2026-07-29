@@ -347,6 +347,40 @@ func (r *PlayerRegistry) Unregister(accountID uint32) *Player {
 	return p
 }
 
+// Relocate moves a live player to a different map: it re-keys the per-map index
+// (removing the player from the old map's bucket, adding it to the new map's) and
+// updates the player's MapName, all atomically under the registry lock. It does
+// NOT touch byAccount (the player stays online) or the AOI grid — the caller owns
+// removing the entity from the old map's GridManager and adding it to the new
+// map's. Returns false (a no-op) when the player is not live.
+//
+// MapName is otherwise set once at enter-world and read under this same lock by
+// OnMap/Unregister; Relocate is the sole second mutation site, so serializing the
+// write here keeps those readers consistent without widening Player's own mutex.
+func (r *PlayerRegistry) Relocate(accountID uint32, newMap string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	p, ok := r.byAccount[accountID]
+	if !ok {
+		return false
+	}
+	if old := r.byMap[p.MapName]; old != nil {
+		delete(old, accountID)
+		if len(old) == 0 {
+			delete(r.byMap, p.MapName)
+		}
+	}
+	p.MapName = newMap
+	mp, ok := r.byMap[newMap]
+	if !ok {
+		mp = make(map[uint32]*Player)
+		r.byMap[newMap] = mp
+	}
+	mp[accountID] = p
+	return true
+}
+
 // ByAccount returns the live player for an account, or (nil,false) if none.
 // The returned pointer is shared; callers must not mutate it.
 func (r *PlayerRegistry) ByAccount(accountID uint32) (*Player, bool) {

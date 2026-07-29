@@ -242,6 +242,27 @@ func (r *GORMCharacterRepository) SaveProgression(ctx context.Context, accountID
 	return nil
 }
 
+// SavePosition writes last_map/last_x/last_y after a warp, scoped by the trusted
+// account (the impersonation guard shared with SaveProgression). It mirrors
+// SaveProgression's column-selective update + RowsAffected==0 → not-found.
+func (r *GORMCharacterRepository) SavePosition(ctx context.Context, accountID, charID uint32, mapName string, x, y uint16) error {
+	res := r.db.WithContext(ctx).
+		Table((charModel{}).TableName()).
+		Where("account_id = ? AND char_id = ?", accountID, charID).
+		Updates(map[string]any{
+			"last_map": mapName,
+			"last_x":   x,
+			"last_y":   y,
+		})
+	if res.Error != nil {
+		return fmt.Errorf("save position account %d char %d: %w", accountID, charID, res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return domain.ErrCharacterNotFound
+	}
+	return nil
+}
+
 // Create inserts a new character with the server-assigned novice defaults and
 // returns the persisted row (char_id is the DB-assigned auto-increment). It
 // guards name uniqueness and slot occupancy at the DB before insert and maps a

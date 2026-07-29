@@ -96,6 +96,13 @@ const (
 	// clif_packetdb.hpp:42 (`parseable_packet(0x0090,7,clif_parse_NpcClicked,2,6)`).
 	// Fixed 7 bytes: [2:cmd][4:AID uint32][1:type uint8] (1=click).
 	HeaderCZCONTACTNPC uint16 = 0x0090
+	// ZC_NPCACK_MAPMOVE (0x0091) — server tells the client to change maps after
+	// a warp/teleport (rAthena clif_changemap, clif.cpp). The client loads the
+	// named map and reconnects with a fresh CZ_ENTER; the map name carries no
+	// ".gat" extension (the client appends it). Wire:
+	// rathena/src/map/packets.hpp PACKET_ZC_NPCACK_MAPMOVE —
+	// `int16 packetType; char mapName[16]; uint16 xPos; uint16 yPos;` = 22 bytes.
+	HeaderZCNPCACKMAPMOVE uint16 = 0x0091
 	// CZ_REQNEXTSCRIPT (0x00b9) — client clicks "Next" in a dialog.
 	// rathena/src/map/clif_packetdb.hpp:60 (`parseable_packet(0x00b9,6,clif_parse_ScriptContinue,2)`).
 	// Fixed 6 bytes: [2:cmd][4:NpcID uint32].
@@ -305,6 +312,10 @@ const (
 	// sizeZCRefuseEnter = int16 packetType + uint8 errorCode = 2+1 = 3
 	// (rathena/src/map/packets.hpp:585-589, static_assert at :589).
 	sizeZCRefuseEnter = 3
+	// sizeZCNPCAckMapMove = int16 packetType + char mapName[16] + uint16 xPos +
+	// uint16 yPos = 2+16+2+2 = 22 (rathena/src/map/packets.hpp
+	// PACKET_ZC_NPCACK_MAPMOVE).
+	sizeZCNPCAckMapMove = 22
 	// sizeCZEnter = int16 packetType + uint32 AID + uint32 CID +
 	// uint32 authCode + uint32 clientTime + uint8 sex = 2+4+4+4+4+1 = 19
 	// (rathena/src/map/clif.cpp:10642 + the WantToConnection handler

@@ -1632,7 +1632,8 @@ func readMapFrame(t *testing.T, conn net.Conn) ([]byte, bool) {
 		op == packet.HeaderZCPCSELLITEMLIST ||
 		op == packet.HeaderZCINVENTORYITEMLISTNORMAL ||
 		op == packet.HeaderZCINVENTORYITEMLISTEQUIP ||
-		op == packet.HeaderZCINVENTORYSTART || op == packet.HeaderZCINVENTORYEND {
+		op == packet.HeaderZCINVENTORYSTART || op == packet.HeaderZCINVENTORYEND ||
+		op == packet.HeaderZCSAYDIALOG2 {
 		lenBuf := make([]byte, 2)
 		_, err := io.ReadFull(conn, lenBuf)
 		require.NoErrorf(t, err, "read length prefix of opcode 0x%04x", op)
@@ -1706,6 +1707,15 @@ func mapFrameSize(op uint16) int {
 		return packet.PurchaseResultResponse{}.Size()
 	case packet.HeaderZCPCSELLRESULT:
 		return packet.SellResultResponse{}.Size()
+	case packet.HeaderZCWAITDIALOG2:
+		// M14a: the NPC "Next" prompt (0x0973, 7 bytes fixed). Value receiver.
+		return packet.WaitDialog2Response{}.Size()
+	case packet.HeaderZCCLOSEDIALOG:
+		// M14a: the NPC "Close" frame (0x00b6, 6 bytes fixed). Value receiver.
+		return packet.CloseDialogResponse{}.Size()
+	case packet.HeaderZCNPCACKMAPMOVE:
+		// M14a: the warp/change-map ack (0x0091, 22 bytes fixed). Value receiver.
+		return packet.MapMoveResponse{}.Size()
 	default:
 		return 0
 	}
@@ -2106,7 +2116,7 @@ func TestServe_ShopSell(t *testing.T) {
 	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eSeller")
 	defer mapConn.Close()
 
-	shopNpcID := worlddomain.NPCIDBase + 2
+	shopNpcID := worlddomain.NPCIDBase + 3
 	var contact bytes.Buffer
 	require.NoError(t, (packet.CZContactNPCRequest{AID: shopNpcID, Type: 1}).Encode(&contact))
 	_, err = mapConn.Write(contact.Bytes())
@@ -2151,8 +2161,8 @@ func TestServe_ShopSell(t *testing.T) {
 // select Buy, purchase an item, and verify zeny is deducted and the purchase
 // succeeds. The shop NPC "Tool Shop" is loaded from data/shop/prontera.yml at
 // prontera(155,153). Script NPCs from data/npc/*.txt are allocated first
-// (alphabetical: healer.txt → sample.txt), then shop NPCs; the Tool Shop is
-// the 3rd NPC so its EntityID = NPCIDBase + 2.
+// (alphabetical: healer.txt → sample.txt → warper.txt), then shop NPCs; the
+// Tool Shop is the 4th NPC so its EntityID = NPCIDBase + 3.
 func TestServe_ShopBuy(t *testing.T) {
 	requireStack(t)
 
@@ -2203,8 +2213,8 @@ func TestServe_ShopBuy(t *testing.T) {
 	defer mapConn.Close()
 
 	// --- Step 1: CZ_CONTACTNPC → ZC_SELECT_DEALTYPE ---
-	// Script NPCs (healer.txt, sample.txt) are allocated first, then shop NPCs.
-	shopNpcID := worlddomain.NPCIDBase + 2
+	// Script NPCs (healer.txt, sample.txt, warper.txt) are allocated first, then shop NPCs.
+	shopNpcID := worlddomain.NPCIDBase + 3
 	var contact bytes.Buffer
 	require.NoError(t, (packet.CZContactNPCRequest{AID: shopNpcID, Type: 1}).Encode(&contact))
 	_, err = mapConn.Write(contact.Bytes())
@@ -2246,4 +2256,126 @@ func TestServe_ShopBuy(t *testing.T) {
 	finalZeny := readCharZeny(t, cfg, seedCharID)
 	expectedZeny := startZeny - 2*50 // 100000 - 100 = 99900
 	assert.Equal(t, expectedZeny, finalZeny, "zeny should be deducted by 2 Red Potions at 50z each")
+}
+
+// readCharPosition reads last_map/last_x/last_y back from the char table. Used
+// by the warp e2e to assert SavePosition persisted the destination cell.
+func readCharPosition(t *testing.T, cfg *config.Config, charID uint32) (string, uint16, uint16) {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to read position")
+	t.Cleanup(func() {
+		sqlDB, dbErr := gdb.DB()
+		_ = sqlDB.Close()
+		_ = dbErr
+	})
+	type posRow struct {
+		LastMap string
+		LastX   uint16
+		LastY   uint16
+	}
+	var row posRow
+	require.NoError(t, gdb.Raw(
+		`SELECT last_map, last_x, last_y FROM `+"`char`"+` WHERE char_id = ?`, charID).
+		Scan(&row).Error, "read persisted position")
+	return row.LastMap, row.LastX, row.LastY
+}
+
+// TestServe_Warp_MovesPlayerToNewMap is the M14a end-to-end: a player on
+// Prontera contacts the Warper NPC, advances the dialog past `next`, and the
+// warp statement migrates the player to Izlude. The proof is two-fold:
+//   - ZC_NPCACK_MAPMOVE (0x0091) is emitted with map="izlude" and the warp cell.
+//     This frame is the LAST step of scriptWorld.Warp, after the AOI relocate +
+//     registry re-key + SavePosition already succeeded — observing it means the
+//     whole server-side transit ran.
+//   - last_map/last_x/last_y are persisted, so a fresh CZ_ENTER re-enter (whose
+//     mechanics the Restart test already proves) would spawn the player on
+//     Izlude rather than the source map.
+//
+// Script NPCs are allocated alphabetically (healer.txt → sample.txt →
+// warper.txt), so the Warper is the 3rd script NPC: EntityID = NPCIDBase + 2.
+func TestServe_Warp_MovesPlayerToNewMap(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eWarp", "prontera", 150, 155)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	// --- Login to capture the session token the CZ_ENTER gate verifies. ---
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN; login likely failed against the DB")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1)
+	require.NoError(t, loginConn.Close())
+
+	// --- Enter on Prontera. ---
+	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eWarp")
+	defer mapConn.Close()
+
+	// --- Contact the Warper (Type 0 = script dialog) and advance past `next`. ---
+	// Script NPCs allocate alphabetically: healer(0) → sample(1) → warper(2).
+	warperID := worlddomain.NPCIDBase + 2
+	var contact bytes.Buffer
+	require.NoError(t, (packet.CZContactNPCRequest{AID: warperID, Type: 0}).Encode(&contact))
+	_, err = mapConn.Write(contact.Bytes())
+	require.NoError(t, err, "send CZ_CONTACTNPC")
+
+	// The Warper script runs mes; mes; next; — the "Next" prompt (ZC_WAIT_DIALOG2)
+	// arrives after the mes lines. readUntilCmd skips the variable-length mes
+	// frames to find it.
+	waitFrame := readUntilCmd(t, mapConn, packet.HeaderZCWAITDIALOG2, 5*time.Second)
+	assert.Equal(t, warperID, binary.LittleEndian.Uint32(waitFrame[2:6]),
+		"ZC_WAIT_DIALOG2 NpcID must match the Warper")
+
+	// CZ_REQ_NEXT_SCRIPT advances past `next`; the VM then runs
+	// `warp "izlude",128,128` → scriptWorld.Warp emits ZC_NPCACK_MAPMOVE (0x0091).
+	var advance bytes.Buffer
+	require.NoError(t, (packet.CZReqNextScriptRequest{NpcID: warperID}).Encode(&advance))
+	_, err = mapConn.Write(advance.Bytes())
+	require.NoError(t, err, "send CZ_REQ_NEXT_SCRIPT")
+
+	moveFrame := readUntilCmd(t, mapConn, packet.HeaderZCNPCACKMAPMOVE, 5*time.Second)
+	// ZC_NPCACK_MAPMOVE layout: [0:2]=0x0091 [2:18]=mapName[16] [18:20]=x [20:22]=y.
+	gotMap := string(bytes.TrimRight(moveFrame[2:18], "\x00"))
+	assert.Equal(t, "izlude", gotMap, "ZC_NPCACK_MAPMOVE map name = izlude")
+	assert.Equal(t, uint16(128), binary.LittleEndian.Uint16(moveFrame[18:20]), "warp X = 128")
+	assert.Equal(t, uint16(128), binary.LittleEndian.Uint16(moveFrame[20:22]), "warp Y = 128")
+
+	// --- Persistence: last_map/last_x/last_y were written so a fresh CZ_ENTER
+	// re-enter spawns on Izlude. (Re-enter mechanics are covered by the Restart
+	// test; here we assert the warp persisted the destination.) ---
+	pMap, pX, pY := readCharPosition(t, cfg, seedCharID)
+	assert.Equal(t, "izlude", pMap, "persisted last_map = izlude")
+	assert.Equal(t, uint16(128), pX, "persisted last_x = 128")
+	assert.Equal(t, uint16(128), pY, "persisted last_y = 128")
 }
