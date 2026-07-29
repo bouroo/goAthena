@@ -150,6 +150,9 @@ func loadConfigForE2E(t *testing.T) *config.Config {
 		// the test CWD and find nothing.
 		cfg.Zone.DBPath = filepath.Join(root, filepath.Clean(cfg.Zone.DBPath))
 	}
+	if cfg.Zone.SkillDBPath != "" {
+		cfg.Zone.SkillDBPath = filepath.Join(root, filepath.Clean(cfg.Zone.SkillDBPath))
+	}
 	return cfg
 }
 
@@ -1716,6 +1719,13 @@ func mapFrameSize(op uint16) int {
 	case packet.HeaderZCNPCACKMAPMOVE:
 		// M14a: the warp/change-map ack (0x0091, 22 bytes fixed). Value receiver.
 		return packet.MapMoveResponse{}.Size()
+	case packet.HeaderZCNOTIFYSKILL:
+		// M14b: the skill-hit broadcast (0x01de, 33 bytes fixed). Value receiver.
+		return packet.NotifySkillResponse{}.Size()
+	case packet.HeaderZCACKTOUSESKILL:
+		// M14b: the skill cast result ack (0x0110, 14 bytes fixed; cause 12 =
+		// SP insufficient). Value receiver.
+		return packet.AckUseSkillResponse{}.Size()
 	default:
 		return 0
 	}
@@ -1819,6 +1829,42 @@ func seedCombatChar(t *testing.T, cfg *config.Config, accountID uint32, name, la
 		"SELECT char_id FROM `char` WHERE account_id = ? AND char_num = 0", accountID).
 		Scan(&charID).Error, "read back seeded combat char_id")
 	require.NotZero(t, charID, "seeded combat char_id is 0")
+	t.Cleanup(func() { _ = gdb.Exec("DELETE FROM `char` WHERE char_id = ?", charID).Error })
+	return charID
+}
+
+// seedSkillChar inserts a level-1 naked novice at (lastX, lastY) with SP and
+// max_sp set to 2000 — enough margin for 100+ SM_BASH lv10 casts (15 SP each)
+// so the M14b skill-cast e2e never trips the SP-insufficient negative path on
+// the way to a kill. Everything else (stats 1, HP 40, base_exp 8) matches
+// seedCombatChar so the kill path can be reasoned about identically; only the
+// SP/max_sp column pair differs. Mirrors seedCombatChar's
+// clear/insert/readback/LIFO-cleanup structure.
+func seedSkillChar(t *testing.T, cfg *config.Config, accountID uint32, name, lastMap string, lastX, lastY int) uint32 {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to seed skill char")
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	require.NoError(t, gdb.Exec("DELETE FROM `char` WHERE account_id = ?", accountID).Error,
+		"clear existing chars for test account")
+	require.NoError(t, gdb.Exec(
+		`INSERT INTO `+"`char`"+` (account_id, char_num, name, class, base_level, job_level,
+		   base_exp, job_exp, zeny, str, agi, vit, `+"`int`"+`, dex, luk,
+		   max_hp, hp, max_sp, sp, status_point, skill_point,
+		   hair, hair_color, clothes_color, body, weapon, shield,
+		   head_top, head_mid, head_bottom, robe,
+		   last_map, last_x, last_y, sex, option, karma, manner)
+		 VALUES (?, 0, ?, 0, 1, 1, 8, 1, 0, 1,1,1,1,1,1, 40,40,2000,2000,0,0, 2,1,0,0,0,0, 0,0,0,0, ?, ?, ?, 1, 0, 0, 0)`,
+		accountID, name, lastMap, lastX, lastY).Error, "insert level-1 high-SP skill seed char row")
+
+	var charID uint32
+	require.NoError(t, gdb.Raw(
+		"SELECT char_id FROM `char` WHERE account_id = ? AND char_num = 0", accountID).
+		Scan(&charID).Error, "read back seeded skill char_id")
+	require.NotZero(t, charID, "seeded skill char_id is 0")
 	t.Cleanup(func() { _ = gdb.Exec("DELETE FROM `char` WHERE char_id = ?", charID).Error })
 	return charID
 }
@@ -2378,4 +2424,124 @@ func TestServe_Warp_MovesPlayerToNewMap(t *testing.T) {
 	assert.Equal(t, "izlude", pMap, "persisted last_map = izlude")
 	assert.Equal(t, uint16(128), pX, "persisted last_x = 128")
 	assert.Equal(t, uint16(128), pY, "persisted last_y = 128")
+}
+
+// TestServe_UseSkill_Bash is the M14b end-to-end: a player on the Poring's
+// spawn cell casts SM_BASH (skillID 5) via CZ_USE_SKILL2 and the server
+// broadcasts ZC_NOTIFY_SKILL + applies damage. The test seeds a high-SP char
+// at the Poring's home cell (155,165) so the first cast is in melee range. It
+// asserts the ZC_NOTIFY_SKILL frame carries the correct skill ID (5 = SM_BASH)
+// and a non-zero damage value. Repeated casts drive the Poring to death
+// (ZC_NOTIFY_VANISH) proving damage was applied through the existing combat
+// pipeline.
+func TestServe_UseSkill_Bash(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate())
+
+	seedCharID := seedSkillChar(t, cfg, seededAccountID, "E2eBash", "prontera", 155, 165)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err)
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	// Login → CZ_ENTER → map enter
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1)
+	require.NoError(t, loginConn.Close())
+
+	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eBash")
+	defer mapConn.Close()
+
+	// --- locate the Poring in the enter spawn burst (same pattern as Combat test) ---
+	var poringID uint32
+	findEnd := time.Now().Add(5 * time.Second)
+	for poringID == 0 && time.Now().Before(findEnd) {
+		require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+		frame, ok := readMapFrame(t, mapConn)
+		if !ok {
+			continue
+		}
+		if binary.LittleEndian.Uint16(frame) != packet.HeaderZCSPAWNUNIT || frame[4] != 5 {
+			continue
+		}
+		if binary.LittleEndian.Uint16(frame[23:25]) == poringSprite {
+			poringID = binary.LittleEndian.Uint32(frame[5:9])
+		}
+	}
+	require.NotZero(t, poringID, "no Poring in the enter spawn burst")
+
+	// --- Cast SM_BASH (skillID=5, level=5) on the Poring. The char spawns on
+	// the Poring's cell so melee range is satisfied. Scan frames for
+	// ZC_NOTIFY_SKILL to verify the skill broadcast was emitted. ---
+	var skillNotify []byte
+	var spUpdate []byte
+	castEnd := time.Now().Add(5 * time.Second)
+	for skillNotify == nil && time.Now().Before(castEnd) {
+		var skill bytes.Buffer
+		require.NoError(t, (packet.CZUseSkill{SkillLv: 5, SkillID: 5, TargetID: poringID}).Encode(&skill))
+		_, err = mapConn.Write(skill.Bytes())
+		require.NoError(t, err, "send CZ_USE_SKILL2")
+
+		// Read frames for up to 1s looking for ZC_NOTIFY_SKILL and ZC_PAR_CHANGE SP_SP.
+		readEnd := time.Now().Add(1 * time.Second)
+		for time.Now().Before(readEnd) && skillNotify == nil {
+			require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+			frame, ok := readMapFrame(t, mapConn)
+			if !ok {
+				break // deadline; retry the cast
+			}
+			op := binary.LittleEndian.Uint16(frame)
+			switch op {
+			case packet.HeaderZCNOTIFYSKILL:
+				skillNotify = frame
+			case packet.HeaderZCPARCHANGE:
+				if binary.LittleEndian.Uint16(frame[2:4]) == packet.SPSP {
+					spUpdate = frame
+				}
+			}
+		}
+	}
+	require.NotNil(t, skillNotify, "no ZC_NOTIFY_SKILL received within %v", 5*time.Second)
+
+	// Verify the ZC_NOTIFY_SKILL carries SM_BASH's skill ID (5) and targets the Poring.
+	assert.Equal(t, uint16(5), binary.LittleEndian.Uint16(skillNotify[2:4]),
+		"ZC_NOTIFY_SKILL SKID = 5 (SM_BASH)")
+	assert.Equal(t, poringID, binary.LittleEndian.Uint32(skillNotify[8:12]),
+		"ZC_NOTIFY_SKILL targetID = Poring EntityID")
+	skillDmg := int32(binary.LittleEndian.Uint32(skillNotify[24:28])) //nolint:gosec // G115: test wire decode
+	assert.Greater(t, skillDmg, int32(0), "BASH damage > 0")
+
+	// Verify SP was spent (ZC_PAR_CHANGE SP_SP was broadcast).
+	require.NotNil(t, spUpdate, "no ZC_PAR_CHANGE SP_SP received — SP was not broadcast")
+	newSP := int32(binary.LittleEndian.Uint32(spUpdate[4:8])) //nolint:gosec // G115: test wire decode
+	assert.Less(t, newSP, int32(2000), "SP should have decreased from the cast cost")
 }

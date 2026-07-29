@@ -37,6 +37,10 @@ type Handlers struct {
 	// OnCZActionRequest serves CZ_ACTION_REQUEST (0x0089), the attack/motion
 	// request. Provided by the world module (M6).
 	OnCZActionRequest domain.PacketHandler
+	// OnCZUseSkill serves CZ_USE_SKILL2 (0x0438), the skill-cast request. The M14b
+	// slice resolves SM_BASH (an offensive weapon skill) on an adjacent mob;
+	// other skills are dropped pending later units. Provided by the world module.
+	OnCZUseSkill domain.PacketHandler
 	// OnCZRequestTime serves CZ_REQUEST_TIME (0x007e), the clock-skew probe.
 	// Provided by the world module (M7).
 	OnCZRequestTime domain.PacketHandler
@@ -130,6 +134,7 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table = addHandler(table, packet.HeaderCZENTER, h.OnCZEnter)
 	table = addHandler(table, packet.HeaderCZREQUESTMOVE, h.OnCZRequestMove)
 	table = addHandler(table, packet.HeaderCZACTIONREQUEST, h.OnCZActionRequest)
+	table = addHandler(table, packet.HeaderCZUSESKILL, h.OnCZUseSkill)
 	table = addHandler(table, packet.HeaderCZREQUESTTIME, h.OnCZRequestTime)
 	table = addHandler(table, packet.HeaderCZCHANGEDIR, h.OnCZChangeDir)
 	table = addHandler(table, packet.HeaderCZREQEMOTION, h.OnCZReqEmotion)

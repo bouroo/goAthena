@@ -28,6 +28,7 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/mode"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 	"github.com/bouroo/goAthena/pkg/ro/statcalc"
 )
 
@@ -122,6 +123,7 @@ type CombatService struct {
 	items      *itemdb.Registry
 	floorItems *domain.FloorItemRegistry
 	rng        stepSource
+	skills     *skilldb.Registry
 }
 
 // NewCombatService binds the combat collaborators. db may be nil (no mob_db):
@@ -139,12 +141,13 @@ type CombatService struct {
 // the dropped-item index; a nil floorItems disables drops the same way. rng is the
 // shared stepSource RNG seam (mob-wander reuses it); the drop roller draws a per-
 // myriad rate check from it. A nil rng defaults to randStep (the global source),
-// matching NewMobService.
-func NewCombatService(players *domain.PlayerRegistry, mobs *domain.MobRegistry, maps domain.MapStore, db *mobdb.Registry, chars domain.ProgressionStore, clock Clock, respawn RespawnScheduler, fs statcalc.FormulaSet, gm mode.Mode, items *itemdb.Registry, floorItems *domain.FloorItemRegistry, rng stepSource) *CombatService {
+// matching NewMobService. skills is the optional skill_db; when nil, CZ_USE_SKILL2
+// casts are no-ops (skill use disabled), mirroring the nil-mob_db contract.
+func NewCombatService(players *domain.PlayerRegistry, mobs *domain.MobRegistry, maps domain.MapStore, db *mobdb.Registry, chars domain.ProgressionStore, clock Clock, respawn RespawnScheduler, fs statcalc.FormulaSet, gm mode.Mode, items *itemdb.Registry, floorItems *domain.FloorItemRegistry, rng stepSource, skills *skilldb.Registry) *CombatService {
 	if rng == nil {
 		rng = randStep{}
 	}
-	return &CombatService{players: players, mobs: mobs, maps: maps, db: db, chars: chars, clock: clock, respawn: respawn, fs: fs, gm: gm, items: items, floorItems: floorItems, rng: rng}
+	return &CombatService{players: players, mobs: mobs, maps: maps, db: db, chars: chars, clock: clock, respawn: respawn, fs: fs, gm: gm, items: items, floorItems: floorItems, rng: rng, skills: skills}
 }
 
 // Attack resolves one CZ_ACTION_REQUEST from accountID against req.TargetGID.
@@ -187,6 +190,144 @@ func (s *CombatService) Attack(ctx context.Context, accountID uint32, req packet
 		return s.onMobDeath(ctx, mp, mob, attacker)
 	}
 	return nil
+}
+
+// UseSkill resolves one CZ_USE_SKILL2 from accountID against req. The M14b slice
+// honours a single offensive weapon skill (SM_BASH) cast on an adjacent mob: it
+// validates the skill + melee range, pays the per-level SP cost, computes skill
+// damage (base melee × the skill ratio), broadcasts ZC_NOTIFY_SKILL then
+// ZC_NOTIFY_ACT, and on the killing blow drives the existing death path.
+// Insufficient SP replies ZC_ACK_TOUSESKILL (cause = SP insufficient) and deals
+// no damage. With no skill_db, an unknown skill, a non-weapon/attack skill, a
+// non-mob target, or an out-of-range cast, the request is a silent no-op —
+// matching Attack's drop policy; richer fail-acks are PENDING. Only an infra
+// fault (map load) is returned so ProcessBytes logs it.
+func (s *CombatService) UseSkill(ctx context.Context, accountID uint32, req packet.CZUseSkill) error {
+	if s.skills == nil {
+		return nil
+	}
+	attacker, ok := s.players.ByAccount(accountID)
+	if !ok {
+		return nil
+	}
+	skill := s.skills.Get(int32(req.SkillID)) //nolint:gosec // G115: skill DB ids fit int32
+	if skill == nil || !isWeaponAttackSkill(skill) {
+		return nil
+	}
+	mob, ok := s.mobs.ByEntity(aoi.EntityID(req.TargetID))
+	if !ok {
+		return nil
+	}
+	ax, ay, _ := attacker.Position()
+	mx, my, _ := mob.Position()
+	if !combat.InMeleeRange(int(ax), int(ay), int(mx), int(my)) {
+		return nil
+	}
+
+	level := clampSkillLevel(req.SkillLv, skill.MaxLevel)
+	cost := s.skills.SpCostAt(skill.ID, int(level))
+	if _, curSP := attacker.Vitals(); int32(curSP) < cost { //nolint:gosec // G115: SP fits int32
+		return s.sendSkillSPFail(attacker, req.SkillID)
+	}
+
+	mp, err := s.maps.Load(ctx, mob.MapName)
+	if err != nil {
+		return fmt.Errorf("skill: load map %q for mob %d: %w", mob.MapName, mob.EntityID, err)
+	}
+	if mp == nil {
+		return fmt.Errorf("skill: map %q loaded nil for mob %d", mob.MapName, mob.EntityID)
+	}
+
+	// Pay SP after the map resolves so a load fault spends no resource; the new
+	// SP is broadcast only to the caster (SP is private, unlike damage).
+	newSP := attacker.SpendSP(cost)
+	if err := (packet.ParChangeResponse{VarID: packet.SPSP, Count: int32(newSP)}).Encode(connWriter{attacker.Conn}); err != nil { //nolint:gosec // G115: SP fits int32
+		return fmt.Errorf("skill: encode SP update account %d: %w", accountID, err)
+	}
+
+	damage := skillDamage(s.computeDamage(attacker, s.mobEntry(mob.MobID)), level)
+	s.broadcastSkill(mp, mx, my, req.SkillID, attacker.AccountID, mob.EntityID, damage, level)
+	s.broadcastDamage(mp, mx, my, attacker.AccountID, mob.EntityID, damage)
+
+	if _, died := mob.ApplyDamage(damage); died {
+		return s.onMobDeath(ctx, mp, mob, attacker)
+	}
+	return nil
+}
+
+// skillDamage scales a base melee hit by the cast skill's damage ratio. The M14b
+// slice resolves SM_BASH only; its ratio is the base 100% + 30% per level
+// (third_party/.../skills/swordman/bash.cpp:14, `base_skillratio += 30 *
+// skill_lv`). int64 holds the product so a large melee hit × ratio cannot wrap.
+func skillDamage(base int32, level int32) int32 {
+	if base < 0 {
+		base = 0
+	}
+	return int32(int64(base) * int64(bashSkillRatio(level)) / 100) //nolint:gosec // G115: bounded by base melee × small ratio
+}
+
+// bashSkillRatio is SM_BASH's per-level damage ratio as a percent.
+func bashSkillRatio(level int32) int32 {
+	return 100 + 30*level
+}
+
+// clampSkillLevel bounds a client-claimed level to [1, maxLv]; a level outside
+// the skill's range resolves at the nearest valid level rather than being
+// rejected (matching rAthena clamping the effective level server-side).
+func clampSkillLevel(lv int16, maxLv int32) int32 {
+	if maxLv > 0 && int32(lv) > maxLv { //nolint:gosec // G115: int16→int32 widening
+		return maxLv
+	}
+	if lv < 1 {
+		return 1
+	}
+	return int32(lv) //nolint:gosec // G115: int16→int32 widening
+}
+
+// isWeaponAttackSkill reports whether a skill is an offensive weapon skill — the
+// only shape the M14b cast slice resolves. Buffs, magic, and passives are out of
+// scope (the handler drops them; PENDING).
+func isWeaponAttackSkill(s *skilldb.SkillEntry) bool {
+	return s.Type == "Weapon" && s.TargetType == "Attack"
+}
+
+// sendSkillSPFail replies ZC_ACK_TOUSESKILL with the SP-insufficient cause to the
+// caster only. The cast is rejected with no damage or SP spent.
+func (s *CombatService) sendSkillSPFail(player *domain.Player, skillID uint16) error {
+	ack := packet.AckUseSkillResponse{SkillID: skillID, Cause: packet.UseSkillFailSPInsufficient}
+	if err := ack.Encode(connWriter{player.Conn}); err != nil {
+		return fmt.Errorf("skill: encode SP-insufficient ack account %d skill %d: %w", player.AccountID, skillID, err)
+	}
+	return nil
+}
+
+// broadcastSkill sends ZC_NOTIFY_SKILL for one skill hit to every player within
+// AOI of the mob's cell (the attacker included). Same observer-resolution and
+// write-failure policy as broadcastDamage: a failed write is ignored, the
+// observer's own dispatch goroutine owns its teardown.
+func (s *CombatService) broadcastSkill(mp *domain.Map, mobX, mobY int16, skillID uint16, attackerAccountID uint32, mobEntityID aoi.EntityID, damage int32, level int32) {
+	sk := packet.NotifySkillResponse{
+		SKID:       skillID,
+		AID:        attackerAccountID,
+		TargetID:   uint32(mobEntityID),
+		StartTime:  s.clock.MoveStart(),
+		AttackMT:   noviceAmotion,
+		AttackedMT: defaultDmotion,
+		Damage:     damage,
+		Level:      int16(level),           //nolint:gosec // G115: level is 1..MaxLevel (≤32)
+		Count:      1,                      // BASH is a single hit
+		Action:     int8(packet.DMGNormal), //nolint:gosec // int8 wire slot; DMG_NORMAL = regular offensive hit
+	}
+	for _, e := range mp.AOI.QueryVisible(int(mobX), int(mobY)) {
+		if e.Type != aoi.EntityPlayer {
+			continue
+		}
+		neighbor, ok := s.players.ByAccount(uint32(e.ID))
+		if !ok {
+			continue
+		}
+		_ = sk.Encode(connWriter{neighbor.Conn})
+	}
 }
 
 // mobEntry resolves the mob_db stats for a mob id, returning nil when no mob_db
@@ -570,3 +711,35 @@ func (h *ActionHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gw
 
 // Compile-time check that ActionHandler satisfies the gateway handler shape.
 var _ gwdomain.PacketHandler = (*ActionHandler)(nil).Handle
+
+// SkillHandler serves CZ_USE_SKILL2 (0x0438) on the map-role dispatch table.
+// The packet carries the skill id, claimed level, and target id; identity is the
+// connection's verified auth (the CZ_ENTER impersonation guard shared with
+// ActionHandler) — the client's target id is trusted only to select a mob, never
+// to identify the caster.
+type SkillHandler struct {
+	svc *CombatService
+}
+
+// NewSkillHandler binds the handler to its combat service.
+func NewSkillHandler(svc *CombatService) *SkillHandler {
+	return &SkillHandler{svc: svc}
+}
+
+// Handle implements gateway/domain.PacketHandler for CZ_USE_SKILL2.
+func (h *SkillHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
+	req, err := packet.ParseCZUseSkill(frame.Raw)
+	if err != nil {
+		return fmt.Errorf("parse CZ_USE_SKILL2: %w", err)
+	}
+	accountID := conn.Auth().AccountID
+	if accountID == 0 {
+		// No cached auth ⇒ the connection never passed the CZ_ENTER gate.
+		// Tolerated by the gateway (the conn stays open) but the cast is dropped.
+		return errors.New("skill: connection has no verified account (CZ_ENTER not completed)")
+	}
+	return h.svc.UseSkill(ctx, accountID, req)
+}
+
+// Compile-time check that SkillHandler satisfies the gateway handler shape.
+var _ gwdomain.PacketHandler = (*SkillHandler)(nil).Handle

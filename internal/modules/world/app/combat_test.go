@@ -24,6 +24,7 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/mode"
 	"github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 	"github.com/bouroo/goAthena/pkg/ro/statcalc"
 )
 
@@ -45,6 +46,12 @@ func splitFixedFrames(t *testing.T, b []byte) [][]byte {
 		packet.HeaderZCItemPickupAck:     (&packet.ItemPickupAckResponse{}).Size(),
 		packet.HeaderZCItemDisappear:     (&packet.ItemDisappearResponse{}).Size(),
 		packet.HeaderZCUSEITEMACK2:       packet.UseItemAck2Response{}.Size(),
+		// M14b: the cast-result ack (14 B) and the skill-hit broadcast (33 B).
+		// Both are fixed-layout map packets; without these the fixture's
+		// splitFixedFrames would hard-fail on the first cast (splitFixedFrames is
+		// the universal combat-test frame splitter).
+		packet.HeaderZCACKTOUSESKILL: packet.AckUseSkillResponse{}.Size(),
+		packet.HeaderZCNOTIFYSKILL:   packet.NotifySkillResponse{}.Size(),
 	}
 	var out [][]byte
 	for len(b) >= 2 {
@@ -134,6 +141,45 @@ func expectParChange(t *testing.T, varID uint16, count int32) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	require.NoError(t, (packet.ParChangeResponse{VarID: varID, Count: count}).Encode(&buf))
+	return buf.Bytes()
+}
+
+// expectNotifySkill encodes a ZC_NOTIFY_SKILL (0x01de, 33-byte) frame the
+// combat service should emit for one offensive-skill hit, built independently
+// from the SUT so a drift in any field — SKID/AID/TargetID/Damage/Level/Count/
+// Action — surfaces as a byte mismatch. Mirrors broadcastSkill's field values:
+// noviceAmotion (432), defaultDmotion (288), Count=1 (BASH is single-hit),
+// Action=DMGNormal (0). StartTime comes from the clock value the fixture's
+// fixedClock stamps (0x11223344) so a wire-level match is feasible.
+func expectNotifySkill(t *testing.T, skillID uint16, srcAccountID, targetEntityID uint32, damage int32, level int16, serverTick uint32) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	require.NoError(t, (packet.NotifySkillResponse{
+		SKID:       skillID,
+		AID:        srcAccountID,
+		TargetID:   targetEntityID,
+		StartTime:  serverTick,
+		AttackMT:   432, // noviceAmotion (combat.go)
+		AttackedMT: 288, // defaultDmotion (combat.go)
+		Damage:     damage,
+		Level:      level,
+		Count:      1,
+		Action:     int8(packet.DMGNormal), //nolint:gosec // int8 wire slot; DMG_NORMAL = regular offensive hit
+	}).Encode(&buf))
+	return buf.Bytes()
+}
+
+// expectAckUseSkill encodes a ZC_ACK_TOUSESKILL (0x0110, 14-byte) frame the
+// combat service emits on the SP-insufficient reject path. Built independently
+// so a drift in the SkillID or the Cause byte is caught. The pre-Renewal Bash
+// slice only emits the negative path (Cause = UseSkillFailSPInsufficient = 12).
+func expectAckUseSkill(t *testing.T, skillID uint16, cause uint8) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	require.NoError(t, (packet.AckUseSkillResponse{
+		SkillID: skillID,
+		Cause:   cause,
+	}).Encode(&buf))
 	return buf.Bytes()
 }
 
@@ -233,8 +279,9 @@ type combatFixture struct {
 type combatFixtureOpt func(*combatFixtureCfg)
 
 type combatFixtureCfg struct {
-	items *itemdb.Registry
-	mobDB *mobdb.Registry
+	items  *itemdb.Registry
+	mobDB  *mobdb.Registry
+	skills *skilldb.Registry
 }
 
 // withItemDB arms the M9c-1 drop path: a non-nil item_db lets dropLoot resolve a
@@ -248,6 +295,14 @@ func withItemDB(db *itemdb.Registry) combatFixtureOpt {
 // mob_db carrying a drop table.
 func withMobDB(db *mobdb.Registry) combatFixtureOpt {
 	return func(c *combatFixtureCfg) { c.mobDB = db }
+}
+
+// withSkillDB arms the M14b skill-cast path: a non-nil skill_db lets UseSkill
+// resolve the SM_BASH entry, pay its SP cost, and emit ZC_NOTIFY_SKILL +
+// ZC_ACK_TOUSESKILL. The default (nil skills) keeps every non-skill test's
+// UseSkill a silent no-op, mirroring the nil-mob_db contract.
+func withSkillDB(db *skilldb.Registry) combatFixtureOpt {
+	return func(c *combatFixtureCfg) { c.skills = db }
 }
 
 // newCombatFixture seeds one mob (id, hp) at (100,100) on "prontera" and one
@@ -302,7 +357,9 @@ func newCombatFixture(t *testing.T, mobID int32, mobHP int32, clevel uint16, cha
 
 	respawn := &recordingRespawnScheduler{}
 	floorItems := domain.NewFloorItemRegistry()
-	svc := app.NewCombatService(players, mobs, maps, mobDB, chars, fixedClock{0x11223344}, respawn, statcalc.PreRenewalSet, mode.PreRenewal, cfg.items, floorItems, nil)
+	// M14b: the M14b skill-cast slice's last collaborator. The default (nil) keeps
+	// every non-skill test's UseSkill a silent no-op; withSkillDB arms it.
+	svc := app.NewCombatService(players, mobs, maps, mobDB, chars, fixedClock{0x11223344}, respawn, statcalc.PreRenewalSet, mode.PreRenewal, cfg.items, floorItems, nil, cfg.skills)
 	return combatFixture{svc: svc, mobs: mobs, players: players, mp: mp, mob: mob, attacker: attacker, conn: conn, respawn: respawn, floorItems: floorItems}
 }
 
@@ -324,6 +381,36 @@ Body:
   - {Id: 9002, Name: Floored, Level: 1, Hp: 100, Defense: 100, Vit: 0, BaseExp: 0,   WalkSpeed: 400}
 `
 	reg, err := mobdb.Load(strings.NewReader(yaml))
+	require.NoError(t, err)
+	return reg
+}
+
+// testSkillDB returns a Registry carrying a single SM_BASH entry (rAthena Id 5,
+// Type=Weapon, TargetType=Attack, MaxLevel=10) — the only offensive weapon skill
+// the M14b cast slice resolves. SpCost matches third_party/.../bash.cpp:8 (lv1-5
+// cost 8 SP, lv6-10 cost 15 SP), so the SP-insufficient assertion can hold
+// against the fixture's pre-seeded attacker SP. Built once per test via
+// skilldb.Load.
+func testSkillDB(t *testing.T) *skilldb.Registry {
+	t.Helper()
+	const yaml = `Header:
+  Type: SKILL_DB
+  Version: 4
+Body:
+  - Id: 5
+    Name: SM_BASH
+    MaxLevel: 10
+    Type: Weapon
+    TargetType: Attack
+    Range: -1
+    Requires:
+      SpCost:
+        - {Level: 1, Amount: 8}
+        - {Level: 5, Amount: 8}
+        - {Level: 6, Amount: 15}
+        - {Level: 10, Amount: 15}
+`
+	reg, err := skilldb.Load(strings.NewReader(yaml))
 	require.NoError(t, err)
 	return reg
 }
@@ -1015,4 +1102,207 @@ func TestCombatService_Kill_RespawnIsIndependentOfKillerSession(t *testing.T) {
 	live := f.mobs.OnMap("prontera")
 	require.Len(t, live, 1, "replacement spawned even after the killer's ctx cancelled")
 	assert.Equal(t, int32(1002), live[0].MobID)
+}
+
+// --- M14b: SM_BASH skill-cast slice --------------------------------------
+
+// bashSkillLvl is the cast level every M14b unit test uses. BASH at lvl 10 =
+// ratio 400% → naked-novice 1 dmg × 4 = 4 dmg/hit, killing a 50-HP Poring in 13
+// casts (matches the e2e damage math: 13 × 4 = 52 ≥ 50).
+const bashSkillLvl int16 = 10
+
+// bashSkillID is rAthena's SM_BASH id (the only offensive weapon skill the M14b
+// slice resolves).
+const bashSkillID uint16 = 5
+
+// TestCombatService_UseSkill_NilRegistryDropsSilently guards the nil-skills
+// guard: a missing skill_db makes CZ_USE_SKILL2 a no-op so a misconfigured zone
+// boots and plays (mirroring the nil-mob_db contract).
+func TestCombatService_UseSkill_NilRegistryDropsSilently(t *testing.T) {
+	t.Parallel()
+	f := newCombatFixture(t, 1002, 50, 1, nil)
+	// skills=nil (default). A cast must emit no frames and damage nothing.
+	require.NoError(t, f.svc.UseSkill(context.Background(), f.attacker.AccountID, packet.CZUseSkill{
+		SkillLv:  bashSkillLvl,
+		SkillID:  bashSkillID,
+		TargetID: uint32(f.mob.EntityID),
+	}))
+	frames := splitFixedFrames(t, f.conn.buf.Bytes())
+	assert.Empty(t, frames, "UseSkill with nil skill_db emits no frames")
+	assert.Equal(t, int32(50), f.mob.HP, "mob HP untouched when skills are nil")
+}
+
+// TestCombatService_UseSkill_KillsMobWithBash is the M14b kill proof at the
+// unit level. A naked novice with SP=2000 casts SM_BASH lvl 10 (ratio 400%) on
+// a 50-HP Poring. 1 dmg × 4 = 4 dmg/hit, 13 casts to kill. The captured stream
+// must hold one ZC_PAR_CHANGE SPSP per cast (SP -= 15 at lvl 10), 13
+// ZC_NOTIFY_SKILL + 13 ZC_NOTIFY_ACT pairs, and one ZC_NOTIFY_VANISH on the
+// killing blow.
+func TestCombatService_UseSkill_KillsMobWithBash(t *testing.T) {
+	t.Parallel()
+	f := newCombatFixture(t, 1002, 50, 1, nil, withSkillDB(testSkillDB(t)))
+	// The fixture attacker is a naked novice (no SP set). BASH lvl 10 = 15 SP,
+	// so seed enough SP for ~200 casts (margin over the 13 needed).
+	f.attacker.SP = 2000
+	f.attacker.MaxSP = 2000
+
+	const castsNeeded = 13 // 50 HP / 4 dmg/hit, ceiling
+	for i := 0; i < castsNeeded; i++ {
+		require.NoError(t, f.svc.UseSkill(context.Background(), f.attacker.AccountID, packet.CZUseSkill{
+			SkillLv:  bashSkillLvl,
+			SkillID:  bashSkillID,
+			TargetID: uint32(f.mob.EntityID),
+		}))
+	}
+
+	frames := splitFixedFrames(t, f.conn.buf.Bytes())
+	require.NotEmpty(t, frames, "BASH casts must emit frames")
+
+	// Walk the captured stream and tally per-opcode occurrences. The exact
+	// interleaving (parchange before/after skill+act) is dictated by UseSkill,
+	// not the test: SP first, then NOTIFY_SKILL, then NOTIFY_ACT. We assert the
+	// per-opcode count and the byte-exact match for each frame.
+	var (
+		parChanges   [][]byte
+		skillHits    [][]byte
+		actHits      [][]byte
+		vanishFrames [][]byte
+	)
+	for _, fr := range frames {
+		switch binary.LittleEndian.Uint16(fr[:2]) {
+		case packet.HeaderZCPARCHANGE:
+			parChanges = append(parChanges, fr)
+		case packet.HeaderZCNOTIFYSKILL:
+			skillHits = append(skillHits, fr)
+		case packet.HeaderZCNOTIFYACT:
+			actHits = append(actHits, fr)
+		case packet.HeaderZCNOTIFYVANISH:
+			vanishFrames = append(vanishFrames, fr)
+		}
+	}
+
+	require.Equal(t, castsNeeded, len(parChanges),
+		"one ZC_PAR_CHANGE SP_SP per cast; got %d", len(parChanges))
+	require.Equal(t, castsNeeded, len(skillHits),
+		"one ZC_NOTIFY_SKILL per cast; got %d", len(skillHits))
+	require.Equal(t, castsNeeded, len(actHits),
+		"one ZC_NOTIFY_ACT per cast; got %d", len(actHits))
+	require.Equal(t, 1, len(vanishFrames), "exactly one ZC_NOTIFY_VANISH on the killing blow")
+
+	// SP arithmetic: 2000 - 13×15 = 1805. The last par-change is the killing blow.
+	wantSP := uint32(2000 - 13*15) //nolint:gosec // SP arithmetic, fits uint32
+	lastPar := parChanges[len(parChanges)-1]
+	assert.Equal(t, packet.SPSP, binary.LittleEndian.Uint16(lastPar[2:4]),
+		"final par-change is SP_SP")
+	assert.Equal(t, int32(wantSP), int32(binary.LittleEndian.Uint32(lastPar[4:8])), //nolint:gosec // G115: int32 wire slot
+		"final SP = seed 2000 - 13×15 = 1805")
+
+	// First skill-hit frame must be byte-exact: skillID=5, attacker AID, mob GID,
+	// Damage=4, Level=10, Count=1, Action=DMGNormal, StartTime=fixedClock value.
+	firstSkill := skillHits[0]
+	assert.Equal(t, expectNotifySkill(t, bashSkillID, f.attacker.AccountID, uint32(f.mob.EntityID), 4, bashSkillLvl, 0x11223344), firstSkill,
+		"first ZC_NOTIFY_SKILL is byte-exact (skillID=5, AID, GID, Damage=4, Level=10, Count=1, Action=0)")
+
+	// ZC_NOTIFY_VANISH is the mob GID (death teardown).
+	assert.Equal(t, expectNotifyVanish(t, uint32(f.mob.EntityID)), vanishFrames[0],
+		"vanish frame addresses the dead Poring")
+
+	// The mob is fully torn down: gone from the registry.
+	_, gone := f.mobs.ByEntity(f.mob.EntityID)
+	require.False(t, gone, "dead Poring unregistered from the mob registry")
+}
+
+// TestCombatService_UseSkill_SPInsufficientAcksAndDoesNotDamage guards the
+// negative path: a naked novice with SP=0 casts SM_BASH (cost 8-15). The server
+// replies ZC_ACK_TOUSESKILL with Cause=UseSkillFailSPInsufficient, the mob is
+// not damaged, and the caster's SP stays at 0.
+func TestCombatService_UseSkill_SPInsufficientAcksAndDoesNotDamage(t *testing.T) {
+	t.Parallel()
+	f := newCombatFixture(t, 1002, 50, 1, nil, withSkillDB(testSkillDB(t)))
+	// SP=0 (zero-value) — BASH lvl 10 costs 15 SP, so the cast is rejected.
+
+	require.NoError(t, f.svc.UseSkill(context.Background(), f.attacker.AccountID, packet.CZUseSkill{
+		SkillLv:  bashSkillLvl,
+		SkillID:  bashSkillID,
+		TargetID: uint32(f.mob.EntityID),
+	}))
+
+	frames := splitFixedFrames(t, f.conn.buf.Bytes())
+	require.Len(t, frames, 1, "exactly one ack frame on SP-insufficient reject")
+	got := frames[0]
+	assert.Equal(t, packet.HeaderZCACKTOUSESKILL, binary.LittleEndian.Uint16(got[:2]),
+		"frame opcode is ZC_ACK_TOUSESKILL")
+	assert.Equal(t, expectAckUseSkill(t, bashSkillID, packet.UseSkillFailSPInsufficient), got,
+		"ack is byte-exact: SkillID=5, Cause=12 (SP insufficient)")
+
+	assert.Equal(t, int32(50), f.mob.HP, "mob HP untouched on the rejected cast")
+	_, sp := f.attacker.Vitals()
+	assert.Equal(t, uint32(0), sp, "caster SP untouched on the rejected cast")
+}
+
+// TestCombatService_UseSkill_OutOfRangeDropsSilently guards the out-of-range
+// branch: a cast from more than one cell away is a silent no-op (matching
+// Attack's drop policy). The mob is not damaged, no frames are emitted.
+func TestCombatService_UseSkill_OutOfRangeDropsSilently(t *testing.T) {
+	t.Parallel()
+	f := newCombatFixture(t, 1002, 50, 1, nil, withSkillDB(testSkillDB(t)))
+	f.attacker.SP = 2000
+	// Move the attacker 10 cells away from the mob (mob is at 100,100; the
+	// fixture attacker is at 101,100). MoveEntity updates the AOI cell; the
+	// player's own PosX/PosY must move in lockstep so the InMeleeRange check
+	// sees the new (ax,ay) it derives from attacker.Position().
+	require.NoError(t, f.mp.AOI.MoveEntity(aoi.EntityID(f.attacker.AccountID), 90, 90))
+	f.attacker.PosX, f.attacker.PosY = 90, 90
+
+	require.NoError(t, f.svc.UseSkill(context.Background(), f.attacker.AccountID, packet.CZUseSkill{
+		SkillLv:  bashSkillLvl,
+		SkillID:  bashSkillID,
+		TargetID: uint32(f.mob.EntityID),
+	}))
+
+	assert.Empty(t, splitFixedFrames(t, f.conn.buf.Bytes()),
+		"out-of-range cast emits no frames")
+	assert.Equal(t, int32(50), f.mob.HP, "mob HP untouched when the cast is out of range")
+	_, sp := f.attacker.Vitals()
+	assert.Equal(t, uint32(2000), sp, "caster SP untouched when the cast is out of range")
+}
+
+// TestCombatService_UseSkill_UnknownTargetDropsSilently guards the unknown-target
+// branch: a cast against a stale (already-removed) EntityID is a silent no-op,
+// mirroring Attack's drop policy.
+func TestCombatService_UseSkill_UnknownTargetDropsSilently(t *testing.T) {
+	t.Parallel()
+	f := newCombatFixture(t, 1002, 50, 1, nil, withSkillDB(testSkillDB(t)))
+	f.attacker.SP = 2000
+	// TargetID 999999 does not exist in the fixture's mob registry.
+	require.NoError(t, f.svc.UseSkill(context.Background(), f.attacker.AccountID, packet.CZUseSkill{
+		SkillLv:  bashSkillLvl,
+		SkillID:  bashSkillID,
+		TargetID: 999999,
+	}))
+
+	assert.Empty(t, splitFixedFrames(t, f.conn.buf.Bytes()),
+		"unknown-target cast emits no frames")
+	_, sp := f.attacker.Vitals()
+	assert.Equal(t, uint32(2000), sp, "caster SP untouched when the target is unknown")
+}
+
+// TestCombatService_UseSkill_UnknownSkillDropsSilently guards the unknown-skill
+// branch: a cast for a skill not in the skill_db (SkillID=99) is a silent no-op,
+// mirroring Attack's drop policy.
+func TestCombatService_UseSkill_UnknownSkillDropsSilently(t *testing.T) {
+	t.Parallel()
+	f := newCombatFixture(t, 1002, 50, 1, nil, withSkillDB(testSkillDB(t)))
+	f.attacker.SP = 2000
+
+	require.NoError(t, f.svc.UseSkill(context.Background(), f.attacker.AccountID, packet.CZUseSkill{
+		SkillLv:  bashSkillLvl,
+		SkillID:  99, // absent from testSkillDB
+		TargetID: uint32(f.mob.EntityID),
+	}))
+
+	assert.Empty(t, splitFixedFrames(t, f.conn.buf.Bytes()),
+		"unknown-skill cast emits no frames")
+	_, sp := f.attacker.Vitals()
+	assert.Equal(t, uint32(2000), sp, "caster SP untouched when the skill is unknown")
 }

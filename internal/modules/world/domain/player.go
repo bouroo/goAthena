@@ -179,6 +179,25 @@ func (p *Player) Heal(hp, sp int32) {
 	p.SP = healedValue(p.SP, p.MaxSP, sp)
 }
 
+// SpendSP subtracts a positive amount from the player's SP, clamped at 0, and
+// returns the resulting SP. Skill casting pays its per-level SP cost through
+// this before the effect resolves; the returned value drives the caster's
+// SP broadcast (ZC_PAR_CHANGE SP_SP). A non-positive amount is a no-op.
+func (p *Player) SpendSP(amount int32) uint32 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if amount <= 0 {
+		return p.SP
+	}
+	spend := uint32(amount) //nolint:gosec // G115: a positive int32 SP cost fits uint32
+	if spend >= p.SP {
+		p.SP = 0
+	} else {
+		p.SP -= spend
+	}
+	return p.SP
+}
+
 func healedValue(current, maximum uint32, delta int32) uint32 {
 	if maximum == 0 {
 		return current

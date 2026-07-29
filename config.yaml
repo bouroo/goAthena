@@ -84,8 +84,10 @@ zone:
   # not check out the rAthena submodule. To boot against the real fork, clear
   # this ("") and set db_path to the submodule root.
   mob_db_path: ./data/mob_db/mob_db.yml
-  # Optional rAthena skill database used by gateway skill dispatch.
-  skill_db_path: ""
+  # skill_db_path: an explicit skill_db.yml override. Non-empty wins over db_path
+  # (below); this slim ./data set (SM_BASH only) pins a usable skill_db for CI
+  # boots without the rAthena submodule. Clear ("") + db_path to boot the fork.
+  skill_db_path: ./data/skill_db/skill_db.yml
   # Optional rAthena job EXP database used by stats domain; empty falls back to the hardcoded BaseExp table.
   job_exp_db_path: ""
   mob_spawns_path: ./data/mob_spawns/prontera.yml

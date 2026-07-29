@@ -28,6 +28,7 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/mode"
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 	"github.com/bouroo/goAthena/pkg/ro/statcalc"
 )
 
@@ -145,9 +146,17 @@ func Register(ctx context.Context, c do.Injector) error {
 	itemDB := loadItemDB(c, cfg.Zone)
 	do.ProvideValue(c, itemDB)
 	floorItems := domain.NewFloorItemRegistry()
-	combat := app.NewCombatService(registry, mobs, maps, mobDB, chars, app.SystemClock(), app.SystemRespawnScheduler{}, fs, gm, itemDB, floorItems, nil)
+	// M14b: skill_db (SM_BASH class). Two-tier like mob_db — zone.skill_db_path
+	// override wins (the committed ./data/skill_db slim set pins CI boots); empty
+	// resolves <db_root>/skill_db.yml from the fork. nil disables skill casts
+	// (UseSkill's nil-skills guard), so a missing skill_db degrades gracefully
+	// instead of aborting boot, mirroring the nil-mob_db contract.
+	skillDB := loadSkillDB(c, cfg.Zone)
+	do.ProvideValue(c, skillDB)
+	combat := app.NewCombatService(registry, mobs, maps, mobDB, chars, app.SystemClock(), app.SystemRespawnScheduler{}, fs, gm, itemDB, floorItems, nil, skillDB)
 	do.ProvideValue(c, combat)
 	do.ProvideValue(c, app.NewActionHandler(combat))
+	do.ProvideValue(c, app.NewSkillHandler(combat))
 
 	// M10a: the pickup service. It shares the combat floor-item index + player
 	// registry + map store + item_db, and adds the inventory port the bag
@@ -228,6 +237,28 @@ func loadMobDB(c do.Injector, zone config.ZoneConfig) *mobdb.Registry {
 	if err != nil {
 		warnLogger(c).Warn().Err(err).Str("path", path).
 			Msg("world: mob_db load failed; mob spawning disabled")
+		return nil
+	}
+	return reg
+}
+
+// loadSkillDB reads skill_db.yml into a skilldb.Registry. Resolution is two-tier:
+// an explicit zone.skill_db_path override wins (the committed ./data/skill_db
+// slim set pins this for CI boots without the rAthena submodule); when the
+// override is empty, the loader resolves <db_root>/skill_db.yml from the rAthena
+// fork (db/re or db/pre-re by zone.renewal). An empty path with no fork file, or
+// a read/parse failure, is logged but not returned — nil disables skill casts
+// (UseSkill's nil-skills guard) so a corrupt or missing skill_db degrades
+// gracefully instead of failing the whole process, mirroring loadMobDB.
+func loadSkillDB(c do.Injector, zone config.ZoneConfig) *skilldb.Registry {
+	path := zone.SkillDBPath
+	if path == "" {
+		path = filepath.Join(zone.DBRoot(), "skill_db.yml")
+	}
+	reg, err := skilldb.LoadFile(path)
+	if err != nil {
+		warnLogger(c).Warn().Err(err).Str("path", path).
+			Msg("world: skill_db load failed; skill casting disabled")
 		return nil
 	}
 	return reg
