@@ -218,6 +218,13 @@ func Register(ctx context.Context, c do.Injector) error {
 	// map-role dispatch table.
 	do.ProvideValue(c, app.NewChatHandler(registry, maps))
 
+	// M15: the stat-change service. It resolves the character repository (chars, already
+	// resolved above) and the player registry, validates the stat ID and available
+	// status points, deducts the cost, increments the stat, persists via SaveProgression,
+	// and notifies the client. The handler is provided for the composition root to
+	// thread into the map-role dispatch table.
+	do.ProvideValue(c, app.NewStatsHandler(chars, registry))
+
 	// M7d: the char-select-return handler. CZ_RESTART type 1 sends
 	// ZC_RESTART_ACK, unregisters the player (so a fresh CZ_ENTER re-registers
 	// cleanly rather than hitting ErrPlayerAlreadyRegistered), removes its AOI

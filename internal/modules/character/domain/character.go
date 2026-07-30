@@ -126,6 +126,12 @@ type Progression struct {
 	Zeny        uint32 // zeny
 	StatusPoint uint32 // status_point
 	SkillPoint  uint32 // skill_point
+	Str         uint16 // str
+	Agi         uint16 // agi
+	Vit         uint16 // vit
+	Int         uint16 // `int`
+	Dex         uint16 // dex
+	Luk         uint16 // luk
 	HP          uint32 // hp
 	MaxHP       uint32 // max_hp
 	SP          uint32 // sp
@@ -145,6 +151,12 @@ func ProgressionOf(c *Character) Progression {
 		Zeny:        c.Zeny,
 		StatusPoint: c.StatusPoint,
 		SkillPoint:  c.SkillPoint,
+		Str:         c.Str,
+		Agi:         c.Agi,
+		Vit:         c.Vit,
+		Int:         c.Int,
+		Dex:         c.Dex,
+		Luk:         c.Luk,
 		HP:          c.HP,
 		MaxHP:       c.MaxHP,
 		SP:          c.SP,

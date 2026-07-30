@@ -1808,6 +1808,9 @@ func mapFrameSize(op uint16) int {
 		// M11: variable-length chat broadcast (0x008d). Handled by the
 		// length-prefix branch in readMapFrame.
 		return 0
+	case packet.HeaderZCSTATUSCHANGEACK:
+		// M15b: the stat-change ack (0x00bc, 6 bytes fixed). No Size() method.
+		return 6
 	default:
 		return 0
 	}
@@ -2626,4 +2629,162 @@ func TestServe_UseSkill_Bash(t *testing.T) {
 	require.NotNil(t, spUpdate, "no ZC_PAR_CHANGE SP_SP received — SP was not broadcast")
 	newSP := int32(binary.LittleEndian.Uint32(spUpdate[4:8])) //nolint:gosec // G115: test wire decode
 	assert.Less(t, newSP, int32(2000), "SP should have decreased from the cast cost")
+}
+
+// TestServe_StatChange is the M15 end-to-end proof. It boots the real modular monolith,
+// logs in, enters Prontera, sends CZ_STATUS_CHANGE to raise STR, and verifies the
+// server responds with ZC_STATUS_CHANGE_ACK (success) plus ZC_PAR_CHANGE frames for
+// the updated STR and StatusPoint. It then verifies persistence by reading the char row.
+func TestServe_StatChange(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate())
+
+	// Seed a character with known status points. STR starts at 1 (cost = 2).
+	const startStatusPoint uint32 = 48
+	seedCharID := seedCombatChar(t, cfg, seededAccountID, "E2eStatChg", "prontera", 155, 150)
+	setCharStatusPoint(t, cfg, seedCharID, startStatusPoint)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err)
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	// --- login → CZ_ENTER → map enter ---
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1)
+	require.NoError(t, loginConn.Close())
+
+	mapConn, err := net.Dial("tcp", mapAddr)
+	require.NoError(t, err)
+	defer mapConn.Close()
+	var enter bytes.Buffer
+	require.NoError(t, packet.CZEnterRequest{
+		AccountID: seededAccountID, CharID: seedCharID, AuthCode: loginID1, ClientTime: 0, Sex: sexByte,
+	}.Encode(&enter))
+	_, err = mapConn.Write(enter.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	enterResp := make([]byte, packet.MapAcceptEnterResponse{}.Size())
+	_, err = io.ReadFull(mapConn, enterResp)
+	require.NoError(t, err)
+	require.Equal(t, packet.HeaderZCACCEPTENTER, binary.LittleEndian.Uint16(enterResp[0:2]))
+
+	// Drain all post-enter frames (NPC/mob spawns + status burst) via frame scanning
+	// so the next read lands on the stat-change response. A fixed-size read fails
+	// when spawn packets interleave with the status burst (D8).
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(800*time.Millisecond)))
+	for {
+		_, ok := readMapFrame(t, mapConn)
+		if !ok {
+			break
+		}
+	}
+
+	// --- CZ_STATUS_CHANGE (0x00bb): raise STR (statID=13, amount=1) ---
+	var statReq bytes.Buffer
+	require.NoError(t, (packet.CZStatusChangeRequest{StatusID: 13, Amount: 1}).Encode(&statReq))
+	_, err = mapConn.Write(statReq.Bytes())
+	require.NoError(t, err)
+
+	// Read ZC_STATUS_CHANGE_ACK (0x00bc, 6 bytes)
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	ackFrame, ok := readMapFrame(t, mapConn)
+	require.True(t, ok, "no ZC_STATUS_CHANGE_ACK received")
+	assert.Equal(t, packet.HeaderZCSTATUSCHANGEACK, binary.LittleEndian.Uint16(ackFrame),
+		"first response must be ZC_STATUS_CHANGE_ACK")
+	assert.Equal(t, uint8(0), ackFrame[4], "result must be 0 (success)")
+	assert.Equal(t, uint8(2), ackFrame[5], "STR must be 2 after the allocation")
+
+	// Read ZC_PAR_CHANGE for SP_STR
+	strPar, ok := readMapFrame(t, mapConn)
+	require.True(t, ok, "no ZC_PAR_CHANGE for STR")
+	assert.Equal(t, packet.HeaderZCPARCHANGE, binary.LittleEndian.Uint16(strPar))
+	assert.Equal(t, packet.SPStr, binary.LittleEndian.Uint16(strPar[2:4]))
+	strVal := int32(binary.LittleEndian.Uint32(strPar[4:8])) //nolint:gosec // G115: test wire decode
+	assert.Equal(t, int32(2), strVal, "STR should be 2 after allocation")
+
+	// Read ZC_PAR_CHANGE for SP_STATUSPOINT
+	spPar, ok := readMapFrame(t, mapConn)
+	require.True(t, ok, "no ZC_PAR_CHANGE for STATUSPOINT")
+	assert.Equal(t, packet.HeaderZCPARCHANGE, binary.LittleEndian.Uint16(spPar))
+	assert.Equal(t, packet.SPStatusPoint, binary.LittleEndian.Uint16(spPar[2:4]))
+	spVal := int32(binary.LittleEndian.Uint32(spPar[4:8])) //nolint:gosec // G115: test wire decode
+	assert.Equal(t, int32(startStatusPoint-2), spVal, "StatusPoint should be %d", startStatusPoint-2)
+
+	// --- Verify persistence: STR and StatusPoint were saved ---
+	finalSTR := readCharStat(t, cfg, seedCharID, "str")
+	finalSP := readCharStatusPoint(t, cfg, seedCharID)
+	assert.Equal(t, uint16(2), finalSTR, "STR should be persisted as 2")
+	assert.Equal(t, startStatusPoint-2, finalSP, "StatusPoint should be persisted as %d", startStatusPoint-2)
+}
+
+// setCharStatusPoint updates the status_point column for a char row.
+func setCharStatusPoint(t *testing.T, cfg *config.Config, charID uint32, sp uint32) {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, gdb.Exec(
+		`UPDATE `+"`char`"+` SET status_point = ? WHERE char_id = ?`, sp, charID).Error,
+		"set char status_point")
+}
+
+// readCharStatusPoint reads the status_point column for a char row.
+func readCharStatusPoint(t *testing.T, cfg *config.Config, charID uint32) uint32 {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	var sp uint32
+	require.NoError(t, gdb.Raw(
+		`SELECT status_point FROM `+"`char`"+` WHERE char_id = ?`, charID).Scan(&sp).Error,
+		"read persisted status_point")
+	return sp
+}
+
+// readCharStat reads a named stat column (str/agi/vit/int/dex/luk) for a char row.
+func readCharStat(t *testing.T, cfg *config.Config, charID uint32, stat string) uint16 {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	var val uint16
+	require.NoError(t, gdb.Raw(
+		`SELECT `+stat+` FROM `+"`char`"+` WHERE char_id = ?`, charID).Scan(&val).Error,
+		"read persisted stat "+stat)
+	return val
 }

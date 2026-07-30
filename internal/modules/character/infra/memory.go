@@ -127,6 +127,12 @@ func (r *MemoryCharacterRepository) SaveProgression(_ context.Context, accountID
 			c.Zeny = p.Zeny
 			c.StatusPoint = p.StatusPoint
 			c.SkillPoint = p.SkillPoint
+			c.Str = p.Str
+			c.Agi = p.Agi
+			c.Vit = p.Vit
+			c.Int = p.Int
+			c.Dex = p.Dex
+			c.Luk = p.Luk
 			c.HP = p.HP
 			c.MaxHP = p.MaxHP
 			c.SP = p.SP
