@@ -184,8 +184,14 @@ func wireRunnableListeners(ctx context.Context, injector do.Injector, cfg *confi
 	// dispatcher and differs from the login/char listener only in its initial
 	// role and map-framed decoder. M3 ships TCP only; the WS variant (NewMapWSServer)
 	// is wired with the dual-client e2e at M7.
+	//
+	// It binds to MapListenAddr(), not MapAddr directly: MapAddr is the value
+	// advertised to clients in HC_NOTIFY_ZONESVR and, for NAT/port-forward/
+	// Docker deployments, is not necessarily an address this process can
+	// net.Listen on. MapBindAddr (defaulting to empty, i.e. MapAddr) lets an
+	// operator decouple the two. See GatewayConfig.MapBindAddr.
 	application.RegisterRunnable("gateway-map-tcp", func(runCtx context.Context) error {
-		return gwinfra.NewMapTCPHandler(runCtx, logger, disp, newMapDec).Run("tcp://" + cfg.Gateway.MapAddr)
+		return gwinfra.NewMapTCPHandler(runCtx, logger, disp, newMapDec).Run("tcp://" + cfg.Gateway.MapListenAddr())
 	})
 	// The map-role WebSocket listener — roBrowser's only way to reach the map
 	// server, since a browser cannot open the raw TCP socket HC_NOTIFY_ZONESVR
@@ -193,10 +199,12 @@ func wireRunnableListeners(ctx context.Context, injector do.Injector, cfg *confi
 	// (NewMapWSServer), so CZ_ENTER routes through the map dispatch table exactly
 	// as the TCP map listener does. It shares the dispatcher, decoder factory,
 	// and origin policy with the login/char WS listener; only its initial role
-	// and bind address differ. Wired with the dual-client e2e (M7e).
+	// and bind address differ. Wired with the dual-client e2e (M7e). Binds to
+	// MapWSListenAddr(), not MapWSAddr directly — same bind/advertise split as
+	// the TCP map listener above.
 	application.RegisterRunnable("gateway-map-ws", func(runCtx context.Context) error {
 		return gwinfra.NewMapWSServer(runCtx, logger, disp, newMapDec, cfg.Gateway.WS.AllowedOrigins).
-			Run(cfg.Gateway.MapWSAddr)
+			Run(cfg.Gateway.MapWSListenAddr())
 	})
 
 	// M4c: the movement worker. A single goroutine owns every map's pathfinder

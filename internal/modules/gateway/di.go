@@ -86,7 +86,11 @@ func Register(_ context.Context, c do.Injector) error {
 	registry.AddReadiness(gatewayChecker{
 		tcpAddr: cfg.Gateway.TCP.Addr,
 		wsAddr:  cfg.Gateway.WS.Addr,
-		mapAddr: cfg.Gateway.MapAddr,
+		// Dial the address the map listener actually binds to, not MapAddr:
+		// when MapBindAddr splits bind from advertise (NAT/Docker
+		// deployments), the advertised address is not guaranteed to be
+		// dialable from inside this process's network namespace.
+		mapAddr: cfg.Gateway.MapListenAddr(),
 	})
 
 	return nil

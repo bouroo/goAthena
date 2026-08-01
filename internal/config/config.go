@@ -161,6 +161,24 @@ type GatewayConfig struct {
 	// one on multi-interface hosts), MapAddr requires an explicit value so the
 	// failure mode is a clear misconfiguration rather than a silent wrong IP.
 	MapAddr string `mapstructure:"map_addr" yaml:"map_addr" env:"GATEWAY_MAP_ADDR" validate:"required"`
+	// MapBindAddr, when set, is the "host:port" the map TCP listener actually
+	// binds to; MapAddr remains the value advertised to clients. Leave empty
+	// to bind exactly where MapAddr points (the historical, same-host-only
+	// behavior) — see MapListenAddr.
+	//
+	// This exists because MapAddr alone cannot express the common NAT /
+	// port-forward / Docker-published-port deployment: the operator advice
+	// above ("override MapAddr to a reachable LAN/WAN hostname or IP") only
+	// works when that hostname/IP is *also* one the host can bind to. A
+	// public DNS name behind a router, or a Docker host port that differs
+	// from the container's internal port, resolves to an address the
+	// process cannot net.Listen on — the map listener fails to start and
+	// every client hangs after CH_SELECT_CHAR. Set MapBindAddr to the
+	// locally bindable address (e.g. ":5121" or "0.0.0.0:5121") and leave
+	// MapAddr as the externally reachable one the router/NAT forwards to.
+	// This is the same split rAthena keeps between bind_ip (map_athena.conf)
+	// and the advertised map_ip.
+	MapBindAddr string `mapstructure:"map_bind_addr" yaml:"map_bind_addr" env:"GATEWAY_MAP_BIND_ADDR" validate:"omitempty"`
 	// MapWSAddr is the WebSocket "host:port" of the dedicated map-role listener
 	// that roBrowser reconnects to after char select — the WS analogue of MapAddr
 	// for the second transport. A native TCP client (ClientROThailand) never dials
@@ -173,12 +191,35 @@ type GatewayConfig struct {
 	// to the address roBrowser's own host can actually reach before deploying
 	// off the gateway's own machine.
 	MapWSAddr string `mapstructure:"map_ws_addr" yaml:"map_ws_addr" env:"GATEWAY_MAP_WS_ADDR" validate:"required"`
+	// MapWSBindAddr is the WS analogue of MapBindAddr: when set, the map
+	// WebSocket listener binds here instead of MapWSAddr. See MapBindAddr
+	// for why this split exists and MapWSListenAddr for the resolution rule.
+	MapWSBindAddr string `mapstructure:"map_ws_bind_addr" yaml:"map_ws_bind_addr" env:"GATEWAY_MAP_WS_BIND_ADDR" validate:"omitempty"`
 	// TextCodepage names the wire text encoding for native TCP sessions
 	// (character names, chat, NPC text). One of "utf-8" (default),
 	// "windows-874"/"cp874"/"tis-620" (Thai Classic), or "euc-kr". Parsed
 	// and validated at gateway DI time via textenc.ParseCodepage;
 	// WebSocket/roBrowser sessions always use UTF-8 regardless of this.
 	TextCodepage string `mapstructure:"text_codepage" yaml:"text_codepage" env:"GATEWAY_TEXT_CODEPAGE"`
+}
+
+// MapListenAddr returns the address the map TCP listener should bind to:
+// MapBindAddr when set, otherwise MapAddr (preserving the historical
+// bind-equals-advertise behavior for same-host deployments).
+func (g GatewayConfig) MapListenAddr() string {
+	if g.MapBindAddr != "" {
+		return g.MapBindAddr
+	}
+	return g.MapAddr
+}
+
+// MapWSListenAddr is the WS analogue of MapListenAddr: MapWSBindAddr when
+// set, otherwise MapWSAddr.
+func (g GatewayConfig) MapWSListenAddr() string {
+	if g.MapWSBindAddr != "" {
+		return g.MapWSBindAddr
+	}
+	return g.MapWSAddr
 }
 
 // TCPConfig holds the gnet TCP listener settings for the kRO ingress port.
@@ -462,7 +503,9 @@ func setDefaults(v *viper.Viper) {
 		"gateway.identity_addr":      "localhost:50051",
 		"gateway.zone_addr":          "localhost:50052",
 		"gateway.map_addr":           "localhost:5121",
+		"gateway.map_bind_addr":      "",
 		"gateway.map_ws_addr":        "localhost:6902",
+		"gateway.map_ws_bind_addr":   "",
 		"gateway.text_codepage":      "utf-8",
 
 		"identity.use_md5_passwords": false,
@@ -550,7 +593,9 @@ func leafBindings() []leafBinding {
 		{"gateway.identity_addr", "GATEWAY_IDENTITY_ADDR"},
 		{"gateway.zone_addr", "GATEWAY_ZONE_ADDR"},
 		{"gateway.map_addr", "GATEWAY_MAP_ADDR"},
+		{"gateway.map_bind_addr", "GATEWAY_MAP_BIND_ADDR"},
 		{"gateway.map_ws_addr", "GATEWAY_MAP_WS_ADDR"},
+		{"gateway.map_ws_bind_addr", "GATEWAY_MAP_WS_BIND_ADDR"},
 		{"gateway.text_codepage", "GATEWAY_TEXT_CODEPAGE"},
 
 		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},

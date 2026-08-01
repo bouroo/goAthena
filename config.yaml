@@ -65,13 +65,25 @@ gateway:
   packetver: 20250604
   identity_addr: "localhost:50051"
   zone_addr: "localhost:50052"
-  # map_addr / map_ws_addr are advertised to the client, not listened on here.
-  # "localhost" only works when the client runs on this same host. Override
-  # both (GATEWAY_MAP_ADDR / GATEWAY_MAP_WS_ADDR) to a host/IP the client can
-  # actually reach for any LAN, WAN, or containerized deployment - the rAthena
-  # equivalent of setting char_ip/map_ip instead of relying on auto-detect.
+  # map_addr / map_ws_addr are advertised to the client in HC_NOTIFY_ZONESVR
+  # AND, unless map_bind_addr/map_ws_bind_addr override it below, are the
+  # addresses the map listeners actually bind to. "localhost" only works
+  # when the client runs on this same host. Override both
+  # (GATEWAY_MAP_ADDR / GATEWAY_MAP_WS_ADDR) to a host/IP the client can
+  # actually reach for any LAN or WAN deployment - the rAthena equivalent
+  # of setting char_ip/map_ip instead of relying on auto-detect.
   map_addr: "localhost:5121"
   map_ws_addr: "localhost:6902"
+  # map_bind_addr / map_ws_bind_addr: set these when the advertised address
+  # above is NOT locally bindable - e.g. a public DNS name behind a router,
+  # or a Docker host port published as something other than 5121/6902. Leave
+  # them blank ("") to bind exactly where map_addr/map_ws_addr point (default,
+  # same-host-only behavior). Example for a Docker deployment publishing
+  # container port 5121 as host port 5121, advertised via a public hostname:
+  #   map_addr: "play.example.com:5121"
+  #   map_bind_addr: ":5121"
+  map_bind_addr: ""
+  map_ws_bind_addr: ""
 
 identity:
   use_md5_passwords: false

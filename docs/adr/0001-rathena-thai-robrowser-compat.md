@@ -66,3 +66,41 @@ is the honest deliverable.
 - No runtime behavior changes for `map_addr`/`map_ws_addr` (comment-only);
   operators deploying off the gateway's own host still need to override
   them, exactly as before, but the requirement is now discoverable in-file.
+
+## Addendum (follow-up audit, 2026-08-01): MapAddr bind/advertise conflation
+
+A second-pass audit of the same rathenaThailand/ClientROThailand config
+surface found a gap in the original finding #2 fix: `gateway.map_addr` /
+`gateway.map_ws_addr` were documented as "advertised to the client, not
+listened on here" (config.yaml), but `internal/app/composition.go` actually
+used them as **both** the bind address for the map TCP/WS listeners
+(`gwinfra.NewMapTCPHandler(...).Run("tcp://" + cfg.Gateway.MapAddr)`) and the
+advertised zone address in `HC_NOTIFY_ZONESVR`
+(`character/di.go: app.ParseZoneAddr(cfg.Gateway.MapAddr)`). This is a
+narrower version of rAthena's `char_ip`/`map_ip` problem than finding #2
+described: unlike stock rAthena, which splits `bind_ip` (what the process
+binds to) from `char_ip`/`map_ip` (what's advertised), goAthena had no split
+at all. The deployment advice added by the original fix — "override
+`GATEWAY_MAP_ADDR` to a reachable LAN/WAN hostname or IP" — is unsafe advice
+on its own: a public DNS name behind a router/NAT, or a Docker host port
+that differs from the container's internal port, is reachable but not
+bindable, so following that advice makes the map listener fail to start
+(`net.Listen` on an address the host doesn't own) and every client hangs
+after `CH_SELECT_CHAR`.
+
+**Fixed:** Added `gateway.map_bind_addr` / `gateway.map_ws_bind_addr`
+(env `GATEWAY_MAP_BIND_ADDR` / `GATEWAY_MAP_WS_BIND_ADDR`, both optional,
+default `""`). `GatewayConfig.MapListenAddr()` / `MapWSListenAddr()` resolve
+to the bind override when set, else fall back to the advertised address —
+preserving today's default (same-host, bind-equals-advertise) behavior
+exactly. `composition.go`'s map listeners and the gateway readiness checker
+(`internal/modules/gateway/di.go`) now bind/dial through these resolvers
+instead of the advertised address directly. This restores the rAthena
+`bind_ip` vs `char_ip`/`map_ip` split for NAT, port-forwarded, and
+Docker-published-port deployments — the common case for a real roBrowser
+deployment reachable over the internet, not just the same-host dev default.
+
+Evidence: `internal/config/config.go` (`MapBindAddr`, `MapWSBindAddr`,
+`MapListenAddr`, `MapWSListenAddr`), `internal/app/composition.go`,
+`internal/modules/gateway/di.go`, `internal/config/config_test.go`
+(`TestGatewayConfig_MapListenAddr`, `TestLoad_Defaults` additions).

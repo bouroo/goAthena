@@ -251,6 +251,39 @@ otel:
 	require.True(t, cfg.Zone.Renewal)
 	// Default db_path joins the mode subtree: renewal → .../db/re.
 	require.Equal(t, "third_party/rathenaThailand/db/re", cfg.Zone.DBRoot())
+	// Default map_bind_addr/map_ws_bind_addr are empty, so the listen-address
+	// resolvers fall back to the advertised map_addr/map_ws_addr — the
+	// historical same-host-only bind-equals-advertise behavior.
+	require.Empty(t, cfg.Gateway.MapBindAddr)
+	require.Empty(t, cfg.Gateway.MapWSBindAddr)
+	require.Equal(t, cfg.Gateway.MapAddr, cfg.Gateway.MapListenAddr())
+	require.Equal(t, cfg.Gateway.MapWSAddr, cfg.Gateway.MapWSListenAddr())
+}
+
+// TestGatewayConfig_MapListenAddr covers the bind/advertise split: with no
+// *BindAddr override the listener binds exactly where the advertised address
+// points (historical behavior); with an override set, the listener binds
+// there instead while the advertised address is untouched — the case that
+// makes NAT/port-forward/Docker deployments (public hostname or remapped
+// host port) actually bindable.
+func TestGatewayConfig_MapListenAddr(t *testing.T) {
+	t.Run("falls back to advertised address when unset", func(t *testing.T) {
+		g := config.GatewayConfig{MapAddr: "play.example.com:5121", MapWSAddr: "play.example.com:6902"}
+		require.Equal(t, "play.example.com:5121", g.MapListenAddr())
+		require.Equal(t, "play.example.com:6902", g.MapWSListenAddr())
+	})
+	t.Run("uses bind override when set, advertised address unaffected", func(t *testing.T) {
+		g := config.GatewayConfig{
+			MapAddr:       "play.example.com:5121",
+			MapBindAddr:   ":5121",
+			MapWSAddr:     "play.example.com:6902",
+			MapWSBindAddr: ":6902",
+		}
+		require.Equal(t, ":5121", g.MapListenAddr())
+		require.Equal(t, ":6902", g.MapWSListenAddr())
+		require.Equal(t, "play.example.com:5121", g.MapAddr)
+		require.Equal(t, "play.example.com:6902", g.MapWSAddr)
+	})
 }
 
 // TestDBRoot isolates DBRoot() resolution from config loading: it pins the
@@ -541,7 +574,9 @@ func neutralizeEnv(t *testing.T) {
 		"GATEWAY_IDENTITY_ADDR":      "localhost:50051",
 		"GATEWAY_ZONE_ADDR":          "localhost:50052",
 		"GATEWAY_MAP_ADDR":           "localhost:5121",
+		"GATEWAY_MAP_BIND_ADDR":      "",
 		"GATEWAY_MAP_WS_ADDR":        "localhost:6902",
+		"GATEWAY_MAP_WS_BIND_ADDR":   "",
 		"GATEWAY_TEXT_CODEPAGE":      "utf-8",
 
 		"IDENTITY_USE_MD5_PASSWORDS": "false",
