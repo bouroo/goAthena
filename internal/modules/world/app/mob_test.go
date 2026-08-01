@@ -153,7 +153,7 @@ func TestSpawnService_EnterWorld_ShowsMobToNewcomer(t *testing.T) {
 	maps := &memMapStore{maps: map[string]*domain.Map{"prontera": mp}}
 	registry := domain.NewPlayerRegistry()
 	mobs := domain.NewMobRegistry()
-	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet)
+	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet, nil, nil)
 
 	// Pre-place a Poring co-located with the novice spawn cell so it is in AOI range.
 	mob := &domain.Mob{

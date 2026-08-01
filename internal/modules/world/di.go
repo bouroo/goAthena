@@ -114,10 +114,6 @@ func Register(ctx context.Context, c do.Injector) error {
 	}
 	do.ProvideValue(c, mobSvc)
 
-	spawner := app.NewSpawnService(chars, maps, registry, mobs, npcs, fs)
-	do.ProvideValue(c, app.NewMapEnterHandler(auth, app.DefaultSpawn, spawner))
-	do.ProvideValue(c, app.NewLoadEndAckHandler(spawner))
-
 	// M4c: the movement worker. A single MoveService owns every map's
 	// pathfinder — its Run goroutine is the sole caller of FindPath, so the
 	// pathfinder's mutable scratch buffers are never raced (the single-goroutine
@@ -174,6 +170,13 @@ func Register(ctx context.Context, c do.Injector) error {
 	if err != nil {
 		return fmt.Errorf("world: resolve inventory repository: %w", err)
 	}
+	// SpawnService owns the enter-world flow + the CZ_NOTIFY_ACTORINIT (LoadEndAck)
+	// init burst. The latter now reads the persisted bag to populate the inventory
+	// list, so it takes the inventory port + item_db alongside the spawn
+	// collaborators; nil either degrades the init burst to empty lists.
+	spawner := app.NewSpawnService(chars, maps, registry, mobs, npcs, fs, invRepo, itemDB)
+	do.ProvideValue(c, app.NewMapEnterHandler(auth, app.DefaultSpawn, spawner))
+	do.ProvideValue(c, app.NewLoadEndAckHandler(spawner))
 	pickup := app.NewPickupService(floorItems, registry, maps, invRepo, itemDB, app.SystemClock())
 	do.ProvideValue(c, app.NewPickupHandler(pickup))
 

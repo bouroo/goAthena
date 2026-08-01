@@ -29,7 +29,7 @@ import (
 func TestSpawnService_SendLoadEndAckInit_EmitsInitBurst(t *testing.T) {
 	t.Parallel()
 	conn := &captureConn{role: gwdomain.RoleMap}
-	require.NoError(t, new(app.SpawnService).SendLoadEndAckInit(conn))
+	require.NoError(t, new(app.SpawnService).SendLoadEndAckInit(context.Background(), conn, 0))
 	want := bytes.Join([][]byte{
 		packet.EncodeInventoryStart(),
 		packet.EncodeEmptyInventoryListNormal(),
@@ -192,7 +192,7 @@ func TestSpawnService_EnterWorld_SelfSpawn(t *testing.T) {
 	maps := &memMapStore{maps: map[string]*domain.Map{"prontera": newTestMap(200, 200)}}
 	registry := domain.NewPlayerRegistry()
 	mobs := domain.NewMobRegistry()
-	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet)
+	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet, nil, nil)
 
 	conn := &captureConn{role: gwdomain.RoleMap, remote: "127.0.0.1:5121"}
 	// spawn zeros ⇒ use the character's persisted last_x/last_y (the M4b path).
@@ -236,7 +236,7 @@ func TestSpawnService_EnterWorld_StatusBurst(t *testing.T) {
 	maps := &memMapStore{maps: map[string]*domain.Map{"prontera": newTestMap(200, 200)}}
 	registry := domain.NewPlayerRegistry()
 	mobs := domain.NewMobRegistry()
-	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet)
+	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet, nil, nil)
 
 	conn := &captureConn{role: gwdomain.RoleMap}
 	require.NoError(t, svc.EnterWorld(context.Background(), conn, aid, cid, app.SpawnPoint{}))
@@ -278,7 +278,7 @@ func TestSpawnService_EnterWorld_NeighborBroadcast(t *testing.T) {
 	require.NoError(t, mp.AOI.AddEntity(&aoi.Entity{ID: neighbor.EntityID, Type: aoi.EntityPlayer, X: 53, Y: 111}))
 
 	mobs := domain.NewMobRegistry()
-	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet)
+	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet, nil, nil)
 	newcomerConn := &captureConn{role: gwdomain.RoleMap, remote: "c"}
 	err := svc.EnterWorld(context.Background(), newcomerConn, newcomerAID, newcomerCID, app.SpawnPoint{})
 	require.NoError(t, err)
@@ -319,7 +319,7 @@ func TestSpawnService_EnterWorld_CharNotFound(t *testing.T) {
 	maps := &memMapStore{maps: map[string]*domain.Map{"prontera": newTestMap(200, 200)}}
 	registry := domain.NewPlayerRegistry()
 	mobs := domain.NewMobRegistry()
-	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet)
+	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet, nil, nil)
 
 	conn := &captureConn{role: gwdomain.RoleMap}
 	err := svc.EnterWorld(context.Background(), conn, 999, 1, app.SpawnPoint{})
@@ -341,7 +341,7 @@ func TestSpawnService_EnterWorld_MapLoadFail(t *testing.T) {
 	maps := &memMapStore{maps: map[string]*domain.Map{}}
 	registry := domain.NewPlayerRegistry()
 	mobs := domain.NewMobRegistry()
-	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet)
+	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet, nil, nil)
 
 	conn := &captureConn{role: gwdomain.RoleMap}
 	err := svc.EnterWorld(context.Background(), conn, aid, cid, app.SpawnPoint{})
@@ -364,7 +364,7 @@ func TestSpawnService_EnterWorld_SpawnOverride(t *testing.T) {
 	maps := &memMapStore{maps: map[string]*domain.Map{"prontera": newTestMap(200, 200)}}
 	registry := domain.NewPlayerRegistry()
 	mobs := domain.NewMobRegistry()
-	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet)
+	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet, nil, nil)
 
 	conn := &captureConn{role: gwdomain.RoleMap}
 	override := app.SpawnPoint{PosX: 100, PosY: 50, Dir: 4}
@@ -393,7 +393,7 @@ func TestSpawnService_EnterWorld_DuplicateAccountRollsBack(t *testing.T) {
 	require.NoError(t, registry.Register(&domain.Player{AccountID: aid, MapName: "prontera"}))
 
 	mobs := domain.NewMobRegistry()
-	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet)
+	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet, nil, nil)
 	conn := &captureConn{role: gwdomain.RoleMap}
 	err := svc.EnterWorld(context.Background(), conn, aid, cid, app.SpawnPoint{})
 	assert.ErrorIs(t, err, domain.ErrPlayerAlreadyRegistered)
@@ -427,7 +427,7 @@ func TestSpawnService_EnterWorld_DeadNeighborDropped(t *testing.T) {
 	require.NoError(t, mp.AOI.AddEntity(&aoi.Entity{ID: neighbor.EntityID, Type: aoi.EntityPlayer, X: 53, Y: 111}))
 
 	mobs := domain.NewMobRegistry()
-	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet)
+	svc := app.NewSpawnService(chars, maps, registry, mobs, domain.NewNPCRegistry(), statcalc.PreRenewalSet, nil, nil)
 	newcomerConn := &captureConn{role: gwdomain.RoleMap}
 	err := svc.EnterWorld(context.Background(), newcomerConn, newcomerAID, newcomerCID, app.SpawnPoint{})
 	require.NoError(t, err, "enter succeeds despite a dead neighbor")

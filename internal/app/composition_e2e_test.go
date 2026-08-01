@@ -1254,6 +1254,21 @@ func TestServe_Inventory_EquipWeaponRaisesATK(t *testing.T) {
 	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eEquip")
 	defer mapConn.Close()
 
+	// --- LoadEndAck init burst: the client sends 0x007d after map load and the
+	// server replies with the populated inventory list. The seeded Knife (nameid
+	// 1201, a weapon) must appear in ZC_INVENTORY_ITEMLIST_EQUIP — proof the
+	// LoadEndAck handler loads the persisted bag and splits it by item_db type
+	// (weapon → equip list), instead of the empty init it emitted before this. ---
+	var loadEndAckCmd [2]byte
+	binary.LittleEndian.PutUint16(loadEndAckCmd[:], packet.HeaderCZNOTIFYACTORINIT)
+	_, err = mapConn.Write(loadEndAckCmd[:])
+	require.NoError(t, err, "send CZ_NOTIFY_ACTORINIT (0x007d)")
+	equipList, ok := awaitFrame(t, mapConn, packet.HeaderZCINVENTORYITEMLISTEQUIP, 3*time.Second, nil)
+	require.True(t, ok, "no ZC_INVENTORY_ITEMLIST_EQUIP in the LoadEndAck burst; populated inventory list not emitted")
+	require.GreaterOrEqual(t, len(equipList), 9, "equip list frame too short for one item entry")
+	assert.Equal(t, uint16(1201), binary.LittleEndian.Uint16(equipList[7:9]),
+		"equip list carries the seeded Knife (nameid 1201) at item slot 0")
+
 	// --- equip the Knife (grid slot 0) in the right hand, then drain for the
 	// wear ack and the refreshed ZC_STATUS. handle captures both at whichever read
 	// site delivers them; the bounded loop keeps the 5s respawn timer from starving
@@ -1729,7 +1744,8 @@ func readMapFrame(t *testing.T, conn net.Conn) ([]byte, bool) {
 		op == packet.HeaderZCPCSELLITEMLIST ||
 		op == packet.HeaderZCINVENTORYITEMLISTNORMAL ||
 		op == packet.HeaderZCINVENTORYITEMLISTEQUIP ||
-		op == packet.HeaderZCINVENTORYSTART || op == packet.HeaderZCINVENTORYEND ||
+		op == packet.HeaderZCINVENTORYSTART ||
+		op == packet.HeaderZCSKILLINFOLIST ||
 		op == packet.HeaderZCSAYDIALOG2 ||
 		op == packet.HeaderZCNOTIFYCHAT {
 		lenBuf := make([]byte, 2)
@@ -1770,6 +1786,15 @@ func mapFrameSize(op uint16) int {
 		return packet.NotifyActResponse{}.Size()
 	case packet.HeaderZCNOTIFYVANISH:
 		return packet.NotifyVanishResponse{}.Size()
+	// ZC_INVENTORY_END (0x0b0b) is a fixed 4-byte packet (cmd + invType + flag)
+	// with no length prefix — unlike ZC_INVENTORY_START/ITEMLIST_* which carry one
+	// — so it is read as fixed-size, not the variable-length path above.
+	case packet.HeaderZCINVENTORYEND:
+		return len(packet.EncodeInventoryEnd())
+	// ZC_SHORTCUT_KEY_LIST (0x0b20) is fixed at 271 bytes (cmd + rotate + tab + 38
+	// hotkey slots) — no length prefix.
+	case packet.HeaderZCSHORTCUTKEYLIST:
+		return len(packet.EncodeEmptyHotkeyList(0))
 	case packet.HeaderZCSTATUS:
 		return packet.StatusResponse{}.Size()
 	case packet.HeaderZCPARCHANGE:
