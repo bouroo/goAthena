@@ -256,7 +256,9 @@ type ZoneConfig struct {
 	DBPath string `mapstructure:"db_path" yaml:"db_path" env:"ZONE_DB_PATH" validate:"omitempty"`
 	// Renewal selects the game-mode data subtree: db/re/ when true, db/pre-re/
 	// when false. The per-file *_db_path overrides win over DBRoot() wherever a
-	// loader reads them, so a slim deployment can pin a single file.
+	// loader reads them, so a slim deployment can pin a single file. Defaults
+	// to true: the vendored rathenaThailand submodule compiles RENEWAL ON, so
+	// this keeps db/ loads and stat formulas in parity with it out of the box.
 	Renewal bool `mapstructure:"renewal" yaml:"renewal" env:"ZONE_RENEWAL"`
 }
 
@@ -454,7 +456,7 @@ func setDefaults(v *viper.Viper) {
 		"identity.item_db_path":      "",
 
 		"zone.tick_rate":      50 * time.Millisecond,
-		"zone.renewal":        false,
+		"zone.renewal":        true,
 		"zone.db_path":        "./third_party/rathenaThailand/db",
 		"zone.map_dir":        "./data/maps",
 		"zone.default_map":    "prontera",

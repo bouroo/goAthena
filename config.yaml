@@ -98,8 +98,11 @@ zone:
   # points at the vendored rathenaThailand submodule.
   db_path: ./third_party/rathenaThailand/db
   # renewal selects the game-mode data subtree (db/re vs db/pre-re) and the
-  # formula set (statcalc.Registry). rathenaThailand ships RENEWAL ON.
-  renewal: false
+  # formula set (statcalc.Registry). The vendored rathenaThailand submodule
+  # compiles RENEWAL ON (src/config/core.hpp does not define PRERE), so this
+  # defaults to true to keep db/ loads and formulas in parity with it. Set to
+  # false only when pairing with a Pre-Renewal client/data tree.
+  renewal: true
 
 assets:
   enabled: false

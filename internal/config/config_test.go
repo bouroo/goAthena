@@ -246,9 +246,11 @@ otel:
 	require.Equal(t, "nats://localhost:4222", cfg.NATS.URL)
 	require.Equal(t, 5*time.Second, cfg.HTTP.HealthProbeTimeout)
 	require.Equal(t, "utf-8", cfg.Gateway.TextCodepage)
-	require.False(t, cfg.Zone.Renewal)
-	// Default db_path joins the mode subtree: pre-renewal → .../db/pre-re.
-	require.Equal(t, "third_party/rathenaThailand/db/pre-re", cfg.Zone.DBRoot())
+	// Default renewal is true: the vendored rathenaThailand submodule compiles
+	// RENEWAL ON, so the default keeps db/ loads and formulas in parity with it.
+	require.True(t, cfg.Zone.Renewal)
+	// Default db_path joins the mode subtree: renewal → .../db/re.
+	require.Equal(t, "third_party/rathenaThailand/db/re", cfg.Zone.DBRoot())
 }
 
 // TestDBRoot isolates DBRoot() resolution from config loading: it pins the
