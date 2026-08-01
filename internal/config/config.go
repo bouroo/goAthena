@@ -253,10 +253,17 @@ type WSConfig struct {
 // MaxChars caps the character roster (effective = max(account.character_slots,
 // MIN_CHARS)); the default of 15 matches PACKETVER >= 20100413. ItemDBPath is
 // the optional rAthena item_db YAML file used to resolve inventory weights.
+// StartItems is the rAthena char_athena.conf start_items string — colon-separated
+// "nameid,amount,location" triples seeded into every new character's bag by the
+// CH_MAKE_CHAR handler (char.cpp:1518-1519 inserts one inventory row per triple,
+// setting equip=location so a nonzero location auto-equips). The default is
+// rAthena's: Knife (1201) in the right hand, Cotton Shirt (2301) on the body,
+// and one bonus usable (23484) loose in the bag.
 type IdentityConfig struct {
 	UseMD5Passwords bool   `mapstructure:"use_md5_passwords" yaml:"use_md5_passwords" env:"IDENTITY_USE_MD5_PASSWORDS"`
 	MaxChars        int    `mapstructure:"max_chars" yaml:"max_chars" env:"IDENTITY_MAX_CHARS" validate:"min=0,max=15"`
 	ItemDBPath      string `mapstructure:"item_db_path" yaml:"item_db_path" env:"IDENTITY_ITEM_DB_PATH" validate:"omitempty"`
+	StartItems      string `mapstructure:"start_items" yaml:"start_items" env:"IDENTITY_START_ITEMS"`
 }
 
 // LogConfig holds the zerolog settings.
@@ -525,6 +532,7 @@ func setDefaults(v *viper.Viper) {
 		"identity.use_md5_passwords": false,
 		"identity.max_chars":         15,
 		"identity.item_db_path":      "",
+		"identity.start_items":       "1201,1,2:2301,1,16:23484,1,0",
 
 		"zone.tick_rate":      50 * time.Millisecond,
 		"zone.renewal":        true,
@@ -617,6 +625,7 @@ func leafBindings() []leafBinding {
 		{"identity.use_md5_passwords", "IDENTITY_USE_MD5_PASSWORDS"},
 		{"identity.max_chars", "IDENTITY_MAX_CHARS"},
 		{"identity.item_db_path", "IDENTITY_ITEM_DB_PATH"},
+		{"identity.start_items", "IDENTITY_START_ITEMS"},
 
 		{"zone.tick_rate", "ZONE_TICK_RATE"},
 		{"zone.map_dir", "ZONE_MAP_DIR"},

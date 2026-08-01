@@ -20,6 +20,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/character/app"
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
 	"github.com/bouroo/goAthena/internal/modules/character/infra"
+	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
 )
 
 // Register builds the character bounded context over the GORM char repository:
@@ -52,9 +53,28 @@ func Register(_ context.Context, c do.Injector) error {
 
 	do.ProvideValue(c, app.NewCharEnterHandler(chars))
 	do.ProvideValue(c, app.NewCharSelectHandler(chars, zone))
+	// CharMakeHandler is provided lazily because start_items seeding depends on
+	// the inventory repository, which the inventory module registers after this
+	// one. The factory runs only when the composition root first resolves the
+	// handler — by then every module has registered, so the Invoke succeeds. A
+	// malformed identity.start_items string fails boot here with a clear error.
 	// MaxChars is the per-account slot ceiling (config Identity.MaxChars,
-	// validated [0,15], default 15 = rAthena's MAX_CHARS). The make-char handler
+	// validated [0,15], default 15 = rAthena's MAX_CHARS); the make-char handler
 	// rejects slot indices >= it with ErrInvalidSlot.
-	do.ProvideValue(c, app.NewCharMakeHandler(chars, uint8(cfg.Identity.MaxChars))) //nolint:gosec // G115: MaxChars is config-validated [0,15]
+	do.Provide(c, func(i do.Injector) (*app.CharMakeHandler, error) {
+		inv, err := do.Invoke[invdomain.InventoryRepository](i)
+		if err != nil {
+			return nil, fmt.Errorf("character: resolve inventory repository for start_items: %w", err)
+		}
+		items, err := app.ParseStartItems(cfg.Identity.StartItems)
+		if err != nil {
+			return nil, fmt.Errorf("character: parse identity.start_items: %w", err)
+		}
+		var seeder *app.StartingItemSeeder
+		if len(items) > 0 {
+			seeder = app.NewStartingItemSeeder(items, inv)
+		}
+		return app.NewCharMakeHandler(chars, uint8(cfg.Identity.MaxChars), seeder), nil //nolint:gosec // G115: MaxChars is config-validated [0,15]
+	})
 	return nil
 }

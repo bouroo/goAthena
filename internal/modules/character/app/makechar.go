@@ -45,13 +45,15 @@ const jobNovice uint32 = 0
 type CharMakeHandler struct {
 	chars     domain.CharacterRepository
 	charSlots uint8
+	seeder    *StartingItemSeeder
 }
 
 // NewCharMakeHandler builds a CH_MAKE_CHAR handler over the character repository.
 // charSlots is the per-account slot ceiling (rAthena's sd->char_slots); a slot
-// index >= it is rejected with ErrInvalidSlot (-4).
-func NewCharMakeHandler(chars domain.CharacterRepository, charSlots uint8) *CharMakeHandler {
-	return &CharMakeHandler{chars: chars, charSlots: charSlots}
+// index >= it is rejected with ErrInvalidSlot (-4). seeder seeds start_items into
+// the new character's bag after creation; nil disables seeding (empty config).
+func NewCharMakeHandler(chars domain.CharacterRepository, charSlots uint8, seeder *StartingItemSeeder) *CharMakeHandler {
+	return &CharMakeHandler{chars: chars, charSlots: charSlots, seeder: seeder}
 }
 
 // Handle implements gateway/domain.PacketHandler for CH_MAKE_CHAR.
@@ -79,9 +81,22 @@ func (h *CharMakeHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame 
 		return h.refuse(conn, err)
 	}
 
+	// Seed start_items once the character row is committed. The success reply is
+	// always sent (the character exists regardless of the seed outcome); a seed
+	// fault is surfaced as a returned error so ProcessBytes logs it, but the
+	// session continues — mirroring rAthena, where a failing starting-item INSERT
+	// is logged while the newly created character stays.
+	var seedErr error
+	if h.seeder != nil {
+		seedErr = h.seeder.Seed(ctx, created.AccountID, created.CharID)
+	}
+
 	resp := packet.AcceptMakeCharResponse{Character: MapCharacterInfo(*created)}
 	if err := resp.Encode(connWriter{conn}); err != nil {
 		return fmt.Errorf("encode HC_ACCEPT_MAKECHAR: %w", err)
+	}
+	if seedErr != nil {
+		return fmt.Errorf("makechar: char %d created, start_items seed failed: %w", created.CharID, seedErr)
 	}
 	return nil
 }

@@ -410,6 +410,25 @@ func TestServe_MakeChar_RoundTrip(t *testing.T) {
 		Scan(&dbCharID).Error, "read back created char_id from MariaDB")
 	assert.Equal(t, createdGID, dbCharID, "wire GID must equal the persisted char_id")
 
+	// --- start_items: the CH_MAKE_CHAR handler seeded the default rAthena
+	// starting gear into the created novice's bag, one inventory row per
+	// configured triple with equip=location (char.cpp:1518-1519). Knife in the
+	// right hand (EQP_HAND_R=2), Cotton Shirt on the body (EQP_ARMOR=16), and the
+	// bonus usable loose (location 0). Proves the seeder ran through the real
+	// handler into the real GORM inventory table. ---
+	type startInvRow struct {
+		NameID uint32 `gorm:"column:nameid"`
+		Amount uint32 `gorm:"column:amount"`
+		Equip  uint32 `gorm:"column:equip"`
+	}
+	var seeded []startInvRow
+	require.NoError(t, gdb.Raw(
+		"SELECT nameid, amount, equip FROM `inventory` WHERE char_id = ? ORDER BY nameid", dbCharID).
+		Scan(&seeded).Error, "read back start_items rows from MariaDB")
+	require.Len(t, seeded, 3, "default start_items = 3 rows")
+	assert.Equal(t, []startInvRow{{1201, 1, 2}, {2301, 1, 16}, {23484, 1, 0}}, seeded,
+		"Knife equipped right-hand, Cotton Shirt equipped body, usable loose in bag")
+
 	// --- Re-enter: the created novice round-trips through the read path, now as
 	// the single CHARACTER_INFO in the list. ---
 	_, err = conn.Write(enter.Bytes()) // CH_ENTER again on the same connection

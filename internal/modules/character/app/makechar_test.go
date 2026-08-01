@@ -22,7 +22,7 @@ import (
 // with slots as the per-account slot ceiling.
 func makeCharDispatcher(chars domain.CharacterRepository, slots uint8) *gwdomain.Dispatcher {
 	return gwdomain.NewDispatcher(nil, gwdomain.PacketHandlerTable{
-		packet.HeaderCHMAKECHAR: app.NewCharMakeHandler(chars, slots).Handle,
+		packet.HeaderCHMAKECHAR: app.NewCharMakeHandler(chars, slots, nil).Handle,
 	}, nil)
 }
 
