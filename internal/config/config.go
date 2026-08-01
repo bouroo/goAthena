@@ -150,6 +150,16 @@ type GatewayConfig struct {
 	// gateway's own listening address — it is the destination the client opens
 	// a new TCP connection to after CH_SELECT_CHAR. Defaults to "localhost:5121"
 	// (the Thai Classic map port).
+	//
+	// DEPLOYMENT WARNING: the "localhost" default only resolves for a client
+	// running on the same host as the gateway. It must be overridden to a
+	// reachable LAN/WAN hostname or IP (GATEWAY_MAP_ADDR) for any other
+	// deployment — a container, remote roBrowser, or LAN test — or the client
+	// silently fails to open the post-char-select map connection. This is the
+	// Go analogue of rAthena's char_ip/map_ip: unlike stock rAthena, which
+	// defaults to auto-detecting the first network interface (often the wrong
+	// one on multi-interface hosts), MapAddr requires an explicit value so the
+	// failure mode is a clear misconfiguration rather than a silent wrong IP.
 	MapAddr string `mapstructure:"map_addr" yaml:"map_addr" env:"GATEWAY_MAP_ADDR" validate:"required"`
 	// MapWSAddr is the WebSocket "host:port" of the dedicated map-role listener
 	// that roBrowser reconnects to after char select — the WS analogue of MapAddr
@@ -158,6 +168,10 @@ type GatewayConfig struct {
 	// the login/char WS listener it serves the "/ws/" upgrade path, but every
 	// accepted connection starts at the map role (NewMapWSServer) so CZ_ENTER
 	// routes through the map dispatch table. Defaults to "localhost:6902".
+	//
+	// DEPLOYMENT WARNING: same caveat as MapAddr - override GATEWAY_MAP_WS_ADDR
+	// to the address roBrowser's own host can actually reach before deploying
+	// off the gateway's own machine.
 	MapWSAddr string `mapstructure:"map_ws_addr" yaml:"map_ws_addr" env:"GATEWAY_MAP_WS_ADDR" validate:"required"`
 	// TextCodepage names the wire text encoding for native TCP sessions
 	// (character names, chat, NPC text). One of "utf-8" (default),

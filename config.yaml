@@ -65,6 +65,11 @@ gateway:
   packetver: 20250604
   identity_addr: "localhost:50051"
   zone_addr: "localhost:50052"
+  # map_addr / map_ws_addr are advertised to the client, not listened on here.
+  # "localhost" only works when the client runs on this same host. Override
+  # both (GATEWAY_MAP_ADDR / GATEWAY_MAP_WS_ADDR) to a host/IP the client can
+  # actually reach for any LAN, WAN, or containerized deployment - the rAthena
+  # equivalent of setting char_ip/map_ip instead of relying on auto-detect.
   map_addr: "localhost:5121"
   map_ws_addr: "localhost:6902"
 
