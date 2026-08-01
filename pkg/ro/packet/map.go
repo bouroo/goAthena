@@ -128,7 +128,18 @@ const (
 	// RFIFOL(fd,2); EVERY failure branch falls through to a fail ack, so the
 	// pickup handler must always answer (see map_item_drop.go
 	// ItemPickupAckResponse).
+	//
+	// At PACKETVER 20250604 the effective C→S pickup opcode is 0x0362, NOT
+	// 0x009f: clif_shuffle.hpp:4732 maps 0x0362 to clif_parse_TakeItem (it
+	// overrides clif_packetdb.hpp:1561's DropItem binding because clif_shuffle
+	// is included after clif_packetdb and packetdb_addpacket last-writes-wins),
+	// while 0x009f's final active binding is UseItem (clif_packetdb.hpp:1205).
+	// Both share the 6-byte <cmd>.<W><ground id>.L layout, so dispatch accepts
+	// 0x009f (legacy) and 0x0362 (modern) through the same parser.
 	HeaderCZITEMPICKUP uint16 = 0x009f
+	// HeaderCZITEMTAKEOpcode is the modern pickup alias at PACKETVER 20250604
+	// (clif_shuffle.hpp:4732 — clif_parse_TakeItem). See HeaderCZITEMPICKUP.
+	HeaderCZITEMTAKE0362 uint16 = 0x0362
 	// P2A: CZ_USE_ITEM2 (0x0439) — client requests to use a consumable
 	// item. rathena/src/map/clif_packetdb.hpp:1151
 	// (`parseable_packet(0x0439,8,clif_parse_UseItem,2,4)`).
@@ -274,14 +285,13 @@ const (
 	// A4: CZ drop-item opcodes. rAthena registers seven modern DropItem
 	// aliases (clif_packetdb.hpp:1385-1606), all sharing the 6-byte
 	// <index>.W <amount>.W layout; which one a given client sends is
-	// build-specific. The gateway accepts all six FREE aliases below.
-	// 0x0438 is excluded — it collides with CZ_USE_SKILL2 (HeaderCZUSESKILL).
-	// 0x0094 is the pre-2004 layout and is CZ_GET_CHAR_NAME_REQUEST here.
+	// build-specific. The gateway accepts the five FREE aliases below; 0x0438 is
+	// excluded (clif_shuffle.hpp:4750 re-binds it to CZ_USE_SKILL2), and 0x0362
+	// is the modern pickup opcode (see HeaderCZITEMTAKE0362), NOT a drop alias.
 	HeaderCZDROPITEM0363 uint16 = 0x0363 // >=20110706
 	HeaderCZDROPITEM0885 uint16 = 0x0885 // >=20111005
 	HeaderCZDROPITEM02C4 uint16 = 0x02C4 // >=20120307
 	HeaderCZDROPITEM0891 uint16 = 0x0891 // >=20120410
-	HeaderCZDROPITEM0362 uint16 = 0x0362 // >=20120418
 	HeaderCZDROPITEM089E uint16 = 0x089e // >=20120702
 )
 
@@ -1130,13 +1140,15 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCItemFallEntry,
 		Direction: DirectionServerToClient,
 	})
-	// A4: item drop + pickup. Six C→S drop aliases share one 6-byte
-	// <index>.W <amount>.W layout (clif_packetdb.hpp:1385-1606); which one a
-	// client sends is build-specific, so the gateway accepts all six. The
-	// seventh alias 0x0438 collides with CZ_USE_SKILL2 and is excluded.
+	// A4: item drop + pickup. The C→S drop frame is <index>.W <amount>.W
+	// (clif_packetdb.hpp:1385-1606). Which opcode the client sends is
+	// build-specific, so the gateway accepts the five free aliases below; the
+	// effective drop opcode at PACKETVER 20250604 is 0x0363 (clif_shuffle.hpp:4733).
+	// 0x0362 is the modern pickup opcode (clif_shuffle.hpp:4732) and 0x0438 is
+	// CZ_USE_SKILL2 (clif_shuffle.hpp:4750), so neither is a drop alias here.
 	for _, op := range []uint16{
 		HeaderCZDROPITEM0363, HeaderCZDROPITEM0885, HeaderCZDROPITEM02C4,
-		HeaderCZDROPITEM0891, HeaderCZDROPITEM0362, HeaderCZDROPITEM089E,
+		HeaderCZDROPITEM0891, HeaderCZDROPITEM089E,
 	} {
 		db.Register(Definition{
 			ID:        op,
@@ -1145,6 +1157,15 @@ func NewMapServerDB() *DB {
 			Direction: DirectionClientToServer,
 		})
 	}
+	// A4: the modern pickup alias 0x0362 (clif_shuffle.hpp:4732 TakeItem). The
+	// 0x009f legacy pickup registration above stays for older PACKETVERs; both
+	// route through the same CZ_ITEM_PICKUP parser (see HeaderCZITEMTAKE0362).
+	db.Register(Definition{
+		ID:        HeaderCZITEMTAKE0362,
+		Name:      "CZ_ITEM_PICKUP",
+		Length:    sizeCZItemPickup,
+		Direction: DirectionClientToServer,
+	})
 	// A4: server→client floor-item and ack frames. Sizes + opcodes verified
 	// in map_item_drop.go.
 	db.Register(Definition{

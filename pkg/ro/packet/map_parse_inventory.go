@@ -200,17 +200,19 @@ type CZItemPickupRequest struct {
 }
 
 // ParseCZItemPickup decodes a CZ_ITEM_PICKUP frame (including the 2-byte cmd
-// header) into a CZItemPickupRequest. The frame must carry cmd 0x009f and contain
-// at least 6 bytes; trailing bytes are ignored.
+// header) into a CZItemPickupRequest. The frame must carry cmd 0x009f (legacy)
+// or 0x0362 (the effective PACKETVER 20250604 opcode, clif_shuffle.hpp:4732) and
+// contain at least 6 bytes; trailing bytes are ignored.
 //
 // Returns a wrapped error naming the off-by-one byte count if the frame is
 // shorter than 6 bytes, or naming the unexpected cmd id if the header is not
-// 0x009f.
+// 0x009f/0x0362.
 func ParseCZItemPickup(frame []byte) (CZItemPickupRequest, error) {
 	if len(frame) < sizeCZItemPickup {
 		return CZItemPickupRequest{}, fmt.Errorf("packet: parse CZ_ITEM_PICKUP: want at least %d bytes, got %d", sizeCZItemPickup, len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZITEMPICKUP {
+	cmd := binary.LittleEndian.Uint16(frame[0:2])
+	if cmd != HeaderCZITEMPICKUP && cmd != HeaderCZITEMTAKE0362 {
 		return CZItemPickupRequest{}, fmt.Errorf("packet: parse CZ_ITEM_PICKUP: unexpected cmd 0x%04x", cmd)
 	}
 	return CZItemPickupRequest{

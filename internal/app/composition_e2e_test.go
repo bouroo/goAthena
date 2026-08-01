@@ -1833,6 +1833,10 @@ func mapFrameSize(op uint16) int {
 		// ItemFallEntryResponse.Size/Encode carry pointer receivers, so the zero
 		// struct is addressed before the call — a value receiver call won't compile.
 		return (&packet.ItemFallEntryResponse{}).Size()
+	case packet.HeaderZCItemThrowAck:
+		// A4: the drop ack (0x00af, 6 bytes fixed: index.W + count.W). Pointer
+		// receiver — the zero value Size() is exact.
+		return (&packet.ItemThrowAckResponse{}).Size()
 	case packet.HeaderZCItemPickupAck:
 		// M10a: the pickup success/fail ack (result=0 / result=6). Pointer receiver.
 		return (&packet.ItemPickupAckResponse{}).Size()
@@ -2935,4 +2939,142 @@ func TestServe_GetCharName_RoundTrip(t *testing.T) {
 	require.Equal(t, (packet.ReqNameAll2Response{}).Size(), len(reply), "REQNAMEALL2 length")
 	assert.Equal(t, seedCharID, binary.LittleEndian.Uint32(reply[2:6]), "reply GID = requested char_id")
 	assert.Equal(t, "E2eHero", string(bytes.TrimRight(reply[6:6+24], "\x00")), "reply carries the char name")
+}
+
+// TestServe_ItemDrop_RoundTrip is the A4 end-to-end: a player enters the world,
+// drops one Jellopy (nameid 909) from bag slot 0 via CZ_ITEM_DROP (0x0363), and
+// the server replies with the SELF ZC_ITEM_THROW_ACK (count=1, index echo) plus
+// the AREA ZC_ITEM_FALL_ENTRY broadcast (ground id + cell + amount), then the
+// bag row is gone from MariaDB. This proves the drop handler wires through
+// BuildDispatcher → DropHandler → DropService and feeds the M10a pickup loop
+// (the dropped floor item is then picked up, closing the loot loop).
+func TestServe_ItemDrop_RoundTrip(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eDropper", "prontera", 53, 111)
+	// seed one Jellopy at bag slot 0 (the single row's id-ascending index).
+	seedJellopyInBag(t, cfg, seedCharID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	loginConn, err := net.DialTimeout("tcp", tcpAddr, 3*time.Second)
+	require.NoError(t, err)
+	defer loginConn.Close()
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN received; login likely failed against the DB")
+
+	mapConn, err := net.DialTimeout("tcp", mapAddr, 3*time.Second)
+	require.NoError(t, err)
+	defer mapConn.Close()
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NoError(t, loginConn.Close())
+	require.NoError(t, packet.CZEnterRequest{
+		AccountID: seededAccountID, CharID: seedCharID, AuthCode: loginID1, ClientTime: 0, Sex: sexByte,
+	}.Encode(mapConn))
+	resp, ok := awaitFrame(t, mapConn, packet.HeaderZCACCEPTENTER, 5*time.Second, nil)
+	require.True(t, ok, "no ZC_ACCEPT_ENTER; CZ_ENTER verification likely failed")
+	require.Equal(t, packet.HeaderZCACCEPTENTER, binary.LittleEndian.Uint16(resp[0:2]), "expected ZC_ACCEPT_ENTER")
+	spawn := make([]byte, packet.SpawnUnitResponse{}.Size())
+	_, err = io.ReadFull(mapConn, spawn)
+	require.NoError(t, err, "no ZC_SPAWN_UNIT; spawn-on-enter likely failed")
+	require.Equal(t, packet.HeaderZCSPAWNUNIT, binary.LittleEndian.Uint16(spawn[0:2]), "expected ZC_SPAWN_UNIT")
+	drainEnterStatusBurst(t, mapConn)
+
+	// --- Drop the Jellopy from slot 0 (raw index; goAthena is 0-based). ---
+	var drop bytes.Buffer
+	require.NoError(t, (packet.CZDropItemRequest{InventoryIndex: 0, Amount: 1}).Encode(&drop))
+	_, err = mapConn.Write(drop.Bytes())
+	require.NoError(t, err, "send CZ_ITEM_DROP (0x0363)")
+
+	var throwAck []byte
+	var fallEntry []byte
+	dropEnd := time.Now().Add(3 * time.Second)
+	for (throwAck == nil || fallEntry == nil) && time.Now().Before(dropEnd) {
+		require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+		frame, ok := readMapFrame(t, mapConn)
+		if !ok {
+			continue
+		}
+		switch binary.LittleEndian.Uint16(frame) {
+		case packet.HeaderZCItemThrowAck:
+			throwAck = frame
+		case packet.HeaderZCItemFallEntry:
+			fallEntry = frame
+		}
+	}
+	require.NotNil(t, throwAck, "no ZC_ITEM_THROW_ACK observed after CZ_ITEM_DROP — drop handler not wired or request rejected")
+	assert.Equal(t, uint16(0), binary.LittleEndian.Uint16(throwAck[2:4]), "throw ack index echoes the raw slot 0")
+	assert.Equal(t, uint16(1), binary.LittleEndian.Uint16(throwAck[4:6]), "throw ack count = dropped amount")
+
+	require.NotNil(t, fallEntry, "no ZC_ITEM_FALL_ENTRY broadcast for the drop")
+	assert.Equal(t, jellopyNameID, binary.LittleEndian.Uint32(fallEntry[6:10]), "fall entry nameid is the Jellopy (909)")
+	assert.Equal(t, uint16(1), binary.LittleEndian.Uint16(fallEntry[19:21]), "fall entry amount = 1")
+	groundID := binary.LittleEndian.Uint32(fallEntry[2:6])
+
+	// --- The bag row is gone from MariaDB. ---
+	assert.Equal(t, uint32(0), readInventoryAmount(t, cfg, seedCharID, jellopyNameID), "bag row removed after the drop")
+
+	// --- Close the loot loop: pick the floor item back up (M10a path). ---
+	var pickup bytes.Buffer
+	require.NoError(t, (packet.CZItemPickupRequest{GroundID: groundID}).Encode(&pickup))
+	_, err = mapConn.Write(pickup.Bytes())
+	require.NoError(t, err, "send CZ_ITEM_PICKUP for the dropped Jellopy")
+	pickupEnd := time.Now().Add(3 * time.Second)
+	var pickupAck []byte
+	for pickupAck == nil && time.Now().Before(pickupEnd) {
+		require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+		frame, ok := readMapFrame(t, mapConn)
+		if !ok {
+			continue
+		}
+		if binary.LittleEndian.Uint16(frame) == packet.HeaderZCItemPickupAck {
+			pickupAck = frame
+		}
+	}
+	require.NotNil(t, pickupAck, "no ZC_ITEM_PICKUP_ACK after re-picking the dropped item")
+	assert.Equal(t, uint8(0), pickupAck[33], "pickup result=0 (success)")
+	assert.Equal(t, uint32(1), readInventoryAmount(t, cfg, seedCharID, jellopyNameID), "picked item is back in the bag")
+}
+
+// seedJellopyInBag inserts one Jellopy (nameid 909) at bag slot 0 for the drop e2e.
+func seedJellopyInBag(t *testing.T, cfg *config.Config, charID uint32) {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to seed Jellopy")
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, gdb.Exec(
+		`INSERT INTO inventory (char_id, nameid, amount, equip) VALUES (?, 909, 1, 0)`,
+		charID).Error, "insert Jellopy (nameid 909) into the char's bag")
+	t.Cleanup(func() { _ = gdb.Exec("DELETE FROM inventory WHERE char_id = ?", charID).Error })
 }

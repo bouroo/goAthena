@@ -180,6 +180,14 @@ func Register(ctx context.Context, c do.Injector) error {
 	do.ProvideValue(c, app.NewNameHandler(spawner))
 	pickup := app.NewPickupService(floorItems, registry, maps, invRepo, itemDB, app.SystemClock())
 	do.ProvideValue(c, app.NewPickupHandler(pickup))
+	// A4: the drop service. It shares the inventory port + item_db + player and
+	// floor-item registries the pickup service holds, and closes the bag → ground
+	// → pickup loot loop: dropping consumes a bag slot via ConsumeItem, registers
+	// a floor item, broadcasts ZC_ITEM_FALL_ENTRY to the area, and acks the
+	// dropper with ZC_ITEM_THROW_ACK. Handler provided for the composition root
+	// to thread into the map-role dispatch table.
+	drop := app.NewDropService(floorItems, registry, maps, invRepo, itemDB)
+	do.ProvideValue(c, app.NewDropHandler(drop))
 
 	// M12: the use-item service. It shares the inventory port + item_db + player
 	// registry the pickup service holds and extends the loot loop into a heal:

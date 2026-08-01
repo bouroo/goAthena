@@ -70,14 +70,17 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		// P3c: ground item drop — see NewMapServerDB for the rAthena
 		// packetdb citation (clif_packetdb.hpp:1921, opcode 0x0ADD).
 		{HeaderZCItemFallEntry, "ZC_ITEM_FALL_ENTRY", sizeZCItemFallEntry, DirectionServerToClient},
-		// A4: six C→S drop aliases share one CZ_ITEM_DROP layout (the
-		// seventh, 0x0438, collides with CZ_USE_SKILL2 and is excluded).
+		// A4: five C→S drop aliases share one CZ_ITEM_DROP layout (the
+		// effective 20250604 opcode is 0x0363, clif_shuffle.hpp:4733; 0x0438 is
+		// CZ_USE_SKILL2 and 0x0362 is the modern pickup opcode, both excluded).
 		{HeaderCZDROPITEM0363, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
 		{HeaderCZDROPITEM0885, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
 		{HeaderCZDROPITEM02C4, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
 		{HeaderCZDROPITEM0891, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
-		{HeaderCZDROPITEM0362, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
 		{HeaderCZDROPITEM089E, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
+		// A4: the modern pickup alias 0x0362 (clif_shuffle.hpp:4732 TakeItem)
+		// shares the CZ_ITEM_PICKUP parser with the legacy 0x009f.
+		{HeaderCZITEMTAKE0362, "CZ_ITEM_PICKUP", sizeCZItemPickup, DirectionClientToServer},
 		// A4: server→client floor-item + ack frames.
 		{HeaderZCItemEntry, "ZC_ITEM_ENTRY", sizeZCItemEntry, DirectionServerToClient},
 		{HeaderZCItemDisappear, "ZC_ITEM_DISAPPEAR", sizeZCItemDisappear, DirectionServerToClient},
@@ -118,12 +121,14 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// ZC_ITEM_FALL_ENTRY (0x0ADD) for a grand total of 59.
 	// P4b adds 2 menu entries (CZ_CHOOSE_MENU, ZC_MENU_LIST) → 61.
 	// A3 adds the inventory bracket (ZC_INVENTORY_START, ZC_INVENTORY_END) → 63.
-	// A4 adds 6 C→S drop aliases (CZ_ITEM_DROP) + 4 S→C floor-item/ack
-	// frames (ZC_ITEM_ENTRY/DISAPPEAR/THROW_ACK/PICKUP_ACK) → 73.
+	// A4 adds 5 C→S drop aliases (CZ_ITEM_DROP) + the modern pickup alias
+	// 0x0362 (CZ_ITEM_PICKUP) + 4 S→C floor-item/ack frames
+	// (ZC_ITEM_ENTRY/DISAPPEAR/THROW_ACK/PICKUP_ACK) → 73.
 	// M7c adds ZC_LONGLONGPAR_CHANGE (0x0acb) for the 64-bit exp parameters at
 	// PACKETVER >= 20170830 → 74.
-	// M10a adds CZ_ITEM_PICKUP (0x009f) → 75. Name-resolution adds two S→C
-	// name replies (ZC_ACK_REQNAMEALL2 0x0a30, ZC_ACK_REQNAMEALL_NPC 0x0adf) → 77.
+	// M10a adds the legacy CZ_ITEM_PICKUP (0x009f) → 75. Name-resolution adds
+	// two S→C name replies (ZC_ACK_REQNAMEALL2 0x0a30, ZC_ACK_REQNAMEALL_NPC
+	// 0x0adf) → 77.
 	const want = 77
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
@@ -188,13 +193,14 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCNOTIFYEFFECT, sizeZCNotifyEffect},
 		// P3c: ground item drop.
 		{HeaderZCItemFallEntry, sizeZCItemFallEntry},
-		// A4: six C→S drop aliases + four S→C floor-item/ack frames.
+		// A4: five C→S drop aliases + the modern pickup alias + four S→C
+		// floor-item/ack frames.
 		{HeaderCZDROPITEM0363, sizeCZDropItem},
 		{HeaderCZDROPITEM0885, sizeCZDropItem},
 		{HeaderCZDROPITEM02C4, sizeCZDropItem},
 		{HeaderCZDROPITEM0891, sizeCZDropItem},
-		{HeaderCZDROPITEM0362, sizeCZDropItem},
 		{HeaderCZDROPITEM089E, sizeCZDropItem},
+		{HeaderCZITEMTAKE0362, sizeCZItemPickup},
 		{HeaderZCItemEntry, sizeZCItemEntry},
 		{HeaderZCItemDisappear, sizeZCItemDisappear},
 		{HeaderZCItemThrowAck, sizeZCItemThrowAck},

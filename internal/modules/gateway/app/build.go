@@ -61,9 +61,13 @@ type Handlers struct {
 	// OnCZRestart serves CZ_RESTART (0x00b2), the leave-world request (respawn
 	// or return to char select). Provided by the world module (M7).
 	OnCZRestart domain.PacketHandler
-	// OnCZItemPickup serves CZ_ITEM_PICKUP (0x009f), the floor-item pickup
-	// request. Provided by the world module (M10a).
+	// OnCZItemPickup serves CZ_ITEM_PICKUP (0x009f legacy + 0x0362 modern at
+	// PACKETVER 20250604), the floor-item pickup request. Provided by the world
+	// module (M10a).
 	OnCZItemPickup domain.PacketHandler
+	// OnCZItemDrop serves CZ_ITEM_DROP (0x0363 at PACKETVER 20250604), the
+	// drop-item-from-bag request. Provided by the world module (A4).
+	OnCZItemDrop domain.PacketHandler
 	// OnCZUseItem serves CZ_USE_ITEM2 (0x0439), consuming and applying a Healing
 	// inventory item. Provided by the world module (M12).
 	OnCZUseItem domain.PacketHandler
@@ -156,6 +160,8 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table = addHandler(table, packet.HeaderCZREQEMOTION, h.OnCZReqEmotion)
 	table = addHandler(table, packet.HeaderCZRESTART, h.OnCZRestart)
 	table = addHandler(table, packet.HeaderCZITEMPICKUP, h.OnCZItemPickup)
+	table = addHandler(table, packet.HeaderCZITEMTAKE0362, h.OnCZItemPickup)
+	table = addHandler(table, packet.HeaderCZDROPITEM0363, h.OnCZItemDrop)
 	table = addHandler(table, packet.HeaderCZUSEITEM2, h.OnCZUseItem)
 	table = addHandler(table, packet.HeaderCZSTATUSCHANGE, h.OnCZStatusChange)
 	table = addHandler(table, packet.HeaderCZREQWEAREQUIPV5, h.OnCZReqWearEquip)

@@ -986,12 +986,14 @@ func ParseCZChooseMenu(frame []byte) (CZChooseMenuRequest, error) {
 }
 
 // CZDropItemRequest is the decoded form of a client → map-server drop-item
-// packet. rAthena registers seven modern aliases for this layout under
+// packet. rAthena registers several modern aliases for this layout under
 // different PACKETVER guards (clif_packetdb.hpp:1385-1606); all share the
 // same 6-byte frame: int16 opcode | uint16 index | uint16 amount. The
-// opcode is accepted under any of the six free aliases registered in
-// NewMapServerDB (0x0438 collides with CZ_USE_SKILL2 and is excluded), so
-// ParseCZDropItem does not pin a single header — dispatch routes every
+// effective opcode at PACKETVER 20250604 is 0x0363 (clif_shuffle.hpp:4733
+// clif_parse_DropItem). The opcode is accepted under any of the five free
+// aliases registered in NewMapServerDB (0x0438 is re-bound to CZ_USE_SKILL2
+// and 0x0362 is the modern pickup opcode, so neither is a drop alias here),
+// and ParseCZDropItem does not pin a single header — dispatch routes every
 // alias to it.
 type CZDropItemRequest struct {
 	// InventoryIndex is the 1-based inventory slot the client drops from.

@@ -266,7 +266,7 @@ func resolveWorldHandlers(i do.Injector) (
 	mapEnter *worldapp.MapEnterHandler, loadEndAck *worldapp.LoadEndAckHandler,
 	move *worldapp.MoveHandler, action *worldapp.ActionHandler,
 	timeH *worldapp.TimeHandler, changeDir *worldapp.ChangeDirHandler, emotion *worldapp.EmotionHandler,
-	restart *worldapp.RestartHandler, pickup *worldapp.PickupHandler, equip *worldapp.EquipHandler,
+	restart *worldapp.RestartHandler, pickup *worldapp.PickupHandler, drop *worldapp.DropHandler, equip *worldapp.EquipHandler,
 	takeoff *worldapp.TakeoffHandler, useItem *worldapp.UseItemHandler, skill *worldapp.SkillHandler,
 	chat *worldapp.ChatHandler, stats *worldapp.StatsHandler,
 	name *worldapp.NameHandler, err error,
@@ -314,6 +314,10 @@ func resolveWorldHandlers(i do.Injector) (
 		},
 		func() error {
 			pickup, err = invokeOr[*worldapp.PickupHandler](i, "resolve CZ_ITEM_PICKUP handler")
+			return err
+		},
+		func() error {
+			drop, err = invokeOr[*worldapp.DropHandler](i, "resolve CZ_ITEM_DROP handler")
 			return err
 		},
 		func() error {
@@ -381,7 +385,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return err
 	}
-	mapEnter, loadEndAck, move, action, timeH, changeDir, emotion, restart, pickup, equip, takeoff, useItem, skill, chat, stats, name, err := resolveWorldHandlers(injector)
+	mapEnter, loadEndAck, move, action, timeH, changeDir, emotion, restart, pickup, drop, equip, takeoff, useItem, skill, chat, stats, name, err := resolveWorldHandlers(injector)
 	if err != nil {
 		return err
 	}
@@ -409,6 +413,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCZReqEmotion:         emotion.Handle,
 		OnCZRestart:            restart.Handle,
 		OnCZItemPickup:         pickup.Handle,
+		OnCZItemDrop:           drop.Handle,
 		OnCZUseItem:            useItem.Handle,
 		OnCZReqWearEquip:       equip.Handle,
 		OnCZReqTakeoffEquip:    takeoff.Handle,

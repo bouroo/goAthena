@@ -45,6 +45,7 @@ func splitFixedFrames(t *testing.T, b []byte) [][]byte {
 		packet.HeaderZCItemFallEntry:     (&packet.ItemFallEntryResponse{}).Size(),
 		packet.HeaderZCItemPickupAck:     (&packet.ItemPickupAckResponse{}).Size(),
 		packet.HeaderZCItemDisappear:     (&packet.ItemDisappearResponse{}).Size(),
+		packet.HeaderZCItemThrowAck:      (&packet.ItemThrowAckResponse{}).Size(),
 		packet.HeaderZCUSEITEMACK2:       packet.UseItemAck2Response{}.Size(),
 		// M14b: the cast-result ack (14 B) and the skill-hit broadcast (33 B).
 		// Both are fixed-layout map packets; without these the fixture's
