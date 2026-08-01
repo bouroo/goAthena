@@ -31,6 +31,10 @@ type Handlers struct {
 	// OnCZEnter serves CZ_ENTER (0x0072), the map-server entry point and trust
 	// gate. Provided by the world module.
 	OnCZEnter domain.PacketHandler
+	// OnCZNotifyActorInit serves CZ_NOTIFY_ACTORINIT (0x007d, LoadEndAck), the
+	// client's map-load-complete signal; replied to with the inventory/skill/
+	// hotkey init burst. Provided by the world module.
+	OnCZNotifyActorInit domain.PacketHandler
 	// OnCZRequestMove serves CZ_REQUEST_MOVE (0x0085), the click-to-walk
 	// request. Provided by the world module (M4c).
 	OnCZRequestMove domain.PacketHandler
@@ -138,6 +142,7 @@ func buildCharTable(h Handlers) domain.PacketHandlerTable {
 func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table := domain.PacketHandlerTable{}
 	table = addHandler(table, packet.HeaderCZENTER, h.OnCZEnter)
+	table = addHandler(table, packet.HeaderCZNOTIFYACTORINIT, h.OnCZNotifyActorInit)
 	table = addHandler(table, packet.HeaderCZREQUESTMOVE, h.OnCZRequestMove)
 	table = addHandler(table, packet.HeaderCZACTIONREQUEST, h.OnCZActionRequest)
 	table = addHandler(table, packet.HeaderCZUSESKILL, h.OnCZUseSkill)

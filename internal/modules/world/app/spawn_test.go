@@ -21,6 +21,26 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/statcalc"
 )
 
+// TestSpawnService_SendLoadEndAckInit_EmitsInitBurst asserts the CZ_NOTIFY_ACTORINIT
+// (LoadEndAck) reply writes the inventory/skill/hotkey init frames rAthena sends on
+// map-load-complete, in order: ZC_INVENTORY_START, ITEMLIST_NORMAL, ITEMLIST_EQUIP,
+// INVENTORY_END, SKILL_LIST, HOTKEY. SendLoadEndAckInit touches no SpawnService
+// state, so a zero-value service suffices.
+func TestSpawnService_SendLoadEndAckInit_EmitsInitBurst(t *testing.T) {
+	t.Parallel()
+	conn := &captureConn{role: gwdomain.RoleMap}
+	require.NoError(t, new(app.SpawnService).SendLoadEndAckInit(conn))
+	want := bytes.Join([][]byte{
+		packet.EncodeInventoryStart(),
+		packet.EncodeEmptyInventoryListNormal(),
+		packet.EncodeEmptyInventoryListEquip(),
+		packet.EncodeInventoryEnd(),
+		packet.EncodeEmptySkillList(),
+		packet.EncodeEmptyHotkeyList(0),
+	}, nil)
+	assert.Equal(t, want, conn.buf.Bytes(), "LoadEndAck init burst must be the 6 init frames in rAthena order")
+}
+
 // fakeCharGetter is a world/domain.CharacterGetter stand-in for the spawn use
 // case: it returns a fixed character for the (accountID, charID) it was seeded
 // with, or ErrCharacterNotFound otherwise — the same contract the GORM adapter

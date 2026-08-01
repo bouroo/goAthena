@@ -116,6 +116,7 @@ func Register(ctx context.Context, c do.Injector) error {
 
 	spawner := app.NewSpawnService(chars, maps, registry, mobs, npcs, fs)
 	do.ProvideValue(c, app.NewMapEnterHandler(auth, app.DefaultSpawn, spawner))
+	do.ProvideValue(c, app.NewLoadEndAckHandler(spawner))
 
 	// M4c: the movement worker. A single MoveService owns every map's
 	// pathfinder — its Run goroutine is the sole caller of FindPath, so the

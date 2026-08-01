@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
@@ -245,6 +246,56 @@ func (s *SpawnService) sendEnterStatus(conn gwdomain.Conn, char *chardomain.Char
 
 	return nil
 }
+
+// SendLoadEndAckInit emits the inventory/skill/hotkey init burst rAthena sends
+// in clif_parse_LoadEndAck (CZ_NOTIFY_ACTORINIT 0x007d, clif.cpp ~10763):
+// ZC_INVENTORY_START bracketing the ITEMLIST_NORMAL/EQUIP + ZC_INVENTORY_END,
+// then the skill and hotkey lists. The client sends 0x007d right after the enter
+// burst to signal map-load-complete; replying here initializes its
+// inventory/skill/hotkey windows instead of the omitted-init state that left them
+// blank. This emits the well-formed empty forms (a fresh Novice has no items or
+// skills); populating the inventory list from the persisted bag is a follow-up.
+func (s *SpawnService) SendLoadEndAckInit(conn gwdomain.Conn) error {
+	w := connWriter{conn}
+	for _, f := range [][]byte{
+		packet.EncodeInventoryStart(),
+		packet.EncodeEmptyInventoryListNormal(),
+		packet.EncodeEmptyInventoryListEquip(),
+		packet.EncodeInventoryEnd(),
+		packet.EncodeEmptySkillList(),
+		packet.EncodeEmptyHotkeyList(0),
+	} {
+		if _, err := w.Write(f); err != nil {
+			return fmt.Errorf("spawn: send LoadEndAck init: %w", err)
+		}
+	}
+	return nil
+}
+
+// LoadEndAckHandler serves CZ_NOTIFY_ACTORINIT (0x007d), the client's
+// map-load-complete signal. A verified connection (CZ_ENTER done) is replied to
+// with the inventory/skill/hotkey init burst; the 2-byte cmd-only frame carries
+// no body, so nothing is parsed. Before this handler the opcode hit ErrNoHandler
+// on every enter/rewarp and the init packets were never sent.
+type LoadEndAckHandler struct {
+	svc *SpawnService
+}
+
+// NewLoadEndAckHandler binds the SpawnService that owns the init burst.
+func NewLoadEndAckHandler(svc *SpawnService) *LoadEndAckHandler {
+	return &LoadEndAckHandler{svc: svc}
+}
+
+// Handle implements gateway/domain.PacketHandler for CZ_NOTIFY_ACTORINIT.
+func (h *LoadEndAckHandler) Handle(_ context.Context, conn gwdomain.Conn, _ gwdomain.Frame) error {
+	if conn.Auth().AccountID == 0 {
+		return errors.New("load-end-ack: connection has no verified account (CZ_ENTER not completed)")
+	}
+	return h.svc.SendLoadEndAckInit(conn)
+}
+
+// compile-time: LoadEndAckHandler satisfies the gateway handler contract.
+var _ gwdomain.PacketHandler = (*LoadEndAckHandler)(nil).Handle
 
 // exchangeSpawns drives the two-way spawn exchange for an entering player: the
 // newcomer's selfFrame goes to each neighbor PC, each neighbor PC's spawn goes

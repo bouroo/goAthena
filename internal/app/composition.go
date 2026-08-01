@@ -263,13 +263,18 @@ func resolveCharacterHandlers(i do.Injector) (enter *characterapp.CharEnterHandl
 }
 
 func resolveWorldHandlers(i do.Injector) (
-	mapEnter *worldapp.MapEnterHandler, move *worldapp.MoveHandler, action *worldapp.ActionHandler,
+	mapEnter *worldapp.MapEnterHandler, loadEndAck *worldapp.LoadEndAckHandler,
+	move *worldapp.MoveHandler, action *worldapp.ActionHandler,
 	timeH *worldapp.TimeHandler, changeDir *worldapp.ChangeDirHandler, emotion *worldapp.EmotionHandler,
 	restart *worldapp.RestartHandler, pickup *worldapp.PickupHandler, equip *worldapp.EquipHandler,
 	takeoff *worldapp.TakeoffHandler, useItem *worldapp.UseItemHandler, skill *worldapp.SkillHandler,
 	chat *worldapp.ChatHandler, stats *worldapp.StatsHandler, err error,
 ) {
 	mapEnter, err = invokeOr[*worldapp.MapEnterHandler](i, "resolve CZ_ENTER handler")
+	if err != nil {
+		return
+	}
+	loadEndAck, err = invokeOr[*worldapp.LoadEndAckHandler](i, "resolve CZ_NOTIFY_ACTORINIT handler")
 	if err != nil {
 		return
 	}
@@ -358,7 +363,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return err
 	}
-	mapEnter, move, action, timeH, changeDir, emotion, restart, pickup, equip, takeoff, useItem, skill, chat, stats, err := resolveWorldHandlers(injector)
+	mapEnter, loadEndAck, move, action, timeH, changeDir, emotion, restart, pickup, equip, takeoff, useItem, skill, chat, stats, err := resolveWorldHandlers(injector)
 	if err != nil {
 		return err
 	}
@@ -376,6 +381,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCHSelectChar:         sel.Handle,
 		OnCHMakeChar:           mk.Handle,
 		OnCZEnter:              mapEnter.Handle,
+		OnCZNotifyActorInit:    loadEndAck.Handle,
 		OnCZRequestMove:        move.Handle,
 		OnCZActionRequest:      action.Handle,
 		OnCZUseSkill:           skill.Handle,

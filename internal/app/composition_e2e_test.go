@@ -587,6 +587,23 @@ func TestServe_MapEnter_RoundTrip(t *testing.T) {
 	assert.Equal(t, want[0:2], notifyMove[0:2], "ZC_NOTIFY_PLAYERMOVE header")
 	assert.Equal(t, want[6:9], notifyMove[6:9], "self-ack packed src (53,111)")
 	assert.Equal(t, want[9:12], notifyMove[9:12], "self-ack packed dest (60,115)")
+
+	// --- LoadEndAck (CZ_NOTIFY_ACTORINIT 0x007d): the client signals
+	// map-load-complete right after the enter burst, and rAthena replies with
+	// the inventory/skill/hotkey init burst (clif_parse_LoadEndAck). Send the
+	// 2-byte cmd-only frame and assert the first reply is ZC_INVENTORY_START
+	// (0x0b08) — proof the opcode is handled (not ErrNoHandler) and the init
+	// handshake fires. The full 6-frame burst is byte-asserted in the unit test. ---
+	var loadEndAck [2]byte
+	binary.LittleEndian.PutUint16(loadEndAck[:], packet.HeaderCZNOTIFYACTORINIT)
+	_, err = mapConn.Write(loadEndAck[:])
+	require.NoError(t, err, "send CZ_NOTIFY_ACTORINIT (0x007d)")
+	wantStart := packet.EncodeInventoryStart()
+	gotStart := make([]byte, len(wantStart))
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, err = io.ReadFull(mapConn, gotStart)
+	require.NoError(t, err, "no ZC_INVENTORY_START reply after 0x007d; LoadEndAck handler not wired")
+	assert.Equal(t, wantStart, gotStart, "LoadEndAck first reply is ZC_INVENTORY_START (0x0b08)")
 }
 
 // TestServe_MapEnter_ShowsSpawnedMobs is the M5 end-to-end proof. The real
