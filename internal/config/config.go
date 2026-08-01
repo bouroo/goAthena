@@ -315,6 +315,20 @@ type ZoneConfig struct {
 	// to true: the vendored rathenaThailand submodule compiles RENEWAL ON, so
 	// this keeps db/ loads and stat formulas in parity with it out of the box.
 	Renewal bool `mapstructure:"renewal" yaml:"renewal" env:"ZONE_RENEWAL"`
+	// BaseExpRate is the server base-EXP multiplier in percent (100 = 1x),
+	// the goAthena equivalent of rAthena's battle.conf base_exp_rate applied in
+	// pc_gainexp. Applied to every mob kill's base EXP in CombatService.awardKill.
+	// 0 disables base-EXP gain (a legitimate private-server setting, not a
+	// default). Defaults to 100.
+	BaseExpRate int `mapstructure:"base_exp_rate" yaml:"base_exp_rate" env:"ZONE_BASE_EXP_RATE" validate:"min=0"`
+	// DropRate is the server item-drop multiplier in percent (100 = 1x),
+	// simplifying rAthena's per-category battle.conf item_rate_common/equip/card
+	// (goAthena's mob_db drops are uncategorized) into one knob applied to every
+	// drop roll in CombatService.dropLoot. A rate ≥ 10000 guarantees a drop
+	// (the per-myriad rate is clamped at the denominator), so an operator can
+	// make probabilistic drops deterministic for testing. 0 disables drops.
+	// Defaults to 100.
+	DropRate int `mapstructure:"drop_rate" yaml:"drop_rate" env:"ZONE_DROP_RATE" validate:"min=0"`
 }
 
 // DBRoot resolves DBPath to the mode-specific rAthena data subtree: <DBPath>/re
@@ -514,6 +528,8 @@ func setDefaults(v *viper.Viper) {
 
 		"zone.tick_rate":      50 * time.Millisecond,
 		"zone.renewal":        true,
+		"zone.base_exp_rate":  100,
+		"zone.drop_rate":      100,
 		"zone.db_path":        "./third_party/rathenaThailand/db",
 		"zone.map_dir":        "./data/maps",
 		"zone.default_map":    "prontera",
@@ -613,6 +629,8 @@ func leafBindings() []leafBinding {
 		{"zone.mob_spawns_path", "ZONE_MOB_SPAWNS_PATH"},
 		{"zone.db_path", "ZONE_DB_PATH"},
 		{"zone.renewal", "ZONE_RENEWAL"},
+		{"zone.base_exp_rate", "ZONE_BASE_EXP_RATE"},
+		{"zone.drop_rate", "ZONE_DROP_RATE"},
 
 		{"assets.enabled", "ASSETS_ENABLED"},
 		{"assets.grf_dir", "ASSETS_GRF_DIR"},

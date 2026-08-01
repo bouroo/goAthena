@@ -153,7 +153,7 @@ func Register(ctx context.Context, c do.Injector) error {
 	// instead of aborting boot, mirroring the nil-mob_db contract.
 	skillDB := loadSkillDB(c, cfg.Zone)
 	do.ProvideValue(c, skillDB)
-	combat := app.NewCombatService(registry, mobs, maps, mobDB, chars, app.SystemClock(), app.SystemRespawnScheduler{}, fs, gm, itemDB, floorItems, nil, skillDB)
+	combat := app.NewCombatService(registry, mobs, maps, mobDB, chars, app.SystemClock(), app.SystemRespawnScheduler{}, fs, gm, itemDB, floorItems, nil, skillDB, app.Rates{BaseExp: cfg.Zone.BaseExpRate, Drop: cfg.Zone.DropRate})
 	do.ProvideValue(c, combat)
 	do.ProvideValue(c, app.NewActionHandler(combat))
 	do.ProvideValue(c, app.NewSkillHandler(combat))

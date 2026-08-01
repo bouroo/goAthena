@@ -249,6 +249,9 @@ otel:
 	// Default renewal is true: the vendored rathenaThailand submodule compiles
 	// RENEWAL ON, so the default keeps db/ loads and formulas in parity with it.
 	require.True(t, cfg.Zone.Renewal)
+	// Default rate multipliers are 100 (1x), matching rAthena battle.conf defaults.
+	require.Equal(t, 100, cfg.Zone.BaseExpRate)
+	require.Equal(t, 100, cfg.Zone.DropRate)
 	// Default db_path joins the mode subtree: renewal → .../db/re.
 	require.Equal(t, "third_party/rathenaThailand/db/re", cfg.Zone.DBRoot())
 	// Default map_bind_addr/map_ws_bind_addr are empty, so the listen-address

@@ -124,6 +124,7 @@ type CombatService struct {
 	floorItems *domain.FloorItemRegistry
 	rng        stepSource
 	skills     *skilldb.Registry
+	rates      Rates
 }
 
 // NewCombatService binds the combat collaborators. db may be nil (no mob_db):
@@ -142,12 +143,15 @@ type CombatService struct {
 // shared stepSource RNG seam (mob-wander reuses it); the drop roller draws a per-
 // myriad rate check from it. A nil rng defaults to randStep (the global source),
 // matching NewMobService. skills is the optional skill_db; when nil, CZ_USE_SKILL2
-// casts are no-ops (skill use disabled), mirroring the nil-mob_db contract.
-func NewCombatService(players *domain.PlayerRegistry, mobs *domain.MobRegistry, maps domain.MapStore, db *mobdb.Registry, chars domain.ProgressionStore, clock Clock, respawn RespawnScheduler, fs statcalc.FormulaSet, gm mode.Mode, items *itemdb.Registry, floorItems *domain.FloorItemRegistry, rng stepSource, skills *skilldb.Registry) *CombatService {
+// casts are no-ops (skill use disabled), mirroring the nil-mob_db contract. rates
+// are the operator EXP/drop multipliers (percent; DefaultRates = 1x); a zero
+// field genuinely disables that reward path, so callers that want baseline 1x
+// pass DefaultRates (config does this unless the operator set a non-default).
+func NewCombatService(players *domain.PlayerRegistry, mobs *domain.MobRegistry, maps domain.MapStore, db *mobdb.Registry, chars domain.ProgressionStore, clock Clock, respawn RespawnScheduler, fs statcalc.FormulaSet, gm mode.Mode, items *itemdb.Registry, floorItems *domain.FloorItemRegistry, rng stepSource, skills *skilldb.Registry, rates Rates) *CombatService {
 	if rng == nil {
 		rng = randStep{}
 	}
-	return &CombatService{players: players, mobs: mobs, maps: maps, db: db, chars: chars, clock: clock, respawn: respawn, fs: fs, gm: gm, items: items, floorItems: floorItems, rng: rng, skills: skills}
+	return &CombatService{players: players, mobs: mobs, maps: maps, db: db, chars: chars, clock: clock, respawn: respawn, fs: fs, gm: gm, items: items, floorItems: floorItems, rng: rng, skills: skills, rates: rates}
 }
 
 // Attack resolves one CZ_ACTION_REQUEST from accountID against req.TargetGID.
@@ -388,7 +392,7 @@ func (s *CombatService) dropLoot(mp *domain.Map, mob *domain.Mob, entry *mobdb.M
 		return
 	}
 	for _, d := range entry.Drops {
-		if s.rng.Intn(dropRateDenominator) >= d.Rate {
+		if s.rng.Intn(dropRateDenominator) >= s.rates.dropThreshold(d.Rate) {
 			continue
 		}
 		item := s.items.ByAegisName(d.Item)
@@ -543,7 +547,7 @@ func (s *CombatService) awardKill(ctx context.Context, killer *domain.Player, en
 	}
 
 	oldLevel := c.BaseLevel
-	c.BaseExp += uint64(entry.BaseExp) //nolint:gosec // G115: int32 BaseExp→uint64; guarded >0, non-negative
+	c.BaseExp += s.rates.baseExpAward(entry.BaseExp) // server base_exp_rate multiplier applied (battle.conf parity)
 	maxLevel := uint16(len(noviceBaseExpThresholds))
 	for c.BaseLevel < maxLevel && c.BaseExp >= baseExpForLevel(c.BaseLevel+1) {
 		c.BaseLevel++

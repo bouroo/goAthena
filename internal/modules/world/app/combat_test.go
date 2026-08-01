@@ -359,7 +359,7 @@ func newCombatFixture(t *testing.T, mobID int32, mobHP int32, clevel uint16, cha
 	floorItems := domain.NewFloorItemRegistry()
 	// M14b: the M14b skill-cast slice's last collaborator. The default (nil) keeps
 	// every non-skill test's UseSkill a silent no-op; withSkillDB arms it.
-	svc := app.NewCombatService(players, mobs, maps, mobDB, chars, fixedClock{0x11223344}, respawn, statcalc.PreRenewalSet, mode.PreRenewal, cfg.items, floorItems, nil, cfg.skills)
+	svc := app.NewCombatService(players, mobs, maps, mobDB, chars, fixedClock{0x11223344}, respawn, statcalc.PreRenewalSet, mode.PreRenewal, cfg.items, floorItems, nil, cfg.skills, app.DefaultRates())
 	return combatFixture{svc: svc, mobs: mobs, players: players, mp: mp, mob: mob, attacker: attacker, conn: conn, respawn: respawn, floorItems: floorItems}
 }
 
