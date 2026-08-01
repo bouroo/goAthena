@@ -310,6 +310,7 @@ func pkModeFlag(karma uint8) uint8 {
 type PlayerRegistry struct {
 	mu        sync.RWMutex
 	byAccount map[uint32]*Player            // accountID → player (primary)
+	byCharID  map[uint32]*Player            // charID → player (name lookup; PC GID = charID)
 	byMap     map[string]map[uint32]*Player // mapName → accountID → player
 }
 
@@ -317,6 +318,7 @@ type PlayerRegistry struct {
 func NewPlayerRegistry() *PlayerRegistry {
 	return &PlayerRegistry{
 		byAccount: make(map[uint32]*Player),
+		byCharID:  make(map[uint32]*Player),
 		byMap:     make(map[string]map[uint32]*Player),
 	}
 }
@@ -335,6 +337,7 @@ func (r *PlayerRegistry) Register(p *Player) error {
 		return ErrPlayerAlreadyRegistered
 	}
 	r.byAccount[p.AccountID] = p
+	r.byCharID[p.CharID] = p
 	mp, ok := r.byMap[p.MapName]
 	if !ok {
 		mp = make(map[uint32]*Player)
@@ -357,6 +360,7 @@ func (r *PlayerRegistry) Unregister(accountID uint32) *Player {
 		return nil
 	}
 	delete(r.byAccount, accountID)
+	delete(r.byCharID, p.CharID)
 	if mp := r.byMap[p.MapName]; mp != nil {
 		delete(mp, accountID)
 		if len(mp) == 0 {
@@ -406,6 +410,17 @@ func (r *PlayerRegistry) ByAccount(accountID uint32) (*Player, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	p, ok := r.byAccount[accountID]
+	return p, ok
+}
+
+// ByCharID returns the live player whose char_id is gid, or (nil,false) if none.
+// A PC's spawn GID is its char_id, so the name handler resolves a requested PC
+// GID through this index. The returned pointer is shared; callers must not
+// mutate it.
+func (r *PlayerRegistry) ByCharID(gid uint32) (*Player, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.byCharID[gid]
 	return p, ok
 }
 

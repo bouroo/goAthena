@@ -122,8 +122,9 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// frames (ZC_ITEM_ENTRY/DISAPPEAR/THROW_ACK/PICKUP_ACK) → 73.
 	// M7c adds ZC_LONGLONGPAR_CHANGE (0x0acb) for the 64-bit exp parameters at
 	// PACKETVER >= 20170830 → 74.
-	// M10a adds CZ_ITEM_PICKUP (0x009f) → 75.
-	const want = 75
+	// M10a adds CZ_ITEM_PICKUP (0x009f) → 75. Name-resolution adds two S→C
+	// name replies (ZC_ACK_REQNAMEALL2 0x0a30, ZC_ACK_REQNAMEALL_NPC 0x0adf) → 77.
+	const want = 77
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

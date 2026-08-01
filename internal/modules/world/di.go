@@ -177,6 +177,7 @@ func Register(ctx context.Context, c do.Injector) error {
 	spawner := app.NewSpawnService(chars, maps, registry, mobs, npcs, fs, invRepo, itemDB)
 	do.ProvideValue(c, app.NewMapEnterHandler(auth, app.DefaultSpawn, spawner))
 	do.ProvideValue(c, app.NewLoadEndAckHandler(spawner))
+	do.ProvideValue(c, app.NewNameHandler(spawner))
 	pickup := app.NewPickupService(floorItems, registry, maps, invRepo, itemDB, app.SystemClock())
 	do.ProvideValue(c, app.NewPickupHandler(pickup))
 

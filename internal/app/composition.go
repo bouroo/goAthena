@@ -268,65 +268,83 @@ func resolveWorldHandlers(i do.Injector) (
 	timeH *worldapp.TimeHandler, changeDir *worldapp.ChangeDirHandler, emotion *worldapp.EmotionHandler,
 	restart *worldapp.RestartHandler, pickup *worldapp.PickupHandler, equip *worldapp.EquipHandler,
 	takeoff *worldapp.TakeoffHandler, useItem *worldapp.UseItemHandler, skill *worldapp.SkillHandler,
-	chat *worldapp.ChatHandler, stats *worldapp.StatsHandler, err error,
+	chat *worldapp.ChatHandler, stats *worldapp.StatsHandler,
+	name *worldapp.NameHandler, err error,
 ) {
-	mapEnter, err = invokeOr[*worldapp.MapEnterHandler](i, "resolve CZ_ENTER handler")
-	if err != nil {
-		return
+	// Each handler resolves in registration order; the closure captures its
+	// named result so the loop body is a single error check. This keeps the
+	// function's cyclomatic complexity flat (O(1)) no matter how many handlers
+	// are wired, rather than one branch per handler.
+	for _, resolve := range []func() error{
+		func() error {
+			mapEnter, err = invokeOr[*worldapp.MapEnterHandler](i, "resolve CZ_ENTER handler")
+			return err
+		},
+		func() error {
+			loadEndAck, err = invokeOr[*worldapp.LoadEndAckHandler](i, "resolve CZ_NOTIFY_ACTORINIT handler")
+			return err
+		},
+		func() error {
+			name, err = invokeOr[*worldapp.NameHandler](i, "resolve CZ_GETCHARNAMEREQUEST handler")
+			return err
+		},
+		func() error {
+			move, err = invokeOr[*worldapp.MoveHandler](i, "resolve CZ_REQUEST_MOVE handler")
+			return err
+		},
+		func() error {
+			action, err = invokeOr[*worldapp.ActionHandler](i, "resolve CZ_ACTION_REQUEST handler")
+			return err
+		},
+		func() error {
+			timeH, err = invokeOr[*worldapp.TimeHandler](i, "resolve CZ_REQUEST_TIME handler")
+			return err
+		},
+		func() error {
+			changeDir, err = invokeOr[*worldapp.ChangeDirHandler](i, "resolve CZ_CHANGE_DIR handler")
+			return err
+		},
+		func() error {
+			emotion, err = invokeOr[*worldapp.EmotionHandler](i, "resolve CZ_REQ_EMOTION handler")
+			return err
+		},
+		func() error {
+			restart, err = invokeOr[*worldapp.RestartHandler](i, "resolve CZ_RESTART handler")
+			return err
+		},
+		func() error {
+			pickup, err = invokeOr[*worldapp.PickupHandler](i, "resolve CZ_ITEM_PICKUP handler")
+			return err
+		},
+		func() error {
+			equip, err = invokeOr[*worldapp.EquipHandler](i, "resolve CZ_REQ_WEAR_EQUIP handler")
+			return err
+		},
+		func() error {
+			takeoff, err = invokeOr[*worldapp.TakeoffHandler](i, "resolve CZ_REQ_TAKEOFF_EQUIP handler")
+			return err
+		},
+		func() error {
+			useItem, err = invokeOr[*worldapp.UseItemHandler](i, "resolve CZ_USE_ITEM2 handler")
+			return err
+		},
+		func() error {
+			skill, err = invokeOr[*worldapp.SkillHandler](i, "resolve CZ_USE_SKILL2 handler")
+			return err
+		},
+		func() error {
+			chat, err = invokeOr[*worldapp.ChatHandler](i, "resolve CZ_GLOBAL_MESSAGE handler")
+			return err
+		},
+		func() error {
+			stats, err = invokeOr[*worldapp.StatsHandler](i, "resolve CZ_STATUS_CHANGE handler")
+			return err
+		},
+	} {
+		if err = resolve(); err != nil {
+			return
+		}
 	}
-	loadEndAck, err = invokeOr[*worldapp.LoadEndAckHandler](i, "resolve CZ_NOTIFY_ACTORINIT handler")
-	if err != nil {
-		return
-	}
-	move, err = invokeOr[*worldapp.MoveHandler](i, "resolve CZ_REQUEST_MOVE handler")
-	if err != nil {
-		return
-	}
-	action, err = invokeOr[*worldapp.ActionHandler](i, "resolve CZ_ACTION_REQUEST handler")
-	if err != nil {
-		return
-	}
-	timeH, err = invokeOr[*worldapp.TimeHandler](i, "resolve CZ_REQUEST_TIME handler")
-	if err != nil {
-		return
-	}
-	changeDir, err = invokeOr[*worldapp.ChangeDirHandler](i, "resolve CZ_CHANGE_DIR handler")
-	if err != nil {
-		return
-	}
-	emotion, err = invokeOr[*worldapp.EmotionHandler](i, "resolve CZ_REQ_EMOTION handler")
-	if err != nil {
-		return
-	}
-	restart, err = invokeOr[*worldapp.RestartHandler](i, "resolve CZ_RESTART handler")
-	if err != nil {
-		return
-	}
-	pickup, err = invokeOr[*worldapp.PickupHandler](i, "resolve CZ_ITEM_PICKUP handler")
-	if err != nil {
-		return
-	}
-	equip, err = invokeOr[*worldapp.EquipHandler](i, "resolve CZ_REQ_WEAR_EQUIP handler")
-	if err != nil {
-		return
-	}
-	takeoff, err = invokeOr[*worldapp.TakeoffHandler](i, "resolve CZ_REQ_TAKEOFF_EQUIP handler")
-	if err != nil {
-		return
-	}
-	useItem, err = invokeOr[*worldapp.UseItemHandler](i, "resolve CZ_USE_ITEM2 handler")
-	if err != nil {
-		return
-	}
-	skill, err = invokeOr[*worldapp.SkillHandler](i, "resolve CZ_USE_SKILL2 handler")
-	if err != nil {
-		return
-	}
-	chat, err = invokeOr[*worldapp.ChatHandler](i, "resolve CZ_GLOBAL_MESSAGE handler")
-	if err != nil {
-		return
-	}
-	stats, err = invokeOr[*worldapp.StatsHandler](i, "resolve CZ_STATUS_CHANGE handler")
 	return
 }
 
@@ -363,7 +381,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return err
 	}
-	mapEnter, loadEndAck, move, action, timeH, changeDir, emotion, restart, pickup, equip, takeoff, useItem, skill, chat, stats, err := resolveWorldHandlers(injector)
+	mapEnter, loadEndAck, move, action, timeH, changeDir, emotion, restart, pickup, equip, takeoff, useItem, skill, chat, stats, name, err := resolveWorldHandlers(injector)
 	if err != nil {
 		return err
 	}
@@ -382,6 +400,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCHMakeChar:           mk.Handle,
 		OnCZEnter:              mapEnter.Handle,
 		OnCZNotifyActorInit:    loadEndAck.Handle,
+		OnCZGetCharNameRequest: name.Handle,
 		OnCZRequestMove:        move.Handle,
 		OnCZActionRequest:      action.Handle,
 		OnCZUseSkill:           skill.Handle,

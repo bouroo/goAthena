@@ -35,6 +35,10 @@ type Handlers struct {
 	// client's map-load-complete signal; replied to with the inventory/skill/
 	// hotkey init burst. Provided by the world module.
 	OnCZNotifyActorInit domain.PacketHandler
+	// OnCZGetCharNameRequest serves CZ_GETCHARNAMEREQUEST (0x0094), the client's
+	// resolve-an-entity-name (mouseover/target) request; replied to with the
+	// REQNAMEALL name for the GID. Provided by the world module.
+	OnCZGetCharNameRequest domain.PacketHandler
 	// OnCZRequestMove serves CZ_REQUEST_MOVE (0x0085), the click-to-walk
 	// request. Provided by the world module (M4c).
 	OnCZRequestMove domain.PacketHandler
@@ -143,6 +147,7 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table := domain.PacketHandlerTable{}
 	table = addHandler(table, packet.HeaderCZENTER, h.OnCZEnter)
 	table = addHandler(table, packet.HeaderCZNOTIFYACTORINIT, h.OnCZNotifyActorInit)
+	table = addHandler(table, packet.HeaderCZGETCHARNAMEREQUEST, h.OnCZGetCharNameRequest)
 	table = addHandler(table, packet.HeaderCZREQUESTMOVE, h.OnCZRequestMove)
 	table = addHandler(table, packet.HeaderCZACTIONREQUEST, h.OnCZActionRequest)
 	table = addHandler(table, packet.HeaderCZUSESKILL, h.OnCZUseSkill)

@@ -80,6 +80,17 @@ const (
 	// rathena/src/map/clif.cpp:9923 (`0095 <id>.L <char name>.24B`).
 	// Fixed 30 bytes: [2:cmd][4:GID int32][24:name char[24]].
 	HeaderZCACKREQNAME uint16 = 0x0095
+	// ZC_ACK_REQNAMEALL2 (0x0a30) — full name reply for a PC. At PACKETVER
+	// MAIN_NUM>=20150225 (ClientROThailand 20250604 qualifies) clif_name emits
+	// this — NOT the legacy 0x0095/0x0195 — carrying char/party/guild/position
+	// names plus a title id (packets_struct.hpp:3562-3573).
+	// Fixed 106 bytes: [2:cmd][4:GID][24:name][24:party][24:guild][24:position][4:titleID].
+	HeaderZCACKREQNAMEALL2 uint16 = 0x0a30
+	// ZC_ACK_REQNAMEALL_NPC (0x0adf) — name reply for an NPC/mob/pet/hom/mer/elem.
+	// At PACKETVER MAIN_NUM>=20180207 (20250604 qualifies) clif_name emits this
+	// carrying groupId, name, and title (packets_struct.hpp:3586-3594).
+	// Fixed 58 bytes: [2:cmd][4:GID][4:groupId][24:name][24:title].
+	HeaderZCACKREQNAMEALLNPC uint16 = 0x0adf
 	// CZ_RESTART (0x00b2) — client requests respawn or return to char select.
 	// rathena/src/map/clif_packetdb.hpp:61 (`parseable_packet(0x00b2,3,clif_parse_Restart,2)`).
 	// Fixed 3 bytes: [2:cmd][1:type uint8] (0=respawn, 1=return to char select).
@@ -476,6 +487,12 @@ const (
 	// sizeZCAckReqNameName is the on-wire name field width in ZC_ACK_REQNAME
 	// (rathena/src/common/mmo.hpp:154 — NAME_LENGTH = 23+1 = 24).
 	sizeZCAckReqNameName = 24
+	// sizeZCAckReqNameAll2 = ZC_ACK_REQNAMEALL2 (0x0a30): cmd(2)+GID(4)+name(24)+
+	// party(24)+guild(24)+position(24)+titleID(4) = 106 (packets_struct.hpp:3564-3572).
+	sizeZCAckReqNameAll2 = 106
+	// sizeZCAckReqNameAllNPC = ZC_ACK_REQNAMEALL_NPC (0x0adf): cmd(2)+GID(4)+
+	// groupId(4)+name(24)+title(24) = 58 (packets_struct.hpp:3587-3593).
+	sizeZCAckReqNameAllNPC = 58
 	// sizeCZRestart = int16 packetType + uint8 type = 2+1 = 3
 	// (rathena/src/map/clif_packetdb.hpp:61).
 	sizeCZRestart = 3
@@ -849,6 +866,22 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCACKREQNAME,
 		Name:      "ZC_ACK_REQNAME",
 		Length:    sizeZCAckReqName,
+		Direction: DirectionServerToClient,
+	})
+	// ZC_ACK_REQNAMEALL2 (0x0a30, fixed 106 bytes) — full PC name reply emitted by
+	// clif_name at PACKETVER >= 20150225 (party/guild/position names + title id).
+	db.Register(Definition{
+		ID:        HeaderZCACKREQNAMEALL2,
+		Name:      "ZC_ACK_REQNAMEALL2",
+		Length:    sizeZCAckReqNameAll2,
+		Direction: DirectionServerToClient,
+	})
+	// ZC_ACK_REQNAMEALL_NPC (0x0adf, fixed 58 bytes) — NPC/mob name reply emitted
+	// by clif_name at PACKETVER >= 20180207 (groupId + name + title).
+	db.Register(Definition{
+		ID:        HeaderZCACKREQNAMEALLNPC,
+		Name:      "ZC_ACK_REQNAMEALL_NPC",
+		Length:    sizeZCAckReqNameAllNPC,
 		Direction: DirectionServerToClient,
 	})
 	// M14: ZC_SET_UNIT_IDLE (fixed 107 bytes) — NPC entity spawn.

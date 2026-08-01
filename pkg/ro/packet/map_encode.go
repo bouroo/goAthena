@@ -1410,6 +1410,85 @@ func (r AckReqNameResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// writeNameField copies name into buf[off:off+sizeZCAckReqNameName] (24 bytes),
+// null-padding the remainder and truncating overlong names. Mirrors rAthena's
+// safestrncpy into a NAME_LENGTH field, shared by every REQNAMEALL variant.
+func writeNameField(buf []byte, off int, name string) {
+	copy(buf[off:off+sizeZCAckReqNameName], name)
+}
+
+// ReqNameAll2Response encodes ZC_ACK_REQNAMEALL2 (command 0x0a30, 106 bytes
+// fixed) — the full PC name reply rAthena's clif_name sends at PACKETVER >=
+// 20150225 (ClientROThailand 20250604). Wire shape (packets_struct.hpp:3564-3572):
+//
+//	[2:cmd=0x0a30][4:GID][24:name][24:party_name][24:guild_name][24:position_name][4:titleID]
+//
+// goAthena has no party/guild/clan systems, so PartyName/GuildName/PositionName
+// stay empty and TitleID stays 0 — matching rAthena for a PC with no
+// affiliations. Each name field is null-padded to 24 bytes; overlong names are
+// truncated.
+type ReqNameAll2Response struct {
+	GID          uint32
+	Name         string
+	PartyName    string
+	GuildName    string
+	PositionName string
+	TitleID      uint32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 106).
+func (r ReqNameAll2Response) Size() int { return sizeZCAckReqNameAll2 }
+
+// Encode writes the ZC_ACK_REQNAMEALL2 packet to w.
+func (r ReqNameAll2Response) Encode(w io.Writer) error {
+	var buf [sizeZCAckReqNameAll2]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREQNAMEALL2)
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	writeNameField(buf[:], 6, r.Name)
+	writeNameField(buf[:], 30, r.PartyName)
+	writeNameField(buf[:], 54, r.GuildName)
+	writeNameField(buf[:], 78, r.PositionName)
+	binary.LittleEndian.PutUint32(buf[102:], r.TitleID)
+
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_ACK_REQNAMEALL2: %w", err)
+	}
+	return nil
+}
+
+// ReqNameAllNPCResponse encodes ZC_ACK_REQNAMEALL_NPC (command 0x0adf, 58 bytes
+// fixed) — the NPC/mob/pet/hom/mer/elem name reply rAthena's clif_name sends at
+// PACKETVER >= 20180207. Wire shape (packets_struct.hpp:3587-3593):
+//
+//	[2:cmd=0x0adf][4:GID][4:groupId][24:name][24:title]
+//
+// GroupID and Title are 0/empty (no group/title systems); Name is the mob/NPC
+// display name, null-padded to 24 bytes.
+type ReqNameAllNPCResponse struct {
+	GID     uint32
+	GroupID uint32
+	Name    string
+	Title   string
+}
+
+// Size returns the on-wire byte length that Encode will write (always 58).
+func (r ReqNameAllNPCResponse) Size() int { return sizeZCAckReqNameAllNPC }
+
+// Encode writes the ZC_ACK_REQNAMEALL_NPC packet to w.
+func (r ReqNameAllNPCResponse) Encode(w io.Writer) error {
+	var buf [sizeZCAckReqNameAllNPC]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREQNAMEALLNPC)
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	binary.LittleEndian.PutUint32(buf[6:], r.GroupID)
+	writeNameField(buf[:], 10, r.Name)
+	writeNameField(buf[:], 34, r.Title)
+
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_ACK_REQNAMEALL_NPC: %w", err)
+	}
+	return nil
+}
+
 // SayDialog2Response encodes a ZC_SAY_DIALOG2 packet (command 0x0972,
 // variable length, PACKETVER >= 20220504). The server sends this to
 // display dialog text in the NPC dialog window.

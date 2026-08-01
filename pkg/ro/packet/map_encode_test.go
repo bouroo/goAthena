@@ -3095,3 +3095,89 @@ func TestMapMoveResponse_Encode_ExactFitAndOverflow(t *testing.T) {
 		t.Errorf("overflow wrote %d bytes, want 0", over.Len())
 	}
 }
+
+func TestReqNameAll2Response_Size(t *testing.T) {
+	t.Parallel()
+	if got, want := (ReqNameAll2Response{}).Size(), sizeZCAckReqNameAll2; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+// TestReqNameAll2Response_Encode proves the PC name reply (0x0a30) matches
+// rAthena's clif_name at PACKETVER 20250604: 106 bytes, cmd 0x0a30 LE, GID at
+// offset 2, the char name at offset 6 null-padded, and party/guild/position
+// names plus titleID all zero (no party/guild systems). A name longer than 24
+// bytes is truncated.
+func TestReqNameAll2Response_Encode(t *testing.T) {
+	t.Parallel()
+	resp := ReqNameAll2Response{GID: 0xDEADBEEF, Name: "TestChar"}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+	if len(got) != sizeZCAckReqNameAll2 { // 106
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCAckReqNameAll2)
+	}
+	if got[0] != 0x30 || got[1] != 0x0a {
+		t.Errorf("header = %02x %02x, want 30 0a (LE 0x0a30)", got[0], got[1])
+	}
+	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
+		t.Errorf("GID = 0x%x, want 0xDEADBEEF", gid)
+	}
+	if s := string(bytes.TrimRight(got[6:6+24], "\x00")); s != "TestChar" {
+		t.Errorf("name = %q, want %q", s, "TestChar")
+	}
+	// party/guild/position name fields (offsets 30/54/78, 24 bytes each) and the
+	// trailing titleID (offset 102, 4 bytes) must be zero — no affiliations.
+	for _, off := range []int{30, 54, 78} {
+		for i := off; i < off+24; i++ {
+			if got[i] != 0 {
+				t.Errorf("name field byte[%d] = 0x%02x, want 0 (no party/guild/position)", i, got[i])
+			}
+		}
+	}
+	if tid := binary.LittleEndian.Uint32(got[102:106]); tid != 0 {
+		t.Errorf("titleID = %d, want 0", tid)
+	}
+}
+
+func TestReqNameAllNPCResponse_Size(t *testing.T) {
+	t.Parallel()
+	if got, want := (ReqNameAllNPCResponse{}).Size(), sizeZCAckReqNameAllNPC; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+// TestReqNameAllNPCResponse_Encode proves the NPC/mob name reply (0x0adf) matches
+// rAthena's clif_name at PACKETVER 20250604: 58 bytes, cmd 0x0adf LE, GID at
+// offset 2, groupId at offset 6 (0), name at offset 10, title empty.
+func TestReqNameAllNPCResponse_Encode(t *testing.T) {
+	t.Parallel()
+	resp := ReqNameAllNPCResponse{GID: 0xCAFEBABE, Name: "Poring"}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+	if len(got) != sizeZCAckReqNameAllNPC { // 58
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCAckReqNameAllNPC)
+	}
+	if got[0] != 0xdf || got[1] != 0x0a {
+		t.Errorf("header = %02x %02x, want df 0a (LE 0x0adf)", got[0], got[1])
+	}
+	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xCAFEBABE {
+		t.Errorf("GID = 0x%x, want 0xCAFEBABE", gid)
+	}
+	if gid := binary.LittleEndian.Uint32(got[6:10]); gid != 0 {
+		t.Errorf("groupID = %d, want 0", gid)
+	}
+	if s := string(bytes.TrimRight(got[10:10+24], "\x00")); s != "Poring" {
+		t.Errorf("name = %q, want %q", s, "Poring")
+	}
+	for i := 34; i < 58; i++ {
+		if got[i] != 0 {
+			t.Errorf("title field byte[%d] = 0x%02x, want 0 (no title)", i, got[i])
+		}
+	}
+}

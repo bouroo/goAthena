@@ -1822,6 +1822,13 @@ func mapFrameSize(op uint16) int {
 		return packet.LongParChangeResponse{}.Size()
 	case packet.HeaderZCLONGLONGPARCHANGE:
 		return packet.LongLongParChangeResponse{}.Size()
+	// ZC_ACK_REQNAMEALL2 (0x0a30, 106B) and ZC_ACK_REQNAMEALL_NPC (0x0adf, 58B)
+	// are fixed-size name replies with no length prefix — the PC and mob/NPC
+	// variants clif_name emits at PACKETVER 20250604.
+	case packet.HeaderZCACKREQNAMEALL2:
+		return packet.ReqNameAll2Response{}.Size()
+	case packet.HeaderZCACKREQNAMEALLNPC:
+		return packet.ReqNameAllNPCResponse{}.Size()
 	case packet.HeaderZCItemFallEntry:
 		// ItemFallEntryResponse.Size/Encode carry pointer receivers, so the zero
 		// struct is addressed before the call — a value receiver call won't compile.
@@ -2848,4 +2855,84 @@ func readCharStat(t *testing.T, cfg *config.Config, charID uint32, stat string) 
 		`SELECT `+stat+` FROM `+"`char`"+` WHERE char_id = ?`, charID).Scan(&val).Error,
 		"read persisted stat "+stat)
 	return val
+}
+
+// TestServe_GetCharName_RoundTrip is the L3 proof for CZ_GETCHARNAMEREQUEST
+// (0x0094) name resolution. It drives the real map dispatch table: login →
+// map-enter (which registers the player + loads the char name), then sends 0x0094
+// for the player's own GID and asserts the server replies 0x0a30
+// (ZC_ACK_REQNAMEALL2) carrying the char name — proving the opcode routes through
+// BuildDispatcher → NameHandler → SpawnService.SendNameReply end to end.
+func TestServe_GetCharName_RoundTrip(t *testing.T) {
+	requireStack(t)
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eHero", "prontera", 53, 111)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN received")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NoError(t, loginConn.Close())
+
+	mapConn, err := net.Dial("tcp", mapAddr)
+	require.NoError(t, err)
+	defer mapConn.Close()
+	require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var enter bytes.Buffer
+	require.NoError(t, packet.CZEnterRequest{
+		AccountID: seededAccountID, CharID: seedCharID, AuthCode: loginID1, ClientTime: 0, Sex: sexByte,
+	}.Encode(&enter))
+	_, err = mapConn.Write(enter.Bytes())
+	require.NoError(t, err)
+
+	// ZC_ACCEPT_ENTER: the trust gate admitted the session (the player is now
+	// registered in the PlayerRegistry with CharID = seedCharID).
+	enterResp := make([]byte, packet.MapAcceptEnterResponse{}.Size())
+	_, err = io.ReadFull(mapConn, enterResp)
+	require.NoError(t, err, "no ZC_ACCEPT_ENTER received")
+	require.Equal(t, packet.HeaderZCACCEPTENTER, binary.LittleEndian.Uint16(enterResp[0:2]))
+
+	// --- Send 0x0094 requesting the name for our own GID. ---
+	var nameReq bytes.Buffer
+	require.NoError(t, (packet.CZGetCharNameRequestRequest{GID: seedCharID}).Encode(&nameReq))
+	_, err = mapConn.Write(nameReq.Bytes())
+	require.NoError(t, err)
+
+	// awaitFrame skips the self-spawn (and any neighbor spawns) until the 0x0a30
+	// reply. A 5s timeout is generous; the handler replies synchronously.
+	reply, ok := awaitFrame(t, mapConn, packet.HeaderZCACKREQNAMEALL2, 5*time.Second, nil)
+	require.True(t, ok, "no ZC_ACK_REQNAMEALL2 (0x0a30) reply to CZ_GETCHARNAMEREQUEST")
+	require.Equal(t, (packet.ReqNameAll2Response{}).Size(), len(reply), "REQNAMEALL2 length")
+	assert.Equal(t, seedCharID, binary.LittleEndian.Uint32(reply[2:6]), "reply GID = requested char_id")
+	assert.Equal(t, "E2eHero", string(bytes.TrimRight(reply[6:6+24], "\x00")), "reply carries the char name")
 }
