@@ -137,9 +137,22 @@ func Load(r io.Reader) (*Registry, error) {
 // decode reads one ITEM_DB v3 document from r and returns its Body. It validates
 // the header (Type=="ITEM_DB", Version==3) so a wrong-format file fails fast
 // rather than silently yielding an empty registry. Unknown fields are ignored.
+//
+// Duplicate mapping keys are tolerated (last-wins) to match rAthena's loader.
+// Some vendored item_db YAMLs repeat a block within one item (e.g. two Trade:
+// stanzas); yaml.v3 rejects those when unmarshaling into a struct. We decode the
+// raw node tree first — which preserves duplicates without erroring — collapse
+// them, then unmarshal into the struct. The cost is one full-tree walk at the
+// multi-MB startup load; the resulting node is the same size the struct decode
+// would allocate anyway.
 func decode(r io.Reader) ([]*ItemEntry, error) {
+	var node yaml.Node
+	if err := yaml.NewDecoder(r).Decode(&node); err != nil {
+		return nil, fmt.Errorf("parse item_db yaml: %w", err)
+	}
+	dedupeMappingKeys(&node)
 	var f fileFormat
-	if err := yaml.NewDecoder(r).Decode(&f); err != nil {
+	if err := node.Decode(&f); err != nil {
 		return nil, fmt.Errorf("parse item_db yaml: %w", err)
 	}
 	if f.Header.Type != "ITEM_DB" {
@@ -322,5 +335,38 @@ func (reg *Registry) IsStackable(nameID uint32) bool {
 		return false
 	default:
 		return true
+	}
+}
+
+// dedupeMappingKeys recursively collapses duplicate keys in every mapping node,
+// keeping the last occurrence (rAthena's loader semantics). A mapping node's
+// Content is a flat [key, value, key, value, ...] slice; on a repeat scalar key
+// the earlier pair is dropped so the struct decode that follows sees a single
+// value. Document and sequence nodes carry no keys themselves but must be
+// descended to reach the item mappings inside the Body list.
+func dedupeMappingKeys(n *yaml.Node) {
+	switch {
+	case n == nil:
+		return
+	case n.Kind == yaml.MappingNode:
+		seen := make(map[string]int, len(n.Content)/2) // key text -> index of its key node in out
+		out := make([]*yaml.Node, 0, len(n.Content))
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k, v := n.Content[i], n.Content[i+1]
+			if k.Kind == yaml.ScalarNode {
+				if idx, dup := seen[k.Value]; dup {
+					out[idx], out[idx+1] = k, v // last-wins replace in place
+					continue
+				}
+				seen[k.Value] = len(out)
+			}
+			out = append(out, k, v)
+		}
+		n.Content = out
+		fallthrough
+	case n.Kind == yaml.DocumentNode || n.Kind == yaml.SequenceNode:
+		for _, c := range n.Content {
+			dedupeMappingKeys(c)
+		}
 	}
 }

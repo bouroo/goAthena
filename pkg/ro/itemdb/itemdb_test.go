@@ -238,6 +238,53 @@ Body:
 	assert.Equal(t, "Last", reg.Get(1).Name)
 }
 
+// TestLoad_DuplicateMappingKeyLastWins covers the rathenaThailand data quirk
+// where item_db_equip.yml repeats a Trade: block within one item
+// (lines 169692/169703). yaml.v3 rejects duplicate mapping keys when decoding
+// into a struct; the loader tolerates them, last occurrence wins, matching
+// rAthena's loader. Without this the whole item_db load aborts and item drops,
+// equip, and use-item healing all break at boot.
+func TestLoad_DuplicateMappingKeyLastWins(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unknown duplicate key tolerated", func(t *testing.T) {
+		t.Parallel()
+
+		reg, err := Load(strings.NewReader(`Header:
+  Type: ITEM_DB
+  Version: 3
+Body:
+  - Id: 1
+    AegisName: Helm
+    Name: Helm
+    Trade:
+      NoDraw: false
+      NoTrade: true
+    Trade:
+      NoDraw: true
+`))
+		require.NoError(t, err)
+		require.Equal(t, 1, reg.Len())
+		assert.Equal(t, "Helm", reg.Get(1).Name)
+	})
+
+	t.Run("known duplicate field last wins", func(t *testing.T) {
+		t.Parallel()
+
+		reg, err := Load(strings.NewReader(`Header:
+  Type: ITEM_DB
+  Version: 3
+Body:
+  - Id: 2
+    AegisName: Knife
+    Defense: 5
+    Defense: 42
+`))
+		require.NoError(t, err)
+		assert.Equal(t, int32(42), reg.Get(2).Defense)
+	})
+}
+
 func TestLoad_SkipsNullBodyEntries(t *testing.T) {
 	reg, err := Load(strings.NewReader(`Header:
   Type: ITEM_DB
