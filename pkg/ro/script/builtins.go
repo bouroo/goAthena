@@ -101,6 +101,25 @@ func builtinSelect(vm *VM, args []Value) (Value, control) {
 	return IntVal(int64(vm.host.Select(options))), ctrlContinue
 }
 
+// builtinMenu implements the prompt half of menu("optA",L_a,"optB",L_b,...):
+// each argument is one menu option, passed verbatim to Host.Select (no colon
+// re-split, unlike builtinSelect). The label jump is a compiler concern —
+// compileMenu lowers each prompt,label pair into this builtin for the choice
+// followed by an OpJumpIfTrue to the matching label — because a builtin cannot
+// set the VM's instruction pointer. Keeping one option per argument preserves
+// the positional prompt↔label pairing the jump chain relies on: builtinSelect's
+// join+split would let a "a:b" prompt spawn two client rows (ZC_MENU_LIST joins
+// options with ":" and the client re-splits) while only one label exists, so the
+// returned index could miss its label. Cancel (choice 255) and the resulting
+// @menu value are handled by compileMenu's jump chain (no label matches 255).
+func builtinMenu(vm *VM, args []Value) (Value, control) {
+	options := make([]string, len(args))
+	for i, a := range args {
+		options[i] = a.String()
+	}
+	return IntVal(int64(vm.host.Select(options))), ctrlContinue
+}
+
 // DefaultBuiltins returns a fresh map of the dialog-subset builtins, ready to
 // hand to NewVM. Callers extend this map with phase-specific builtins (select,
 // menu, getitem, sc_start, …) by copying it and inserting their entries.
@@ -115,6 +134,10 @@ func DefaultBuiltins() map[string]BuiltinFunc {
 		"warp":        builtinWarp,
 		"percentheal": builtinPercentHeal,
 		"select":      builtinSelect,
+		// prompt() is select()'s paginated ("Prev/Next") sibling — same
+		// return-the-index semantics, no label jump.
+		"prompt": builtinSelect, //nolint:goconst
+		"menu":   builtinMenu,   //nolint:goconst
 	}
 }
 

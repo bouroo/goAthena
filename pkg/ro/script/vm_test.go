@@ -417,3 +417,91 @@ func TestVMStatementCallNoLeak(t *testing.T) {
 		t.Errorf("mes = %v, want [a b c]", h.mes)
 	}
 }
+
+// menuScript is a two-option menu whose cancel path falls through to a final
+// mes. Each label ends with close so a jump there halts; a non-matching choice
+// (cancel) skips the labels and runs the fall-through line.
+const menuScript = "-\tscript\tN\t-1,{\n" +
+	`menu("Stay",L_stay,"Leave",L_leave);` + "\n" +
+	`mes "cancelled";` + "\n" +
+	`close;` + "\n" +
+	`L_stay:` + "\n" +
+	`mes "staying";` + "\n" +
+	`close;` + "\n" +
+	`L_leave:` + "\n" +
+	`mes "leaving";` + "\n" +
+	`close;` + "\n" +
+	"}\n"
+
+// TestVMMenuJumpsToSelectedLabel proves the compiler-lowered jump chain: choice
+// 2 must goto L_leave, skipping the fall-through and L_stay. It also asserts
+// builtinMenu passes each prompt as one option (no colon re-split, unlike
+// builtinSelect) and stores the choice in @menu.
+func TestVMMenuJumpsToSelectedLabel(t *testing.T) {
+	h := newFakeHost()
+	h.selectChoice = 2
+	vars := runFirstScript(t, menuScript, h, nil)
+	if len(h.selects) != 1 || len(h.selects[0]) != 2 ||
+		h.selects[0][0] != "Stay" || h.selects[0][1] != "Leave" {
+		t.Errorf("options = %v, want [Stay Leave] (one option per prompt)", h.selects)
+	}
+	if len(h.mes) != 1 || h.mes[0] != "leaving" {
+		t.Errorf("mes = %v, want [leaving] (choice 2 → L_leave)", h.mes)
+	}
+	if vars["@menu"].Int != 2 {
+		t.Errorf("@menu = %d, want 2", vars["@menu"].Int)
+	}
+	if !h.closed {
+		t.Error("expected dialog closed")
+	}
+}
+
+// TestVMMenuFirstOption covers the first label (i+1 == 1) so the jump chain's
+// initial comparison is exercised, not just the second.
+func TestVMMenuFirstOption(t *testing.T) {
+	h := newFakeHost()
+	h.selectChoice = 1
+	vars := runFirstScript(t, menuScript, h, nil)
+	if len(h.mes) != 1 || h.mes[0] != "staying" {
+		t.Errorf("mes = %v, want [staying] (choice 1 → L_stay)", h.mes)
+	}
+	if vars["@menu"].Int != 1 {
+		t.Errorf("@menu = %d, want 1", vars["@menu"].Int)
+	}
+}
+
+// TestVMMenuCancelFallsThrough proves cancel (255) matches no label, so the
+// menu falls through to the statement after it — rAthena's cancel semantics.
+func TestVMMenuCancelFallsThrough(t *testing.T) {
+	h := newFakeHost()
+	h.selectChoice = 255
+	vars := runFirstScript(t, menuScript, h, nil)
+	if len(h.mes) != 1 || h.mes[0] != "cancelled" {
+		t.Errorf("mes = %v, want [cancelled] (cancel → fall through)", h.mes)
+	}
+	if vars["@menu"].Int != 255 {
+		t.Errorf("@menu = %d, want 255 (cancel)", vars["@menu"].Int)
+	}
+}
+
+// TestVMPromptReturnsChoice proves prompt() behaves like select() — returns the
+// 1-based index and colon-splits its argument — rather than jumping to a label.
+func TestVMPromptReturnsChoice(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		`.@p = prompt("A:B");` + "\n" +
+		`mes "got " + .@p;` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	h.selectChoice = 2
+	vars := runFirstScript(t, src, h, nil)
+	if len(h.selects) != 1 || len(h.selects[0]) != 2 ||
+		h.selects[0][0] != "A" || h.selects[0][1] != "B" {
+		t.Errorf("options = %v, want [A B] (prompt colon-splits like select)", h.selects)
+	}
+	if vars[".@p"].Int != 2 {
+		t.Errorf(".@p = %d, want 2", vars[".@p"].Int)
+	}
+	if len(h.mes) != 1 || h.mes[0] != "got 2" {
+		t.Errorf("mes = %v, want [got 2]", h.mes)
+	}
+}

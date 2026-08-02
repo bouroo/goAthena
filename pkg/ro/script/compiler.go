@@ -135,6 +135,9 @@ func (c *compiler) compileStmt(s Stmt) error { //nolint:gocyclo
 		if n.Name == "set" { //nolint:goconst
 			return c.compileSet(n)
 		}
+		if n.Name == "menu" { //nolint:goconst
+			return c.compileMenu(n)
+		}
 		if err := c.compileCall(n.Name, n.Args, n.pos); err != nil {
 			return err
 		}
@@ -199,6 +202,54 @@ func (c *compiler) compileSet(n *CallStmt) error {
 		return fmt.Errorf("script: set expects 2 args, got %d at %s", len(n.Args), n.pos)
 	}
 	return c.compileAssign(&AssignStmt{Lhs: n.Args[0], Op: "=", Rhs: n.Args[1], pos: n.pos})
+}
+
+// compileMenu lowers `menu(prompt0,L0,prompt1,L1,...)`: each even-index
+// argument is a prompt expression, each odd-index argument a jump label (a bare
+// identifier). It emits builtinMenu to gather the prompts and block on
+// Host.Select for the 1-based choice, stores that choice in @menu (rAthena's
+// convention, so scripts may also read it), then lowers a jump chain that goto's
+// the label paired with the chosen option. A builtin cannot set the VM's
+// instruction pointer, so the jump is compiler-emitted rather than returned by
+// the builtin. Cancel (choice 255) and any out-of-range choice match no label,
+// so execution falls through past the menu — matching rAthena's cancel
+// semantics.
+func (c *compiler) compileMenu(n *CallStmt) error {
+	if len(n.Args) == 0 || len(n.Args)%2 != 0 {
+		return fmt.Errorf("script: menu expects prompt,label pairs, got %d args at %s", len(n.Args), n.pos)
+	}
+	prompts := make([]Expr, 0, len(n.Args)/2)
+	labels := make([]string, 0, len(n.Args)/2)
+	for i, a := range n.Args {
+		if i%2 == 0 {
+			prompts = append(prompts, a)
+			continue
+		}
+		id, ok := a.(*IdentExpr)
+		if !ok {
+			return fmt.Errorf("script: menu option %d expects a label, got %T at %s", i/2+1, a, a.Pos())
+		}
+		labels = append(labels, id.Name)
+	}
+
+	// Push each prompt, then invoke builtinMenu which blocks on Host.Select and
+	// returns the chosen 1-based index.
+	for _, p := range prompts {
+		if err := c.compileExpr(p); err != nil {
+			return err
+		}
+	}
+	c.emit(Instruction{Op: OpFunc, Str: "menu", Operand: int32(len(prompts)), Pos: n.pos}) //nolint:gosec,goconst // G115: arg count bounded by parse (<256); builtin name shared with dispatch + registration
+	c.emit(Instruction{Op: OpAssign, Str: "@menu", Pos: n.pos})
+
+	// if (@menu == i) goto label_i — the first label whose index matches jumps.
+	for i, label := range labels {
+		c.emit(Instruction{Op: OpVar, Str: "@menu", Pos: n.pos})
+		c.emit(Instruction{Op: OpInt, Operand: int32(i + 1), Pos: n.pos})
+		c.emitOp(OpLEq, n.pos)
+		c.emit(Instruction{Op: OpJumpIfTrue, Str: label, Pos: n.pos})
+	}
+	return nil
 }
 
 // compileAssign lowers `lhs = rhs` and compound forms. `=` evaluates rhs then
