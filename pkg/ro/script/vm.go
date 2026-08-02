@@ -18,6 +18,12 @@ type Host interface {
 	// advances the dialog. Returns false if the dialog was closed or the
 	// connection dropped, in which case the VM ends the script.
 	Next() bool
+	// Select sends the menu option list (ZC_MENU_LIST) and blocks until the
+	// client chooses. options is the flat list (colon-separated inputs are
+	// split by the builtin before calling). Returns the 1-based index the
+	// client picked, or 255 (FF_CANCEL) for cancel, mirroring rAthena's
+	// @menu / sd->npc_menu result of clif_parse_NpcSelectMenu.
+	Select(options []string) int
 	// Close sends the close-dialog frame (ZC_CLOSE_DIALOG).
 	Close()
 	// Warp moves the player to the named map tile.
@@ -191,10 +197,14 @@ func (vm *VM) Run() error { //nolint:gocyclo
 			if fn == nil {
 				return fmt.Errorf("script: unknown builtin %q at %s", ins.Str, ins.Pos)
 			}
-			_, ctrl := fn(vm, args)
+			ret, ctrl := fn(vm, args)
 			if ctrl == ctrlEnd {
 				return nil
 			}
+			// The builtin's result stays on the stack. Expression context
+			// (e.g. select(...)) consumes it; statement context drops it via
+			// the OpFunc the compiler follows with OpPop.
+			vm.push(ret)
 		case OpIndexGet:
 			if err := vm.indexGet(); err != nil {
 				return err
@@ -203,6 +213,9 @@ func (vm *VM) Run() error { //nolint:gocyclo
 			if err := vm.indexSet(); err != nil {
 				return err
 			}
+		case OpPop:
+			// Discard a statement-position builtin's void result.
+			_ = vm.pop()
 		default:
 			return fmt.Errorf("script: unhandled opcode %s at %s", ins.Op, ins.Pos)
 		}

@@ -10,12 +10,14 @@ import (
 // effects without a network. Next returns true (advance) so dialog scripts
 // proceed; a future test can flip nextOK to model a cancelled dialog.
 type fakeHost struct {
-	mes    []string
-	nexts  int
-	closed bool
-	warps  []warpCall
-	heals  []healCall
-	nextOK bool
+	mes          []string
+	nexts        int
+	closed       bool
+	warps        []warpCall
+	heals        []healCall
+	selects      [][]string
+	nextOK       bool
+	selectChoice int
 }
 
 type warpCall struct {
@@ -32,6 +34,10 @@ func (h *fakeHost) Next() bool              { h.nexts++; return h.nextOK }
 func (h *fakeHost) Close()                  { h.closed = true }
 func (h *fakeHost) Warp(m string, x, y int) { h.warps = append(h.warps, warpCall{m, x, y}) }
 func (h *fakeHost) PercentHeal(hp, sp int)  { h.heals = append(h.heals, healCall{hp, sp}) }
+func (h *fakeHost) Select(options []string) int {
+	h.selects = append(h.selects, options)
+	return h.selectChoice
+}
 
 // runFirstScript compiles src, takes the first script in the set, and runs it
 // against host with the given initial variables.
@@ -349,5 +355,65 @@ func TestVMHealerFlowWithSeedVars(t *testing.T) {
 	}
 	if len(h.heals) != 1 {
 		t.Errorf("heals = %v, want 1 heal", h.heals)
+	}
+}
+
+// TestVMSelectReturnsChoice proves the VM-stack change that select() relies on:
+// select is an expression, so its result must reach the assignment rather than
+// being discarded by OpFunc. It also checks the option list is the flat
+// colon-split of the argument (select("Stay:Leave") → ["Stay","Leave"]).
+func TestVMSelectReturnsChoice(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		`.@c = select("Stay:Leave");` + "\n" +
+		`mes "picked " + .@c;` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	h.selectChoice = 2
+	vars := runFirstScript(t, src, h, nil)
+	if len(h.selects) != 1 {
+		t.Fatalf("selects = %v, want one call", h.selects)
+	}
+	got := h.selects[0]
+	if len(got) != 2 || got[0] != "Stay" || got[1] != "Leave" {
+		t.Errorf("options = %v, want [Stay Leave]", got)
+	}
+	if vars[".@c"].Int != 2 {
+		t.Errorf(".@c = %d, want 2", vars[".@c"].Int)
+	}
+	if len(h.mes) != 1 || h.mes[0] != "picked 2" {
+		t.Errorf("mes = %v, want [picked 2]", h.mes)
+	}
+}
+
+// TestVMSelectCancelReturnsFF proves cancel surfaces as 255 (0xff), the value
+// rAthena's clif_parse_NpcSelectMenu sends and scripts test for.
+func TestVMSelectCancelReturnsFF(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		`.@c = select("A:B");` + "\n" +
+		`mes "got " + .@c;` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	h.selectChoice = 255
+	vars := runFirstScript(t, src, h, nil)
+	if vars[".@c"].Int != 255 {
+		t.Errorf(".@c = %d, want 255 (cancel)", vars[".@c"].Int)
+	}
+}
+
+// TestVMStatementCallNoLeak guards the OpPop change: a dialog built only of
+// statement-position void calls (mes/next/close) must run cleanly — if OpFunc
+// pushed without the statement-path OpPop, the stack would grow per call. The
+// assertion is implicit (Run does not panic / misbehave); an explicit mes
+// check confirms the dialog executed top-to-bottom.
+func TestVMStatementCallNoLeak(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		`mes "a";` + "\n" +
+		`mes "b";` + "\n" +
+		`mes "c";` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.mes) != 3 || h.mes[0] != "a" || h.mes[2] != "c" {
+		t.Errorf("mes = %v, want [a b c]", h.mes)
 	}
 }

@@ -9,7 +9,7 @@ import (
 
 type memoryDialogRegistry struct {
 	mu      sync.RWMutex
-	dialogs map[uint32]chan bool
+	dialogs map[uint32]chan domain.DialogSignal
 }
 
 // NewMemoryDialogRegistry constructs an in-memory dialog registry keyed by
@@ -17,11 +17,11 @@ type memoryDialogRegistry struct {
 // and provided to the injector as the dialog port.
 func NewMemoryDialogRegistry() domain.DialogRegistry {
 	return &memoryDialogRegistry{
-		dialogs: make(map[uint32]chan bool),
+		dialogs: make(map[uint32]chan domain.DialogSignal),
 	}
 }
 
-func (r *memoryDialogRegistry) Open(accountID uint32) (chan bool, error) {
+func (r *memoryDialogRegistry) Open(accountID uint32) (chan domain.DialogSignal, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -30,12 +30,12 @@ func (r *memoryDialogRegistry) Open(accountID uint32) (chan bool, error) {
 	}
 
 	// Unbuffered channel so next/choose can block correctly
-	ch := make(chan bool)
+	ch := make(chan domain.DialogSignal)
 	r.dialogs[accountID] = ch
 	return ch, nil
 }
 
-func (r *memoryDialogRegistry) Get(accountID uint32) chan bool {
+func (r *memoryDialogRegistry) Get(accountID uint32) chan domain.DialogSignal {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.dialogs[accountID]

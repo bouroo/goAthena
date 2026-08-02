@@ -147,7 +147,7 @@ func (h *ReqNextScriptHandler) Handle(ctx context.Context, conn gwdomain.Conn, f
 	if ch := h.svc.dialogRegistry.Get(auth.AccountID); ch != nil {
 		// Non-blocking send: if the dialog already timed out, drop the advance.
 		select {
-		case ch <- true:
+		case ch <- domain.DialogSignal{Advance: true}:
 		default:
 		}
 	}
@@ -164,13 +164,26 @@ func NewChooseMenuHandler(svc *DialogService) *ChooseMenuHandler {
 	return &ChooseMenuHandler{svc: svc}
 }
 
-// Handle is a placeholder for menu/select responses; the M11d milestone will
-// implement the actual selection logic.
+// Handle forwards the client's menu choice to the paused script. The 7-byte
+// CZ_CHOOSE_MENU frame carries the NPC id and a choice byte (1..254 = option,
+// 255 = cancel). The parser stores the choice as int8, so byte(int8) recovers
+// both the cancel sentinel (0xff) and the 1-based option bytes unchanged. The
+// choice rides the same DialogSignal the next/close handlers use, waking the
+// scriptHost.Select() that emitted ZC_MENU_LIST (clif.cpp:13337
+// clif_parse_NpcSelectMenu → npc_scriptcont). Non-blocking: a timed-out dialog
+// drops the choice.
 func (h *ChooseMenuHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
-	if _, err := packet.ParseCZChooseMenu(frame.Raw); err != nil {
+	req, err := packet.ParseCZChooseMenu(frame.Raw)
+	if err != nil {
 		return fmt.Errorf("parse CZ_CHOOSE_MENU: %w", err)
 	}
-	// TODO(M11d): menu/select handling.
+	auth := conn.Auth()
+	if ch := h.svc.dialogRegistry.Get(auth.AccountID); ch != nil {
+		select {
+		case ch <- domain.DialogSignal{Advance: true, Choice: byte(req.Selected)}: //nolint:gosec // G115: the parser stores the 0x00b8 choice byte as int8; byte(int8) is an intentional two's-complement recovery that reproduces 1..254 (choice) and 0xff (cancel) exactly
+		default:
+		}
+	}
 	return nil
 }
 
@@ -193,9 +206,10 @@ func (h *CloseDialogHandler) Handle(ctx context.Context, conn gwdomain.Conn, fra
 
 	auth := conn.Auth()
 	if ch := h.svc.dialogRegistry.Get(auth.AccountID); ch != nil {
-		// Sending false breaks the dialog's Next() wait, ending it.
+		// Sending Advance=false breaks the dialog's Next()/Select() wait,
+		// ending it; select() resolves the close as a cancel.
 		select {
-		case ch <- false:
+		case ch <- domain.DialogSignal{Advance: false}:
 		default:
 		}
 	}

@@ -197,6 +197,13 @@ const (
 	// the Str-named label only when the value is truthy. Used to compile
 	// `||` short-circuit.
 	OpJumpIfTrue
+
+	// OpPop discards the top of the stack. A builtin call in statement
+	// position (e.g. `mes "x";`) leaves its return value on the stack via
+	// OpFunc; the compiler emits OpPop so the void result does not leak.
+	// Expression-position calls (e.g. `select(...)`) keep the value for the
+	// surrounding expression and emit no OpPop.
+	OpPop
 )
 
 // String returns a mnemonic for debug disassembly.
@@ -268,4 +275,5 @@ var opcodeNames = [...]string{
 	OpIndexSet:     "INDEX_SET",
 	OpJumpIfFalse:  "JMPF",
 	OpJumpIfTrue:   "JMPT",
+	OpPop:          "POP",
 }

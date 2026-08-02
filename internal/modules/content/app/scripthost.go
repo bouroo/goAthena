@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
@@ -31,12 +32,12 @@ type scriptHost struct {
 	conn      gwdomain.Conn
 	accountID uint32
 	charID    uint32
-	dialogCh  chan bool
+	dialogCh  chan domain.DialogSignal
 	world     domain.World
 }
 
 // NewScriptHost returns a script.Host for an active dialog session.
-func NewScriptHost(npcID uint32, conn gwdomain.Conn, accountID, charID uint32, dialogCh chan bool, world domain.World) script.Host {
+func NewScriptHost(npcID uint32, conn gwdomain.Conn, accountID, charID uint32, dialogCh chan domain.DialogSignal, world domain.World) script.Host {
 	return &scriptHost{
 		npcID:     npcID,
 		conn:      conn,
@@ -71,10 +72,36 @@ func (h *scriptHost) Next() bool {
 	defer timer.Stop()
 
 	select {
-	case advanced := <-h.dialogCh:
-		return advanced
+	case sig := <-h.dialogCh:
+		return sig.Advance
 	case <-timer.C:
 		return false
+	}
+}
+
+// Select sends the menu option list (ZC_MENU_LIST) and blocks for the client's
+// CZ_CHOOSE_MENU. rAthena's select numbers the colon-separated options 1..N and
+// yields 255 (0xff) on cancel. A terminated dialog (advance=false, e.g. the
+// player closed or the connection dropped) resolves as a cancel so the VM's
+// select expression sees a value scripts already test for.
+func (h *scriptHost) Select(options []string) int {
+	resp := packet.MenuListResponse{
+		NpcID: h.npcID,
+		Items: strings.Join(options, ":"),
+	}
+	_ = resp.Encode(connWriter{h.conn})
+
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+
+	select {
+	case sig := <-h.dialogCh:
+		if !sig.Advance {
+			return 255 // cancel: dialog closed/dropped
+		}
+		return int(sig.Choice)
+	case <-timer.C:
+		return 255 // cancel: client dropped silently
 	}
 }
 

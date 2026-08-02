@@ -135,7 +135,15 @@ func (c *compiler) compileStmt(s Stmt) error { //nolint:gocyclo
 		if n.Name == "set" { //nolint:goconst
 			return c.compileSet(n)
 		}
-		return c.compileCall(n.Name, n.Args, n.pos)
+		if err := c.compileCall(n.Name, n.Args, n.pos); err != nil {
+			return err
+		}
+		// A statement-position call discards the builtin's result so its void
+		// return does not leak onto the stack. Expression-position calls
+		// (compileExpr → *CallExpr) keep the value for the surrounding
+		// expression and emit no OpPop.
+		c.emitOp(OpPop, n.pos)
+		return nil
 	case *IfStmt:
 		return c.compileIf(n)
 	case *WhileStmt:

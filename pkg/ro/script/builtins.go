@@ -1,5 +1,7 @@
 package script
 
+import "strings"
+
 // Package-level builtin implementations for the dialog subset. Each takes the
 // VM (for variable access) and the OpFunc argument slice, and returns a value
 // plus a flow control (ctrlContinue keeps going; ctrlEnd stops the VM).
@@ -79,6 +81,26 @@ func builtinPercentHeal(vm *VM, args []Value) (Value, control) {
 	return NilVal(), ctrlContinue
 }
 
+// builtinSelect implements select("opt1:opt2:..."). rAthena's select takes
+// varargs where each may itself be colon-separated; the displayed menu is the
+// arguments joined by ":" and the client numbers the colon-separated entries
+// 1..N. The builtin builds that flat option list, delegates to Host.Select
+// (which emits ZC_MENU_LIST and blocks for the client's CZ_CHOOSE_MENU), and
+// returns the chosen 1-based index — 255 when the player cancels
+// (clif.cpp:13337 clif_parse_NpcSelectMenu, choice byte 0xff). Because select
+// is an expression (`if (select(...) == 2)`), its result stays on the stack;
+// the compiler only OpPops statement-position calls.
+func builtinSelect(vm *VM, args []Value) (Value, control) {
+	parts := make([]string, 0, len(args))
+	for _, a := range args {
+		parts = append(parts, a.String())
+	}
+	// Re-join then split so a single "a:b:c" arg and varargs "a","b" produce
+	// the same option list the client numbers.
+	options := strings.Split(strings.Join(parts, ":"), ":")
+	return IntVal(int64(vm.host.Select(options))), ctrlContinue
+}
+
 // DefaultBuiltins returns a fresh map of the dialog-subset builtins, ready to
 // hand to NewVM. Callers extend this map with phase-specific builtins (select,
 // menu, getitem, sc_start, …) by copying it and inserting their entries.
@@ -92,6 +114,7 @@ func DefaultBuiltins() map[string]BuiltinFunc {
 		"set":         builtinSet, //nolint:goconst
 		"warp":        builtinWarp,
 		"percentheal": builtinPercentHeal,
+		"select":      builtinSelect,
 	}
 }
 
