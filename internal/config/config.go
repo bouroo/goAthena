@@ -123,22 +123,24 @@ type OTelConfig struct {
 type GatewayConfig struct {
 	TCP TCPConfig `mapstructure:"tcp" yaml:"tcp" validate:"required"`
 	WS  WSConfig  `mapstructure:"ws" yaml:"ws" validate:"required"`
-	// Packetver is the operator-chosen default PACKETVER. It is used as the
-	// fallback when a CA_LOGIN does not supply a usable client version (zero
-	// or outside [PacketverMin, PacketverMax]); see the N2 plan in
-	// .agents/plans/rathena-compat-roadmap/subplans/n2-per-session-packetver.md.
+	// Packetver is the single PACKETVER every connection uses. The map codec
+	// is fixed at this value at gateway DI time (internal/modules/gateway/di.go
+	// KeysForVersion). Per-session selection is NOT wired: PacketverMin/Max
+	// below are parsed and validated but no logic reads them to pick a codec
+	// per CA_LOGIN. That per-session selection (needed to serve roBrowser's
+	// older layout alongside the native client) is milestone M14.
 	Packetver int `mapstructure:"packetver" yaml:"packetver" env:"GATEWAY_PACKETVER" validate:"min=20000000,max=20260000"`
-	// PacketverMin is the minimum client version the gateway accepts for
-	// per-session PACKETVER selection. A CA_LOGIN reporting a lower version
-	// falls back to Packetver.
+	// PacketverMin is the minimum client version reserved for per-session
+	// PACKETVER selection (M14). It is parsed and validated but currently has
+	// no reader; it does not yet affect codec selection.
 	//
 	// `omitempty` lets partial Config values used by unit tests (which
 	// bypass Load and so never receive viper defaults) skip range checks
 	// when unset. viper's setDefaults() still seeds 20000000 in production.
 	PacketverMin int `mapstructure:"packetver_min" yaml:"packetver_min" env:"GATEWAY_PACKETVER_MIN" validate:"omitempty,min=20000000,max=20260000"`
-	// PacketverMax is the maximum client version the gateway accepts for
-	// per-session PACKETVER selection. A CA_LOGIN reporting a higher version
-	// falls back to Packetver. See PacketverMin for the omitempty rationale.
+	// PacketverMax is the maximum client version reserved for per-session
+	// PACKETVER selection (M14). Like PacketverMin it is validated but not yet
+	// read. See PacketverMin for the omitempty rationale.
 	PacketverMax int    `mapstructure:"packetver_max" yaml:"packetver_max" env:"GATEWAY_PACKETVER_MAX" validate:"omitempty,min=20000000,max=20260000,gtefield=PacketverMin"`
 	IdentityAddr string `mapstructure:"identity_addr" yaml:"identity_addr" env:"GATEWAY_IDENTITY_ADDR" validate:"required"`
 	// ZoneAddr is the gRPC endpoint of the zone service (DEL-03). The
