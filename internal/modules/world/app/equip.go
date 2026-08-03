@@ -15,9 +15,9 @@
 // PACKETVER >= 20110824 (clif.cpp:4338) so 0=success, 1=failure on the wire. The
 // stat recompute mirrors status_calc_pc: the equipment contributions fold into
 // StatusInputs.Equipment so a fresh ZC_STATUS reflects worn gear (Atk2=weapon
-// ATK, Def1=armor DEF). AREA sprite/look sync (other players seeing the weapon)
-// is deferred — no ZC_SPRITE_CHANGE encoder exists yet and the verify criterion
-// keys on the SELF ack + the Atk2 delta.
+// ATK, Def1=armor DEF). P2A adds the AREA look sync: equip/unequip also broadcasts
+// a ZC_SPRITE_CHANGE (0x01d7) so the actor + AOI neighbors see the weapon/shield
+// sprite update (rAthena clif_changelook, combined LOOK_WEAPON PACKETVER>=4 path).
 package app
 
 import (
@@ -54,6 +54,7 @@ type EquipService struct {
 	players *domain.PlayerRegistry
 	chars   domain.CharacterGetter
 	fs      statcalc.FormulaSet
+	maps    domain.MapStore
 }
 
 // NewEquipService binds the equip collaborators. items is the inventory port the
@@ -62,8 +63,8 @@ type EquipService struct {
 // requirement, attack/defense, and view sprite; a nil itemDB fails every equip.
 // players resolves the live session; chars reloads the character for the stat
 // recompute; fs is the mode's formula set ZC_STATUS derives from.
-func NewEquipService(items invdomain.InventoryRepository, itemDB *itemdb.Registry, players *domain.PlayerRegistry, chars domain.CharacterGetter, fs statcalc.FormulaSet) *EquipService {
-	return &EquipService{items: items, itemDB: itemDB, players: players, chars: chars, fs: fs}
+func NewEquipService(items invdomain.InventoryRepository, itemDB *itemdb.Registry, players *domain.PlayerRegistry, chars domain.CharacterGetter, fs statcalc.FormulaSet, maps domain.MapStore) *EquipService {
+	return &EquipService{items: items, itemDB: itemDB, players: players, chars: chars, fs: fs, maps: maps}
 }
 
 // Equip wears the bag item at the given grid slot into the requested EQP_*
@@ -155,6 +156,9 @@ func (s *EquipService) Equip(ctx context.Context, accountID uint32, index uint16
 	// (weapon ATK) and Def1 (armor DEF) update live. A send fault is returned
 	// for logging; the equip already persisted and acked, so the session
 	// continues — the client refreshes on its next status burst.
+	if err := s.broadcastLook(ctx, player, rows); err != nil {
+		return fmt.Errorf("equip: %w", err)
+	}
 	return s.sendStatus(ctx, player, rows)
 }
 
@@ -211,6 +215,9 @@ func (s *EquipService) Unequip(ctx context.Context, accountID uint32, index uint
 		return fmt.Errorf("unequip: encode ZC_REQ_TAKEOFF_EQUIP_ACK char %d index %d: %w", player.CharID, index, err)
 	}
 
+	if err := s.broadcastLook(ctx, player, rows); err != nil {
+		return fmt.Errorf("unequip: %w", err)
+	}
 	return s.sendStatus(ctx, player, rows)
 }
 
@@ -241,6 +248,86 @@ func equipmentStats(rows []invdomain.InventoryItem, itemDB *itemdb.Registry) sta
 		}
 	}
 	return eq
+}
+
+// computeLook derives the worn-gear look sprites for ZC_SPRITE_CHANGE from the
+// inventory bag. It mirrors rAthena pc.cpp's equip look logic: the right-hand
+// weapon's class sprite (weapon_type, from the item's SubType) becomes
+// LOOK_WEAPON's val; the left-hand armor's View becomes LOOK_SHIELD's val2. A
+// left-hand weapon (dual wield) sets status.shield=W_FIST(0) and combines the two
+// weapons into one weapon view via pc_calcweapontype; that combine is NOT mirrored
+// here (single right-hand weapon only) — a documented simplification tracked as a
+// follow-up. Two-handed weapons occupy both hands and correctly yield
+// weapon=class, shield=0. A weapon is identified by its item_db location including
+// the right hand (equip.HandRight), the same test equipmentStats uses.
+func computeLook(rows []invdomain.InventoryItem, itemDB *itemdb.Registry) (weapon, shield uint16) {
+	if itemDB == nil {
+		return 0, 0
+	}
+	for _, r := range rows {
+		if r.Equip == 0 {
+			continue
+		}
+		entry := itemDB.Get(int32(r.NameID)) //nolint:gosec // G115: NameID < 2^31; value-preserving cast
+		if entry == nil {
+			continue
+		}
+		isWeapon := entry.EquipLocations&equip.HandRight != 0
+		switch {
+		case r.Equip&equip.HandRight != 0 && isWeapon:
+			if c, ok := itemdb.WeaponClass(entry.SubType); ok {
+				weapon = c
+			}
+		case r.Equip&equip.HandLeft != 0 && !isWeapon:
+			shield = uint16(entry.View) //nolint:gosec // G115: small client view sprite id → uint16
+		}
+	}
+	return weapon, shield
+}
+
+// broadcastLook recomputes the player's weapon/shield view sprites from the worn
+// gear and broadcasts a ZC_SPRITE_CHANGE (0x01d7) to the actor + AOI neighbors,
+// mirroring rAthena clif_changelook's PACKETVER>=4 combined LOOK_WEAPON AREA send
+// (clif.cpp:3963). It also writes player.Weapon/Shield so a late-arriving
+// observer's spawn packet carries the updated look. The char DB weapon/shield
+// columns are NOT updated (chars is a read port); a logout/login cycle still reads
+// the persisted value until a char-look-write port is added — documented gap.
+//
+// The fan-out is best-effort per the drop-service contract: a neighbor whose Conn
+// write fails misses one cosmetic update and is reaped by the next movement/social
+// broadcast. Only the map-store load is propagated as an error (an unexpected
+// infra fault); nil maps (no world wired, e.g. unit tests) skips the broadcast
+// while still updating the look fields.
+func (s *EquipService) broadcastLook(ctx context.Context, player *domain.Player, rows []invdomain.InventoryItem) error {
+	weapon, shield := computeLook(rows, s.itemDB)
+	player.Weapon = weapon
+	player.Shield = shield
+	if s.maps == nil {
+		return nil
+	}
+	mp, err := s.maps.Load(ctx, player.MapName)
+	if err != nil {
+		return fmt.Errorf("load map %q for look broadcast: %w", player.MapName, err)
+	}
+	resp := packet.SpriteChangeResponse{
+		GID:  player.AccountID,
+		Type: packet.LookWeapon,
+		Val:  uint32(weapon), //nolint:gosec // G115: weapon_type < 2^16 → uint32 view slot
+		Val2: uint32(shield), //nolint:gosec // G115: shield view sprite < 2^16 → uint32 slot
+	}
+	x, y, _ := player.Position()
+	_ = resp.Encode(connWriter{player.Conn})
+	for _, e := range mp.AOI.QueryVisible(int(x), int(y)) {
+		if e.ID == player.EntityID {
+			continue
+		}
+		neighbor, ok := s.players.ByAccount(uint32(e.ID))
+		if !ok {
+			continue
+		}
+		_ = resp.Encode(connWriter{neighbor.Conn})
+	}
+	return nil
 }
 
 // sendStatus reloads the character (authoritative StatusPoint + base stats) and

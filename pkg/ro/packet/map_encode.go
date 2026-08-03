@@ -1366,6 +1366,74 @@ func (r EmotionResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// LOOK_* view-sprite categories carried by ZC_SPRITE_CHANGE (rAthena's _look
+// enum, rathenaThailand/src/map/map.hpp:601). Only WEAPON is emitted today:
+// clif_changelook's PACKETVER>=4 path collapses the weapon+shield sprites into a
+// single LOOK_WEAPON packet (val=weapon, val2=shield).
+const (
+	LookBase   uint8 = 0
+	LookHair   uint8 = 1
+	LookWeapon uint8 = 2
+	LookShield uint8 = 8
+)
+
+// SpriteChangeResponse encodes a ZC_SPRITE_CHANGE2 packet (command 0x01d7). The
+// server broadcasts it to the actor and its AOI neighbors when an entity's look
+// sprite changes — for a player, the weapon/shield update on equip/unequip.
+//
+// Wire shape (rathenaThailand/src/map/packets_struct.hpp:2591-2604). The struct
+// has three PACKETVER-gated layouts for the val/val2 width; PACKETVER 20250604
+// selects the modern branch (PACKETVER_MAIN_NUM>=20181121 — satisfied because
+// PACKETVER_RE is undefined for 20250604, so MAIN_NUM=PACKETVER=20250604),
+// making val/val2 uint32 → 15 bytes, little-endian:
+//
+//	[0:2 cmd=0x01d7][2:6 GID uint32][6 type uint8][7:11 val uint32][11:15 val2 uint32]
+//
+// rAthena's clif_changelook (clif.cpp:3963) PACKETVER>=4 path remaps either
+// LOOK_WEAPON or LOOK_SHIELD into one combined LOOK_WEAPON packet (type=2,
+// val=weaponSprite, val2=shieldSprite) and clif_sends it AREA. clif_send emits
+// sizeof(struct)=15, not the packetdb static 11 (clif_packetdb.hpp:226); the
+// client built with the same PACKETVER parses 15.
+type SpriteChangeResponse struct {
+	// GID is the entity ID of the look owner (rAthena bl.id; for a PC the
+	// account_id — the same value spawn/EmotionResponse carry, so the client
+	// attributes the change to the sprite it spawned).
+	GID uint32
+	// Type is the LOOK_* category. For the combined weapon+shield change, WEAPON(2).
+	Type uint8
+	// Val is the primary look value. For LOOK_WEAPON: the weapon class sprite
+	// (rAthena weapon_type enum, derived from the item's SubType).
+	Val uint32
+	// Val2 is the secondary look value. For LOOK_WEAPON: the shield sprite (armor
+	// View) or 0 (no shield / left-hand weapon). Present for PACKETVER>=4.
+	Val2 uint32
+}
+
+// Size returns the on-wire byte length Encode writes (always 15 for the
+// PACKETVER 20250604 layout).
+func (r SpriteChangeResponse) Size() int {
+	return sizeZCSpriteChange
+}
+
+// Encode writes the ZC_SPRITE_CHANGE packet to w.
+func (r SpriteChangeResponse) Encode(w io.Writer) error {
+	var buf [sizeZCSpriteChange]byte
+	// int16 packetType = 0x01d7 (HeaderZCSPRITECHANGE).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSPRITECHANGE)
+	// uint32 GID at offset 2.
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	// uint8 type at offset 6.
+	buf[6] = r.Type
+	// uint32 val at offset 7, uint32 val2 at offset 11.
+	binary.LittleEndian.PutUint32(buf[7:], r.Val)
+	binary.LittleEndian.PutUint32(buf[11:], r.Val2)
+
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_SPRITE_CHANGE: %w", err)
+	}
+	return nil
+}
+
 // AckReqNameResponse encodes a ZC_ACK_REQNAME packet (command 0x0095,
 // 30 bytes fixed). The server sends this in response to
 // CZ_GETCHARNAMEREQUEST to tell the client the character name for a

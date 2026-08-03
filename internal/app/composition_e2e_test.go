@@ -1294,8 +1294,9 @@ func TestServe_Inventory_EquipWeaponRaisesATK(t *testing.T) {
 	// it (no mob is engaged here, but the drain contract is the same as the loot
 	// loop). ---
 	var (
-		wearAck  []byte
-		eqStatus []byte
+		wearAck      []byte
+		eqStatus     []byte
+		spriteChange []byte
 	)
 	handle := func(op uint16, frame []byte) {
 		switch op {
@@ -1303,6 +1304,8 @@ func TestServe_Inventory_EquipWeaponRaisesATK(t *testing.T) {
 			wearAck = frame
 		case packet.HeaderZCSTATUS:
 			eqStatus = frame
+		case packet.HeaderZCSPRITECHANGE:
+			spriteChange = frame
 		}
 	}
 	var req bytes.Buffer
@@ -1310,7 +1313,7 @@ func TestServe_Inventory_EquipWeaponRaisesATK(t *testing.T) {
 	_, err = mapConn.Write(req.Bytes())
 	require.NoError(t, err, "send CZ_REQ_WEAR_EQUIP for the Knife")
 	equipEnd := time.Now().Add(3 * time.Second)
-	for (wearAck == nil || eqStatus == nil) && time.Now().Before(equipEnd) {
+	for (wearAck == nil || eqStatus == nil || spriteChange == nil) && time.Now().Before(equipEnd) {
 		drainFrames(t, mapConn, 250*time.Millisecond, handle)
 	}
 
@@ -1328,6 +1331,24 @@ func TestServe_Inventory_EquipWeaponRaisesATK(t *testing.T) {
 		"no ZC_STATUS observed after a successful equip — stat recompute not emitted")
 	require.Equal(t, int16(17), int16(binary.LittleEndian.Uint16(eqStatus[18:20])), //nolint:gosec // G115: ATK 17 fits int16
 		"ZC_STATUS Atk2 = Knife ATK 17 (weapon contribution folded into the recompute)")
+
+	// P2A: the equip also broadcasts a ZC_SPRITE_CHANGE (0x01d7) so the actor +
+	// AOI neighbors see the weapon sprite update. AREA includes the originator, so
+	// the equipping connection receives its own frame. The Knife's item_db SubType
+	// is "Dagger" → LOOK_WEAPON val=1; the LOOK_WEAPON type byte combines weapon+
+	// shield (clif_changelook PACKETVER>=4 path); no shield is worn (val2=0).
+	require.NotNil(t, spriteChange,
+		"no ZC_SPRITE_CHANGE observed after equip — look-sprite broadcast not emitted")
+	require.Equal(t, uint16(packet.HeaderZCSPRITECHANGE), binary.LittleEndian.Uint16(spriteChange[0:2]),
+		"ZC_SPRITE_CHANGE opcode = 0x01d7")
+	require.Equal(t, seededAccountID, binary.LittleEndian.Uint32(spriteChange[2:6]),
+		"ZC_SPRITE_CHANGE GID = the equipping player's account_id (bl.id)")
+	require.Equal(t, packet.LookWeapon, spriteChange[6],
+		"ZC_SPRITE_CHANGE type = LOOK_WEAPON(2)")
+	require.Equal(t, uint32(1), binary.LittleEndian.Uint32(spriteChange[7:11]),
+		"ZC_SPRITE_CHANGE val = 1 (Knife SubType Dagger → W_DAGGER)")
+	require.Equal(t, uint32(0), binary.LittleEndian.Uint32(spriteChange[11:15]),
+		"ZC_SPRITE_CHANGE val2 = 0 (no shield worn)")
 }
 
 // TestServe_UseItem_HealsHPAndConsumesCount is the M12 end-to-end: a player
@@ -1849,6 +1870,9 @@ func mapFrameSize(op uint16) int {
 	case packet.HeaderZCREQTAKEOFFEQUIPACK:
 		// M10b: the takeoff ack (0x099a, flag wire-inverted 0=success). Value receiver.
 		return packet.ReqTakeoffEquipAckResponse{}.Size()
+	case packet.HeaderZCSPRITECHANGE:
+		// P2A: the look-sprite broadcast (0x01d7, 15B PACKETVER>=20181121 variant).
+		return packet.SpriteChangeResponse{}.Size()
 	case packet.HeaderZCUSEITEMACK2:
 		// M12: the use-item ack (0x01c8, Result 0=fail/1=success). Value receiver.
 		return packet.UseItemAck2Response{}.Size()

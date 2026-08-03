@@ -244,6 +244,14 @@ const (
 	// PACKETVER >= 20110824 per clif.cpp:4338 — success becomes
 	// 0 on the wire).
 	HeaderZCREQTAKEOFFEQUIPACK uint16 = 0x099a
+	// P2A: ZC_SPRITE_CHANGE2 (0x01d7) — look-sprite update broadcast to the actor
+	// + AOI neighbors on equip/unequip (rAthena clif_sprite_change /
+	// clif_changelook AREA). Fixed 15 bytes for PACKETVER 20250604
+	// (PACKETVER_MAIN_NUM>=20181121 branch of packets_struct.hpp:2591):
+	// [2:cmd=0x01d7][4:GID uint32][1:type uint8][4:val uint32][4:val2 uint32].
+	// The packetdb static registration is 11 (clif_packetdb.hpp:226) but clif_send
+	// emits sizeof(struct)=15; see SpriteChangeResponse.
+	HeaderZCSPRITECHANGE uint16 = 0x01d7
 	// P2A: ZC_USE_ITEM_ACK2 (0x01c8) — server ack for
 	// CZ_USE_ITEM2. rathena/src/map/packets_struct.hpp:312
 	// (useItemAckType = 0x1c8, PACKETVER >= 3). Fixed 13 bytes:
@@ -488,6 +496,11 @@ const (
 	// sizeZCEmotion = int16 packetType + int32 GID + uint8 type = 2+4+1 = 7
 	// (rathena/src/map/packets.hpp:1973-1978).
 	sizeZCEmotion = 7
+	// sizeZCSpriteChange = int16 packetType + uint32 GID + uint8 type +
+	// uint32 val + uint32 val2 = 2+4+1+4+4 = 15 (rathenaThailand/src/map/
+	// packets_struct.hpp:2591, PACKETVER_MAIN_NUM>=20181121 branch which
+	// PACKETVER 20250604 selects).
+	sizeZCSpriteChange = 15
 	// sizeCZGetCharNameRequest = int16 packetType + int32 GID = 2+4 = 6
 	// (rathena/src/map/clif_packetdb.hpp:45).
 	sizeCZGetCharNameRequest = 6
@@ -869,6 +882,14 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCEMOTION,
 		Name:      "ZC_EMOTION",
 		Length:    sizeZCEmotion,
+		Direction: DirectionServerToClient,
+	})
+	// P2A: ZC_SPRITE_CHANGE2 (0x01d7) — look-sprite update broadcast to the actor
+	// + AOI neighbors on equip/unequip. 15 bytes for PACKETVER 20250604.
+	db.Register(Definition{
+		ID:        HeaderZCSPRITECHANGE,
+		Name:      "ZC_SPRITE_CHANGE",
+		Length:    sizeZCSpriteChange,
 		Direction: DirectionServerToClient,
 	})
 	// M13: ZC_ACK_REQNAME (fixed 30 bytes) — name lookup response.

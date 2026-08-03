@@ -94,7 +94,7 @@ func newEquipFixture(t *testing.T, char *chardomain.Character) equipFixture {
 	}
 	require.NoError(t, players.Register(player))
 	chars := &fakeCharGetter{chars: map[uint64]chardomain.Character{charKey(eqAccID, eqCharID): *char}}
-	svc := app.NewEquipService(repo, equipItemDB(t), players, chars, statcalc.PreRenewalSet)
+	svc := app.NewEquipService(repo, equipItemDB(t), players, chars, statcalc.PreRenewalSet, nil)
 	return equipFixture{svc: svc, conn: conn, repo: repo, players: players}
 }
 

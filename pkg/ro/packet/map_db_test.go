@@ -128,8 +128,9 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// PACKETVER >= 20170830 → 74.
 	// M10a adds the legacy CZ_ITEM_PICKUP (0x009f) → 75. Name-resolution adds
 	// two S→C name replies (ZC_ACK_REQNAMEALL2 0x0a30, ZC_ACK_REQNAMEALL_NPC
-	// 0x0adf) → 77.
-	const want = 77
+	// 0x0adf) → 77. P2A adds ZC_SPRITE_CHANGE (0x01d7) for the equip/unequip
+	// look-sprite broadcast → 78.
+	const want = 78
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -172,6 +173,7 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCACTIONRESPONSE, sizeZCActionResponse},
 		{HeaderZCCHANGEDIR, sizeZCChangeDir},
 		{HeaderZCEMOTION, sizeZCEmotion},
+		{HeaderZCSPRITECHANGE, sizeZCSpriteChange},
 		{HeaderZCACKREQNAME, sizeZCAckReqName},
 		{HeaderZCSETUNITIDLE, sizeZCSetUnitIdle},
 		{HeaderZCUNITWALKING, sizeZCUnitWalking},

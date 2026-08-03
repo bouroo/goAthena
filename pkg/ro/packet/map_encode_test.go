@@ -1890,6 +1890,64 @@ func TestEmotionResponse_Encode(t *testing.T) {
 	}
 }
 
+// TestSpriteChangeResponse_Size pins the fixed 15-byte wire length ZC_SPRITE_CHANGE
+// advertises for PACKETVER 20250604 (packets_struct.hpp:2591, the
+// PACKETVER_MAIN_NUM>=20181121 branch).
+func TestSpriteChangeResponse_Size(t *testing.T) {
+	t.Parallel()
+	var r SpriteChangeResponse
+	if got, want := r.Size(), sizeZCSpriteChange; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+// TestSpriteChangeResponse_Encode exercises the P2A look-sprite change wire layout
+// byte-exact: [2:cmd=0x01d7][4:GID uint32][1:type uint8][4:val uint32][4:val2
+// uint32] = 15 bytes.
+func TestSpriteChangeResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := SpriteChangeResponse{
+		GID:  0xDEADBEEF,
+		Type: LookWeapon, // 2
+		Val:  5,          // weapon class (e.g. 1h-spear)
+		Val2: 3,          // shield sprite
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 15
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Opcode [0:2] = 0x01d7 (LE → 0xd7 0x01).
+	if got[0] != 0xd7 || got[1] != 0x01 {
+		t.Errorf("opcode bytes = %02x %02x, want d7 01 (LE 0x01d7 ZC_SPRITE_CHANGE)",
+			got[0], got[1])
+	}
+	// GID [2:6] = 0xDEADBEEF.
+	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
+		t.Errorf("GID = 0x%x, want 0xDEADBEEF", gid)
+	}
+	// type [6] = 2 (LOOK_WEAPON).
+	if got[6] != 2 {
+		t.Errorf("type = 0x%02x, want 0x02 (LOOK_WEAPON)", got[6])
+	}
+	// val [7:11] = 5.
+	if val := binary.LittleEndian.Uint32(got[7:11]); val != 5 {
+		t.Errorf("val = %d, want 5", val)
+	}
+	// val2 [11:15] = 3.
+	if val2 := binary.LittleEndian.Uint32(got[11:15]); val2 != 3 {
+		t.Errorf("val2 = %d, want 3", val2)
+	}
+}
+
 // TestEmotionResponse_Encode_ZeroValues verifies the byte-exact
 // encoding for a fresh all-zero emotion response (skipping the
 // always-non-zero opcode slot).
