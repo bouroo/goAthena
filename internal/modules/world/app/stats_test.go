@@ -74,6 +74,10 @@ func (s *memCharStore) SavePosition(_ context.Context, _, _ uint32, _ string, _,
 	return nil
 }
 
+func (s *memCharStore) SaveLook(_ context.Context, _, _ uint32, _, _ uint16) error {
+	return nil
+}
+
 type statsFixture struct {
 	svc      *app.StatsService
 	handler  *app.StatsHandler

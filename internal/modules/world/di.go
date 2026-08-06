@@ -207,7 +207,7 @@ func Register(ctx context.Context, c do.Injector) error {
 	// through — CharacterRepository satisfies CharacterGetter structurally) and fs
 	// (the mode's formula set ZC_STATUS derives from). Both handlers are provided
 	// for the composition root to thread into the map-role dispatch table.
-	equip := app.NewEquipService(invRepo, itemDB, registry, chars, fs, maps)
+	equip := app.NewEquipService(invRepo, itemDB, registry, chars, fs, maps, chars)
 	do.ProvideValue(c, app.NewEquipHandler(equip))
 	do.ProvideValue(c, app.NewTakeoffHandler(equip))
 

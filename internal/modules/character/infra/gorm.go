@@ -269,6 +269,26 @@ func (r *GORMCharacterRepository) SavePosition(ctx context.Context, accountID, c
 	return nil
 }
 
+// SaveLook writes weapon/shield after an equip/unequip, scoped by the trusted
+// account (the impersonation guard shared with SaveProgression/SavePosition).
+// It mirrors SavePosition's column-selective update + RowsAffected==0 → not-found.
+func (r *GORMCharacterRepository) SaveLook(ctx context.Context, accountID, charID uint32, weapon, shield uint16) error {
+	res := r.db.WithContext(ctx).
+		Table((charModel{}).TableName()).
+		Where("account_id = ? AND char_id = ?", accountID, charID).
+		Updates(map[string]any{
+			"weapon": weapon,
+			"shield": shield,
+		})
+	if res.Error != nil {
+		return fmt.Errorf("save look account %d char %d: %w", accountID, charID, res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return domain.ErrCharacterNotFound
+	}
+	return nil
+}
+
 // Create inserts a new character with the server-assigned novice defaults and
 // returns the persisted row (char_id is the DB-assigned auto-increment). It
 // guards name uniqueness and slot occupancy at the DB before insert and maps a

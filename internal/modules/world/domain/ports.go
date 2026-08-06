@@ -45,3 +45,17 @@ type ProgressionStore interface {
 type PositionStore interface {
 	SavePosition(ctx context.Context, accountID, charID uint32, mapName string, x, y uint16) error
 }
+
+// LookStore is the world equip use case's view of character persistence: it
+// writes the worn-look columns (weapon/shield) after an equip or unequip so a
+// logout/login cycle re-spawns the player with the same weapon/shield sprites.
+// It is satisfied structurally by the character module's CharacterRepository.
+// Named in the world context — alongside PositionStore — so equip's unit tests
+// substitute a fake without importing character/infra. The SaveLook scoping
+// contract (accountID + charID, never a client-supplied id) is the impersonation
+// guard shared with PositionStore and the CZ_ENTER gate. rAthena persists the
+// look on its logout save; goAthena has none, so the look is committed at the
+// moment it changes.
+type LookStore interface {
+	SaveLook(ctx context.Context, accountID, charID uint32, weapon, shield uint16) error
+}

@@ -55,6 +55,7 @@ type EquipService struct {
 	chars   domain.CharacterGetter
 	fs      statcalc.FormulaSet
 	maps    domain.MapStore
+	look    domain.LookStore
 }
 
 // NewEquipService binds the equip collaborators. items is the inventory port the
@@ -62,9 +63,10 @@ type EquipService struct {
 // every equip a fail ack. itemDB resolves the item's permitted locations, level
 // requirement, attack/defense, and view sprite; a nil itemDB fails every equip.
 // players resolves the live session; chars reloads the character for the stat
-// recompute; fs is the mode's formula set ZC_STATUS derives from.
-func NewEquipService(items invdomain.InventoryRepository, itemDB *itemdb.Registry, players *domain.PlayerRegistry, chars domain.CharacterGetter, fs statcalc.FormulaSet, maps domain.MapStore) *EquipService {
-	return &EquipService{items: items, itemDB: itemDB, players: players, chars: chars, fs: fs, maps: maps}
+// recompute; fs is the mode's formula set ZC_STATUS derives from; look persists
+// the worn weapon/shield sprites so a relog keeps the look (chars is read-only).
+func NewEquipService(items invdomain.InventoryRepository, itemDB *itemdb.Registry, players *domain.PlayerRegistry, chars domain.CharacterGetter, fs statcalc.FormulaSet, maps domain.MapStore, look domain.LookStore) *EquipService {
+	return &EquipService{items: items, itemDB: itemDB, players: players, chars: chars, fs: fs, maps: maps, look: look}
 }
 
 // Equip wears the bag item at the given grid slot into the requested EQP_*
@@ -286,22 +288,26 @@ func computeLook(rows []invdomain.InventoryItem, itemDB *itemdb.Registry) (weapo
 }
 
 // broadcastLook recomputes the player's weapon/shield view sprites from the worn
-// gear and broadcasts a ZC_SPRITE_CHANGE (0x01d7) to the actor + AOI neighbors,
-// mirroring rAthena clif_changelook's PACKETVER>=4 combined LOOK_WEAPON AREA send
+// gear, persists them to the char DB so a logout/login cycle keeps the look, then
+// broadcasts a ZC_SPRITE_CHANGE (0x01d7) to the actor + AOI neighbors, mirroring
+// rAthena clif_changelook's PACKETVER>=4 combined LOOK_WEAPON AREA send
 // (clif.cpp:3963). It also writes player.Weapon/Shield so a late-arriving
-// observer's spawn packet carries the updated look. The char DB weapon/shield
-// columns are NOT updated (chars is a read port); a logout/login cycle still reads
-// the persisted value until a char-look-write port is added — documented gap.
+// observer's spawn packet carries the updated look. rAthena persists the look via
+// chrif_save on logout; goAthena has no logout save, so the look is committed here
+// at the moment it changes (SaveLook, like SavePosition).
 //
 // The fan-out is best-effort per the drop-service contract: a neighbor whose Conn
 // write fails misses one cosmetic update and is reaped by the next movement/social
-// broadcast. Only the map-store load is propagated as an error (an unexpected
-// infra fault); nil maps (no world wired, e.g. unit tests) skips the broadcast
-// while still updating the look fields.
+// broadcast. The SaveLook write and the map-store load are real infra faults and
+// propagate; nil maps (no world wired, e.g. unit tests) skips the broadcast while
+// still persisting the look and updating the in-memory fields.
 func (s *EquipService) broadcastLook(ctx context.Context, player *domain.Player, rows []invdomain.InventoryItem) error {
 	weapon, shield := computeLook(rows, s.itemDB)
 	player.Weapon = weapon
 	player.Shield = shield
+	if err := s.look.SaveLook(ctx, player.AccountID, player.CharID, weapon, shield); err != nil {
+		return fmt.Errorf("save look char %d: %w", player.CharID, err)
+	}
 	if s.maps == nil {
 		return nil
 	}

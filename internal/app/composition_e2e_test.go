@@ -1349,6 +1349,13 @@ func TestServe_Inventory_EquipWeaponRaisesATK(t *testing.T) {
 		"ZC_SPRITE_CHANGE val = 1 (Knife SubType Dagger → W_DAGGER)")
 	require.Equal(t, uint32(0), binary.LittleEndian.Uint32(spriteChange[11:15]),
 		"ZC_SPRITE_CHANGE val2 = 0 (no shield worn)")
+
+	// P2b: the worn weapon look is persisted to the char DB so a logout/login
+	// re-spawns with the same sprite (rAthena persists via chrif_save; goAthena has
+	// no logout save, so SaveLook commits it at equip time). The Knife → W_DAGGER(1);
+	// the seeded default was 0.
+	require.Equal(t, uint16(1), readCharWeapon(t, cfg, seedCharID),
+		"char.weapon persisted = W_DAGGER(1) after equip (not reverted to 0 on relog)")
 }
 
 // TestServe_UseItem_HealsHPAndConsumesCount is the M12 end-to-end: a player
@@ -2202,6 +2209,21 @@ func readCharHP(t *testing.T, cfg *config.Config, charID uint32) uint32 {
 		`SELECT hp FROM `+"`char`"+` WHERE char_id = ?`, charID).Scan(&hp).Error,
 		"read persisted HP")
 	return hp
+}
+
+// readCharWeapon queries the persisted weapon look column the SpawnService loads
+// on the next CZ_ENTER. Used by the equip e2e to assert the worn weapon look is
+// persisted (not reverted to 0 on relog) — the equip-look-not-persisted gap.
+func readCharWeapon(t *testing.T, cfg *config.Config, charID uint32) uint16 {
+	t.Helper()
+	gdb, err := gorm.Open(mysql.Open(cfg.DBConnString()), &gorm.Config{})
+	require.NoError(t, err, "open gorm to read weapon look")
+	t.Cleanup(func() { sqlDB, _ := gdb.DB(); _ = sqlDB.Close() })
+	var weapon uint16
+	require.NoError(t, gdb.Raw(
+		`SELECT weapon FROM `+"`char`"+` WHERE char_id = ?`, charID).Scan(&weapon).Error,
+		"read persisted weapon look")
+	return weapon
 }
 
 // resetCharsForAccount opens a GORM session against the same DSN app.Serve uses,

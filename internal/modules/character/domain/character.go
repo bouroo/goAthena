@@ -205,4 +205,12 @@ type CharacterRepository interface {
 	// same impersonation guard as SaveProgression; RowsAffected==0 is reported as
 	// ErrCharacterNotFound.
 	SavePosition(ctx context.Context, accountID, charID uint32, mapName string, x, y uint16) error
+	// SaveLook writes the worn-look columns (weapon, shield) for the character at
+	// (accountID, charID) after an equip/unequip. rAthena sets sd->status.
+	// weapon/shield in pc_equipitem (pc.cpp:1527) and broadcasts via
+	// clif_changelook; chrif_save persists them on logout. goAthena has no logout
+	// save, so the look is committed at the moment it changes, mirroring
+	// SavePosition's column-selective write + impersonation guard. RowsAffected==0
+	// is reported as ErrCharacterNotFound.
+	SaveLook(ctx context.Context, accountID, charID uint32, weapon, shield uint16) error
 }

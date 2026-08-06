@@ -60,6 +60,22 @@ func (f *fakeCharGetter) GetByID(_ context.Context, accountID, charID uint32) (*
 	return nil, chardomain.ErrCharacterNotFound
 }
 
+// SaveLook records the worn weapon/shield on the seeded char so equip tests can
+// assert the look is persisted. It satisfies world/domain.LookStore alongside
+// GetByID (CharacterGetter), so the same fake serves both the read and write
+// ports the EquipService holds.
+func (f *fakeCharGetter) SaveLook(_ context.Context, accountID, charID uint32, weapon, shield uint16) error {
+	k := charKey(accountID, charID)
+	c, ok := f.chars[k]
+	if !ok {
+		return chardomain.ErrCharacterNotFound
+	}
+	c.Weapon = weapon
+	c.Shield = shield
+	f.chars[k] = c
+	return nil
+}
+
 // memMapStore is a domain.MapStore backed by an in-memory map of pre-built
 // *domain.Map, so the spawn test does not touch the filesystem. Each entry
 // carries a fresh AOI grid sized to the test scenario.

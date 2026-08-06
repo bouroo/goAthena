@@ -160,6 +160,21 @@ func (r *MemoryCharacterRepository) SavePosition(_ context.Context, accountID, c
 	return domain.ErrCharacterNotFound
 }
 
+// SaveLook writes weapon/shield after an equip/unequip. Mirrors the
+// SavePosition lookup contract: scoped by (accountID, charID), returns
+// ErrCharacterNotFound when no slot matches.
+func (r *MemoryCharacterRepository) SaveLook(_ context.Context, accountID, charID uint32, weapon, shield uint16) error {
+	for k, c := range r.bySlot {
+		if k.accountID == accountID && c.CharID == charID {
+			c.Weapon = weapon
+			c.Shield = shield
+			r.bySlot[k] = c
+			return nil
+		}
+	}
+	return domain.ErrCharacterNotFound
+}
+
 // newNoviceDomain is the domain twin of newNoviceModel — same novice defaults,
 // expressed as a domain.Character for the in-memory adapter.
 func newNoviceDomain(in domain.CreateCharacter, charID uint32) domain.Character {
