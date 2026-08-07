@@ -33,3 +33,14 @@ Body:
           Amount: 12
         - Level: 10
           Amount: 15
+  - Id: 89
+    Name: MG_STORMGUST
+    Description: Storm Gust
+    MaxLevel: 5
+    Type: Magic
+    TargetType: Ground
+    Range: 9
+    Requires:
+      SpCost:
+        - Level: 1
+          Amount: 78

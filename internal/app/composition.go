@@ -267,7 +267,7 @@ func resolveWorldHandlers(i do.Injector) (
 	move *worldapp.MoveHandler, action *worldapp.ActionHandler,
 	timeH *worldapp.TimeHandler, changeDir *worldapp.ChangeDirHandler, emotion *worldapp.EmotionHandler,
 	restart *worldapp.RestartHandler, pickup *worldapp.PickupHandler, drop *worldapp.DropHandler, equip *worldapp.EquipHandler,
-	takeoff *worldapp.TakeoffHandler, useItem *worldapp.UseItemHandler, skill *worldapp.SkillHandler,
+	takeoff *worldapp.TakeoffHandler, useItem *worldapp.UseItemHandler, skill *worldapp.SkillHandler, topos *worldapp.ToPosHandler,
 	chat *worldapp.ChatHandler, stats *worldapp.StatsHandler,
 	name *worldapp.NameHandler, whisper *worldapp.WhisperHandler, err error,
 ) {
@@ -337,6 +337,10 @@ func resolveWorldHandlers(i do.Injector) (
 			return err
 		},
 		func() error {
+			topos, err = invokeOr[*worldapp.ToPosHandler](i, "resolve CZ_USE_SKILL_TOPOS handler")
+			return err
+		},
+		func() error {
 			chat, err = invokeOr[*worldapp.ChatHandler](i, "resolve CZ_GLOBAL_MESSAGE handler")
 			return err
 		},
@@ -397,7 +401,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return err
 	}
-	mapEnter, loadEndAck, move, action, timeH, changeDir, emotion, restart, pickup, drop, equip, takeoff, useItem, skill, chat, stats, name, whisper, err := resolveWorldHandlers(injector)
+	mapEnter, loadEndAck, move, action, timeH, changeDir, emotion, restart, pickup, drop, equip, takeoff, useItem, skill, topos, chat, stats, name, whisper, err := resolveWorldHandlers(injector)
 	if err != nil {
 		return err
 	}
@@ -420,6 +424,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCZRequestMove:        move.Handle,
 		OnCZActionRequest:      action.Handle,
 		OnCZUseSkill:           skill.Handle,
+		OnCZUseSkillToPos:      topos.Handle,
 		OnCZRequestTime:        timeH.Handle,
 		OnCZChangeDir:          changeDir.Handle,
 		OnCZReqEmotion:         emotion.Handle,

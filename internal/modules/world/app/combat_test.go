@@ -53,6 +53,8 @@ func splitFixedFrames(t *testing.T, b []byte) [][]byte {
 		// the universal combat-test frame splitter).
 		packet.HeaderZCACKTOUSESKILL: packet.AckUseSkillResponse{}.Size(),
 		packet.HeaderZCNOTIFYSKILL:   packet.NotifySkillResponse{}.Size(),
+		// M14d: the ground-skill poseffect broadcast (18 B).
+		packet.HeaderZCNOTIFYGROUNDSKILL: packet.GroundSkillPoseEffect{}.Size(),
 	}
 	var out [][]byte
 	for len(b) >= 2 {

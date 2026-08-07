@@ -49,6 +49,11 @@ type Handlers struct {
 	// slice resolves SM_BASH (an offensive weapon skill) on an adjacent mob;
 	// other skills are dropped pending later units. Provided by the world module.
 	OnCZUseSkill domain.PacketHandler
+	// OnCZUseSkillToPos serves CZ_USE_SKILL_TOPOS (0x0AF4), a ground-target skill
+	// cast. The M14d slice resolves an instant ground skill (e.g. MG_STORMGUST)
+	// as a 3x3 splash on the cast tile; cast bar + skill_db splash + MATK pending.
+	// Provided by the world module.
+	OnCZUseSkillToPos domain.PacketHandler
 	// OnCZRequestTime serves CZ_REQUEST_TIME (0x007e), the clock-skew probe.
 	// Provided by the world module (M7).
 	OnCZRequestTime domain.PacketHandler
@@ -164,6 +169,7 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table = addHandler(table, packet.HeaderCZREQUESTMOVE, h.OnCZRequestMove)
 	table = addHandler(table, packet.HeaderCZACTIONREQUEST, h.OnCZActionRequest)
 	table = addHandler(table, packet.HeaderCZUSESKILL, h.OnCZUseSkill)
+	table = addHandler(table, packet.HeaderCZUSESKILLTOPOS, h.OnCZUseSkillToPos)
 	table = addHandler(table, packet.HeaderCZREQUESTTIME, h.OnCZRequestTime)
 	table = addHandler(table, packet.HeaderCZCHANGEDIR, h.OnCZChangeDir)
 	table = addHandler(table, packet.HeaderCZREQEMOTION, h.OnCZReqEmotion)

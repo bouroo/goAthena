@@ -37,6 +37,20 @@ func InPickupRange(ax, ay, bx, by int) bool {
 	return dy <= PickupRange
 }
 
+// Chebyshev returns the Chebyshev distance (max of the axis deltas) between two
+// cells — rAthena's measure of cast/attack reach. Ground-target skills gate on
+// Chebyshev(caster, targetTile) <= skill.Range.At(level) (the range check in
+// battle.cpp skill_castend_pos / skill_check_unit_range). Pure geometry; the
+// caller owns the position reads.
+func Chebyshev(ax, ay, bx, by int) int {
+	dx := abs(ax - bx)
+	dy := abs(ay - by)
+	if dx > dy {
+		return dx
+	}
+	return dy
+}
+
 func abs(x int) int {
 	if x < 0 {
 		return -x

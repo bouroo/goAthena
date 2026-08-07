@@ -91,6 +91,9 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderCZINPUTEDITDLGSTR, "CZ_INPUT_EDITDLGSTR", VariableLength, DirectionClientToServer},
 		{HeaderZCOPENEDITDLG, "ZC_OPEN_EDITDLG", sizeZCOpenEditDlg, DirectionServerToClient},
 		{HeaderZCOPENEDITDLGSTR, "ZC_OPEN_EDITDLGSTR", sizeZCOpenEditDlg, DirectionServerToClient},
+		// M14d: ground-target skills (clif_packetdb.hpp:1905, packets_struct.hpp:4696).
+		{HeaderCZUSESKILLTOPOS, "CZ_USE_SKILL_TOPOS", sizeCZUseSkillToPos, DirectionClientToServer},
+		{HeaderZCNOTIFYGROUNDSKILL, "ZC_NOTIFY_GROUNDSKILL", sizeZCNotifyGroundSkill, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -137,8 +140,10 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// look-sprite broadcast → 78. P2c adds the whisper family (CZ_WHISPER
 	// 0x0096, ZC_WHISPER 0x09de, ZC_ACK_WHISPER 0x09df) → 81. M14c adds the
 	// NPC input-dialog family (CZ_INPUT_EDITDLG 0x0143, CZ_INPUT_EDITDLGSTR
-	// 0x01d5, ZC_OPEN_EDITDLG 0x0142, ZC_OPEN_EDITDLGSTR 0x01d4) → 85.
-	const want = 85
+	// 0x01d5, ZC_OPEN_EDITDLG 0x0142, ZC_OPEN_EDITDLGSTR 0x01d4) → 85. M14d adds
+	// the ground-skill family (CZ_USE_SKILL_TOPOS 0x0AF4, ZC_NOTIFY_GROUNDSKILL
+	// 0x0117) → 87.
+	const want = 87
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

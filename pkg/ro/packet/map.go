@@ -306,6 +306,18 @@ const (
 	HeaderCZUSESKILL      uint16 = 0x0438 // CZ_USE_SKILL2 — clif_parse_UseSkillToId (clif_shuffle.hpp:4750)
 	HeaderZCNOTIFYSKILL   uint16 = 0x01de // ZC_NOTIFY_SKILL — packets_struct.hpp:4671 (PACKETVER >= 3)
 	HeaderZCACKTOUSESKILL uint16 = 0x0110 // ZC_ACK_TOUSESKILL — packets_struct.hpp:2461
+	// CZ_USE_SKILL_TOPOS (0x0AF4) — client casts a ground-target skill.
+	// rathena/src/map/clif_packetdb.hpp:1905
+	// (`#if PACKETVER >= 20180207 parseable_packet(0x0AF4,11,clif_parse_UseSkillToPos,2,4,6,8,10)`),
+	// the last UseSkillToPos binding (no rebind after). Fixed 11 bytes:
+	// [2:cmd][2:skillLv][2:skillID][2:xPos][2:yPos][1:moreinfo]. The trailing
+	// moreinfo byte is wire-present but server-ignored (rAthena clif.cpp:13137
+	// RFIFOB is commented out, passes -1), so goAthena consumes then discards it.
+	HeaderCZUSESKILLTOPOS uint16 = 0x0AF4
+	// ZC_NOTIFY_GROUNDSKILL (0x0117) — server broadcasts a ground skill's
+	// animation. rathena/src/map/packets_struct.hpp:4696 PACKET_ZC_NOTIFY_GROUNDSKILL.
+	// Fixed 18 bytes: [2:cmd][2:SKID][4:AID caster][2:level][2:xPos][2:yPos][4:startTime].
+	HeaderZCNOTIFYGROUNDSKILL uint16 = 0x0117
 	// P2C: stats & leveling — stat allocation + level-up effect.
 	// CZ_STATUS_CHANGE (0x00bb) is the client request to raise a base
 	// stat (rathena/src/map/clif.cpp:12714 clif_parse_StatusChange).
@@ -644,6 +656,14 @@ const (
 	// uint32 targetID = 2+2+2+4 = 10 (clif_shuffle.hpp:4750 binds
 	// opcode 0x0438 to length 10 for PACKETVER_RE_NUM >= 20190904).
 	sizeCZUseSkill2 = 10
+	// sizeCZUseSkillToPos = int16 packetType + int16 skillLv + uint16 skillID +
+	// uint16 xPos + uint16 yPos + uint8 moreinfo = 2+2+2+2+2+1 = 11
+	// (rathena/src/map/clif_packetdb.hpp:1905, PACKETVER >= 20180204 branch).
+	sizeCZUseSkillToPos = 11
+	// sizeZCNotifyGroundSkill = int16 packetType + uint16 SKID + uint32 AID +
+	// int16 level + int16 xPos + int16 yPos + uint32 startTime = 2+2+4+2+2+2+4 = 18
+	// (rathena/src/map/packets_struct.hpp:4696).
+	sizeZCNotifyGroundSkill = 18
 	// sizeZCNotifySkill = int16 packetType + uint16 SKID + uint32 AID +
 	// uint32 targetID + uint32 startTime + int32 attackMT +
 	// int32 attackedMT + int32 damage + int16 level + int16 count +
@@ -1257,6 +1277,21 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCACKTOUSESKILL,
 		Name:      "ZC_ACK_TOUSESKILL",
 		Length:    sizeZCAckToUseSkill,
+		Direction: DirectionServerToClient,
+	})
+	// M14d: ground-target skills. CZ_USE_SKILL_TOPOS (fixed 11 bytes) requests a
+	// ground cast; ZC_NOTIFY_GROUNDSKILL (fixed 18 bytes) broadcasts the poseffect
+	// animation to the AREA around the cast tile.
+	db.Register(Definition{
+		ID:        HeaderCZUSESKILLTOPOS,
+		Name:      "CZ_USE_SKILL_TOPOS",
+		Length:    sizeCZUseSkillToPos,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCNOTIFYGROUNDSKILL,
+		Name:      "ZC_NOTIFY_GROUNDSKILL",
+		Length:    sizeZCNotifyGroundSkill,
 		Direction: DirectionServerToClient,
 	})
 	// P3c: ground item drop notification. rAthena binds opcode 0x0ADD

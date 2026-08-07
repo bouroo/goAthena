@@ -259,6 +259,120 @@ func (s *CombatService) UseSkill(ctx context.Context, accountID uint32, req pack
 	return nil
 }
 
+// groundSkillSplashRadius is the 3x3 (radius 1) splash a ground-target skill
+// affects in the M14d slice. rAthena derives the splash per-skill from skill_db
+// Unit.Range/Layout (e.g. Storm Gust 5x5), which goAthena's skilldb does not yet
+// parse; radius 1 covers the cast tile plus its 8 neighbours and is the smallest
+// playable AoE. Lifting this to the skill_db value is a deferred unit.
+const groundSkillSplashRadius = 1
+
+// UseSkillToPos resolves one CZ_USE_SKILL_TOPOS (0x0AF4): an instant-cast
+// ground-target skill aimed at tile (req.X, req.Y). The M14d slice honours a
+// CastTime-zero ground skill (e.g. MG_STORMGUST): it gates on TargetType ==
+// "Ground", range-checks Chebyshev(caster, tile) <= skill.Range.At(level), pays
+// the per-level SP cost, broadcasts ZC_NOTIFY_GROUNDSKILL (the poseffect) to the
+// AREA around the cast tile, then resolves the 3x3 splash — every mob within
+// groundSkillSplashRadius of the tile takes one computeDamage hit broadcast as
+// ZC_NOTIFY_SKILL + ZC_NOTIFY_ACT, and a killing blow drives the existing
+// death/EXP/drop path. With no skill_db, an unknown skill, a non-ground skill, or
+// an out-of-range cast the request is a silent no-op — matching UseSkill's drop
+// policy. PENDING: real MATK magic damage (battle_calc_magic_attack — the MVP
+// uses melee computeDamage values), the skill_db splash radius, the cast bar
+// (ZC_USESKILL_ACK), and lingering skill-unit-group interval ticks.
+func (s *CombatService) UseSkillToPos(ctx context.Context, accountID uint32, req packet.CZUseSkillToPos) error {
+	if s.skills == nil {
+		return nil
+	}
+	attacker, ok := s.players.ByAccount(accountID)
+	if !ok {
+		return nil
+	}
+	skill := s.skills.Get(int32(req.SkillID)) //nolint:gosec // G115: skill DB ids fit int32
+	if skill == nil || !isGroundSkill(skill) {
+		return nil
+	}
+	level := clampSkillLevel(req.SkillLv, skill.MaxLevel)
+	ax, ay, _ := attacker.Position()
+	if combat.Chebyshev(int(ax), int(ay), int(req.X), int(req.Y)) > int(skill.Range.At(int(level))) {
+		return nil
+	}
+	cost := s.skills.SpCostAt(skill.ID, int(level))
+	if _, curSP := attacker.Vitals(); int32(curSP) < cost { //nolint:gosec // G115: SP fits int32
+		return s.sendSkillSPFail(attacker, req.SkillID)
+	}
+
+	mp, err := s.maps.Load(ctx, attacker.MapName)
+	if err != nil {
+		return fmt.Errorf("ground skill: load map %q for account %d: %w", attacker.MapName, accountID, err)
+	}
+	if mp == nil {
+		return fmt.Errorf("ground skill: map %q loaded nil for account %d", attacker.MapName, accountID)
+	}
+
+	// Pay SP after the map resolves so a load fault spends no resource; the new
+	// SP is broadcast only to the caster (SP is private, unlike damage).
+	newSP := attacker.SpendSP(cost)
+	if err := (packet.ParChangeResponse{VarID: packet.SPSP, Count: int32(newSP)}).Encode(connWriter{attacker.Conn}); err != nil { //nolint:gosec // G115: SP fits int32
+		return fmt.Errorf("ground skill: encode SP update account %d: %w", accountID, err)
+	}
+
+	// Broadcast the poseffect animation (ZC_NOTIFY_GROUNDSKILL) to every player
+	// observing the cast tile, mirroring rAthena's clif_skill_poseffect AREA send.
+	s.broadcastGroundPose(mp, packet.GroundSkillPoseEffect{
+		SKID:      req.SkillID,
+		AID:       attacker.AccountID,
+		Level:     int16(level), //nolint:gosec // G115: clampSkillLevel bounds level to [1,MaxLevel], fits int16
+		XPos:      int16(req.X), //nolint:gosec // G115: tile coords fit int16
+		YPos:      int16(req.Y), //nolint:gosec // G115: tile coords fit int16
+		StartTime: s.clock.MoveStart(),
+	})
+
+	// Resolve the 3x3 splash. QueryWithin returns a fresh snapshot, so onMobDeath
+	// removing a mob entity mid-loop is safe. The MVP uses melee computeDamage
+	// (PENDING MATK magic damage); the e2e asserts damage > 0, not an exact value.
+	return s.resolveGroundSplash(ctx, mp, attacker, req.SkillID, req.X, req.Y, level)
+}
+
+// broadcastGroundPose fans a ZC_NOTIFY_GROUNDSKILL poseffect to every player
+// observing the cast tile (the AREA send rAthena's clif_skill_poseffect makes).
+// One frame per cast, independent of how many mobs the splash later hits.
+func (s *CombatService) broadcastGroundPose(mp *domain.Map, pose packet.GroundSkillPoseEffect) {
+	for _, e := range mp.AOI.QueryVisible(int(pose.XPos), int(pose.YPos)) {
+		if e.Type != aoi.EntityPlayer {
+			continue
+		}
+		if neighbor, ok := s.players.ByAccount(uint32(e.ID)); ok {
+			_ = pose.Encode(connWriter{neighbor.Conn})
+		}
+	}
+}
+
+// resolveGroundSplash applies one computeDamage hit to every mob within
+// groundSkillSplashRadius of the cast tile, broadcasting ZC_NOTIFY_SKILL +
+// ZC_NOTIFY_ACT per victim and driving the death path on a killing blow. The MVP
+// reuses melee computeDamage (PENDING a MATK magic-damage formula).
+func (s *CombatService) resolveGroundSplash(ctx context.Context, mp *domain.Map, attacker *domain.Player, skillID uint16, tileX, tileY uint16, level int32) error {
+	for _, e := range mp.AOI.QueryWithin(int(tileX), int(tileY), groundSkillSplashRadius) {
+		if e.Type != aoi.EntityMob {
+			continue
+		}
+		mob, ok := s.mobs.ByEntity(e.ID)
+		if !ok {
+			continue
+		}
+		mx, my, _ := mob.Position()
+		damage := s.computeDamage(attacker, s.mobEntry(mob.MobID))
+		s.broadcastSkill(mp, mx, my, skillID, attacker.AccountID, mob.EntityID, damage, level)
+		s.broadcastDamage(mp, mx, my, attacker.AccountID, mob.EntityID, damage)
+		if _, died := mob.ApplyDamage(damage); died {
+			if err := s.onMobDeath(ctx, mp, mob, attacker); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // skillDamage scales a base melee hit by the cast skill's damage ratio. The M14b
 // slice resolves SM_BASH only; its ratio is the base 100% + 30% per level
 // (third_party/.../skills/swordman/bash.cpp:14, `base_skillratio += 30 *
@@ -293,6 +407,15 @@ func clampSkillLevel(lv int16, maxLv int32) int32 {
 // scope (the handler drops them; PENDING).
 func isWeaponAttackSkill(s *skilldb.SkillEntry) bool {
 	return s.Type == "Weapon" && s.TargetType == "Attack"
+}
+
+// isGroundSkill reports whether a skill targets a ground tile (rAthena skill_db
+// TargetType "Ground") — the only kind the M14d ground-cast slice resolves
+// (e.g. MG_STORMGUST). Self/buff/pet/trap target types are rejected here so a
+// ground-cast packet for a non-ground skill is a silent no-op, matching
+// UseSkill's drop policy for unsupported skills.
+func isGroundSkill(s *skilldb.SkillEntry) bool {
+	return s.TargetType == "Ground"
 }
 
 // sendSkillSPFail replies ZC_ACK_TOUSESKILL with the SP-insufficient cause to the
@@ -747,3 +870,33 @@ func (h *SkillHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwd
 
 // Compile-time check that SkillHandler satisfies the gateway handler shape.
 var _ gwdomain.PacketHandler = (*SkillHandler)(nil).Handle
+
+// ToPosHandler serves CZ_USE_SKILL_TOPOS (0x0AF4) on the map-role dispatch
+// table — a ground-target skill cast. Like SkillHandler, the caster is sourced
+// from conn.Auth().AccountID (never the packet, which carries only a tile).
+type ToPosHandler struct {
+	svc *CombatService
+}
+
+// NewToPosHandler binds the handler to its combat service.
+func NewToPosHandler(svc *CombatService) *ToPosHandler {
+	return &ToPosHandler{svc: svc}
+}
+
+// Handle implements gateway/domain.PacketHandler for CZ_USE_SKILL_TOPOS.
+func (h *ToPosHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
+	req, err := packet.ParseCZUseSkillToPos(frame.Raw)
+	if err != nil {
+		return fmt.Errorf("parse CZ_USE_SKILL_TOPOS: %w", err)
+	}
+	accountID := conn.Auth().AccountID
+	if accountID == 0 {
+		// No cached auth ⇒ the connection never passed the CZ_ENTER gate.
+		// Tolerated by the gateway (the conn stays open) but the cast is dropped.
+		return errors.New("ground skill: connection has no verified account (CZ_ENTER not completed)")
+	}
+	return h.svc.UseSkillToPos(ctx, accountID, req)
+}
+
+// Compile-time check that ToPosHandler satisfies the gateway handler shape.
+var _ gwdomain.PacketHandler = (*ToPosHandler)(nil).Handle

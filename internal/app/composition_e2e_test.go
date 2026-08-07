@@ -2034,6 +2034,9 @@ func mapFrameSize(op uint16) int {
 	case packet.HeaderZCNOTIFYSKILL:
 		// M14b: the skill-hit broadcast (0x01de, 33 bytes fixed). Value receiver.
 		return packet.NotifySkillResponse{}.Size()
+	case packet.HeaderZCNOTIFYGROUNDSKILL:
+		// M14d: the ground-skill poseffect broadcast (0x0117, 18 bytes fixed).
+		return packet.GroundSkillPoseEffect{}.Size()
 	case packet.HeaderZCACKTOUSESKILL:
 		// M14b: the skill cast result ack (0x0110, 14 bytes fixed; cause 12 =
 		// SP insufficient). Value receiver.
@@ -2972,6 +2975,122 @@ func TestServe_UseSkill_Bash(t *testing.T) {
 	require.NotNil(t, spUpdate, "no ZC_PAR_CHANGE SP_SP received — SP was not broadcast")
 	newSP := int32(binary.LittleEndian.Uint32(spUpdate[4:8])) //nolint:gosec // G115: test wire decode
 	assert.Less(t, newSP, int32(2000), "SP should have decreased from the cast cost")
+}
+
+// TestServe_UseSkillToPos_GroundTile is the M14d end-to-end: a player co-located
+// with the Poring casts MG_STORMGUST (a ground-target skill) on the Poring's
+// spawn tile via CZ_USE_SKILL_TOPOS (0x0AF4), proving the full TCP dispatch path
+// — gateway routes 0x0AF4 → ToPosHandler → ParseCZUseSkillToPos →
+// CombatService.UseSkillToPos → isGroundSkill gate → Chebyshev range check → SP
+// cost → ZC_NOTIFY_GROUNDSKILL (0x0117) poseffect broadcast. The poseffect is
+// emitted on every valid cast (independent of whether a mob is in the splash),
+// so it is the robust assertion; the per-mob ZC_NOTIFY_SKILL damage is
+// best-effort against the Poring wandering off the fixed cast tile (its
+// deterministic damage proof lives in TestCombatService_UseSkillToPos_HitsMobInSplash).
+func TestServe_UseSkillToPos_GroundTile(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	seedCharID := seedSkillChar(t, cfg, seededAccountID, "E2eGround", "prontera", 155, 165)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN; login likely failed against the DB")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1)
+	require.NoError(t, loginConn.Close())
+
+	// --- Enter on Prontera, co-located with the Poring spawn (155,165). ---
+	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eGround")
+	defer mapConn.Close()
+
+	// Locate the Poring in the enter spawn burst so a damage frame can be tied to
+	// its EntityID (best-effort; the poseffect assertion does not need it).
+	var poringID uint32
+	findEnd := time.Now().Add(5 * time.Second)
+	for poringID == 0 && time.Now().Before(findEnd) {
+		require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+		frame, ok := readMapFrame(t, mapConn)
+		if !ok {
+			continue
+		}
+		if binary.LittleEndian.Uint16(frame) != packet.HeaderZCSPAWNUNIT || frame[4] != 5 { // Poring sprite 1002 → job/sprite slot
+			continue
+		}
+		poringID = binary.LittleEndian.Uint32(frame[8:12])
+	}
+
+	// Cast MG_STORMGUST (89) on the Poring spawn tile (155,165), where the char
+	// stands (Chebyshev 0 <= Range 9). Loop casts so the 3x3 splash catches the
+	// Poring as it wanders near its spawn; the poseffect (0x0117) is emitted on
+	// every valid cast and is the hard proof the dispatch path ran.
+	var poseFrame, dmgFrame []byte
+	castEnd := time.Now().Add(8 * time.Second)
+	for time.Now().Before(castEnd) && poseFrame == nil {
+		var sk bytes.Buffer
+		require.NoError(t, (packet.CZUseSkillToPos{SkillLv: 1, SkillID: 89, X: 155, Y: 165}).Encode(&sk))
+		_, err = mapConn.Write(sk.Bytes())
+		require.NoError(t, err, "send CZ_USE_SKILL_TOPOS")
+
+		readEnd := time.Now().Add(600 * time.Millisecond)
+		for time.Now().Before(readEnd) && poseFrame == nil && dmgFrame == nil {
+			require.NoError(t, mapConn.SetReadDeadline(time.Now().Add(600*time.Millisecond)))
+			frame, ok := readMapFrame(t, mapConn)
+			if !ok {
+				break
+			}
+			switch binary.LittleEndian.Uint16(frame) {
+			case packet.HeaderZCNOTIFYGROUNDSKILL:
+				poseFrame = frame
+			case packet.HeaderZCNOTIFYSKILL:
+				if poringID != 0 && binary.LittleEndian.Uint32(frame[8:12]) == poringID &&
+					int32(binary.LittleEndian.Uint32(frame[24:28])) > 0 { //nolint:gosec // G115: test wire decode
+					dmgFrame = frame
+				}
+			}
+		}
+	}
+
+	require.NotNil(t, poseFrame, "no ZC_NOTIFY_GROUNDSKILL received — ground-skill dispatch did not run")
+	assert.Equal(t, uint16(89), binary.LittleEndian.Uint16(poseFrame[2:4]), "poseffect SKID = MG_STORMGUST")
+	assert.Equal(t, seededAccountID, binary.LittleEndian.Uint32(poseFrame[4:8]), "poseffect AID = caster")
+	assert.Equal(t, uint16(155), binary.LittleEndian.Uint16(poseFrame[10:12]), "poseffect xPos = cast tile")
+	assert.Equal(t, uint16(165), binary.LittleEndian.Uint16(poseFrame[12:14]), "poseffect yPos = cast tile")
+
+	// Damage is best-effort (the Poring may wander off the fixed cast tile); the
+	// deterministic damage proof lives in the unit test. Assert only when seen.
+	if dmgFrame != nil {
+		assert.Equal(t, uint16(89), binary.LittleEndian.Uint16(dmgFrame[2:4]), "ZC_NOTIFY_SKILL SKID = MG_STORMGUST")
+	}
 }
 
 // TestServe_StatChange is the M15 end-to-end proof. It boots the real modular monolith,

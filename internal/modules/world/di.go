@@ -154,6 +154,7 @@ func Register(ctx context.Context, c do.Injector) error {
 	do.ProvideValue(c, combat)
 	do.ProvideValue(c, app.NewActionHandler(combat))
 	do.ProvideValue(c, app.NewSkillHandler(combat))
+	do.ProvideValue(c, app.NewToPosHandler(combat))
 
 	// M10a: the pickup service. It shares the combat floor-item index + player
 	// registry + map store + item_db, and adds the inventory port the bag
