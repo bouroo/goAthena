@@ -269,7 +269,9 @@ func resolveWorldHandlers(i do.Injector) (
 	restart *worldapp.RestartHandler, pickup *worldapp.PickupHandler, drop *worldapp.DropHandler, equip *worldapp.EquipHandler,
 	takeoff *worldapp.TakeoffHandler, useItem *worldapp.UseItemHandler, skill *worldapp.SkillHandler, topos *worldapp.ToPosHandler,
 	chat *worldapp.ChatHandler, stats *worldapp.StatsHandler,
-	name *worldapp.NameHandler, whisper *worldapp.WhisperHandler, err error,
+	name *worldapp.NameHandler, whisper *worldapp.WhisperHandler,
+	tradeReq *worldapp.TradeRequestHandler, tradeAck *worldapp.TradeAckHandler, tradeCancel *worldapp.TradeCancelHandler,
+	err error,
 ) {
 	// Each handler resolves in registration order; the closure captures its
 	// named result so the loop body is a single error check. This keeps the
@@ -349,6 +351,18 @@ func resolveWorldHandlers(i do.Injector) (
 			return err
 		},
 		func() error {
+			tradeReq, err = invokeOr[*worldapp.TradeRequestHandler](i, "resolve CZ_TRADE_REQUEST handler")
+			return err
+		},
+		func() error {
+			tradeAck, err = invokeOr[*worldapp.TradeAckHandler](i, "resolve CZ_TRADE_ACK handler")
+			return err
+		},
+		func() error {
+			tradeCancel, err = invokeOr[*worldapp.TradeCancelHandler](i, "resolve CZ_TRADE_CANCEL handler")
+			return err
+		},
+		func() error {
 			stats, err = invokeOr[*worldapp.StatsHandler](i, "resolve CZ_STATUS_CHANGE handler")
 			return err
 		},
@@ -401,7 +415,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return err
 	}
-	mapEnter, loadEndAck, move, action, timeH, changeDir, emotion, restart, pickup, drop, equip, takeoff, useItem, skill, topos, chat, stats, name, whisper, err := resolveWorldHandlers(injector)
+	mapEnter, loadEndAck, move, action, timeH, changeDir, emotion, restart, pickup, drop, equip, takeoff, useItem, skill, topos, chat, stats, name, whisper, tradeReq, tradeAck, tradeCancel, err := resolveWorldHandlers(injector)
 	if err != nil {
 		return err
 	}
@@ -436,6 +450,9 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCZReqTakeoffEquip:    takeoff.Handle,
 		OnCZGlobalMessage:      chat.Handle,
 		OnCZWhisper:            whisper.Handle,
+		OnCZTradeRequest:       tradeReq.Handle,
+		OnCZTradeAck:           tradeAck.Handle,
+		OnCZTradeCancel:        tradeCancel.Handle,
 		OnCZStatusChange:       stats.Handle,
 		OnCZContactNPC:         contact.Handle,
 		OnCZReqNextScript:      next.Handle,

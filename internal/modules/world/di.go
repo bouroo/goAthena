@@ -232,6 +232,12 @@ func Register(ctx context.Context, c do.Injector) error {
 	// map-role dispatch table.
 	do.ProvideValue(c, app.NewChatHandler(registry, maps))
 	do.ProvideValue(c, app.NewWhisperHandler(registry))
+	// S1: the player-to-player trade handshake (request/ack/cancel). It shares the
+	// PlayerRegistry with whisper/chat/social, resolving both parties live.
+	tradeSvc := app.NewTradeService(registry)
+	do.ProvideValue(c, app.NewTradeRequestHandler(tradeSvc))
+	do.ProvideValue(c, app.NewTradeAckHandler(tradeSvc))
+	do.ProvideValue(c, app.NewTradeCancelHandler(tradeSvc))
 
 	// M15: the stat-change service. It resolves the character repository (chars, already
 	// resolved above) and the player registry, validates the stat ID and available

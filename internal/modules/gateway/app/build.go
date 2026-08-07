@@ -90,6 +90,13 @@ type Handlers struct {
 	// OnCZWhisper serves CZ_WHISPER (0x0096), the private-message request.
 	// Provided by the world module (P2c).
 	OnCZWhisper domain.PacketHandler
+	// OnCZTradeRequest/Ack/Cancel serve the CZ_TRADE family handshake
+	// (0x00e4 / 0x00e6 / 0x00ed): the request/ack/cancel state machine between
+	// two online players, with NO item or zeny movement (atomic commit deferred).
+	// Provided by the world module (S1).
+	OnCZTradeRequest domain.PacketHandler
+	OnCZTradeAck     domain.PacketHandler
+	OnCZTradeCancel  domain.PacketHandler
 	// OnCZContactNPC serves CZ_CONTACTNPC (0x0090), initiating an NPC dialog.
 	// Provided by the content module.
 	OnCZContactNPC domain.PacketHandler
@@ -183,6 +190,9 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table = addHandler(table, packet.HeaderCZREQTAKEOFFEQUIP, h.OnCZReqTakeoffEquip)
 	table = addHandler(table, packet.HeaderCZGLOBALMESSAGE, h.OnCZGlobalMessage)
 	table = addHandler(table, packet.HeaderCZWHISPER, h.OnCZWhisper)
+	table = addHandler(table, packet.HeaderCZTRADEREQUEST, h.OnCZTradeRequest)
+	table = addHandler(table, packet.HeaderCZTRADEACK, h.OnCZTradeAck)
+	table = addHandler(table, packet.HeaderCZTRADECANCEL, h.OnCZTradeCancel)
 	table = addHandler(table, packet.HeaderCZCONTACTNPC, h.OnCZContactNPC)
 	table = addHandler(table, packet.HeaderCZREQNEXTSCRIPT, h.OnCZReqNextScript)
 	table = addHandler(table, packet.HeaderCZCHOOSEMENU, h.OnCZChooseMenu)

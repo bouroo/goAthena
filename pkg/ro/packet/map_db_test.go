@@ -94,6 +94,13 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		// M14d: ground-target skills (clif_packetdb.hpp:1905, packets_struct.hpp:4696).
 		{HeaderCZUSESKILLTOPOS, "CZ_USE_SKILL_TOPOS", sizeCZUseSkillToPos, DirectionClientToServer},
 		{HeaderZCNOTIFYGROUNDSKILL, "ZC_NOTIFY_GROUNDSKILL", sizeZCNotifyGroundSkill, DirectionServerToClient},
+		// S1: trade handshake family (clif_packetdb.hpp:87,89,93; packets.hpp:373,387; :1062).
+		{HeaderCZTRADEREQUEST, "CZ_TRADE_REQUEST", sizeCZTradeRequest, DirectionClientToServer},
+		{HeaderCZTRADEACK, "CZ_TRADE_ACK", sizeCZTradeAck, DirectionClientToServer},
+		{HeaderCZTRADECANCEL, "CZ_TRADE_CANCEL", sizeCZTradeCancel, DirectionClientToServer},
+		{HeaderZCREQEXCHANGEITEM, "ZC_REQ_EXCHANGE_ITEM", sizeZCReqExchange, DirectionServerToClient},
+		{HeaderZCACKEXCHANGEITEM, "ZC_ACK_EXCHANGE_ITEM", sizeZCAckExchange, DirectionServerToClient},
+		{HeaderZCCANCELEXCHANGEITEM, "ZC_CANCEL_EXCHANGE_ITEM", sizeZCCancelExchange, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -142,8 +149,10 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// NPC input-dialog family (CZ_INPUT_EDITDLG 0x0143, CZ_INPUT_EDITDLGSTR
 	// 0x01d5, ZC_OPEN_EDITDLG 0x0142, ZC_OPEN_EDITDLGSTR 0x01d4) → 85. M14d adds
 	// the ground-skill family (CZ_USE_SKILL_TOPOS 0x0AF4, ZC_NOTIFY_GROUNDSKILL
-	// 0x0117) → 87.
-	const want = 87
+	// 0x0117) → 87. S1 adds the trade-handshake family (CZ_TRADE_REQUEST 0x00e4,
+	// CZ_TRADE_ACK 0x00e6, CZ_TRADE_CANCEL 0x00ed, ZC_REQ_EXCHANGE_ITEM 0x01f4,
+	// ZC_ACK_EXCHANGE_ITEM 0x01f5, ZC_CANCEL_EXCHANGE_ITEM 0x00ee) → 93.
+	const want = 93
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

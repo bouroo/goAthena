@@ -105,6 +105,62 @@ type Player struct {
 	Option      uint32 // effect bits → EffectState
 	Manner      uint16 // → Honor
 	Karma       uint8  // → IsPKModeON (1 when non-zero)
+	// Trade-partner state (slice S1: the request/ack/cancel handshake, NO item or
+	// zeny movement). Guarded by mu: a trade request arrives on one player's
+	// dispatch goroutine but mutates BOTH players' state. To stay deadlock-free
+	// each accessor holds only ONE player's lock at a time (sequential, never
+	// nested); a narrow TOCTOU window between the partner check and the set is
+	// acceptable for a zero-dupe handshake slice (the "already-partnered" reject
+	// still fires on the next request). tradePartnerID 0 means idle. The atomic
+	// all-or-nothing guarantee this state CANNOT provide belongs to the deferred
+	// commit slice (S3).
+	tradePartnerID uint32
+	tradePartnerLv uint16
+	trading        bool
+}
+
+// TradePartner returns the player's current trade partner's account id and base
+// level under the read lock. A zero id means no pending/active trade.
+func (p *Player) TradePartner() (partnerID uint32, partnerLv uint16) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.tradePartnerID, p.tradePartnerLv
+}
+
+// IsTrading reports whether the player has an OPEN trade window (past the ack,
+// before cancel/commit). Read under the lock.
+func (p *Player) IsTrading() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.trading
+}
+
+// SetTradePartner records a pending trade partner (their account id + level) on
+// this player, matching rAthena's trade_partner.{id,lv} (trade.cpp:86-90). Does
+// NOT mark the window open — that waits for the ack (SetTrading).
+func (p *Player) SetTradePartner(partnerID uint32, partnerLv uint16) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tradePartnerID = partnerID
+	p.tradePartnerLv = partnerLv
+}
+
+// SetTrading marks the player's trade window open (ack accepted) or closed. The
+// partner id is unaffected; ClearTrade zeroes both.
+func (p *Player) SetTrading(open bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.trading = open
+}
+
+// ClearTrade zeroes this player's trade-partner state (id, level, trading flag) —
+// the cancel/close path (rAthena trade.cpp:147-160 on fail, :128-133 on cancel).
+func (p *Player) ClearTrade() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tradePartnerID = 0
+	p.tradePartnerLv = 0
+	p.trading = false
 }
 
 // SpawnUnit builds the ZC_SPAWN_UNIT frame this player emits to a client —

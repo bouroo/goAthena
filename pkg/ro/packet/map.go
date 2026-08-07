@@ -1294,6 +1294,45 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCNotifyGroundSkill,
 		Direction: DirectionServerToClient,
 	})
+	// S1: player-to-player trade handshake (request/ack/cancel). NO item or zeny
+	// movement (the atomic-commit slice is deferred). ZC_REQ/ZC_ACK use the
+	// PACKETVER > 6 layouts (packets.hpp:373/:387); see trade.go for field maps.
+	db.Register(Definition{
+		ID:        HeaderCZTRADEREQUEST,
+		Name:      "CZ_TRADE_REQUEST",
+		Length:    sizeCZTradeRequest,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZTRADEACK,
+		Name:      "CZ_TRADE_ACK",
+		Length:    sizeCZTradeAck,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZTRADECANCEL,
+		Name:      "CZ_TRADE_CANCEL",
+		Length:    sizeCZTradeCancel,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCREQEXCHANGEITEM,
+		Name:      "ZC_REQ_EXCHANGE_ITEM",
+		Length:    sizeZCReqExchange,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCACKEXCHANGEITEM,
+		Name:      "ZC_ACK_EXCHANGE_ITEM",
+		Length:    sizeZCAckExchange,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCCANCELEXCHANGEITEM,
+		Name:      "ZC_CANCEL_EXCHANGE_ITEM",
+		Length:    sizeZCCancelExchange,
+		Direction: DirectionServerToClient,
+	})
 	// P3c: ground item drop notification. rAthena binds opcode 0x0ADD
 	// with size 22 for PACKETVER >= 20180418 (clif_packetdb.hpp:1921);
 	// the v5 layout adds <showDropEffect> + <dropEffectMode> on top of

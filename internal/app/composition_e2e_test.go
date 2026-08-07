@@ -2038,6 +2038,15 @@ func mapFrameSize(op uint16) int {
 	case packet.HeaderZCNOTIFYGROUNDSKILL:
 		// M14d: the ground-skill poseffect broadcast (0x0117, 18 bytes fixed).
 		return packet.GroundSkillPoseEffect{}.Size()
+	case packet.HeaderZCREQEXCHANGEITEM:
+		// S1: trade request → target (0x01f4, 32 bytes fixed).
+		return packet.TradeRequestResponse{}.Size()
+	case packet.HeaderZCACKEXCHANGEITEM:
+		// S1: trade ack result (0x01f5, 9 bytes fixed).
+		return packet.TradeAckResponse{}.Size()
+	case packet.HeaderZCCANCELEXCHANGEITEM:
+		// S1: trade cancel notice (0x00ee, 2 bytes fixed).
+		return packet.CancelExchangeResponse{}.Size()
 	case packet.HeaderZCACKTOUSESKILL:
 		// M14b: the skill cast result ack (0x0110, 14 bytes fixed; cause 12 =
 		// SP insufficient). Value receiver.
@@ -3113,6 +3122,85 @@ func TestServe_UseSkillToPos_GroundTile(t *testing.T) {
 	if dmgFrame != nil {
 		assert.Equal(t, uint16(89), binary.LittleEndian.Uint16(dmgFrame[2:4]), "ZC_NOTIFY_SKILL SKID = MG_STORMGUST")
 	}
+}
+
+// TestServe_Trade_HandshakeOverTCP is the S1 end-to-end: two players (the default
+// "test" account + the seeded "test2" account) each enter Prontera within
+// TRADE_DISTANCE, then drive the full trade handshake over real sockets:
+//   - A sends CZ_TRADE_REQUEST (0x00e4) targeting B's GID → B receives
+//     ZC_REQ_EXCHANGE_ITEM (0x01f4).
+//   - B sends CZ_TRADE_ACK (0x00e6, type==3 accept) → BOTH receive
+//     ZC_ACK_EXCHANGE_ITEM (0x01f5, ACCEPT).
+//   - A sends CZ_TRADE_CANCEL (0x00ed) → BOTH receive ZC_CANCEL_EXCHANGE_ITEM
+//     (0x00ee).
+//
+// This proves the whole S1 dispatch path (gateway → handlers → TradeService →
+// cross-session conn writes) with zero item/zeny movement. The two players are
+// seeded adjacent so the TRADE_DISTANCE (2) gate passes.
+func TestServe_Trade_HandshakeOverTCP(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	// A ("test") and B ("test2") co-located within TRADE_DISTANCE on prontera.
+	aCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eTradeA", "prontera", 60, 120)
+	const bAccountID uint32 = 2000001
+	bCharID := seedCharForAccount(t, cfg, bAccountID, "E2eTradeB", "prontera", 61, 120)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+
+	aLoginID1, aSex := loginAccount(t, tcpAddr, "test", "test")
+	bLoginID1, bSex := loginAccount(t, tcpAddr, "test2", "test2")
+	mapConnA := enterMapForAccount(t, mapAddr, seededAccountID, aCharID, aLoginID1, aSex)
+	defer mapConnA.Close()
+	mapConnB := enterMapForAccount(t, mapAddr, bAccountID, bCharID, bLoginID1, bSex)
+	defer mapConnB.Close()
+
+	// 1) A requests a trade with B (target = B's GID/char_id). B's conn should
+	//    receive ZC_REQ_EXCHANGE_ITEM (0x01f4). readUntilCmd drains the enter burst.
+	var req bytes.Buffer
+	require.NoError(t, (packet.CZTradeRequest{TargetGID: bCharID}).Encode(&req))
+	_, err := mapConnA.Write(req.Bytes())
+	require.NoError(t, err, "send CZ_TRADE_REQUEST")
+	reqFrame := readUntilCmd(t, mapConnB, packet.HeaderZCREQEXCHANGEITEM, 5*time.Second)
+	assert.Equal(t, "E2eTradeA", string(bytes.TrimRight(reqFrame[2:26], "\x00")),
+		"ZC_REQ requester name = A")
+	assert.Equal(t, seededAccountID, binary.LittleEndian.Uint32(reqFrame[26:30]),
+		"ZC_REQ targetId = A's account_id")
+
+	// 2) B accepts (type==3). Both conns receive ZC_ACK EXCHANGE_ITEM (0x01f5, ACCEPT).
+	var ack bytes.Buffer
+	require.NoError(t, (packet.CZTradeAck{Type: packet.CZTradeAckAccept}).Encode(&ack))
+	_, err = mapConnB.Write(ack.Bytes())
+	require.NoError(t, err, "send CZ_TRADE_ACK accept")
+	aAck := readUntilCmd(t, mapConnA, packet.HeaderZCACKEXCHANGEITEM, 5*time.Second)
+	bAck := readUntilCmd(t, mapConnB, packet.HeaderZCACKEXCHANGEITEM, 5*time.Second)
+	assert.Equal(t, uint8(packet.TradeAckAccept), aAck[2], "A's ZC_ACK result = ACCEPT")
+	assert.Equal(t, uint8(packet.TradeAckAccept), bAck[2], "B's ZC_ACK result = ACCEPT")
+
+	// 3) A cancels (0x00ed). Both conns receive ZC_CANCEL_EXCHANGE_ITEM (0x00ee).
+	var cancelPkt bytes.Buffer
+	require.NoError(t, packet.EncodeCZTradeCancel(&cancelPkt))
+	_, err = mapConnA.Write(cancelPkt.Bytes())
+	require.NoError(t, err, "send CZ_TRADE_CANCEL")
+	readUntilCmd(t, mapConnA, packet.HeaderZCCANCELEXCHANGEITEM, 5*time.Second)
+	readUntilCmd(t, mapConnB, packet.HeaderZCCANCELEXCHANGEITEM, 5*time.Second)
 }
 
 // TestServe_StatChange is the M15 end-to-end proof. It boots the real modular monolith,
