@@ -1065,6 +1065,20 @@ func ParseCZChooseMenu(frame []byte) (CZChooseMenuRequest, error) {
 	}, nil
 }
 
+// Encode writes the CZ_CHOOSE_MENU packet to w, mirroring the on-wire layout
+// documented above: [2:cmd=0x00b8][4:NpcID][1:Selected] = 7 bytes. Used by tests
+// and the e2e harness to resume a select()/menu() dialog.
+func (r CZChooseMenuRequest) Encode(w io.Writer) error {
+	var buf [sizeCZChooseMenu]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCHOOSEMENU)
+	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
+	buf[6] = byte(r.Selected) //nolint:gosec // int8→byte is the wire format; 0xff means "cancel".
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_CHOOSE_MENU: %w", err)
+	}
+	return nil
+}
+
 // CZInputEditDlgRequest is the decoded form of a client → map-server
 // CZ_INPUT_EDITDLG packet (header 0x0143, 10 bytes on the wire). The client
 // sends it after the player enters a number in the inputnum dialog window and

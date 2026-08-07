@@ -2045,3 +2045,22 @@ func TestParseCZDropItem_RejectsBadLength(t *testing.T) {
 		}
 	}
 }
+
+func TestCZChooseMenuRequest_EncodeRoundTrip(t *testing.T) {
+	t.Parallel()
+	in := CZChooseMenuRequest{NpcID: 0x12345678, Selected: 2}
+	var buf bytes.Buffer
+	require.NoError(t, in.Encode(&buf))
+	assert.Len(t, buf.Bytes(), sizeCZChooseMenu, "CZ_CHOOSE_MENU fixed 7 bytes")
+	out, err := ParseCZChooseMenu(buf.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, in, out, "encode → parse round-trips the menu choice")
+
+	// The cancel sentinel (0xff) round-trips too.
+	cancel := CZChooseMenuRequest{NpcID: 0x0A0B0C0D, Selected: -1}
+	var cbuf bytes.Buffer
+	require.NoError(t, cancel.Encode(&cbuf))
+	cout, err := ParseCZChooseMenu(cbuf.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, int8(-1), cout.Selected, "cancel sentinel 0xff → int8 -1")
+}

@@ -1917,6 +1917,7 @@ func readMapFrame(t *testing.T, conn net.Conn) ([]byte, bool) {
 		op == packet.HeaderZCINVENTORYSTART ||
 		op == packet.HeaderZCSKILLINFOLIST ||
 		op == packet.HeaderZCSAYDIALOG2 ||
+		op == packet.HeaderZCMENULIST ||
 		op == packet.HeaderZCNOTIFYCHAT ||
 		op == packet.HeaderZCWHISPER {
 		lenBuf := make([]byte, 2)
@@ -2763,17 +2764,20 @@ func TestServe_Warp_MovesPlayerToNewMap(t *testing.T) {
 	assert.Equal(t, uint16(128), pY, "persisted last_y = 128")
 }
 
-// TestServe_InputDialog_NumericRoundTrip is the M14c end-to-end: a player on
-// Prontera contacts the Sample NPC (a script NPC exercising the input() builtin),
-// advances past `next`, and the server opens the numeric-input dialog
-// (ZC_OPEN_EDITDLG 0x0142). The player submits a value via CZ_INPUT_EDITDLG
-// (0x0143); the script resumes, stores the value, and echoes it in a follow-up
-// mes line — proving the whole pipeline: gateway dispatch → InputEditDlgHandler
-// → DialogSignal(Amount) → scriptHost.Input resume → VM builtinInput store.
+// TestServe_DialogCoroutine_MenuAndInput is the end-to-end dialog-coroutine
+// proof: a player on Prontera contacts the Sample NPC (a script NPC exercising
+// select() AND input()), advances past `next`, and the server opens a menu
+// (ZC_MENU_LIST 0x00b7). The player selects an option via CZ_CHOOSE_MENU
+// (0x00b8); the script resumes into the input() branch, which opens the
+// numeric-input dialog (ZC_OPEN_EDITDLG 0x0142). The player submits a value via
+// CZ_INPUT_EDITDLG (0x0143); the script resumes, stores the value, and echoes it
+// in a follow-up mes line — proving TWO coroutine-suspend/resume cycles over a
+// real socket: select()→CZ_CHOOSE_MENU and input()→CZ_INPUT_EDITDLG, sharing the
+// single per-account DialogSignal channel (WIP=1).
 //
 // Script NPCs allocate alphabetically (healer → sample → warper), so the Sample
 // NPC is the 2nd script NPC: EntityID = NPCIDBase + 1.
-func TestServe_InputDialog_NumericRoundTrip(t *testing.T) {
+func TestServe_DialogCoroutine_MenuAndInput(t *testing.T) {
 	requireStack(t)
 
 	cfg := loadConfigForE2E(t)
@@ -2831,12 +2835,30 @@ func TestServe_InputDialog_NumericRoundTrip(t *testing.T) {
 	assert.Equal(t, sampleNpcID, binary.LittleEndian.Uint32(waitFrame[2:6]),
 		"ZC_WAIT_DIALOG2 NpcID must match the Sample NPC")
 
-	// CZ_REQ_NEXT_SCRIPT advances; the script then runs input(.@donate), which
-	// emits ZC_OPEN_EDITDLG and blocks for the client's value.
+	// CZ_REQ_NEXT_SCRIPT advances past `next`; the script then runs
+	// mes "What would you like to do?" then select("Donate zeny:Just say hi"),
+	// which emits ZC_MENU_LIST and blocks for the client's choice. This proves
+	// the select() coroutine-suspend + CZ_CHOOSE_MENU resume over a real socket.
 	var advance bytes.Buffer
 	require.NoError(t, (packet.CZReqNextScriptRequest{NpcID: sampleNpcID}).Encode(&advance))
 	_, err = mapConn.Write(advance.Bytes())
 	require.NoError(t, err, "send CZ_REQ_NEXT_SCRIPT")
+
+	// ZC_MENU_LIST (variable-length): [2:len][4:NpcID][8:items+NUL]. The items
+	// text ends with a NUL terminator one byte before pktLen.
+	menuFrame := readUntilCmd(t, mapConn, packet.HeaderZCMENULIST, 5*time.Second)
+	menuLen := int(binary.LittleEndian.Uint16(menuFrame[2:4]))
+	assert.Equal(t, sampleNpcID, binary.LittleEndian.Uint32(menuFrame[4:8]),
+		"ZC_MENU_LIST NpcID must match the Sample NPC")
+	menuItems := string(bytes.TrimRight(menuFrame[8:menuLen], "\x00"))
+	assert.Contains(t, menuItems, "Donate zeny", "ZC_MENU_LIST carries the Donate option")
+
+	// Choose "Donate zeny" (1-based index 1). The script resumes into the if-branch,
+	// runs mes "How much..." then input(.@donate), which emits ZC_OPEN_EDITDLG.
+	var choose bytes.Buffer
+	require.NoError(t, (packet.CZChooseMenuRequest{NpcID: sampleNpcID, Selected: 1}).Encode(&choose))
+	_, err = mapConn.Write(choose.Bytes())
+	require.NoError(t, err, "send CZ_CHOOSE_MENU")
 
 	editFrame := readUntilCmd(t, mapConn, packet.HeaderZCOPENEDITDLG, 5*time.Second)
 	assert.Equal(t, sampleNpcID, binary.LittleEndian.Uint32(editFrame[2:6]),
