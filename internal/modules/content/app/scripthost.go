@@ -105,6 +105,43 @@ func (h *scriptHost) Select(options []string) int {
 	}
 }
 
+// Input sends the numeric-input dialog (ZC_OPEN_EDITDLG) and blocks for the
+// client's CZ_INPUT_EDITDLG. A 30s timer bounds the wait to prevent leaks if
+// the client drops silently. Returns the entered amount and false if the dialog
+// was closed/dropped/timed out, so builtinInput ends the script.
+func (h *scriptHost) Input() (int64, bool) {
+	resp := packet.OpenEditDlgResponse{NpcID: h.npcID}
+	_ = resp.Encode(connWriter{h.conn})
+
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+
+	select {
+	case sig := <-h.dialogCh:
+		return int64(sig.Amount), sig.Advance
+	case <-timer.C:
+		return 0, false
+	}
+}
+
+// InputStr sends the string-input dialog (ZC_OPEN_EDITDLGSTR) and blocks for the
+// client's CZ_INPUT_EDITDLGSTR. A 30s timer bounds the wait. Returns the entered
+// text and false if the dialog was closed/dropped/timed out.
+func (h *scriptHost) InputStr() (string, bool) {
+	resp := packet.OpenEditDlgStrResponse{NpcID: h.npcID}
+	_ = resp.Encode(connWriter{h.conn})
+
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+
+	select {
+	case sig := <-h.dialogCh:
+		return sig.Text, sig.Advance
+	case <-timer.C:
+		return "", false
+	}
+}
+
 // Close sends the close-dialog frame (ZC_CLOSE_DIALOG) to the client.
 func (h *scriptHost) Close() {
 	resp := packet.CloseDialogResponse{

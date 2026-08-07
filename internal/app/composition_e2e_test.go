@@ -2024,6 +2024,10 @@ func mapFrameSize(op uint16) int {
 	case packet.HeaderZCCLOSEDIALOG:
 		// M14a: the NPC "Close" frame (0x00b6, 6 bytes fixed). Value receiver.
 		return packet.CloseDialogResponse{}.Size()
+	case packet.HeaderZCOPENEDITDLG, packet.HeaderZCOPENEDITDLGSTR:
+		// M14c: the NPC input-window open frames (0x0142 / 0x01d4, 6 bytes
+		// fixed). Value receiver.
+		return packet.OpenEditDlgResponse{}.Size()
 	case packet.HeaderZCNPCACKMAPMOVE:
 		// M14a: the warp/change-map ack (0x0091, 22 bytes fixed). Value receiver.
 		return packet.MapMoveResponse{}.Size()
@@ -2754,6 +2758,100 @@ func TestServe_Warp_MovesPlayerToNewMap(t *testing.T) {
 	assert.Equal(t, "izlude", pMap, "persisted last_map = izlude")
 	assert.Equal(t, uint16(128), pX, "persisted last_x = 128")
 	assert.Equal(t, uint16(128), pY, "persisted last_y = 128")
+}
+
+// TestServe_InputDialog_NumericRoundTrip is the M14c end-to-end: a player on
+// Prontera contacts the Sample NPC (a script NPC exercising the input() builtin),
+// advances past `next`, and the server opens the numeric-input dialog
+// (ZC_OPEN_EDITDLG 0x0142). The player submits a value via CZ_INPUT_EDITDLG
+// (0x0143); the script resumes, stores the value, and echoes it in a follow-up
+// mes line — proving the whole pipeline: gateway dispatch → InputEditDlgHandler
+// → DialogSignal(Amount) → scriptHost.Input resume → VM builtinInput store.
+//
+// Script NPCs allocate alphabetically (healer → sample → warper), so the Sample
+// NPC is the 2nd script NPC: EntityID = NPCIDBase + 1.
+func TestServe_InputDialog_NumericRoundTrip(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	seedCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eInput", "prontera", 150, 155)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+
+	loginConn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, loginConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(cfg.Gateway.Packetver), Username: "test", Password: "test",
+	}.Encode(&login))
+	_, err = loginConn.Write(login.Bytes())
+	require.NoError(t, err)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(loginConn, accept)
+	require.NoError(t, err, "no AC_ACCEPT_LOGIN; login likely failed against the DB")
+	loginID1 := binary.LittleEndian.Uint32(accept[4:8])
+	sexByte := accept[46]
+	require.NotZero(t, loginID1)
+	require.NoError(t, loginConn.Close())
+
+	// --- Enter on Prontera. ---
+	mapConn := connectAndEnterMap(t, mapAddr, seedCharID, loginID1, sexByte, "E2eInput")
+	defer mapConn.Close()
+
+	// --- Contact the Sample NPC (Type 0 = script dialog) and advance past next. ---
+	sampleNpcID := worlddomain.NPCIDBase + 1
+	var contact bytes.Buffer
+	require.NoError(t, (packet.CZContactNPCRequest{AID: sampleNpcID, Type: 0}).Encode(&contact))
+	_, err = mapConn.Write(contact.Bytes())
+	require.NoError(t, err, "send CZ_CONTACTNPC")
+
+	// mes×3 then the "Next" prompt (ZC_WAIT_DIALOG2).
+	waitFrame := readUntilCmd(t, mapConn, packet.HeaderZCWAITDIALOG2, 5*time.Second)
+	assert.Equal(t, sampleNpcID, binary.LittleEndian.Uint32(waitFrame[2:6]),
+		"ZC_WAIT_DIALOG2 NpcID must match the Sample NPC")
+
+	// CZ_REQ_NEXT_SCRIPT advances; the script then runs input(.@donate), which
+	// emits ZC_OPEN_EDITDLG and blocks for the client's value.
+	var advance bytes.Buffer
+	require.NoError(t, (packet.CZReqNextScriptRequest{NpcID: sampleNpcID}).Encode(&advance))
+	_, err = mapConn.Write(advance.Bytes())
+	require.NoError(t, err, "send CZ_REQ_NEXT_SCRIPT")
+
+	editFrame := readUntilCmd(t, mapConn, packet.HeaderZCOPENEDITDLG, 5*time.Second)
+	assert.Equal(t, sampleNpcID, binary.LittleEndian.Uint32(editFrame[2:6]),
+		"ZC_OPEN_EDITDLG NpcID must match the Sample NPC")
+
+	// Submit a numeric value via CZ_INPUT_EDITDLG. The handler forwards it as
+	// DialogSignal(Amount); builtinInput stores it and the script echoes it.
+	var input bytes.Buffer
+	require.NoError(t, (packet.CZInputEditDlgRequest{NpcID: sampleNpcID, Value: 1234}).Encode(&input))
+	_, err = mapConn.Write(input.Bytes())
+	require.NoError(t, err, "send CZ_INPUT_EDITDLG")
+
+	// The script resumes and emits mes "You donated <value> zeny...". The mes
+	// text lives in the ZC_SAY_DIALOG2 payload at [9:pktLen) (NUL-trimmed).
+	mesFrame := readUntilCmd(t, mapConn, packet.HeaderZCSAYDIALOG2, 5*time.Second)
+	pktLen := int(binary.LittleEndian.Uint16(mesFrame[2:4]))
+	dialogText := string(bytes.TrimRight(mesFrame[9:pktLen], "\x00"))
+	assert.Contains(t, dialogText, "1234", "mes echoes the submitted input value through the full pipeline")
 }
 
 // TestServe_UseSkill_Bash is the M14b end-to-end: a player on the Poring's

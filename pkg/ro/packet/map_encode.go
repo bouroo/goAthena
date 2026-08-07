@@ -1778,6 +1778,60 @@ func (r CloseDialogResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// OpenEditDlgResponse encodes a ZC_OPEN_EDITDLG packet (command 0x0142,
+// 6 bytes fixed). The server sends this to open the numeric-input dialog
+// window for an NPC; the client replies with CZ_INPUT_EDITDLG (0x0143).
+//
+// Wire layout (rathena/src/map/packets.hpp:769 PACKET_ZC_OPEN_EDITDLG):
+//
+//	int16  packetType (0x0142)
+//	uint32 NpcID
+type OpenEditDlgResponse struct {
+	// NpcID is the NPC entity ID the inputnum window is opened for.
+	NpcID uint32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 6).
+func (r OpenEditDlgResponse) Size() int { return sizeZCOpenEditDlg }
+
+// Encode writes the ZC_OPEN_EDITDLG packet to w.
+func (r OpenEditDlgResponse) Encode(w io.Writer) error {
+	var buf [sizeZCOpenEditDlg]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCOPENEDITDLG)
+	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_OPEN_EDITDLG: %w", err)
+	}
+	return nil
+}
+
+// OpenEditDlgStrResponse encodes a ZC_OPEN_EDITDLGSTR packet (command 0x01d4,
+// 6 bytes fixed). Same layout as ZC_OPEN_EDITDLG but opens the string-input
+// dialog window; the client replies with CZ_INPUT_EDITDLGSTR (0x01d5).
+//
+// Wire layout (rathena/src/map/packets.hpp:775 PACKET_ZC_OPEN_EDITDLGSTR):
+//
+//	int16  packetType (0x01d4)
+//	uint32 NpcID
+type OpenEditDlgStrResponse struct {
+	// NpcID is the NPC entity ID the inputstr window is opened for.
+	NpcID uint32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 6).
+func (r OpenEditDlgStrResponse) Size() int { return sizeZCOpenEditDlg }
+
+// Encode writes the ZC_OPEN_EDITDLGSTR packet to w.
+func (r OpenEditDlgStrResponse) Encode(w io.Writer) error {
+	var buf [sizeZCOpenEditDlg]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCOPENEDITDLGSTR)
+	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_OPEN_EDITDLGSTR: %w", err)
+	}
+	return nil
+}
+
 // SelectDealtypeResponse encodes a ZC_SELECT_DEALTYPE packet (command
 // 0x00c4, 6 bytes fixed). The server sends this after CZ_CONTACTNPC
 // for shop-type NPCs so the client can pop up the Buy / Sell / Cancel

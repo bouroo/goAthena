@@ -24,6 +24,15 @@ type Host interface {
 	// client picked, or 255 (FF_CANCEL) for cancel, mirroring rAthena's
 	// @menu / sd->npc_menu result of clif_parse_NpcSelectMenu.
 	Select(options []string) int
+	// Input sends the numeric-input dialog (ZC_OPEN_EDITDLG) and blocks until
+	// the client replies with CZ_INPUT_EDITDLG. Returns the entered amount and
+	// false if the dialog was closed or the connection dropped, in which case
+	// the VM ends the script — mirroring Next()'s false return.
+	Input() (amount int64, ok bool)
+	// InputStr sends the string-input dialog (ZC_OPEN_EDITDLGSTR) and blocks
+	// until the client replies with CZ_INPUT_EDITDLGSTR. Returns the entered
+	// text and false if the dialog was closed or the connection dropped.
+	InputStr() (text string, ok bool)
 	// Close sends the close-dialog frame (ZC_CLOSE_DIALOG).
 	Close()
 	// Warp moves the player to the named map tile.

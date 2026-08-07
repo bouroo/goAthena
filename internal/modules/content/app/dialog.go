@@ -187,6 +187,68 @@ func (h *ChooseMenuHandler) Handle(ctx context.Context, conn gwdomain.Conn, fram
 	return nil
 }
 
+// InputEditDlgHandler serves CZ_INPUT_EDITDLG (0x0143).
+type InputEditDlgHandler struct {
+	svc *DialogService
+}
+
+// NewInputEditDlgHandler builds a CZ_INPUT_EDITDLG handler bound to the
+// DialogService.
+func NewInputEditDlgHandler(svc *DialogService) *InputEditDlgHandler {
+	return &InputEditDlgHandler{svc: svc}
+}
+
+// Handle forwards the client's numeric input to the paused script. The 10-byte
+// CZ_INPUT_EDITDLG frame carries the NPC id and an int32 value. The value rides
+// the DialogSignal (Amount), waking the scriptHost.Input() that emitted
+// ZC_OPEN_EDITDLG (clif.cpp:13378 clif_parse_NpcAmountInput → npc_scriptcont).
+// Non-blocking: a timed-out dialog drops the value.
+func (h *InputEditDlgHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
+	req, err := packet.ParseCZInputEditDlg(frame.Raw)
+	if err != nil {
+		return fmt.Errorf("parse CZ_INPUT_EDITDLG: %w", err)
+	}
+	auth := conn.Auth()
+	if ch := h.svc.dialogRegistry.Get(auth.AccountID); ch != nil {
+		select {
+		case ch <- domain.DialogSignal{Advance: true, Amount: req.Value}:
+		default:
+		}
+	}
+	return nil
+}
+
+// InputEditDlgStrHandler serves CZ_INPUT_EDITDLGSTR (0x01d5).
+type InputEditDlgStrHandler struct {
+	svc *DialogService
+}
+
+// NewInputEditDlgStrHandler builds a CZ_INPUT_EDITDLGSTR handler bound to the
+// DialogService.
+func NewInputEditDlgStrHandler(svc *DialogService) *InputEditDlgStrHandler {
+	return &InputEditDlgStrHandler{svc: svc}
+}
+
+// Handle forwards the client's string input to the paused script. The variable-
+// length CZ_INPUT_EDITDLGSTR frame carries the NPC id and the text. The text
+// rides the DialogSignal (Text), waking the scriptHost.InputStr() that emitted
+// ZC_OPEN_EDITDLGSTR (clif.cpp:13397 clif_parse_NpcStringInput → npc_scriptcont).
+// Non-blocking: a timed-out dialog drops the value.
+func (h *InputEditDlgStrHandler) Handle(ctx context.Context, conn gwdomain.Conn, frame gwdomain.Frame) error {
+	req, err := packet.ParseCZInputEditDlgStr(frame.Raw)
+	if err != nil {
+		return fmt.Errorf("parse CZ_INPUT_EDITDLGSTR: %w", err)
+	}
+	auth := conn.Auth()
+	if ch := h.svc.dialogRegistry.Get(auth.AccountID); ch != nil {
+		select {
+		case ch <- domain.DialogSignal{Advance: true, Text: req.Value}:
+		default:
+		}
+	}
+	return nil
+}
+
 // CloseDialogHandler serves CZ_CLOSE_DIALOG.
 type CloseDialogHandler struct {
 	svc *DialogService
@@ -221,5 +283,7 @@ var (
 	_ gwdomain.PacketHandler = (*ContactNPCHandler)(nil).Handle
 	_ gwdomain.PacketHandler = (*ReqNextScriptHandler)(nil).Handle
 	_ gwdomain.PacketHandler = (*ChooseMenuHandler)(nil).Handle
+	_ gwdomain.PacketHandler = (*InputEditDlgHandler)(nil).Handle
+	_ gwdomain.PacketHandler = (*InputEditDlgStrHandler)(nil).Handle
 	_ gwdomain.PacketHandler = (*CloseDialogHandler)(nil).Handle
 )

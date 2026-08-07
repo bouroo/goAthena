@@ -1020,6 +1020,209 @@ func TestZCAckWhisperResponse_Encode(t *testing.T) {
 	assert.Equal(t, 7, (ZCAckWhisperResponse{}).Size(), "Size()==7")
 }
 
+func TestParseCZInputEditDlg(t *testing.T) {
+	t.Parallel()
+
+	// Known 10-byte frame: cmd 0x0143, NpcID = 0x0A0B0C0D, value = -1234
+	// (signed int32; an inputnum can submit a negative before clamping).
+	goodFrame := func() []byte {
+		f := make([]byte, sizeCZInputEditDlg)
+		writeLE16(f[0:], HeaderCZINPUTEDITDLG)
+		writeLE32(f[2:], 0x0A0B0C0D)
+		neg := int32(-1234)
+		writeLE32(f[6:], uint32(neg)) //nolint:gosec // signed int32 bit pattern on the wire
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZInputEditDlgRequest
+	}{
+		{
+			name:    "valid frame decodes NpcID and signed value",
+			frame:   goodFrame,
+			wantErr: false,
+			want:    CZInputEditDlgRequest{NpcID: 0x0A0B0C0D, Value: -1234},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZInputEditDlg-1),
+			wantErr:    true,
+			wantErrSub: "want at least 10",
+		},
+		{
+			name: "wrong cmd reports opcode",
+			frame: func() []byte {
+				f := make([]byte, sizeCZInputEditDlg)
+				writeLE16(f[0:], 0x00b8)
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "unexpected cmd",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseCZInputEditDlg(tt.frame)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrSub)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCZInputEditDlgRequest_EncodeRoundTrip(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	in := CZInputEditDlgRequest{NpcID: 110000, Value: 4242}
+	require.NoError(t, in.Encode(&buf))
+	assert.Len(t, buf.Bytes(), sizeCZInputEditDlg, "CZ_INPUT_EDITDLG fixed 10 bytes")
+	out, err := ParseCZInputEditDlg(buf.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, in, out, "encode → parse round-trips the numeric input")
+}
+
+func TestParseCZInputEditDlgStr(t *testing.T) {
+	t.Parallel()
+
+	// Valid variable-length frame: cmd 0x01d5, packetLen, NpcID, "hello"+NUL.
+	goodFrame := func() []byte {
+		msg := append([]byte("hello"), 0)
+		f := make([]byte, sizeCZInputEditDlgStrMin+len(msg))
+		writeLE16(f[0:], HeaderCZINPUTEDITDLGSTR)
+		writeLE16(f[2:], uint16(len(f))) //nolint:gosec // packetLength
+		writeLE32(f[4:], 0x0A0B0C0D)
+		copy(f[8:], msg)
+		return f
+	}()
+
+	tests := []struct {
+		name       string
+		frame      []byte
+		wantErr    bool
+		wantErrSub string
+		want       CZInputEditDlgStrRequest
+	}{
+		{
+			name:    "valid frame decodes NpcID and NUL-trimmed text",
+			frame:   goodFrame,
+			wantErr: false,
+			want:    CZInputEditDlgStrRequest{NpcID: 0x0A0B0C0D, Value: "hello"},
+		},
+		{
+			name:       "short frame reports byte count",
+			frame:      make([]byte, sizeCZInputEditDlgStrMin-1),
+			wantErr:    true,
+			wantErrSub: "want at least 8",
+		},
+		{
+			name: "header-only length is rejected (no value bytes)",
+			frame: func() []byte {
+				f := make([]byte, sizeCZInputEditDlgStrMin)
+				writeLE16(f[0:], HeaderCZINPUTEDITDLGSTR)
+				writeLE16(f[2:], sizeCZInputEditDlgStrMin) // declares no payload
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "empty value",
+		},
+		{
+			name: "packetLength exceeding frame is rejected",
+			frame: func() []byte {
+				f := make([]byte, sizeCZInputEditDlgStrMin+2)
+				writeLE16(f[0:], HeaderCZINPUTEDITDLGSTR)
+				writeLE16(f[2:], 999) // larger than the frame
+				return f
+			}(),
+			wantErr:    true,
+			wantErrSub: "bad packetLength",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseCZInputEditDlgStr(tt.frame)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrSub)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCZInputEditDlgStrRequest_EncodeRoundTrip(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	in := CZInputEditDlgStrRequest{NpcID: 110000, Value: "Kafra"}
+	require.NoError(t, in.Encode(&buf))
+
+	// packetLength at [2:4] equals the actual frame length.
+	require.GreaterOrEqual(t, buf.Len(), 4)
+	assert.Equal(t, buf.Len(), int(binary.LittleEndian.Uint16(buf.Bytes()[2:4])),
+		"packetLength == actual frame length")
+
+	out, err := ParseCZInputEditDlgStr(buf.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, in, out, "encode → parse round-trips the string input")
+}
+
+func TestParseCZInputEditDlgStr_TruncatesToChatboxSize(t *testing.T) {
+	t.Parallel()
+	// rAthena safestrncpy's into a CHATBOX_SIZE buffer (npcInputStrMax), so an
+	// oversized value is truncated to npcInputStrMax-1 visible bytes.
+	oversized := bytes.Repeat([]byte("x"), 100) // exceeds npcInputStrMax-1 (70)
+	pktLen := sizeCZInputEditDlgStrMin + len(oversized)
+	frame := make([]byte, pktLen)
+	writeLE16(frame[0:], HeaderCZINPUTEDITDLGSTR)
+	writeLE16(frame[2:], uint16(pktLen))
+	writeLE32(frame[4:], 0x0A0B0C0D)
+	copy(frame[8:], oversized)
+
+	got, err := ParseCZInputEditDlgStr(frame)
+	require.NoError(t, err)
+	assert.Len(t, got.Value, npcInputStrMax-1, "value truncated to CHATBOX_SIZE-1 (safestrncpy parity)")
+	assert.Equal(t, string(oversized[:npcInputStrMax-1]), got.Value)
+}
+
+func TestOpenEditDlgResponse_Encode(t *testing.T) {
+	t.Parallel()
+	for _, r := range []struct {
+		name string
+		hdr  uint16
+		enc  func(b *bytes.Buffer) error
+	}{
+		{"ZC_OPEN_EDITDLG", HeaderZCOPENEDITDLG, func(b *bytes.Buffer) error {
+			return (OpenEditDlgResponse{NpcID: 0x11223344}).Encode(b)
+		}},
+		{"ZC_OPEN_EDITDLGSTR", HeaderZCOPENEDITDLGSTR, func(b *bytes.Buffer) error {
+			return (OpenEditDlgStrResponse{NpcID: 0x11223344}).Encode(b)
+		}},
+	} {
+		t.Run(r.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			require.NoError(t, r.enc(&buf))
+			out := buf.Bytes()
+			assert.Len(t, out, 6, "open-editdlg fixed 6 bytes")
+			assert.Equal(t, r.hdr, binary.LittleEndian.Uint16(out[0:2]), "opcode")
+			assert.Equal(t, uint32(0x11223344), binary.LittleEndian.Uint32(out[2:6]), "NpcID")
+		})
+	}
+	assert.Equal(t, 6, (OpenEditDlgResponse{}).Size(), "OpenEditDlg Size==6")
+	assert.Equal(t, 6, (OpenEditDlgStrResponse{}).Size(), "OpenEditDlgStr Size==6")
+}
+
 func TestParseCZActionRequest(t *testing.T) {
 	t.Parallel()
 

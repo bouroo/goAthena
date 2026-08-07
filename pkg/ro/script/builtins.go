@@ -120,6 +120,87 @@ func builtinMenu(vm *VM, args []Value) (Value, control) {
 	return IntVal(int64(vm.host.Select(options))), ctrlContinue
 }
 
+// inputDefaultMax is rAthena's script_config.input_max_value default: INT_MAX
+// (script.cpp:6159). With the matching min default of 0, numeric inputs are
+// clamped to the non-negative int32 range unless a script overrides the bounds.
+const inputDefaultMax int64 = 2147483647
+
+// builtinInput implements input(<var>{,<min>{,<max>}}). rAthena declares it as
+// BUILDIN_DEF(input,"r??") (script.cpp:27980): a writable variable reference
+// plus optional bounds. The variable's type — a "$" suffix marks a string
+// variable (script.cpp is_string_variable) — selects the dialog: string →
+// ZC_OPEN_EDITDLGSTR + CZ_INPUT_EDITDLGSTR, numeric → ZC_OPEN_EDITDLG +
+// CZ_INPUT_EDITDLG. The result is stored in the named variable (mirroring
+// set_reg_* at script.cpp:6180/6186) and the builtin returns rAthena's
+// range-check code (0 in-range, -1 below min, +1 above max) — for strings the
+// code compares the text length against the bounds. A cancelled, closed, or
+// dropped input ends the script (ok=false), mirroring Next() returning false.
+//
+// Because arg0 is a variable *name* (not its value), input is compiler-lowered
+// (compileInput) like set/menu: the identifier is emitted as an OpStr literal so
+// the builtin receives the name to store under.
+func builtinInput(vm *VM, args []Value) (Value, control) {
+	name := argStr(args, 0)
+	min, max := inputBounds(args)
+	if isStringVar(name) {
+		text, ok := vm.host.InputStr()
+		if !ok {
+			return NilVal(), ctrlEnd
+		}
+		vm.SetVar(name, StrVal(text))
+		return IntVal(inputRangeCode(int64(len(text)), min, max)), ctrlContinue
+	}
+	amount, ok := vm.host.Input()
+	if !ok {
+		return NilVal(), ctrlEnd
+	}
+	vm.SetVar(name, IntVal(clampInput(amount, min, max)))
+	return IntVal(inputRangeCode(amount, min, max)), ctrlContinue
+}
+
+// inputBounds resolves the optional min/max arguments. rAthena defaults to
+// [0, INT_MAX] when the bounds are omitted (script.cpp:6158-6159); a script that
+// passes only min leaves max at the INT_MAX default.
+func inputBounds(args []Value) (min, max int64) {
+	min, max = 0, inputDefaultMax
+	if len(args) > 1 {
+		min = args[1].asInt()
+	}
+	if len(args) > 2 {
+		max = args[2].asInt()
+	}
+	return min, max
+}
+
+// isStringVar reports whether name is a rAthena string variable (suffix "$").
+func isStringVar(name string) bool { return strings.HasSuffix(name, "$") }
+
+// inputRangeCode returns rAthena's input result code: 0 in-range, -1 below min,
+// +1 above max (script.cpp:6181/6187).
+func inputRangeCode(v, min, max int64) int64 {
+	switch {
+	case v > max:
+		return 1
+	case v < min:
+		return -1
+	default:
+		return 0
+	}
+}
+
+// clampInput bounds v to [min, max], matching rAthena's cap_value(amount,min,max)
+// applied to the stored numeric value (script.cpp:6186). The range code is
+// computed against the original, unclamped value.
+func clampInput(v, min, max int64) int64 {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
 // DefaultBuiltins returns a fresh map of the dialog-subset builtins, ready to
 // hand to NewVM. Callers extend this map with phase-specific builtins (select,
 // menu, getitem, sc_start, …) by copying it and inserting their entries.
@@ -138,6 +219,7 @@ func DefaultBuiltins() map[string]BuiltinFunc {
 		// return-the-index semantics, no label jump.
 		"prompt": builtinSelect, //nolint:goconst
 		"menu":   builtinMenu,   //nolint:goconst
+		"input":  builtinInput,
 	}
 }
 

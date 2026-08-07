@@ -86,6 +86,11 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCItemDisappear, "ZC_ITEM_DISAPPEAR", sizeZCItemDisappear, DirectionServerToClient},
 		{HeaderZCItemThrowAck, "ZC_ITEM_THROW_ACK", sizeZCItemThrowAck, DirectionServerToClient},
 		{HeaderZCItemPickupAck, "ZC_ITEM_PICKUP_ACK", sizeZCItemPickupAck, DirectionServerToClient},
+		// M14c: NPC input dialogs (clif.cpp:13378/13397, packets.hpp:769/775/1837/1844).
+		{HeaderCZINPUTEDITDLG, "CZ_INPUT_EDITDLG", sizeCZInputEditDlg, DirectionClientToServer},
+		{HeaderCZINPUTEDITDLGSTR, "CZ_INPUT_EDITDLGSTR", VariableLength, DirectionClientToServer},
+		{HeaderZCOPENEDITDLG, "ZC_OPEN_EDITDLG", sizeZCOpenEditDlg, DirectionServerToClient},
+		{HeaderZCOPENEDITDLGSTR, "ZC_OPEN_EDITDLGSTR", sizeZCOpenEditDlg, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -130,8 +135,10 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// two S→C name replies (ZC_ACK_REQNAMEALL2 0x0a30, ZC_ACK_REQNAMEALL_NPC
 	// 0x0adf) → 77. P2A adds ZC_SPRITE_CHANGE (0x01d7) for the equip/unequip
 	// look-sprite broadcast → 78. P2c adds the whisper family (CZ_WHISPER
-	// 0x0096, ZC_WHISPER 0x09de, ZC_ACK_WHISPER 0x09df) → 81.
-	const want = 81
+	// 0x0096, ZC_WHISPER 0x09de, ZC_ACK_WHISPER 0x09df) → 81. M14c adds the
+	// NPC input-dialog family (CZ_INPUT_EDITDLG 0x0143, CZ_INPUT_EDITDLGSTR
+	// 0x01d5, ZC_OPEN_EDITDLG 0x0142, ZC_OPEN_EDITDLGSTR 0x01d4) → 85.
+	const want = 85
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

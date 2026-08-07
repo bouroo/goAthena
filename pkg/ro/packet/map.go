@@ -205,6 +205,24 @@ const (
 	// rathena/src/map/clif_packetdb.hpp:62 (`parseable_packet(0x00b8,7,clif_parse_NpcSelectMenu,2,6)`).
 	// Fixed 7 bytes: [2:cmd][4:NpcID][1:selected byte].
 	HeaderCZCHOOSEMENU uint16 = 0x00b8
+	// ZC_OPEN_EDITDLG (0x0142) — server opens the numeric-input dialog window.
+	// rathena/src/map/packets.hpp:769 PACKET_ZC_OPEN_EDITDLG.
+	// Fixed 6 bytes: [2:cmd][4:NpcID].
+	HeaderZCOPENEDITDLG uint16 = 0x0142
+	// ZC_OPEN_EDITDLGSTR (0x01d4) — server opens the string-input dialog window.
+	// rathena/src/map/packets.hpp:775 PACKET_ZC_OPEN_EDITDLGSTR.
+	// Fixed 6 bytes: [2:cmd][4:NpcID] (same layout as ZC_OPEN_EDITDLG).
+	HeaderZCOPENEDITDLGSTR uint16 = 0x01d4
+	// CZ_INPUT_EDITDLG (0x0143) — client sends a numeric input value.
+	// rathena/src/map/clif_packetdb.hpp:134
+	// (`parseable_packet(HEADER_CZ_INPUT_EDITDLG, sizeof(PACKET_CZ_INPUT_EDITDLG), clif_parse_NpcAmountInput, 0)`).
+	// Fixed 10 bytes: [2:cmd][4:GID/NpcID][4:int32 value].
+	HeaderCZINPUTEDITDLG uint16 = 0x0143
+	// CZ_INPUT_EDITDLGSTR (0x01d5) — client sends a string input value.
+	// rathena/src/map/clif_packetdb.hpp:225
+	// (`parseable_packet(HEADER_CZ_INPUT_EDITDLGSTR, -1, clif_parse_NpcStringInput, 0)`).
+	// Variable length: [2:cmd][2:packetLength][4:GID/NpcID][n:value + NUL].
+	HeaderCZINPUTEDITDLGSTR uint16 = 0x01d5
 	// M16: NPC shop interaction. CZ_ACK_SELECT_DEALTYPE / ZC_SELECT_DEALTYPE
 	// carry the deal-type selection (Buy / Sell / Cancel) that follows
 	// CZ_CONTACTNPC for shop-type NPCs. CZ_PC_PURCHASE_ITEMLIST /
@@ -562,6 +580,24 @@ const (
 	// sizeCZChooseMenu = int16 packetType + uint32 NpcID + uint8 selected = 2+4+1 = 7
 	// (rathena/src/map/clif_packetdb.hpp:62).
 	sizeCZChooseMenu = 7
+	// sizeZCOpenEditDlg = int16 packetType + uint32 NpcID = 2+4 = 6
+	// (rathena/src/map/packets.hpp:769). ZC_OPEN_EDITDLGSTR shares this 6-byte
+	// layout (packets.hpp:775).
+	sizeZCOpenEditDlg = 6
+	// sizeCZInputEditDlg = int16 packetType + uint32 GID + int32 value = 2+4+4 = 10
+	// (rathena/src/map/packets.hpp:1837 PACKET_CZ_INPUT_EDITDLG, fixed).
+	sizeCZInputEditDlg = 10
+	// sizeCZInputEditDlgStrMin = int16 packetType + uint16 packetLength + uint32 GID = 2+2+4 = 8
+	// (rathena/src/map/packets.hpp:1844 PACKET_CZ_INPUT_EDITDLGSTR). The header
+	// size before the variable-length value bytes; rAthena rejects a frame whose
+	// declared length does not exceed this (clif.cpp:13405).
+	sizeCZInputEditDlgStrMin = 8
+	// npcInputStrMax is rAthena's CHATBOX_SIZE (map.hpp:286, 70+1): the inputstr
+	// value buffer. clif_parse_NpcStringInput safestrncpy's the packet value into
+	// a buffer of this size (clif.cpp:13412), so a value longer than
+	// npcInputStrMax-1 visible bytes is truncated. ParseCZInputEditDlgStr mirrors
+	// that cap for parity and to bound a malicious oversized frame.
+	npcInputStrMax = 71
 	// sizeZCSelectDealtype = int16 packetType + uint32 NpcID = 2+4 = 6
 	// (rathena/src/map/packets.hpp: ZC_SELECT_DEALTYPE).
 	sizeZCSelectDealtype = 6
@@ -1008,6 +1044,33 @@ func NewMapServerDB() *DB {
 		Name:      "CZ_CHOOSE_MENU",
 		Length:    sizeCZChooseMenu,
 		Direction: DirectionClientToServer,
+	})
+	// M14c: NPC input dialogs. CZ_INPUT_EDITDLG (fixed 10 bytes) carries a
+	// numeric value; CZ_INPUT_EDITDLGSTR (variable) carries a string.
+	// ZC_OPEN_EDITDLG / ZC_OPEN_EDITDLGSTR (fixed 6 bytes) open the windows.
+	db.Register(Definition{
+		ID:        HeaderCZINPUTEDITDLG,
+		Name:      "CZ_INPUT_EDITDLG",
+		Length:    sizeCZInputEditDlg,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZINPUTEDITDLGSTR,
+		Name:      "CZ_INPUT_EDITDLGSTR",
+		Length:    VariableLength,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCOPENEDITDLG,
+		Name:      "ZC_OPEN_EDITDLG",
+		Length:    sizeZCOpenEditDlg,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCOPENEDITDLGSTR,
+		Name:      "ZC_OPEN_EDITDLGSTR",
+		Length:    sizeZCOpenEditDlg,
+		Direction: DirectionServerToClient,
 	})
 	// M15: ZC_SAY_DIALOG2 (variable length), ZC_WAIT_DIALOG2 (fixed 7 bytes),
 	// ZC_CLOSE_DIALOG (fixed 6 bytes).

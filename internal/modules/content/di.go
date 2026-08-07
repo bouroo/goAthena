@@ -158,6 +158,8 @@ func Register(c do.Injector, npcDataRoot string) error {
 	contactH := app.NewContactNPCHandler(dialogService)
 	nextH := app.NewReqNextScriptHandler(dialogService)
 	chooseH := app.NewChooseMenuHandler(dialogService)
+	inputH := app.NewInputEditDlgHandler(dialogService)
+	inputStrH := app.NewInputEditDlgStrHandler(dialogService)
 	closeH := app.NewCloseDialogHandler(dialogService)
 
 	// 7. Provide to the injector
@@ -168,6 +170,8 @@ func Register(c do.Injector, npcDataRoot string) error {
 	do.ProvideValue(c, contactH)
 	do.ProvideValue(c, nextH)
 	do.ProvideValue(c, chooseH)
+	do.ProvideValue(c, inputH)
+	do.ProvideValue(c, inputStrH)
 	do.ProvideValue(c, closeH)
 
 	// Shop catalog is provided so the commerce module's future shop-buy /

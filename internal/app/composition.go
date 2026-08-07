@@ -356,7 +356,7 @@ func resolveWorldHandlers(i do.Injector) (
 	return
 }
 
-func resolveContentHandlers(i do.Injector) (contact *contentapp.ContactNPCHandler, next *contentapp.ReqNextScriptHandler, menu *contentapp.ChooseMenuHandler, closeDlg *contentapp.CloseDialogHandler, err error) {
+func resolveContentHandlers(i do.Injector) (contact *contentapp.ContactNPCHandler, next *contentapp.ReqNextScriptHandler, menu *contentapp.ChooseMenuHandler, input *contentapp.InputEditDlgHandler, inputStr *contentapp.InputEditDlgStrHandler, closeDlg *contentapp.CloseDialogHandler, err error) {
 	contact, err = invokeOr[*contentapp.ContactNPCHandler](i, "resolve CZ_CONTACTNPC handler")
 	if err != nil {
 		return
@@ -366,6 +366,14 @@ func resolveContentHandlers(i do.Injector) (contact *contentapp.ContactNPCHandle
 		return
 	}
 	menu, err = invokeOr[*contentapp.ChooseMenuHandler](i, "resolve CZ_CHOOSE_MENU handler")
+	if err != nil {
+		return
+	}
+	input, err = invokeOr[*contentapp.InputEditDlgHandler](i, "resolve CZ_INPUT_EDITDLG handler")
+	if err != nil {
+		return
+	}
+	inputStr, err = invokeOr[*contentapp.InputEditDlgStrHandler](i, "resolve CZ_INPUT_EDITDLGSTR handler")
 	if err != nil {
 		return
 	}
@@ -393,7 +401,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return err
 	}
-	contact, next, menu, closeDlg, err := resolveContentHandlers(injector)
+	contact, next, menu, input, inputStr, closeDlg, err := resolveContentHandlers(injector)
 	if err != nil {
 		return err
 	}
@@ -427,6 +435,8 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCZContactNPC:         contact.Handle,
 		OnCZReqNextScript:      next.Handle,
 		OnCZChooseMenu:         menu.Handle,
+		OnCZInputEditDlg:       input.Handle,
+		OnCZInputEditDlgStr:    inputStr.Handle,
 		OnCZCloseDialog:        closeDlg.Handle,
 		OnCZAckSelectDealtype:  buySvc.HandleAckSelectDealtype,
 		OnCZPCPurchaseItemList: buySvc.HandlePurchaseItemList,

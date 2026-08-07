@@ -138,6 +138,9 @@ func (c *compiler) compileStmt(s Stmt) error { //nolint:gocyclo
 		if n.Name == "menu" { //nolint:goconst
 			return c.compileMenu(n)
 		}
+		if n.Name == "input" { //nolint:goconst
+			return c.compileInput(n)
+		}
 		if err := c.compileCall(n.Name, n.Args, n.pos); err != nil {
 			return err
 		}
@@ -249,6 +252,35 @@ func (c *compiler) compileMenu(n *CallStmt) error {
 		c.emitOp(OpLEq, n.pos)
 		c.emit(Instruction{Op: OpJumpIfTrue, Str: label, Pos: n.pos})
 	}
+	return nil
+}
+
+// compileInput lowers `input(<var>{,<min>{,<max>}})`. arg0 must be a variable
+// *name* (an identifier), so — like set — it cannot flow through compileCall:
+// that would push the variable's current value (OpVar) and lose the name the
+// store needs. The name is emitted as an OpStr literal so builtinInput receives
+// it to store under; the optional min/max (default 0 / INT_MAX per rAthena
+// script_config) follow as evaluated expressions. rAthena declares input as
+// BUILDIN_DEF(input,"r??"): "r" = writable reference, "??" = two optional args
+// (script.cpp:6153). Statement-position input then drops its result code via the
+// OpPop compileStmt appends.
+func (c *compiler) compileInput(n *CallStmt) error {
+	if len(n.Args) < 1 || len(n.Args) > 3 {
+		return fmt.Errorf("script: input expects 1 to 3 args, got %d at %s", len(n.Args), n.pos)
+	}
+	id, ok := n.Args[0].(*IdentExpr)
+	if !ok {
+		return fmt.Errorf("script: input expects a variable, got %T at %s", n.Args[0], n.Args[0].Pos())
+	}
+	// arg0 = the variable NAME, so builtinInput can store the result under it.
+	c.emit(Instruction{Op: OpStr, Str: id.Name, Pos: n.pos})
+	// args 1..2 (min/max) are optional expressions, emitted only when present.
+	for _, a := range n.Args[1:] {
+		if err := c.compileExpr(a); err != nil {
+			return err
+		}
+	}
+	c.emit(Instruction{Op: OpFunc, Str: "input", Operand: int32(len(n.Args)), Pos: n.pos}) //nolint:gosec // G115: bounded by parse (args < 256)
 	return nil
 }
 

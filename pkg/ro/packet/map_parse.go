@@ -1065,6 +1065,122 @@ func ParseCZChooseMenu(frame []byte) (CZChooseMenuRequest, error) {
 	}, nil
 }
 
+// CZInputEditDlgRequest is the decoded form of a client → map-server
+// CZ_INPUT_EDITDLG packet (header 0x0143, 10 bytes on the wire). The client
+// sends it after the player enters a number in the inputnum dialog window and
+// presses OK. Source: rathena/src/map/packets.hpp:1837 PACKET_CZ_INPUT_EDITDLG
+// and clif.cpp:13378 clif_parse_NpcAmountInput, which stores the value into
+// sd->npc_amount then resumes the script via npc_scriptcont.
+//
+// The on-wire `value` is a signed int32; an empty input is sent as 0.
+type CZInputEditDlgRequest struct {
+	// NpcID is the NPC entity ID the inputnum window was opened for (the
+	// client echoes back the npcId from ZC_OPEN_EDITDLG).
+	NpcID uint32
+	// Value is the numeric amount the player entered.
+	Value int32
+}
+
+// ParseCZInputEditDlg decodes a CZ_INPUT_EDITDLG frame. The frame must carry
+// cmd 0x0143 and contain at least 10 bytes. Returns a wrapped error naming the
+// byte count if the frame is short, or naming the unexpected cmd id otherwise.
+func ParseCZInputEditDlg(frame []byte) (CZInputEditDlgRequest, error) {
+	if len(frame) < sizeCZInputEditDlg {
+		return CZInputEditDlgRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLG: want at least %d bytes, got %d", sizeCZInputEditDlg, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZINPUTEDITDLG {
+		return CZInputEditDlgRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLG: unexpected cmd 0x%04x", cmd)
+	}
+	return CZInputEditDlgRequest{
+		NpcID: binary.LittleEndian.Uint32(frame[2:6]),
+		Value: int32(binary.LittleEndian.Uint32(frame[6:10])), //nolint:gosec // G115: int32 is the on-wire type (PACKET_CZ_INPUT_EDITDLG.value).
+	}, nil
+}
+
+// Encode serializes a CZInputEditDlgRequest (used by tests and request builders).
+func (r CZInputEditDlgRequest) Encode(w io.Writer) error {
+	var buf [sizeCZInputEditDlg]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZINPUTEDITDLG)
+	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
+	binary.LittleEndian.PutUint32(buf[6:], uint32(r.Value)) //nolint:gosec // G115: int32→uint32 preserves the bit pattern on the wire.
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_INPUT_EDITDLG: %w", err)
+	}
+	return nil
+}
+
+// CZInputEditDlgStrRequest is the decoded form of a client → map-server
+// CZ_INPUT_EDITDLGSTR packet (header 0x01d5, variable length). The client sends
+// it after the player enters text in the inputstr dialog window and presses OK.
+// Source: rathena/src/map/packets.hpp:1844 PACKET_CZ_INPUT_EDITDLGSTR and
+// clif.cpp:13397 clif_parse_NpcStringInput, which copies the string into
+// sd->npc_str then resumes the script via npc_scriptcont.
+//
+// Wire layout:
+//
+//	int16  packetType (0x01d5)
+//	uint16 packetLength (total bytes including this header)
+//	uint32 NpcID
+//	char[] value (packetLength - 8 bytes; rAthena rejects a zero-length value)
+type CZInputEditDlgStrRequest struct {
+	// NpcID is the NPC entity ID the inputstr window was opened for.
+	NpcID uint32
+	// Value is the text the player entered (NUL-trimmed).
+	Value string
+}
+
+// ParseCZInputEditDlgStr decodes a CZ_INPUT_EDITDLGSTR frame. The packet
+// carries its own length at [2:4]; the value spans [8:packetLength]. A frame
+// whose declared length does not exceed the 8-byte header, or whose value is
+// empty after NUL trimming, is invalid — rAthena returns without resuming the
+// script (clif.cpp:13405).
+func ParseCZInputEditDlgStr(frame []byte) (CZInputEditDlgStrRequest, error) {
+	if len(frame) < sizeCZInputEditDlgStrMin {
+		return CZInputEditDlgStrRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLGSTR: want at least %d bytes, got %d", sizeCZInputEditDlgStrMin, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZINPUTEDITDLGSTR {
+		return CZInputEditDlgStrRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLGSTR: unexpected cmd 0x%04x", cmd)
+	}
+	pktLen := int(binary.LittleEndian.Uint16(frame[2:4]))
+	if pktLen < sizeCZInputEditDlgStrMin || pktLen > len(frame) {
+		return CZInputEditDlgStrRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLGSTR: bad packetLength %d (frame %d)", pktLen, len(frame))
+	}
+	value := string(bytes.TrimRight(frame[8:pktLen], "\x00"))
+	if value == "" {
+		return CZInputEditDlgStrRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLGSTR: empty value")
+	}
+	// rAthena clif_parse_NpcStringInput safestrncpy's into a CHATBOX_SIZE
+	// (npcInputStrMax) buffer (clif.cpp:13412), truncating oversized input to
+	// npcInputStrMax-1 visible bytes. Mirror that cap here for parity and to
+	// bound a malicious oversized frame.
+	if len(value) > npcInputStrMax-1 {
+		value = value[:npcInputStrMax-1]
+	}
+	return CZInputEditDlgStrRequest{
+		NpcID: binary.LittleEndian.Uint32(frame[4:8]),
+		Value: value,
+	}, nil
+}
+
+// Encode serializes a CZInputEditDlgStrRequest (used by tests and request
+// builders). The value is NUL-terminated so ParseCZInputEditDlgStr's NUL-trim
+// round-trips it; note rAthena's client omits the trailing NUL at
+// PACKETVER >= 20151001 (clif.cpp:13409 message_len++), but the parser trims
+// regardless, so the round-trip is exact either way.
+func (r CZInputEditDlgStrRequest) Encode(w io.Writer) error {
+	value := append([]byte(r.Value), 0)
+	pktLen := sizeCZInputEditDlgStrMin + len(value)
+	buf := make([]byte, pktLen)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZINPUTEDITDLGSTR)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(pktLen)) //nolint:gosec // G115: bounded by CHATBOX_SIZE on the wire.
+	binary.LittleEndian.PutUint32(buf[4:], r.NpcID)
+	copy(buf[8:], value)
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_INPUT_EDITDLGSTR: %w", err)
+	}
+	return nil
+}
+
 // CZDropItemRequest is the decoded form of a client → map-server drop-item
 // packet. rAthena registers several modern aliases for this layout under
 // different PACKETVER guards (clif_packetdb.hpp:1385-1606); all share the

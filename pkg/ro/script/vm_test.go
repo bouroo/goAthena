@@ -10,14 +10,20 @@ import (
 // effects without a network. Next returns true (advance) so dialog scripts
 // proceed; a future test can flip nextOK to model a cancelled dialog.
 type fakeHost struct {
-	mes          []string
-	nexts        int
-	closed       bool
-	warps        []warpCall
-	heals        []healCall
-	selects      [][]string
-	nextOK       bool
-	selectChoice int
+	mes            []string
+	nexts          int
+	closed         bool
+	warps          []warpCall
+	heals          []healCall
+	selects        [][]string
+	inputs         int
+	inputStrs      int
+	nextOK         bool
+	selectChoice   int
+	inputResult    int64
+	inputOK        bool
+	inputStrResult string
+	inputStrOK     bool
 }
 
 type warpCall struct {
@@ -27,7 +33,9 @@ type warpCall struct {
 
 type healCall struct{ hp, sp int }
 
-func newFakeHost() *fakeHost { return &fakeHost{nextOK: true} }
+func newFakeHost() *fakeHost {
+	return &fakeHost{nextOK: true, inputOK: true, inputStrOK: true}
+}
 
 func (h *fakeHost) Mes(msg string)          { h.mes = append(h.mes, msg) }
 func (h *fakeHost) Next() bool              { h.nexts++; return h.nextOK }
@@ -37,6 +45,16 @@ func (h *fakeHost) PercentHeal(hp, sp int)  { h.heals = append(h.heals, healCall
 func (h *fakeHost) Select(options []string) int {
 	h.selects = append(h.selects, options)
 	return h.selectChoice
+}
+
+func (h *fakeHost) Input() (int64, bool) {
+	h.inputs++
+	return h.inputResult, h.inputOK
+}
+
+func (h *fakeHost) InputStr() (string, bool) {
+	h.inputStrs++
+	return h.inputStrResult, h.inputStrOK
 }
 
 // runFirstScript compiles src, takes the first script in the set, and runs it
@@ -503,5 +521,100 @@ func TestVMPromptReturnsChoice(t *testing.T) {
 	}
 	if len(h.mes) != 1 || h.mes[0] != "got 2" {
 		t.Errorf("mes = %v, want [got 2]", h.mes)
+	}
+}
+
+func TestVMInputNumeric(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		"input(.@donate);\n" +
+		`mes "got " + .@donate;` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	h.inputResult = 500
+	vars := runFirstScript(t, src, h, nil)
+	if h.inputs != 1 {
+		t.Fatalf("inputs = %d, want 1", h.inputs)
+	}
+	if vars[".@donate"].Int != 500 {
+		t.Errorf(".@donate = %d, want 500", vars[".@donate"].Int)
+	}
+	if len(h.mes) != 1 || h.mes[0] != "got 500" {
+		t.Errorf("mes = %v, want [got 500]", h.mes)
+	}
+}
+
+func TestVMInputString(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		"input(.@name$);\n" +
+		`mes "hi " + .@name$;` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	h.inputStrResult = "Bob"
+	vars := runFirstScript(t, src, h, nil)
+	if h.inputStrs != 1 {
+		t.Fatalf("inputStrs = %d, want 1", h.inputStrs)
+	}
+	if vars[".@name$"].Str != "Bob" {
+		t.Errorf(".@name$ = %q, want Bob", vars[".@name$"].Str)
+	}
+	if len(h.mes) != 1 || h.mes[0] != "hi Bob" {
+		t.Errorf("mes = %v, want [hi Bob]", h.mes)
+	}
+}
+
+func TestVMInputCancelEndsScript(t *testing.T) {
+	// A cancelled/closed input ends the script (ok=false → ctrlEnd): the mes
+	// after input must NOT run.
+	const src = "-\tscript\tN\t-1,{\n" +
+		"input(.@donate);\n" +
+		`mes "after";` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	h.inputOK = false
+	runFirstScript(t, src, h, nil)
+	if h.inputs != 1 {
+		t.Errorf("inputs = %d, want 1", h.inputs)
+	}
+	if len(h.mes) != 0 {
+		t.Errorf("mes = %v, want none (cancelled input ends the script)", h.mes)
+	}
+}
+
+func TestVMInputClampBounds(t *testing.T) {
+	cases := []struct {
+		name   string
+		result int64
+		want   int64
+	}{
+		{"above max clamps to max", 150, 100},
+		{"below min clamps to min", 5, 10},
+		{"in-range stored as-is", 42, 42},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			const src = "-\tscript\tN\t-1,{\n" +
+				"input(.@x, 10, 100);\n" +
+				"}\n"
+			h := newFakeHost()
+			h.inputResult = tc.result
+			vars := runFirstScript(t, src, h, nil)
+			if vars[".@x"].Int != tc.want {
+				t.Errorf(".@x = %d, want %d (input %d)", vars[".@x"].Int, tc.want, tc.result)
+			}
+		})
+	}
+}
+
+func TestVMInputDefaultClampsNegative(t *testing.T) {
+	// With no explicit bounds, rAthena defaults to [0, INT_MAX], so a negative
+	// input is clamped to 0 (script_config.input_min_value default).
+	const src = "-\tscript\tN\t-1,{\n" +
+		"input(.@amt);\n" +
+		"}\n"
+	h := newFakeHost()
+	h.inputResult = -50
+	vars := runFirstScript(t, src, h, nil)
+	if vars[".@amt"].Int != 0 {
+		t.Errorf(".@amt = %d, want 0 (default min clamps negative)", vars[".@amt"].Int)
 	}
 }

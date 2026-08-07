@@ -94,6 +94,12 @@ type Handlers struct {
 	// OnCZChooseMenu serves CZ_CHOOSE_MENU (0x00b8), responding to a dialog choice.
 	// Provided by the content module.
 	OnCZChooseMenu domain.PacketHandler
+	// OnCZInputEditDlg serves CZ_INPUT_EDITDLG (0x0143), a numeric NPC input.
+	// Provided by the content module.
+	OnCZInputEditDlg domain.PacketHandler
+	// OnCZInputEditDlgStr serves CZ_INPUT_EDITDLGSTR (0x01d5), a string NPC input.
+	// Provided by the content module.
+	OnCZInputEditDlgStr domain.PacketHandler
 	// OnCZCloseDialog serves CZ_CLOSE_DIALOG (0x0146), ending the dialog.
 	// Provided by the content module.
 	OnCZCloseDialog domain.PacketHandler
@@ -174,6 +180,8 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table = addHandler(table, packet.HeaderCZCONTACTNPC, h.OnCZContactNPC)
 	table = addHandler(table, packet.HeaderCZREQNEXTSCRIPT, h.OnCZReqNextScript)
 	table = addHandler(table, packet.HeaderCZCHOOSEMENU, h.OnCZChooseMenu)
+	table = addHandler(table, packet.HeaderCZINPUTEDITDLG, h.OnCZInputEditDlg)
+	table = addHandler(table, packet.HeaderCZINPUTEDITDLGSTR, h.OnCZInputEditDlgStr)
 	table = addHandler(table, packet.HeaderCZCLOSEDIALOG, h.OnCZCloseDialog)
 	table = addHandler(table, packet.HeaderCZACKSELECTDEALTYPE, h.OnCZAckSelectDealtype)
 	table = addHandler(table, packet.HeaderCZPCPURCHASEITEMLIST, h.OnCZPCPurchaseItemList)

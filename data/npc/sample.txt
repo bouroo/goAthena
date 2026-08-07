@@ -1,9 +1,10 @@
 prontera,150,150,4	script	SampleNPC	46,{
 	mes "[SampleNPC]";
 	mes "Welcome to goAthena.";
+	mes "Verbs: mes, next, input, close, set, warp, percentheal.";
 	next;
-	mes "This is a sample dialog.";
-	mes "The supported verb set is:";
-	mes "mes, next, close, end, set, warp, percentheal.";
+	mes "How much would you like to donate?";
+	input(.@donate);
+	mes "You donated " + .@donate + " zeny. Thank you!";
 	close;
 }

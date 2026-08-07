@@ -17,14 +17,19 @@ type World interface {
 }
 
 // DialogSignal carries the client's progression of an open dialog: whether the
-// dialog advances (Next or a menu Choose) or terminates (Close/disconnect), and
-// — for a menu choice — the 1-based option byte the client picked (0 when the
-// signal is not a menu response). Mirrors rAthena: the selection rides the
-// npc_scriptcont resume (sd->npc_menu) rather than living in a separate
-// per-session slot, so a single channel carries both the wake and the choice.
+// dialog advances (Next, a menu Choose, or an input submit) or terminates
+// (Close/disconnect), and — depending on the pending operation — the value the
+// client sent: the 1-based menu option byte (Choice), the numeric input amount
+// (Amount), or the string input text (Text). Mirrors rAthena: the value rides
+// the npc_scriptcont resume (sd->npc_menu / sd->npc_amount / sd->npc_str) rather
+// than living in separate per-session slots, so a single channel carries both the
+// wake and the payload. Only the field matching the operation the scriptHost is
+// blocked on is meaningful; the others are zero.
 type DialogSignal struct {
 	Advance bool
 	Choice  byte
+	Amount  int32
+	Text    string
 }
 
 // DialogRegistry tracks active dialog sessions, preventing concurrent execution
