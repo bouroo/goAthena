@@ -1134,6 +1134,78 @@ func (r NotifyChatResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// ZCWhisperResponse encodes ZC_WHISPER (command 0x09de, variable length) — the
+// delivered private message the recipient receives. At PACKETVER
+// MAIN_NUM>=20131204 (ClientROThailand 20250604 qualifies) clif emits the
+// 0x09de branch (packets_struct.hpp:5347-5356), NOT the legacy 0x0097. Wire
+// shape:
+//
+//	[2:cmd=0x09de][2:packetLength][4:senderGID uint32][24:sender char[24]][1:isAdmin][n:message+null]
+//
+// senderGID is the sender's bl.id (= account_id for a PC). isAdmin is the GM
+// flag; goAthena sends 0 (no GM-level parity). The message is NUL-terminated.
+type ZCWhisperResponse struct {
+	SenderGID  uint32
+	SenderName string
+	IsAdmin    uint8
+	Message    string
+}
+
+// Encode writes the ZC_WHISPER frame. packetLength is computed from the
+// message size so the length slot cannot disagree with the trailing bytes.
+func (r ZCWhisperResponse) Encode(w io.Writer) error {
+	msg := []byte(r.Message)
+	// 4 (header) + 4 (GID) + 24 (sender) + 1 (isAdmin) + len(msg) + 1 (NUL).
+	total := 4 + 4 + sizeZCWhisperName + 1 + len(msg) + 1
+	if total > 0xffff {
+		return fmt.Errorf("packet: write ZC_WHISPER: message too long (%d bytes)", len(msg))
+	}
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCWHISPER)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint32(buf[4:], r.SenderGID)
+	off := 8
+	copy(buf[off:off+sizeZCWhisperName], r.SenderName)
+	// trailing bytes of the 24-byte sender slot stay 0x00 from make() (NUL-pad).
+	off += sizeZCWhisperName
+	buf[off] = r.IsAdmin
+	off++
+	copy(buf[off:], msg)
+	// buf[total-1] is already 0x00 from make() — the trailing NUL.
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_WHISPER: %w", err)
+	}
+	return nil
+}
+
+// ZCAckWhisperResponse encodes ZC_ACK_WHISPER (command 0x09df, fixed 7 bytes)
+// — the whisper result ack sent to the sender. At PACKETVER>=20131223
+// (20250604 qualifies; packets.hpp:1225-1231), NOT legacy 0x0098. Wire shape:
+//
+//	[2:cmd=0x09df][1:result][4:CID uint32 = sender char_id]
+//
+// result: 0=success, 1=target offline (2/3 ignored = not implemented, no
+// ignore-list feature).
+type ZCAckWhisperResponse struct {
+	Result uint8
+	CID    uint32
+}
+
+// Size returns the fixed wire size of ZC_ACK_WHISPER.
+func (ZCAckWhisperResponse) Size() int { return sizeZCAckWhisper }
+
+// Encode writes the 7-byte ZC_ACK_WHISPER frame.
+func (r ZCAckWhisperResponse) Encode(w io.Writer) error {
+	var buf [sizeZCAckWhisper]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKWHISPER)
+	buf[2] = r.Result
+	binary.LittleEndian.PutUint32(buf[3:], r.CID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_ACK_WHISPER: %w", err)
+	}
+	return nil
+}
+
 // ZCStatusChangeAck encodes ZC_STATUS_CHANGE_ACK (0x00bc) — the server's
 // response to a stat-point allocation request. Wire layout
 // (rathena/src/map/clif.cpp:4283):

@@ -1213,6 +1213,129 @@ func TestServe_Chat_BroadcastsToAOI(t *testing.T) {
 	assert.Equal(t, chatMsg, gotMsg, "ZC_NOTIFY_CHAT message matches the sent chat text")
 }
 
+// TestServe_Whisper_DeliversToRecipient is the P2c end-to-end: two accounts
+// (seeded 2000000 "test" + 2000001 "test2") each enter the world on distinct
+// chars, then the sender sends CZ_WHISPER (0x0096) addressed to the recipient's
+// char name. The recipient receives ZC_WHISPER (0x09de) carrying the sender's
+// GID + name + message, and the sender receives ZC_ACK_WHISPER (0x09df)
+// result=0 (success), CID=sender char_id. This proves cross-session delivery
+// through the real gateway codec + dispatch table + the byName registry index.
+func TestServe_Whisper_DeliversToRecipient(t *testing.T) {
+	requireStack(t)
+
+	cfg := loadConfigForE2E(t)
+	tcpAddr := rebindListenersToEphemeralPorts(t, cfg)
+	mapAddr := cfg.Gateway.MapAddr
+	require.NoError(t, cfg.Validate(), "config drift: config.yaml no longer validates")
+
+	senderCharID := seedCharForAccount(t, cfg, seededAccountID, "E2eWhisperA", "prontera", 60, 120)
+	const recipientAccountID uint32 = 2000001
+	recipientCharID := seedCharForAccount(t, cfg, recipientAccountID, "E2eWhisperB", "prontera", 62, 120)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Serve(ctx, cfg) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-serveErr:
+			assert.NoError(t, err, "app.Serve returned an error on shutdown")
+		case <-time.After(15 * time.Second):
+			t.Fatal("app.Serve did not shut down within 15s")
+		}
+	}()
+	waitGatewayOrFatal(t, tcpAddr, serveErr)
+	waitGatewayOrFatal(t, mapAddr, serveErr)
+
+	// Log in both accounts to capture each session's loginID1 + sex byte.
+	senderLoginID1, senderSex := loginAccount(t, tcpAddr, "test", "test")
+	recipientLoginID1, recipientSex := loginAccount(t, tcpAddr, "test2", "test2")
+
+	// Both enter the world; SpawnService registers each in the (global) PlayerRegistry
+	// keyed by char name, so the sender's ByName lookup resolves the recipient.
+	mapConnA := enterMapForAccount(t, mapAddr, seededAccountID, senderCharID, senderLoginID1, senderSex)
+	defer mapConnA.Close()
+	mapConnB := enterMapForAccount(t, mapAddr, recipientAccountID, recipientCharID, recipientLoginID1, recipientSex)
+	defer mapConnB.Close()
+
+	// Sender whispers the recipient by char name.
+	const whisperMsg = "psst"
+	var req bytes.Buffer
+	require.NoError(t, (packet.CZWhisperRequest{TargetNick: "E2eWhisperB", Message: whisperMsg}).Encode(&req))
+	_, err := mapConnA.Write(req.Bytes())
+	require.NoError(t, err, "send CZ_WHISPER")
+
+	// Recipient receives ZC_WHISPER.
+	recv, ok := awaitFrame(t, mapConnB, packet.HeaderZCWHISPER, 5*time.Second, nil)
+	require.True(t, ok, "no ZC_WHISPER observed by the recipient — delivery failed")
+	require.Equal(t, uint16(packet.HeaderZCWHISPER), binary.LittleEndian.Uint16(recv[0:2]), "ZC_WHISPER opcode 0x09de")
+	require.Equal(t, seededAccountID, binary.LittleEndian.Uint32(recv[4:8]), "ZC_WHISPER senderGID = sender account_id")
+	assert.Equal(t, "E2eWhisperA", string(bytes.TrimRight(recv[8:32], "\x00")), "ZC_WHISPER sender name")
+	assert.Equal(t, whisperMsg, string(bytes.TrimRight(recv[33:], "\x00")), "ZC_WHISPER message")
+
+	// Sender receives ZC_ACK_WHISPER success.
+	ack, ok := awaitFrame(t, mapConnA, packet.HeaderZCACKWHISPER, 5*time.Second, nil)
+	require.True(t, ok, "no ZC_ACK_WHISPER observed by the sender")
+	require.Equal(t, uint16(packet.HeaderZCACKWHISPER), binary.LittleEndian.Uint16(ack[0:2]), "ZC_ACK_WHISPER opcode 0x09df")
+	assert.Equal(t, uint8(0), ack[2], "ZC_ACK_WHISPER result = 0 (success)")
+	assert.Equal(t, senderCharID, binary.LittleEndian.Uint32(ack[3:7]), "ZC_ACK_WHISPER CID = sender char_id")
+}
+
+// loginAccount performs a CA_LOGIN for user/pass and returns the session's
+// loginID1 (auth code the CZ_ENTER gate verifies) and sex byte.
+func loginAccount(t *testing.T, tcpAddr, user, pass string) (loginID1 uint32, sexByte byte) {
+	t.Helper()
+	conn, err := net.Dial("tcp", tcpAddr)
+	require.NoError(t, err)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	var login bytes.Buffer
+	require.NoError(t, packet.CALoginRequest{
+		Version: uint32(loadConfigForE2E(t).Gateway.Packetver), Username: user, Password: pass,
+	}.Encode(&login))
+	_, err = conn.Write(login.Bytes())
+	require.NoErrorf(t, err, "send CA_LOGIN for %q", user)
+	accept := make([]byte, packet.AcceptLoginResponse{}.Size())
+	_, err = io.ReadFull(conn, accept)
+	require.NoErrorf(t, err, "no AC_ACCEPT_LOGIN for %q — account login failed", user)
+	loginID1 = binary.LittleEndian.Uint32(accept[4:8])
+	sexByte = accept[46]
+	require.NotZero(t, loginID1, "loginID1 must be non-zero")
+	require.NoError(t, conn.Close())
+	return loginID1, sexByte
+}
+
+// enterMapForAccount is connectAndEnterMap parameterized by accountID so a second
+// seeded account (e.g. 2000001 "test2") can enter the world — needed for the
+// cross-session whisper e2e where both the sender and recipient must be live.
+func enterMapForAccount(t *testing.T, mapAddr string, accountID, charID, loginID1 uint32, sexByte byte) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", mapAddr)
+	require.NoError(t, err)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+
+	var enter bytes.Buffer
+	require.NoError(t, packet.CZEnterRequest{
+		AccountID: accountID, CharID: charID, AuthCode: loginID1, ClientTime: 0, Sex: sexByte,
+	}.Encode(&enter))
+	_, err = conn.Write(enter.Bytes())
+	require.NoError(t, err)
+
+	resp := make([]byte, packet.MapAcceptEnterResponse{}.Size())
+	_, err = io.ReadFull(conn, resp)
+	require.NoError(t, err, "no ZC_ACCEPT_ENTER for account %d", accountID)
+	require.Equal(t, packet.HeaderZCACCEPTENTER, binary.LittleEndian.Uint16(resp[0:2]), "expected ZC_ACCEPT_ENTER")
+
+	spawn := make([]byte, packet.SpawnUnitResponse{}.Size())
+	_, err = io.ReadFull(conn, spawn)
+	require.NoError(t, err, "no ZC_SPAWN_UNIT for account %d", accountID)
+	require.Equal(t, packet.HeaderZCSPAWNUNIT, binary.LittleEndian.Uint16(spawn[0:2]), "expected ZC_SPAWN_UNIT")
+	assert.Equal(t, accountID, binary.LittleEndian.Uint32(spawn[5:9]), "spawn AID = account_id")
+
+	drainEnterStatusBurst(t, conn)
+	return conn
+}
+
 // TestServe_Inventory_EquipWeaponRaisesATK is the M10b end-to-end: a Knife
 // (nameid 1201 — the fork's right-hand weapon, Attack 17, EquipLevelMin 1,
 // Right_Hand only, no View column) is seeded in the char's bag, the player
@@ -1794,7 +1917,8 @@ func readMapFrame(t *testing.T, conn net.Conn) ([]byte, bool) {
 		op == packet.HeaderZCINVENTORYSTART ||
 		op == packet.HeaderZCSKILLINFOLIST ||
 		op == packet.HeaderZCSAYDIALOG2 ||
-		op == packet.HeaderZCNOTIFYCHAT {
+		op == packet.HeaderZCNOTIFYCHAT ||
+		op == packet.HeaderZCWHISPER {
 		lenBuf := make([]byte, 2)
 		_, err := io.ReadFull(conn, lenBuf)
 		require.NoErrorf(t, err, "read length prefix of opcode 0x%04x", op)
@@ -1880,6 +2004,9 @@ func mapFrameSize(op uint16) int {
 	case packet.HeaderZCSPRITECHANGE:
 		// P2A: the look-sprite broadcast (0x01d7, 15B PACKETVER>=20181121 variant).
 		return packet.SpriteChangeResponse{}.Size()
+	case packet.HeaderZCACKWHISPER:
+		// P2c: the whisper result ack (0x09df, 7B) sent to the sender.
+		return packet.ZCAckWhisperResponse{}.Size()
 	case packet.HeaderZCUSEITEMACK2:
 		// M12: the use-item ack (0x01c8, Result 0=fail/1=success). Value receiver.
 		return packet.UseItemAck2Response{}.Size()

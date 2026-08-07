@@ -230,6 +230,7 @@ func Register(ctx context.Context, c do.Injector) error {
 	// goroutine, provided here for the composition root to thread into the
 	// map-role dispatch table.
 	do.ProvideValue(c, app.NewChatHandler(registry, maps))
+	do.ProvideValue(c, app.NewWhisperHandler(registry))
 
 	// M15: the stat-change service. It resolves the character repository (chars, already
 	// resolved above) and the player registry, validates the stat ID and available

@@ -82,6 +82,9 @@ type Handlers struct {
 	// OnCZGlobalMessage serves CZ_GLOBAL_MESSAGE (0x008c), the public chat
 	// message broadcast. Provided by the world module (M11).
 	OnCZGlobalMessage domain.PacketHandler
+	// OnCZWhisper serves CZ_WHISPER (0x0096), the private-message request.
+	// Provided by the world module (P2c).
+	OnCZWhisper domain.PacketHandler
 	// OnCZContactNPC serves CZ_CONTACTNPC (0x0090), initiating an NPC dialog.
 	// Provided by the content module.
 	OnCZContactNPC domain.PacketHandler
@@ -167,6 +170,7 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table = addHandler(table, packet.HeaderCZREQWEAREQUIPV5, h.OnCZReqWearEquip)
 	table = addHandler(table, packet.HeaderCZREQTAKEOFFEQUIP, h.OnCZReqTakeoffEquip)
 	table = addHandler(table, packet.HeaderCZGLOBALMESSAGE, h.OnCZGlobalMessage)
+	table = addHandler(table, packet.HeaderCZWHISPER, h.OnCZWhisper)
 	table = addHandler(table, packet.HeaderCZCONTACTNPC, h.OnCZContactNPC)
 	table = addHandler(table, packet.HeaderCZREQNEXTSCRIPT, h.OnCZReqNextScript)
 	table = addHandler(table, packet.HeaderCZCHOOSEMENU, h.OnCZChooseMenu)

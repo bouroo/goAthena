@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"sync"
 
 	gwdomain "github.com/bouroo/goAthena/internal/modules/gateway/domain"
@@ -311,6 +312,7 @@ type PlayerRegistry struct {
 	mu        sync.RWMutex
 	byAccount map[uint32]*Player            // accountID → player (primary)
 	byCharID  map[uint32]*Player            // charID → player (name lookup; PC GID = charID)
+	byName    map[string]*Player            // lower-cased name → player (whisper target resolution)
 	byMap     map[string]map[uint32]*Player // mapName → accountID → player
 }
 
@@ -319,6 +321,7 @@ func NewPlayerRegistry() *PlayerRegistry {
 	return &PlayerRegistry{
 		byAccount: make(map[uint32]*Player),
 		byCharID:  make(map[uint32]*Player),
+		byName:    make(map[string]*Player),
 		byMap:     make(map[string]map[uint32]*Player),
 	}
 }
@@ -338,6 +341,7 @@ func (r *PlayerRegistry) Register(p *Player) error {
 	}
 	r.byAccount[p.AccountID] = p
 	r.byCharID[p.CharID] = p
+	r.byName[strings.ToLower(p.Name)] = p
 	mp, ok := r.byMap[p.MapName]
 	if !ok {
 		mp = make(map[uint32]*Player)
@@ -361,6 +365,7 @@ func (r *PlayerRegistry) Unregister(accountID uint32) *Player {
 	}
 	delete(r.byAccount, accountID)
 	delete(r.byCharID, p.CharID)
+	delete(r.byName, strings.ToLower(p.Name))
 	if mp := r.byMap[p.MapName]; mp != nil {
 		delete(mp, accountID)
 		if len(mp) == 0 {
@@ -410,6 +415,17 @@ func (r *PlayerRegistry) ByAccount(accountID uint32) (*Player, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	p, ok := r.byAccount[accountID]
+	return p, ok
+}
+
+// ByName returns the live player whose name matches (case-insensitive, mirroring
+// rAthena's map_nick2sd strncasecmp). A whisper's target is a nick, so the
+// registry resolves nick → player through this index; a case mismatch must not
+// fail delivery. The returned pointer is shared; callers must not mutate it.
+func (r *PlayerRegistry) ByName(name string) (*Player, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.byName[strings.ToLower(name)]
 	return p, ok
 }
 

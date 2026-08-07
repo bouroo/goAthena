@@ -318,6 +318,86 @@ func (r CZGlobalMessageRequest) Encode(w io.Writer) error {
 	return nil
 }
 
+// CZWhisperRequest is the decoded form of a client → map-server CZ_WHISPER
+// packet (header 0x0096, variable length). Source: rathena/src/map/
+// clif_packetdb.hpp:46 + clif.cpp clif_parse_WisMessage. The on-wire shape is
+// [2:cmd][2:packetLength][24:targetNick char[24] NUL-padded][n:message+null];
+// the fixed minimum is 28 bytes (header + 24-byte name + ≥1 message byte).
+type CZWhisperRequest struct {
+	// TargetNick is the recipient name, NUL-trimmed from the 24-byte field.
+	TargetNick string
+	// Message is the whisper text, NUL terminator stripped.
+	Message string
+}
+
+// ParseCZWhisper decodes a CZ_WHISPER frame. The body is bounded by the
+// embedded packetLength slot at frame[2:4] (not the frame's total length) so a
+// buffered frame carrying trailing packets cannot leak bytes from the next
+// packet into the parsed message — the same discipline ParseCZGlobalMessage
+// uses. The target nick is the 24-byte field at [4:28] trimmed at the first
+// NUL; the message is the NUL-terminated text from offset 28 onward.
+//
+// Returns a wrapped error if the frame is shorter than 28 bytes, the cmd id is
+// not 0x0096, the embedded packetLength is below 28 or larger than the frame,
+// or the message body is empty (a whisper with no text is rejected, mirroring
+// rAthena's empty-message guard).
+func ParseCZWhisper(frame []byte) (CZWhisperRequest, error) {
+	const (
+		minFrame   = 28
+		nickOffset = 4
+		nickEnd    = 28
+	)
+	if len(frame) < minFrame {
+		return CZWhisperRequest{}, fmt.Errorf("packet: parse CZ_WHISPER: want at least %d bytes, got %d", minFrame, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZWHISPER {
+		return CZWhisperRequest{}, fmt.Errorf("packet: parse CZ_WHISPER: unexpected cmd 0x%04x", cmd)
+	}
+
+	plen := binary.LittleEndian.Uint16(frame[2:4])
+	if int(plen) < minFrame {
+		return CZWhisperRequest{}, fmt.Errorf("packet: parse CZ_WHISPER: packet length %d too short", plen)
+	}
+	if len(frame) < int(plen) {
+		return CZWhisperRequest{}, fmt.Errorf("packet: parse CZ_WHISPER: frame length %d shorter than packet length %d", len(frame), plen)
+	}
+
+	nick := frame[nickOffset:nickEnd]
+	if idx := bytes.IndexByte(nick, 0); idx >= 0 {
+		nick = nick[:idx]
+	}
+	body := frame[nickEnd:plen]
+	if len(body) == 0 {
+		return CZWhisperRequest{}, fmt.Errorf("packet: parse CZ_WHISPER: empty message body")
+	}
+	if idx := bytes.IndexByte(body, 0); idx >= 0 {
+		body = body[:idx]
+	}
+	return CZWhisperRequest{TargetNick: string(nick), Message: string(body)}, nil
+}
+
+// Encode writes a CZ_WHISPER frame for test round-trip parity with a real
+// client-shaped packet. Layout: [2:cmd][2:packetLength][24:nick NUL-padded]
+// [n:message+NUL]; packetLength = 4 + 24 + len(msg) + 1.
+func (r CZWhisperRequest) Encode(w io.Writer) error {
+	msg := []byte(r.Message)
+	total := 4 + sizeZCWhisperName + len(msg) + 1
+	if total > 0xffff {
+		return fmt.Errorf("packet: write CZ_WHISPER: message too long (%d bytes)", len(msg))
+	}
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZWHISPER)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	copy(buf[4:4+sizeZCWhisperName], r.TargetNick)
+	// trailing bytes of the 24-byte nick slot stay 0x00 from make() (NUL-pad).
+	copy(buf[4+sizeZCWhisperName:], msg)
+	// buf[total-1] is already 0x00 from make() — the trailing NUL.
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_WHISPER: %w", err)
+	}
+	return nil
+}
+
 // CZChangeDirRequest is the decoded form of a client → map-server
 // CZ_CHANGE_DIRECTION packet (header 0x009b, 5 bytes on the wire).
 // Source: rathena/src/map/clif_packetdb.hpp:48

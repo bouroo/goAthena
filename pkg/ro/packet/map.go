@@ -31,6 +31,11 @@ const (
 	// clif_packetdb.hpp:40 (`parseable_packet(0x008c,-1,clif_parse_GlobalMessage,2,4)`).
 	// Variable length: [2:cmd][2:packetLength][n:text+null].
 	HeaderCZGLOBALMESSAGE uint16 = 0x008c
+	// CZ_WHISPER (0x0096) — private message to a named target. rathena/src/map/
+	// clif_packetdb.hpp:46 (`parseable_packet(0x0096,-1,clif_parse_WisMessage,2,4,28)`).
+	// Variable length: [2:cmd][2:packetLength][24:targetNick char[24]][n:message+null];
+	// fixed min 28 bytes (header + 24-byte name + ≥1 message byte).
+	HeaderCZWHISPER uint16 = 0x0096
 	// CZ_CHANGE_DIRECTION (0x009b) — direction change request. rathena/src/map/
 	// clif_packetdb.hpp:48 (`parseable_packet(0x009b,5,clif_parse_ChangeDir,2,4)`).
 	// Fixed 5 bytes: [2:cmd][2:headDir uint16][1:dir uint8]. The pos array
@@ -91,6 +96,17 @@ const (
 	// carrying groupId, name, and title (packets_struct.hpp:3586-3594).
 	// Fixed 58 bytes: [2:cmd][4:GID][4:groupId][24:name][24:title].
 	HeaderZCACKREQNAMEALLNPC uint16 = 0x0adf
+	// ZC_WHISPER (0x09de) — delivered private message to the recipient. At
+	// PACKETVER MAIN_NUM>=20131204 (ClientROThailand 20250604 qualifies) clif
+	// emits this 0x09de branch (packets_struct.hpp:5347-5356), NOT the legacy
+	// 0x0097. Variable length:
+	// [2:cmd][2:packetLength][4:senderGID uint32][24:sender char[]][1:isAdmin][n:message+null].
+	HeaderZCWHISPER uint16 = 0x09de
+	// ZC_ACK_WHISPER (0x09df) — whisper result ack to the sender. At PACKETVER
+	// >= 20131223 (20250604 qualifies; packets.hpp:1225-1231), NOT legacy 0x0098.
+	// Fixed 7 bytes: [2:cmd][1:result][4:CID uint32=sender char_id]. result:
+	// 0=success, 1=target offline (2/3 ignored = not implemented, no ignore list).
+	HeaderZCACKWHISPER uint16 = 0x09df
 	// CZ_RESTART (0x00b2) — client requests respawn or return to char select.
 	// rathena/src/map/clif_packetdb.hpp:61 (`parseable_packet(0x00b2,3,clif_parse_Restart,2)`).
 	// Fixed 3 bytes: [2:cmd][1:type uint8] (0=respawn, 1=return to char select).
@@ -516,6 +532,12 @@ const (
 	// sizeZCAckReqNameAllNPC = ZC_ACK_REQNAMEALL_NPC (0x0adf): cmd(2)+GID(4)+
 	// groupId(4)+name(24)+title(24) = 58 (packets_struct.hpp:3587-3593).
 	sizeZCAckReqNameAllNPC = 58
+	// sizeZCAckWhisper = ZC_ACK_WHISPER (0x09df): cmd(2)+result(1)+CID(4) = 7
+	// (rathena/src/map/packets.hpp:1225-1231).
+	sizeZCAckWhisper = 7
+	// sizeZCWhisperName is the on-wire sender-name field width in ZC_WHISPER
+	// (NAME_LENGTH = 24, same as ZC_ACK_REQNAME).
+	sizeZCWhisperName = 24
 	// sizeCZRestart = int16 packetType + uint8 type = 2+1 = 3
 	// (rathena/src/map/clif_packetdb.hpp:61).
 	sizeCZRestart = 3
@@ -913,6 +935,30 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCACKREQNAMEALLNPC,
 		Name:      "ZC_ACK_REQNAMEALL_NPC",
 		Length:    sizeZCAckReqNameAllNPC,
+		Direction: DirectionServerToClient,
+	})
+	// P2c: CZ_WHISPER (0x0096) — private message request. Variable length;
+	// codec bounds by the embedded packetLength slot at offset 2.
+	db.Register(Definition{
+		ID:        HeaderCZWHISPER,
+		Name:      "CZ_WHISPER",
+		Length:    VariableLength,
+		Direction: DirectionClientToServer,
+	})
+	// P2c: ZC_WHISPER (0x09de) — delivered whisper to the recipient. Variable
+	// length (sender + message); 0x09de branch active at PACKETVER 20250604.
+	db.Register(Definition{
+		ID:        HeaderZCWHISPER,
+		Name:      "ZC_WHISPER",
+		Length:    VariableLength,
+		Direction: DirectionServerToClient,
+	})
+	// P2c: ZC_ACK_WHISPER (0x09df) — whisper result ack to the sender. Fixed 7
+	// bytes; 0x09df branch active at PACKETVER 20250604.
+	db.Register(Definition{
+		ID:        HeaderZCACKWHISPER,
+		Name:      "ZC_ACK_WHISPER",
+		Length:    sizeZCAckWhisper,
 		Direction: DirectionServerToClient,
 	})
 	// M14: ZC_SET_UNIT_IDLE (fixed 107 bytes) — NPC entity spawn.
