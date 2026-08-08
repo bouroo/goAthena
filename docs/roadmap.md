@@ -183,11 +183,11 @@ recoverable as shape reference) are re-landed next, then M8+ is the frontier.
 | **M7** Combat | Melee damage, attack action, HP reduction | ✅ re-landed |
 | **M8** Economy | Zeny value object + EconomyService (DeductZeny/CreditZeny) | ✅ done |
 | **M9** Commerce | Shop buy/sell (economy+inventory ports) | ✅ done |
-| **M10** Content / script VM | `content` script engine (the 29k-LOC hard part) — NPC dialog/quest/item script | 🟡 partial |
+| **M10** Content | script VM ↔ dialog bridge (mes/next/select/input/close) | ✅ done |
 | **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 scaffold |
-| **M12** Transit | Cross-map / cross-zone handshake | 🔜 frontier |
+| **M12** Transit | cross-map warp (SetPosition + LeaveMap) | ✅ done |
 | **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 📋 planned |
-| **M14** Production hardening | Observability coverage, security audit, perf profiling, load test | 📋 planned |
+| **M14** Hardening | Prometheus /metrics + Docker build | 🟡 in progress |
 
 **Effort weighting** (from `rathena-subsystem-size-risk-profile`): the protocol/
 crypto/path work is a few hundred lines and **done**; the real effort is the
