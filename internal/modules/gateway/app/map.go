@@ -35,14 +35,15 @@ type MapServer struct {
 	handlers map[uint16]mapHandler
 	world    *worldapp.WorldService
 	spawn    *worldapp.SpawnService
+	combat   *worldapp.CombatService
 	inv      *invapp.InventoryService
 	sess     chardomain.SessionStore
 	log      *slog.Logger
 }
 
 // NewMapServer builds a map listener.
-func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, inv *invapp.InventoryService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
-	return &MapServer{world: world, spawn: spawn, inv: inv, sess: sess, log: log, handlers: mapHandlers()}, nil
+func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
+	return &MapServer{world: world, spawn: spawn, combat: combat, inv: inv, sess: sess, log: log, handlers: mapHandlers()}, nil
 }
 
 // OnBoot captures the engine for shutdown.

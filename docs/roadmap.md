@@ -179,8 +179,8 @@ recoverable as shape reference) are re-landed next, then M8+ is the frontier.
 | **M3** World core | Entity lifecycle, AOI grid, 50 Hz tick, map-enter, map :5121 | ✅ re-landed |
 | **M4** Gateway ingress | Table-driven opcode dispatch, LoadEndAck, movement | ✅ re-landed |
 | **M5** Inventory | Item-container aggregate + LoadEndAck init burst | ✅ re-landed |
-| **M6** Spawn / drops | Mob spawn, death, drops, pickup | 🔜 re-land |
-| **M7** Combat | Battle formulas, melee/skill damage, equip/unequip + stat recompute | 🔜 re-land |
+| **M6** Spawn / drops | Mob spawn, floor items, drops, pickup | ✅ re-landed |
+| **M7** Combat | Melee damage, attack action, HP reduction | ✅ re-landed |
 | **M8** Economy | `economy` zeny-ledger aggregate + ports | 🔜 frontier |
 | **M9** Commerce | `shop`/`trade`/`vending`/`storage` over economy+inventory (trade S1/S2 staged) | 🔜 frontier |
 | **M10** Content / script VM | `content` script engine (the 29k-LOC hard part) — NPC dialog/quest/item script | 🟡 partial |
@@ -220,8 +220,8 @@ it — never when the code merely looks right.
 | **M3** World | entity registry + AOI grid + 50Hz tick + map-enter (CZ_ENTER→ZC_ACCEPT_ENTER), map :5121 | L3 map-enter over TCP | ✅ done |
 | **M4** Gateway ingress | table-driven opcode dispatch (CZ_ENTER/LoadEndAck/move), LoadEndAck inventory burst | L3 dispatch e2e | ✅ done |
 | **M5** Inventory | item-container aggregate (domain/infra/app) + LoadEndAck init burst + wave3 | L1+L2+wave3 migrated | ✅ done |
-| **M6** Spawn / drops | mob spawn, death, drops, pickup | L3 | 🔜 |
-| **M7** Combat | battle formulas, melee/skill damage, equip + stat recompute | L3 | 🔜 |
+| **M6** Spawn / drops | mob spawn + floor items + drops + CZ_ITEM_PICKUP | L1+L2 | ✅ done |
+| **M7** Combat | CombatService + melee NormalMelee (pre-re) + CZ_ACTION_REQUEST + HP reduction | L1+L2 | ✅ done |
 | **M8** Economy | `economy` zeny-ledger aggregate + ports | L1+L2 | 🔜 |
 | **M9** Commerce | `shop`/`trade`/`vending`/`storage` over economy+inventory | L3 (trade e2e) | 🔜 |
 | **M10** Content | `content` script VM — dialog/quest/item-script execution | L3 (NPC dialog e2e) | 🟡 |

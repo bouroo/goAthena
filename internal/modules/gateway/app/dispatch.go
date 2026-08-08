@@ -24,7 +24,8 @@ func mapHandlers() map[uint16]mapHandler {
 		0x0072: {size: czEnterSize, fn: (*MapServer).handleEnterFrame},
 		0x007d: {size: 2, fn: (*MapServer).handleLoadEndAck},
 		0x0085: {size: 5, fn: (*MapServer).handleRequestMove},
-		0x0362: {size: 6, fn: (*MapServer).handleItemPickup}, // CZ_ITEM_PICKUP @ 20250604
+		0x0089: {size: 7, fn: (*MapServer).handleActionRequest}, // CZ_ACTION_REQUEST
+		0x0362: {size: 6, fn: (*MapServer).handleItemPickup},    // CZ_ITEM_PICKUP @ 20250604
 	}
 }
 
@@ -125,6 +126,37 @@ func (s *MapServer) handleItemPickup(c gnet.Conn, frame []byte) {
 	out := make([]byte, resp.Size())
 	if err := resp.Encode(sliceWriter(out)); err != nil {
 		s.log.Error("map: encode pickup-ack", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// handleActionRequest handles CZ_ACTION_REQUEST (0x0089, 7B): sit/stand/attack.
+// Attack (action 0x07) resolves melee damage via CombatService and echoes the
+// action; sit/stand just echo back.
+func (s *MapServer) handleActionRequest(c gnet.Conn, frame []byte) {
+	auth := authFromConn(c)
+	if auth == nil {
+		s.log.Warn("map: CZ_ACTION_REQUEST from unauthed conn")
+		return
+	}
+	req, err := ropacket.ParseCZActionRequest(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_ACTION_REQUEST", "err", err)
+		return
+	}
+	if req.Action == 0x07 { // attack
+		dmg, err := s.combat.Attack(worlddomain.EntityID(auth.charID), worlddomain.EntityID(req.TargetGID))
+		if err != nil {
+			s.log.Warn("map: attack", "err", err)
+			return
+		}
+		s.log.Debug("map: attack", "attacker", auth.charID, "target", req.TargetGID, "dmg", dmg)
+	}
+	resp := ropacket.ActionResponse{GID: auth.charID, Action: req.Action, TargetGID: req.TargetGID}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode action-response", "err", err)
 		return
 	}
 	_ = c.AsyncWrite(out, nil)
