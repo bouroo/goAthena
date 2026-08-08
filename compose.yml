@@ -67,6 +67,15 @@ services:
       - "6900:6900" # login
       - "6121:6121" # char
       - "5121:5121" # map
+    healthcheck:
+      # The image is distroless (no shell/curl), so use the purpose-built
+      # /healthcheck binary (probes localhost:8080/healthz). CMD form, not
+      # CMD-SHELL — distroless has no shell to expand a command string.
+      test: ["CMD", "/healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
 volumes:
   mariadb-data: {}
