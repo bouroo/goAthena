@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/bouroo/goAthena/internal/config"
 )
@@ -123,5 +124,11 @@ func (a *App) routes() {
 		return c.JSON(http.StatusOK, map[string]string{
 			"version": Version, "commit": Commit, "build_time": BuildTime,
 		})
+	})
+	// /metrics exposes Prometheus metrics: Go runtime + process + goathena_*
+	// custom counters. Used by the observability stack (OTel Collector → Prometheus).
+	a.echo.GET("/metrics", func(c *echo.Context) error {
+		promhttp.Handler().ServeHTTP(c.Response(), c.Request())
+		return nil
 	})
 }
