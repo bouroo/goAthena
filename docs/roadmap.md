@@ -1,7 +1,7 @@
 # goAthena — Project Plan & Roadmap
 
 > Plan of record. Status reflects the verified state of the repository as of
-> 2026-08-08. Every claim below is anchored to executable evidence (git refs,
+> 2026-08-09. Every claim below is anchored to executable evidence (git refs,
 > file paths, line counts, or test gates), not narrative.
 
 ---
@@ -12,7 +12,8 @@
 built as a **modular monolith** on domain-driven / clean-architecture principles.
 It targets **wire + data compatibility** with the Thai Classic client
 (**`PACKETVER 20250604`**) so that the existing client (`ClientROThailand`),
-roBrowser, the rAthena SQL schema, and the game-data YAMLs work as-is.
+the rAthena SQL schema, and the game-data YAMLs work as-is. (roBrowser /
+WebSocket support is on the roadmap, not yet wired.)
 
 The reference implementation is **rAthena** (`third_party/rathenaThailand`,
 Thai Classic fork). goAthena is **not** a line-for-line port: it keeps the
@@ -46,7 +47,7 @@ subcommands (`serve`, `migrate`, `version`). `serve` runs supervised listeners:
 
 - **Login** TCP `:6900` (the only static port the client knows — read from its `clientinfo.xml`)
 - **Character** TCP `:6121` (advertised to the client during the login→char handoff)
-- **Map** TCP `:5121` + WebSocket (roBrowser), advertised during the char→map handoff
+- **Map** TCP `:5121` (a WebSocket / roBrowser listener is planned, not wired)
 - **HTTP** `/healthz` + `/readyz`; **gRPC** (ops)
 
 Internally the server mirrors rAthena's tick model but with Go-native
@@ -62,18 +63,18 @@ through interfaces, never concrete types. Layering inside a module is
 clean-architecture: `domain` (pure) → `app` (use cases) → `infra` (adapters) →
 `di` (wiring). Dependency direction is strictly inward.
 
-| Module | Owns | Status @ `cea42f8` |
+| Module | Owns | Status @ `cf4d622` (HEAD) |
 |---|---|---|
 | `account` | Auth + login/char-select session | ✅ domain+app+infra |
 | `character` | Character CRUD + progression | ✅ domain+app+infra |
-| `world` | Entity, AOI, tick, spawn, combat authority, Agones adapter | ✅ **most built** (domain 10 / app 41 files) |
-| `gateway` | Ingress: codec + table-driven dispatch + broadcast render | ✅ app+domain+infra (TCP+WS) |
+| `world` | Entity, AOI, tick, spawn, combat authority (Agones adapter planned, not wired) | ✅ most built (domain 10 / app 41 files) |
+| `gateway` | Ingress: codec + table-driven dispatch + broadcast render | ✅ app+domain+infra (TCP only; WS planned) |
 | `inventory` | Item-container aggregate (char/cart/warehouse/storage) | ✅ domain+infra |
-| `content` | Script engine (NPC dialog/quest/item script) | 🟡 partial (app 8 files) |
-| `commerce/{shop,trade,vending,storage}` | Use-case services over economy+inventory ports | 🟡 trade S1/S2 staged; module largely empty |
-| `economy` | Zeny-ledger aggregate | ❌ empty — frontier |
-| `social` | Chat / friend / party / guild / mail | ❌ empty — frontier (chat lives in `world` for now) |
-| `transit` | Cross-map / cross-zone handshake | ❌ empty — frontier |
+| `content` | Script engine (NPC dialog/quest/item script) | 🟡 partial — dialog bridge landed (602 LOC), full VM coverage open |
+| `commerce/{shop,trade,vending,storage}` | Use-case services over economy+inventory ports | 🟡 shop slice landed (157 LOC); trade/vending/storage open |
+| `economy` | Zeny-ledger aggregate | 🟡 first slice landed (216 LOC); full ledger open |
+| `social` | Chat / friend / party / guild / mail | 🟡 scaffold (PlayerDirectory port, 87 LOC); chat lives in `world` for now |
+| `transit` | Cross-map / cross-zone handshake | 🟡 cross-map warp landed (SetPosition + LeaveMap, 61 LOC); cross-zone handshake open |
 
 Combat is a `world` **app service** (no independent data) to avoid a
 `world → combat → world` cycle. Reference data (mob/item/skill tables) lives in
@@ -122,12 +123,12 @@ Everything else builds on this; it is the most-verified code in the repo
 | Language | **Go 1.26+** | Concurrency, single-static-binary deploy, GC fit for a game loop |
 | Primary DB | **PostgreSQL** (MariaDB as compatibility fallback) | PG for production durability; MariaDB keeps rAthena schema read/write compat |
 | Cache / sessions | **Valkey** (Redis-fork) | Session keys, hot state, rate-limit counters |
-| Inter-service eventing | **NATS** | The scale-out bus when modules extract to separate binaries |
-| Game-server orchestration | **Agones** | Per-shard/per-map `GameServer` allocation on K8s |
-| Network | **gnet v2** (TCP) + **coder/websocket** (roBrowser) | Zero-copy event loop for the map protocol; WS for browser clients |
+| Inter-service eventing | **NATS** *(planned)* | Configured (`config.yaml`, compose sidecar); no `nats.Connect` in the binary yet. Scale-out bus for when modules extract to separate binaries |
+| Game-server orchestration | **Agones** *(planned)* | Per-shard/per-map `GameServer` allocation on K8s; design seam only, no adapter wired |
+| Network | **gnet v2** (TCP) | Zero-copy event loop for the map protocol. A `coder/websocket` listener for roBrowser is planned, not wired |
 | Migrations | **golang-migrate** (embedded `go:embed`) | Self-contained, idempotent, 11-wave schema |
 | DI | **samber/do v2** | Auditable, line-by-line wiring; infra singletons, plain-ctor use cases |
-| Observability | **OpenTelemetry** + Prometheus + Grafana | Traces/metrics across the tick loop and cross-module calls |
+| Observability | Prometheus `/metrics` | Live today. OpenTelemetry tracing + Grafana dashboards are planned |
 | Build/lint | **Task** runner, **golangci-lint v2**, **gofumpt/goimports** | Merge-blocking CI |
 
 ---
@@ -158,18 +159,22 @@ can resume a login; NATS for cross-node broadcasts. Read-replicas for PG.
   cache; **OTel Collector** → Prometheus/Grafana for telemetry.
 - Kustomize base + dev/prod overlays, HPA, PDB, Traefik ingress + rate-limit.
 
-The seam is real today: `composition.go` wires the process via explicit ordered
-factories; every module is injectable; versioned NATS subjects and an Agones
-lifecycle client (with a local no-op fallback) are already present at `cea42f8`.
+The architectural seam is real today: `composition.go` wires the process via
+explicit ordered factories and every module is injectable behind an interface.
+The scale-out *plumbing* is not — there is no `nats.Connect` and no Agones
+adapter in the binary; versioned NATS subjects and an Agones lifecycle client
+are future work, not present in the tree.
 
 ---
 
 ## 5. Milestone roadmap
 
 The re-init wiped the tree; the rebuild re-lands each milestone fresh (keep the
-`pkg/ro` kernel, rewrite the app layer on the framework stack). **M0 and M1 are
-re-landed in the new tree**; M2–M7 (proven in the old build at `cea42f8`,
-recoverable as shape reference) are re-landed next, then M8+ is the frontier.
+`pkg/ro` kernel, rewrite the app layer on the framework stack). **M0–M7 are
+re-landed and proven** in the new tree; **first slices of M8, M9, M10, and M12
+have landed** and M11 is a scaffold. M13 scale-out and M14 hardening remain
+planned; **dual-client (roBrowser/WebSocket) and PACKETVER decoupling are not
+started.**
 
 | Milestone | Scope | Status |
 |---|---|---|
@@ -181,13 +186,13 @@ recoverable as shape reference) are re-landed next, then M8+ is the frontier.
 | **M5** Inventory | Item-container aggregate + LoadEndAck init burst | ✅ re-landed |
 | **M6** Spawn / drops | Mob spawn, floor items, drops, pickup | ✅ re-landed |
 | **M7** Combat | Melee damage, attack action, HP reduction | ✅ re-landed |
-| **M8** Economy | Zeny value object + EconomyService (DeductZeny/CreditZeny) | ✅ done |
-| **M9** Commerce | Shop buy/sell (economy+inventory ports) | ✅ done |
-| **M10** Content | script VM ↔ dialog bridge (mes/next/select/input/close) | ✅ done |
-| **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 scaffold |
-| **M12** Transit | cross-map warp (SetPosition + LeaveMap) | ✅ done |
-| **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 📋 planned |
-| **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | ✅ done |
+| **M8** Economy | Zeny value object + EconomyService (DeductZeny/CreditZeny) | 🟡 partial — first slice (216 LOC); full zeny-ledger open |
+| **M9** Commerce | Shop buy/sell (economy+inventory ports) | 🟡 partial — shop slice (157 LOC); trade/vending/storage open |
+| **M10** Content | script VM ↔ dialog bridge (mes/next/select/input/close) | 🟡 partial — dialog bridge landed (602 LOC); full script-VM coverage open |
+| **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 scaffold (87 LOC) |
+| **M12** Transit | cross-map warp (SetPosition + LeaveMap) | 🟡 partial — in-zone warp landed (61 LOC); cross-zone handshake + Agones allocation open |
+| **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 📋 planned (no `nats.Connect`, no Agones adapter yet) |
+| **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | 🟡 partial — /metrics + compose e2e login live; OTel tracing, security review, load test open |
 
 **Effort weighting** (from `rathena-subsystem-size-risk-profile`): the protocol/
 crypto/path work is a few hundred lines and **done**; the real effort is the
@@ -222,11 +227,11 @@ it — never when the code merely looks right.
 | **M5** Inventory | item-container aggregate (domain/infra/app) + LoadEndAck init burst + wave3 | L1+L2+wave3 migrated | ✅ done |
 | **M6** Spawn / drops | mob spawn + floor items + drops + CZ_ITEM_PICKUP | L1+L2 | ✅ done |
 | **M7** Combat | CombatService + melee NormalMelee (pre-re) + CZ_ACTION_REQUEST + HP reduction | L1+L2 | ✅ done |
-| **M8** Economy | `economy` zeny-ledger aggregate + ports | L1+L2 | 🔜 |
-| **M9** Commerce | `shop`/`trade`/`vending`/`storage` over economy+inventory | L3 (trade e2e) | 🔜 |
-| **M10** Content | `content` script VM — dialog/quest/item-script execution | L3 (NPC dialog e2e) | 🟡 |
-| **M11** Social | friend/party/guild/mail | L3 | 🔜 |
-| **M12** Transit | cross-map handshake + Agones allocation path | L3 (map-change e2e) | 🔜 |
+| **M8** Economy | `economy` zeny-ledger aggregate + ports | L1+L2 | 🟡 partial (first slice) |
+| **M9** Commerce | `shop`/`trade`/`vending`/`storage` over economy+inventory | L3 (trade e2e) | 🟡 partial (shop slice) |
+| **M10** Content | `content` script VM — dialog/quest/item-script execution | L3 (NPC dialog e2e) | 🟡 partial (dialog bridge) |
+| **M11** Social | friend/party/guild/mail | L3 | 🟡 scaffold |
+| **M12** Transit | cross-map handshake + Agones allocation path | L3 (map-change e2e) | 🟡 partial (in-zone warp; cross-zone+Agones open) |
 | **P-scale** Scale-out | extract one module to a NATS binary; Agones fleet | L3 (multi-process) | 📋 |
 | **P-hard** Harden | OTel coverage, security review, perf profiling, load test | perf budget met | 📋 |
 
