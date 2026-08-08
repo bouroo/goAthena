@@ -24,4 +24,8 @@ func Register(inj do.Injector, tickRateHz int) {
 		log := do.MustInvoke[*slog.Logger](i)
 		return app.NewWorldService(repo, log, tickRateHz), nil
 	})
+	do.Provide(inj, func(i do.Injector) (*app.SpawnService, error) {
+		world := do.MustInvoke[*app.WorldService](i)
+		return app.NewSpawnService(world, nil), nil // mob_db wired in M6b
+	})
 }

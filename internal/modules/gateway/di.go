@@ -14,6 +14,7 @@ import (
 	charapp "github.com/bouroo/goAthena/internal/modules/character/app"
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
 	"github.com/bouroo/goAthena/internal/modules/gateway/app"
+	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 )
 
@@ -66,11 +67,19 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve world service: %w", err)
 	}
+	spawn, err := do.Invoke[*worldapp.SpawnService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve spawn service: %w", err)
+	}
+	inv, err := do.Invoke[*invapp.InventoryService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve inventory service: %w", err)
+	}
 	sess, err := do.Invoke[chardomain.SessionStore](inj)
 	if err != nil {
 		return nil, fmt.Errorf("resolve session store: %w", err)
 	}
-	ms, err := app.NewMapServer(world, sess, log)
+	ms, err := app.NewMapServer(world, spawn, inv, sess, log)
 	if err != nil {
 		return nil, fmt.Errorf("map server: %w", err)
 	}

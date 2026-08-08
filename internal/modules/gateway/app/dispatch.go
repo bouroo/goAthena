@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+
 	"github.com/panjf2000/gnet/v2"
 
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
@@ -22,6 +24,7 @@ func mapHandlers() map[uint16]mapHandler {
 		0x0072: {size: czEnterSize, fn: (*MapServer).handleEnterFrame},
 		0x007d: {size: 2, fn: (*MapServer).handleLoadEndAck},
 		0x0085: {size: 5, fn: (*MapServer).handleRequestMove},
+		0x0362: {size: 6, fn: (*MapServer).handleItemPickup}, // CZ_ITEM_PICKUP @ 20250604
 	}
 }
 
@@ -84,6 +87,44 @@ func (s *MapServer) handleRequestMove(c gnet.Conn, frame []byte) {
 	out := make([]byte, resp.Size())
 	if err := resp.Encode(sliceWriter(out)); err != nil {
 		s.log.Error("map: encode player-move", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// handleItemPickup handles CZ_ITEM_PICKUP (0x0362, 6B): parse GroundID, look up
+// the floor item, remove it from the ground, add it to the player's inventory,
+// and reply ZC_ITEM_PICKUP_ACK.
+func (s *MapServer) handleItemPickup(c gnet.Conn, frame []byte) {
+	auth := authFromConn(c)
+	if auth == nil {
+		s.log.Warn("map: CZ_ITEM_PICKUP from unauthed conn")
+		return
+	}
+	req, err := ropacket.ParseCZItemPickup(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_ITEM_PICKUP", "err", err)
+		return
+	}
+	fi, err := s.spawn.PickupFloorItem(req.GroundID)
+	if err != nil {
+		s.log.Debug("map: pickup (not found)", "gid", req.GroundID)
+		return // item already taken or gone — client re-syncs
+	}
+	_, err = s.inv.Add(context.Background(), auth.charID, fi.NameID, int(fi.Amount))
+	if err != nil {
+		s.log.Error("map: pickup add inventory", "err", err)
+		return
+	}
+	resp := ropacket.ItemPickupAckResponse{
+		Count:        uint16(fi.Amount), //nolint:gosec // G115: item amount bounded to small stack values.
+		NameID:       fi.NameID,
+		IsIdentified: 1,
+		Result:       0, // success
+	}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode pickup-ack", "err", err)
 		return
 	}
 	_ = c.AsyncWrite(out, nil)
