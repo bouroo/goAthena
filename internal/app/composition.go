@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -66,12 +67,32 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	do.ProvideValue(inj, cfg)
 	do.ProvideValue(inj, log)
 
+	// OTel (#10): the exporter config is parsed/validated but the OTel SDK is
+	// not initialized at boot. Surface the gap so an operator who sets
+	// OTEL_EXPORTER=otlp sees telemetry is being dropped, not silently
+	// consumed. Wiring the full SDK (tracer/meter provider) is tracked separately.
+	if wired, msg := otelStatus(cfg.OTel); !wired {
+		log.Warn(msg,
+			"endpoint", cfg.OTel.Endpoint,
+			"service_name", cfg.OTel.ServiceName,
+			"sampling", cfg.OTel.Sampling)
+	}
+
 	if gdb, err := db.New(cfg.DB); err != nil {
 		log.Error("db connect failed; readiness will report down", "err", err)
 	} else {
 		d.db = gdb
 		do.ProvideValue(inj, gdb)
 		closers = append(closers, func() { _ = db.Close(gdb) })
+
+		// Apply the embedded rAthena schema at boot so a fresh volume reaches
+		// readiness without a manual `goathena migrate up`. Bounded retry
+		// tolerates a slow-to-accept DB; a persistent failure leaves /readyz
+		// reporting not-ready because probeSchema finds no schema_migrations row.
+		// Reuses the existing golang-migrate infra — no new runner dependency.
+		if err := applyMigrations(ctx, cfg, log); err != nil {
+			log.Error("boot migrations failed; /readyz will report schema not applied", "err", err)
+		}
 	}
 
 	if vc, err := valkey.New(ctx, cfg.Valkey); err != nil {
@@ -130,19 +151,120 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	return inj, d, closeAll
 }
 
-// ready reports nil only when every required dependency answers its probe.
+// ready reports nil only when every required dependency answers its probe AND
+// the rAthena schema is present. A bare DB ping would report ready against a
+// fresh/empty volume (no tables); the schema check closes that gap so a load
+// balancer stops sending traffic until migrations have landed.
 func (d *deps) ready(ctx context.Context) error {
 	if d.db == nil {
-		return fmt.Errorf("db not connected")
+		return errors.New("db not connected")
 	}
 	if err := db.Ping(ctx, d.db); err != nil {
 		return fmt.Errorf("db: %v", err)
 	}
+	version, dirty, err := d.probeSchema(ctx)
+	if verr := schemaVerdict(err, version, dirty); verr != nil {
+		return verr
+	}
 	if d.valkey == nil {
-		return fmt.Errorf("valkey not connected")
+		return errors.New("valkey not connected")
 	}
 	if err := valkey.Ping(ctx, d.valkey); err != nil {
 		return fmt.Errorf("valkey: %v", err)
 	}
 	return nil
+}
+
+// probeSchema reads the golang-migrate version row over the existing GORM pool.
+// On a fresh volume the schema_migrations table is absent, so the query errors
+// — the honest "schema not applied" signal. One cheap query per probe; no
+// dedicated connection is opened (migrator handles are confined to Up).
+func (d *deps) probeSchema(ctx context.Context) (version uint, dirty bool, err error) {
+	var row struct {
+		Version uint
+		Dirty   bool
+	}
+	res := d.db.WithContext(ctx).
+		Raw("SELECT version, dirty FROM schema_migrations LIMIT 1").
+		Scan(&row)
+	if res.Error != nil {
+		return 0, false, fmt.Errorf("read schema_migrations: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return 0, false, errors.New("no schema_migrations row (schema not applied)")
+	}
+	return row.Version, row.Dirty, nil
+}
+
+// schemaVerdict is the pure, testable core of the schema-aware readiness gate.
+// It is split from probeSchema so the decision (applied? dirty? non-zero?) can
+// be unit-tested with fakes — the live query cannot run without a database.
+func schemaVerdict(err error, version uint, dirty bool) error {
+	if err != nil {
+		return fmt.Errorf("schema not applied: %w", err)
+	}
+	if dirty {
+		return fmt.Errorf("schema dirty at version %d", version)
+	}
+	if version == 0 {
+		return errors.New("schema not applied (version 0)")
+	}
+	return nil
+}
+
+// applyMigrations runs the embedded schema at boot with a bounded retry. It
+// reuses db.NewMigrator (golang-migrate over the embedded SQL) — no new
+// migration runner is introduced. Each attempt opens and closes its own
+// migrator handles; the loop honours ctx cancellation between attempts.
+func applyMigrations(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
+	const maxAttempts = 3
+	backoff := 500 * time.Millisecond
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("boot migrate cancelled: %w", err)
+		}
+		mg, err := db.NewMigrator(cfg.DB)
+		if err != nil {
+			lastErr = fmt.Errorf("migrator open (attempt %d): %w", attempt, err)
+		} else if err := mg.Up(); err != nil {
+			lastErr = fmt.Errorf("migrate up (attempt %d): %w", attempt, err)
+			_ = mg.Close()
+		} else {
+			v, dirty, _ := mg.Version()
+			log.Info("boot migrations applied", "version", v, "dirty", dirty, "attempt", attempt)
+			_ = mg.Close()
+			return nil
+		}
+		log.Warn("boot migrate retry", "attempt", attempt, "err", lastErr, "backoff", backoff)
+		if !sleepCtx(ctx, backoff) {
+			return fmt.Errorf("boot migrate cancelled: %w", ctx.Err())
+		}
+		backoff *= 2
+	}
+	return lastErr
+}
+
+// sleepCtx blocks for d or until ctx is cancelled. Returns false if cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// otelStatus reports whether the OTel SDK is wired for the given config. The SDK
+// is not initialized at boot (option b of #10): a non-none exporter is parsed
+// but not forwarded, so this returns wired=false with a message the boot path
+// logs. Kept pure so the decision is unit-testable without a live exporter.
+func otelStatus(cfg config.OTelConfig) (wired bool, msg string) {
+	if cfg.Exporter == "" || cfg.Exporter == "none" {
+		return true, ""
+	}
+	return false, "otel not wired: exporter " + cfg.Exporter +
+		" requested but SDK not initialized; telemetry will not be exported"
 }

@@ -140,7 +140,10 @@ type LogConfig struct {
 	Format string `yaml:"format" env:"LOG_FORMAT"`
 }
 
-// OTelConfig is the OpenTelemetry exporter.
+// OTelConfig carries the OpenTelemetry export settings. The fields are parsed
+// and validated, but the OTel SDK is NOT initialized at boot (see
+// app.otelStatus): setting exporter=otlp currently only logs a "not wired"
+// warning rather than exporting telemetry. Wiring the SDK is tracked separately.
 type OTelConfig struct {
 	Exporter    string  `yaml:"exporter"     env:"OTEL_EXPORTER" validate:"oneof=none otlp"`
 	Endpoint    string  `yaml:"endpoint"     env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
