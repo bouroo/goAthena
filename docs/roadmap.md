@@ -181,10 +181,10 @@ recoverable as shape reference) are re-landed next, then M8+ is the frontier.
 | **M5** Inventory | Item-container aggregate + LoadEndAck init burst | ✅ re-landed |
 | **M6** Spawn / drops | Mob spawn, floor items, drops, pickup | ✅ re-landed |
 | **M7** Combat | Melee damage, attack action, HP reduction | ✅ re-landed |
-| **M8** Economy | `economy` zeny-ledger aggregate + ports | 🔜 frontier |
-| **M9** Commerce | `shop`/`trade`/`vending`/`storage` over economy+inventory (trade S1/S2 staged) | 🔜 frontier |
+| **M8** Economy | Zeny value object + EconomyService (DeductZeny/CreditZeny) | ✅ done |
+| **M9** Commerce | Shop buy/sell (economy+inventory ports) | ✅ done |
 | **M10** Content / script VM | `content` script engine (the 29k-LOC hard part) — NPC dialog/quest/item script | 🟡 partial |
-| **M11** Social | friend/party/guild/mail (chat already in `world`) | 🔜 frontier |
+| **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 scaffold |
 | **M12** Transit | Cross-map / cross-zone handshake | 🔜 frontier |
 | **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 📋 planned |
 | **M14** Production hardening | Observability coverage, security audit, perf profiling, load test | 📋 planned |
