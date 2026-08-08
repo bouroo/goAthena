@@ -177,8 +177,8 @@ recoverable as shape reference) are re-landed next, then M8+ is the frontier.
 | **M1** Account / Login | `:6900` login handshake (v55 old-login), account auth, session keys, gnet listener | ✅ re-landed |
 | **M2** Character | Char CRUD, char-select, session handoff, char TCP :6121 | ✅ re-landed |
 | **M3** World core | Entity lifecycle, AOI grid, 50 Hz tick, map-enter, map :5121 | ✅ re-landed |
-| **M4** Gateway ingress | Codec, table-driven dispatch, broadcast render (TCP + WS) | 🔜 re-land |
-| **M5** Inventory | Item-container aggregate (equip/cart/warehouse) | 🔜 re-land |
+| **M4** Gateway ingress | Table-driven opcode dispatch, LoadEndAck, movement | ✅ re-landed |
+| **M5** Inventory | Item-container aggregate + LoadEndAck init burst | ✅ re-landed |
 | **M6** Spawn / drops | Mob spawn, death, drops, pickup | 🔜 re-land |
 | **M7** Combat | Battle formulas, melee/skill damage, equip/unequip + stat recompute | 🔜 re-land |
 | **M8** Economy | `economy` zeny-ledger aggregate + ports | 🔜 frontier |
@@ -218,8 +218,8 @@ it — never when the code merely looks right.
 | **M1** Login | account module (domain/app/infra) + migration system + gnet login listener :6900 | L3 real-TCP handshake e2e | ✅ done |
 | **M2** Character | char CRUD, char-select, session handoff (Valkey), char TCP :6121 | L3 char-select over TCP | ✅ done |
 | **M3** World | entity registry + AOI grid + 50Hz tick + map-enter (CZ_ENTER→ZC_ACCEPT_ENTER), map :5121 | L3 map-enter over TCP | ✅ done |
-| **M4** Gateway ingress | full codec, table-driven dispatch, broadcast render (TCP + WS) | L3 | 🔜 |
-| **M5** Inventory | item-container aggregate (equip/cart/warehouse) | L1+L2+L3 | 🔜 |
+| **M4** Gateway ingress | table-driven opcode dispatch (CZ_ENTER/LoadEndAck/move), LoadEndAck inventory burst | L3 dispatch e2e | ✅ done |
+| **M5** Inventory | item-container aggregate (domain/infra/app) + LoadEndAck init burst + wave3 | L1+L2+wave3 migrated | ✅ done |
 | **M6** Spawn / drops | mob spawn, death, drops, pickup | L3 | 🔜 |
 | **M7** Combat | battle formulas, melee/skill damage, equip + stat recompute | L3 | 🔜 |
 | **M8** Economy | `economy` zeny-ledger aggregate + ports | L1+L2 | 🔜 |
