@@ -187,7 +187,7 @@ recoverable as shape reference) are re-landed next, then M8+ is the frontier.
 | **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 scaffold |
 | **M12** Transit | cross-map warp (SetPosition + LeaveMap) | ✅ done |
 | **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 📋 planned |
-| **M14** Hardening | Prometheus /metrics + Docker build | 🟡 in progress |
+| **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | ✅ done |
 
 **Effort weighting** (from `rathena-subsystem-size-risk-profile`): the protocol/
 crypto/path work is a few hundred lines and **done**; the real effort is the
