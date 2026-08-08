@@ -16,6 +16,7 @@ import (
 	"github.com/panjf2000/gnet/v2"
 
 	"github.com/bouroo/goAthena/internal/modules/account/domain"
+	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -37,6 +38,7 @@ type LoginServer struct {
 	engine   gnet.Engine
 	booted   bool
 	auth     domain.Authenticator
+	sessions chardomain.SessionStore // stores login session for char/map validation
 	log      *slog.Logger
 	charIP   uint32 // advertised char-server IPv4 (wire uint32)
 	charPort uint16 // advertised char-server port
@@ -44,13 +46,14 @@ type LoginServer struct {
 }
 
 // NewLoginServer builds a login listener. charHost/charPort/charName are the
-// char-server endpoint advertised to the client inside AC_ACCEPT_LOGIN.
-func NewLoginServer(auth domain.Authenticator, log *slog.Logger, charHost, charName string, charPort uint16) (*LoginServer, error) {
+// char-server endpoint advertised to the client inside AC_ACCEPT_LOGIN. sessions
+// persists the login handshake so the char server can validate CH_ENTER.
+func NewLoginServer(auth domain.Authenticator, sessions chardomain.SessionStore, log *slog.Logger, charHost, charName string, charPort uint16) (*LoginServer, error) {
 	ip, err := ipToWire(charHost)
 	if err != nil {
 		return nil, fmt.Errorf("char server host %q: %w", charHost, err)
 	}
-	return &LoginServer{auth: auth, log: log, charIP: ip, charPort: charPort, charName: charName}, nil
+	return &LoginServer{auth: auth, sessions: sessions, log: log, charIP: ip, charPort: charPort, charName: charName}, nil
 }
 
 // OnBoot captures the running engine so Stop can shut the listener down.
@@ -90,6 +93,15 @@ func (s *LoginServer) handleLogin(c gnet.Conn, frame []byte, ip string) {
 		s.writeRefuse(c, refuseCode(err))
 		s.log.Info("login refused", "user", req.Username, "ip", ip, "err", err)
 		return
+	}
+	// Persist the session so the char server can validate CH_ENTER later.
+	if err := s.sessions.PutSession(context.Background(), chardomain.Session{
+		AccountID: uint32(acc.ID),
+		LoginID1:  id1,
+		LoginID2:  id2,
+		Sex:       sexByte(acc.Sex),
+	}); err != nil {
+		s.log.Error("login: store session", "err", err)
 	}
 	resp := ropacket.AcceptLoginResponse{
 		LoginID1: id1,

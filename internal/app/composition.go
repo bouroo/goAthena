@@ -13,13 +13,14 @@ import (
 	"github.com/bouroo/goAthena/internal/infrastructure/db"
 	"github.com/bouroo/goAthena/internal/infrastructure/messaging/valkey"
 	"github.com/bouroo/goAthena/internal/modules/account"
+	"github.com/bouroo/goAthena/internal/modules/character"
 	"github.com/bouroo/goAthena/internal/modules/gateway"
 )
 
-// loginServer is the lifecycle surface App.Run needs from a game-protocol
+// protoListener is the lifecycle surface App.Run needs from a game-protocol
 // listener. Keeping it an interface (rather than importing gateway/app, whose
 // package name collides with this one) lets more listeners plug in later.
-type loginServer interface {
+type protoListener interface {
 	Start(addr string)
 	Stop()
 }
@@ -30,7 +31,8 @@ type loginServer interface {
 type deps struct {
 	db     *gorm.DB
 	valkey vk.Client
-	login  loginServer
+	login  protoListener
+	char   protoListener
 }
 
 // compose opens the infrastructure singletons and registers them in the DI
@@ -66,14 +68,21 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	// Feature modules register their providers; they resolve infra lazily, so a
 	// down dependency surfaces as a resolution error at use time, not at boot.
 	account.Register(inj, cfg.Identity.UseMD5Passwords)
+	character.Register(inj, cfg.Identity.MaxChars)
 
-	// The login listener resolves the account Authenticator from the injector.
-	// Best-effort: a build failure is logged and login simply won't serve.
+	// Listeners resolve their ports from the injector. Best-effort: a build
+	// failure is logged and the listener simply won't serve.
 	if ls, err := gateway.NewLoginServer(inj, *cfg, log); err != nil {
 		log.Error("login listener build failed; login will not start", "err", err)
 	} else {
 		d.login = ls
 		closers = append(closers, ls.Stop)
+	}
+	if cs, err := gateway.NewCharServer(inj, *cfg, log); err != nil {
+		log.Error("char listener build failed; char will not start", "err", err)
+	} else {
+		d.char = cs
+		closers = append(closers, cs.Stop)
 	}
 
 	closeAll := func() {

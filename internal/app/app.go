@@ -60,6 +60,10 @@ func (a *App) Run(ctx context.Context) error {
 		loginAddr := fmt.Sprintf("tcp://%s:%d", a.cfg.Gateway.LoginHost, a.cfg.Gateway.LoginPort)
 		a.deps.login.Start(loginAddr)
 	}
+	if a.deps.char != nil {
+		charAddr := fmt.Sprintf("tcp://%s:%d", a.cfg.Gateway.LoginHost, a.cfg.Gateway.CharPort)
+		a.deps.char.Start(charAddr)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {

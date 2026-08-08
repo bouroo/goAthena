@@ -17,6 +17,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/account/app"
 	"github.com/bouroo/goAthena/internal/modules/account/domain"
 	"github.com/bouroo/goAthena/internal/modules/account/infra"
+	charinfra "github.com/bouroo/goAthena/internal/modules/character/infra"
 	gwapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
@@ -53,7 +54,8 @@ func startLoginListener(t *testing.T, port int) (*gwapp.LoginServer, net.Conn) {
 		UserPass: md5hex("s3cret"), Sex: domain.SexMale,
 	})
 	auth := app.NewAuthService(repo, true)
-	ls, err := gwapp.NewLoginServer(auth, slog.Default(), "127.0.0.1", "goathena-test", 6121)
+	sessions := charinfra.NewMemorySessionStore()
+	ls, err := gwapp.NewLoginServer(auth, sessions, slog.Default(), "127.0.0.1", "goathena-test", 6121)
 	if err != nil {
 		t.Fatal(err)
 	}
