@@ -12,6 +12,7 @@ import (
 	"github.com/bouroo/goAthena/internal/config"
 	"github.com/bouroo/goAthena/internal/infrastructure/db"
 	"github.com/bouroo/goAthena/internal/infrastructure/messaging/valkey"
+	"github.com/bouroo/goAthena/internal/modules/account"
 )
 
 // deps are the best-effort infrastructure singletons the control plane probes
@@ -51,6 +52,10 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 		do.ProvideValue(inj, vc)
 		closers = append(closers, func() { vc.Close() })
 	}
+
+	// Feature modules register their providers; they resolve infra lazily, so a
+	// down dependency surfaces as a resolution error at use time, not at boot.
+	account.Register(inj, cfg.Identity.UseMD5Passwords)
 
 	closeAll := func() {
 		for i := len(closers) - 1; i >= 0; i-- {

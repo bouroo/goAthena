@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/go-playground/validator/v10 v10.30.3
+	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/labstack/echo/v5 v5.3.1
 	github.com/samber/do/v2 v2.1.0
 	github.com/stretchr/testify v1.11.1
@@ -30,6 +31,7 @@ require (
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/lib/pq v1.10.9 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/samber/go-type-to-string v1.8.0 // indirect
 	go.uber.org/mock v0.6.0 // indirect
