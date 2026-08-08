@@ -13,7 +13,10 @@ import (
 
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
 	charinfra "github.com/bouroo/goAthena/internal/modules/character/infra"
+	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
 	gwapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
+	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
+	invinfra "github.com/bouroo/goAthena/internal/modules/inventory/infra"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	worldinfra "github.com/bouroo/goAthena/internal/modules/world/infra"
@@ -30,7 +33,11 @@ func startMapListener(t *testing.T, port int, sessions *charinfra.MemorySessionS
 		Name: "Hero", HP: 1000, MaxHP: 1000, Speed: 150,
 	})
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
-	ms, err := gwapp.NewMapServer(world, sessions, slog.Default())
+	spawn := worldapp.NewSpawnService(world, nil)
+	combat := worldapp.NewCombatService(world)
+	inv := invapp.NewInventoryService(invinfra.NewMemoryItemRepository())
+	content := contentapp.NewEngine(nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
+	ms, err := gwapp.NewMapServer(world, spawn, combat, inv, content, sessions, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
