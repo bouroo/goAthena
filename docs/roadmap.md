@@ -28,11 +28,12 @@ and concurrency in idiomatic Go designed for horizontal scale-out.
 | Upstream `main` | **M0–M7 merged** — `56d280b Greenfield modular-monolith rebuild + playable combat slice (M0–M7)` | `git log main` |
 | Third-party refs | Present as **git submodules** (`rathena`, `rathenaThailand`, `ClientROThailand`, `ignore = all`) | `.gitmodules` at HEAD |
 
-The re-init cleared the tree. The entire **verified, tested foundation survives
-intact at `cea42f8`**: the `pkg/ro` kernel, all bounded-context modules, build/CI/lint
-config, and the 11-wave SQL migrations. **Phase 0 re-establishes this proven
-foundation on the clean tree** (see §6), then the rebuild continues forward from
-M8 — it does **not** re-derive the already-proven protocol/crypto/stat math.
+The re-init cleared the tree. The **verified `pkg/ro` kernel survives intact at
+`cea42f8`** (the prior app-layer modules, build config, and migrations also
+survive there as recoverable reference). **Phase 0 keeps the kernel verbatim and
+builds the application layer ground-up** (see §6) — the rebuild does **not**
+re-derive the already-proven protocol/crypto/stat math, and does **not**
+wholesale-restore the prior app layer.
 
 ---
 
@@ -210,7 +211,7 @@ it — never when the code merely looks right.
 
 | Phase | Deliverable | Commit gate |
 |---|---|---|
-| **P0** Foundation recovery | Restore proven `cea42f8` tree (kernel + infra + migrations + build config + built modules); rewrite README | `go build ./...` + `task test-unit` green |
+| **P0** Kernel re-establishment | Keep proven `pkg/ro` kernel verbatim; decouple it from the app layer; rewrite README. App layer (modules/infra/cmd) is rebuilt fresh in P0b+ | `go build ./...` + kernel unit tests green |
 | **P1** Economy | `economy` zeny-ledger domain + app + port; wire into DI | L1+L2 + ledger unit tests |
 | **P2** Commerce | `shop` buy/sell + `trade` completion + `vending` + `storage` over economy+inventory | L1+L2+L3 (trade e2e over TCP) |
 | **P3** Content | `content` script VM — dialog/quest/item-script execution | L1+L2+L3 (NPC dialog e2e) |
@@ -221,12 +222,19 @@ it — never when the code merely looks right.
 
 ### Phase 0 — recovery decision (recorded)
 
-The re-init wiped the tree but the proven foundation survives at `cea42f8`. The
-recommended path — and the one that honors the README's stated doctrine ("carry
-the verified, tested kernel verbatim") — is to **recover the proven tree** and
-continue forward, **not** to re-derive already-verified protocol/crypto/stat
-math (months of correctness risk, zero benefit). Recovery is scoped to the
-Go source tree + build config; the `third_party/` submodules are untouched.
+The re-init wiped the tree but the proven kernel survives at `cea42f8`. The
+chosen path: **keep the verified `pkg/ro` kernel verbatim** — do **not**
+re-derive protocol/crypto/stat math (months of correctness risk, zero benefit) —
+and **build the application layer (modules, infrastructure, `cmd`, composition
+root) ground-up with efficiency as a first-class design goal.** No wholesale
+restore; the prior app layer is treated as recoverable reference, not reused.
+
+One kernel defect was found and fixed in this phase: `pkg/ro/athenaconf`
+imported the app-layer `internal/config` (an inward dependency that would make
+the kernel unbuildable without the app layer). Decoupled by introducing a
+kernel-local `athenaconf.Config`/`athenaconf.Identity` apply target; the app
+layer will map or embed these fields. The `third_party/` submodules are
+untouched.
 
 ---
 
