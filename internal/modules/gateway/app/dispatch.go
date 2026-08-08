@@ -29,17 +29,26 @@ func mapHandlers() map[uint16]mapHandler {
 // frame is already detached from gnet's ring buffer by the caller).
 func (s *MapServer) handleEnterFrame(c gnet.Conn, frame []byte) { s.handleEnter(c, frame) }
 
-// handleLoadEndAck handles CZ_NOTIFY_ACTORINIT (0x007d, 2B cmd-only). In rAthena
-// this triggers the inventory/skill/hotkey init burst; for M4 it is the signal
-// that the client has finished loading the map. M5 replaces this with the real
-// inventory init.
+// handleLoadEndAck handles CZ_NOTIFY_ACTORINIT (0x007d, 2B cmd-only). This is
+// the signal the client finished loading the map; rAthena replies with the
+// inventory/skill/hotkey init burst. The burst is: ZC_INVENTORY_START →
+// ZC_INVENTORY_ITEMLIST_NORMAL → ZC_INVENTORY_ITEMLIST_EQUIP → ZC_INVENTORY_END.
+// Populated item lists (with item_db type/view resolution) land in M5b; for a
+// fresh character (or before item_db is loaded) the empty lists are correct.
 func (s *MapServer) handleLoadEndAck(c gnet.Conn, _ []byte) {
 	auth := authFromConn(c)
 	if auth == nil {
 		s.log.Warn("map: LoadEndAck from unauthed conn")
 		return
 	}
-	s.log.Debug("map: client load complete", "aid", auth.accountID, "gid", auth.charID)
+	// Coalesce the 4-frame burst into one AsyncWrite to avoid four syscalls.
+	var burst []byte
+	burst = append(burst, ropacket.EncodeInventoryStart()...)
+	burst = append(burst, ropacket.EncodeEmptyInventoryListNormal()...)
+	burst = append(burst, ropacket.EncodeEmptyInventoryListEquip()...)
+	burst = append(burst, ropacket.EncodeInventoryEnd()...)
+	_ = c.AsyncWrite(burst, nil)
+	s.log.Debug("map: client load complete (inventory init sent)", "aid", auth.accountID, "gid", auth.charID)
 }
 
 // handleRequestMove handles CZ_REQUEST_MOVE (0x0085, 5B): parse the 3-byte

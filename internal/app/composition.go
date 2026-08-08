@@ -16,6 +16,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/account"
 	"github.com/bouroo/goAthena/internal/modules/character"
 	"github.com/bouroo/goAthena/internal/modules/gateway"
+	"github.com/bouroo/goAthena/internal/modules/inventory"
 	"github.com/bouroo/goAthena/internal/modules/world"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 )
@@ -80,6 +81,7 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	// down dependency surfaces as a resolution error at use time, not at boot.
 	account.Register(inj, cfg.Identity.UseMD5Passwords)
 	character.Register(inj, cfg.Identity.MaxChars)
+	inventory.Register(inj)
 	world.Register(inj, cfg.Zone.TickRateHz)
 
 	// Resolve the world service so App.Run can start/stop its tick loop.
