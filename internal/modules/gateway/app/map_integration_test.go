@@ -450,3 +450,64 @@ func TestMap_Dispatch_DropOutOfRangeKeepsConnection(t *testing.T) {
 		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE)
 	}
 }
+
+// TestMap_Dispatch_InputEditDlgStrVariableFrameKeepsConnection drives the
+// variable-length CZ_INPUT_EDITDLGSTR (0x01d5) handler over a real socket. With
+// no NPC dialog active, Engine.Signal is a no-op, so the handler parses and
+// returns without a wire reply — but the dispatcher must consume the WHOLE
+// variable frame (its on-wire length at offset 2), not a fixed prefix. A
+// following CZ_REQUEST_MOVE proves stream alignment: had 0x01d5 been read with
+// the wrong length, its trailing value bytes would be parsed as the next opcode
+// and the move reply read would fail or return the wrong header.
+func TestMap_Dispatch_InputEditDlgStrVariableFrameKeepsConnection(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	conn, _ := startMapListenerWithSpawn(t, port, sessions)
+	defer conn.Close()
+
+	// 1. CZ_ENTER → drain the 13-byte ZC_ACCEPT_ENTER.
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// 2. CZ_INPUT_EDITDLGSTR (0x01d5): int16 cmd | uint16 pktLen | uint32 NpcID |
+	//    char[] value+NUL. A multi-byte value makes the frame longer than the
+	//    8-byte minimum so the length-prefix path is actually exercised.
+	const value = "goAthena"
+	pktLen := 8 + len(value) + 1 // header(8) + value + NUL
+	strReq := make([]byte, pktLen)
+	binary.LittleEndian.PutUint16(strReq[0:], ropacket.HeaderCZINPUTEDITDLGSTR)
+	binary.LittleEndian.PutUint16(strReq[2:], uint16(pktLen)) //nolint:gosec // G115: bounded by pktLen (<256).
+	binary.LittleEndian.PutUint32(strReq[4:], 0)              // NpcID: no dialog active
+	copy(strReq[8:], value)
+	strReq[pktLen-1] = 0 // NUL terminator
+	if _, err := conn.Write(strReq); err != nil {
+		t.Fatalf("send CZ_INPUT_EDITDLGSTR: %v", err)
+	}
+
+	// 3. CZ_REQUEST_MOVE on the same connection. If the variable-length frame had
+	//    been read with the wrong length, its trailing bytes would be parsed as
+	//    this opcode and the reply read would fail or mismatch.
+	moveReq := make([]byte, 5)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	moveReq[2] = 100 // dest x
+	moveReq[3] = 200 // dest y
+	moveReq[4] = 0   // dest dir
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write(moveReq); err != nil {
+		t.Fatalf("send CZ_REQUEST_MOVE after inputstr: %v", err)
+	}
+
+	moveReply := make([]byte, 12)
+	if _, err := io.ReadFull(conn, moveReply); err != nil {
+		t.Fatalf("read player-move reply after inputstr: %v (conn likely closed / stream desynced)", err)
+	}
+	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE {
+		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x) (variable frame mis-lengthed?)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE)
+	}
+}

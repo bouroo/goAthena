@@ -78,10 +78,11 @@ func (s *MapServer) OnTraffic(c gnet.Conn) gnet.Action {
 		}
 		opcode := binary.LittleEndian.Uint16(hdr)
 		if h, ok := s.handlers[opcode]; ok {
-			if c.InboundBuffered() < h.size {
-				return gnet.None // wait for the full frame to arrive
+			n, ready := h.frameLen(c)
+			if !ready {
+				return gnet.None // wait for the full frame (fixed or variable) to arrive
 			}
-			frame, err := c.Next(h.size)
+			frame, err := c.Next(n)
 			if err != nil {
 				return gnet.None
 			}

@@ -2,41 +2,66 @@ package app
 
 import (
 	"context"
+	"encoding/binary"
 	"strconv"
 
 	"github.com/panjf2000/gnet/v2"
 
 	dialogdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
-	contentinfra "github.com/bouroo/goAthena/internal/modules/content/infra"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
-// mapHandler is one entry in the map-server dispatch table: a fixed frame size
-// and the function that processes a complete frame of that opcode.
+// mapHandler is one entry in the map-server dispatch table and the function that
+// processes a complete frame of that opcode.
+//
+// Most map packets are fixed-length: size is their constant byte count. The few
+// variable-length packets (e.g. CZ_INPUT_EDITDLGSTR 0x01d5) leave size at 0 and
+// set frameSize, which derives the full frame length from the buffered bytes and
+// reports whether the whole frame has arrived — mirroring the fixed-size wait in
+// OnTraffic without disturbing it.
 type mapHandler struct {
+	// size is the fixed frame byte count for constant-length packets. Ignored
+	// when frameSize is non-nil.
 	size int
+	// frameSize, when set, derives the full frame length for a variable-length
+	// packet from the buffered bytes (its on-wire uint16 length at offset 2) and
+	// returns false until the whole frame has buffered. nil means use size.
+	frameSize func(c gnet.Conn) (int, bool)
 	// fn receives the authed identity resolved on the eventloop so handlers never
 	// read c.Context() off-loop, where gnet's conn.release() races on close.
 	fn func(s *MapServer, c gnet.Conn, auth *mapAuth, frame []byte)
 }
 
+// frameLen returns the full frame byte count for this opcode and whether that
+// many bytes are already buffered. Fixed-length packets compare size directly;
+// variable-length packets delegate to frameSize. Callers (OnTraffic) read this
+// once and then Next(n), keeping the size decision in one place.
+func (h mapHandler) frameLen(c gnet.Conn) (n int, ready bool) {
+	if h.frameSize != nil {
+		return h.frameSize(c)
+	}
+	return h.size, c.InboundBuffered() >= h.size
+}
+
 // mapHandlers is the opcode→handler table the map server dispatches against.
-// Every map packet is fixed-length today. A connection's first packet is always
-// CZ_ENTER (the trust gate); the rest are only valid post-auth.
+// Fixed-length packets carry their constant size; variable-length packets carry
+// a frameSize func instead. A connection's first packet is always CZ_ENTER (the
+// trust gate); the rest are only valid post-auth.
 func mapHandlers() map[uint16]mapHandler {
 	return map[uint16]mapHandler{
 		0x0072: {size: czEnterSize, fn: (*MapServer).handleEnterFrame},
 		0x007d: {size: 2, fn: (*MapServer).handleLoadEndAck},
 		0x0085: {size: 5, fn: (*MapServer).handleRequestMove},
-		0x0089: {size: 7, fn: (*MapServer).handleActionRequest}, // CZ_ACTION_REQUEST
-		0x0090: {size: 7, fn: (*MapServer).handleContactNPC},    // CZ_CONTACT_NPC (NPC click)
-		0x00b8: {size: 7, fn: (*MapServer).handleChooseMenu},    // CZ_CHOOSE_MENU
-		0x00b9: {size: 6, fn: (*MapServer).handleReqNextScript}, // CZ_REQ_NEXT_SCRIPT
-		0x0143: {size: 10, fn: (*MapServer).handleInputEditDlg}, // CZ_INPUT_EDITDLG
-		0x0146: {size: 6, fn: (*MapServer).handleCloseDialog},   // CZ_CLOSE_DIALOG
-		0x0362: {size: 6, fn: (*MapServer).handleItemPickup},    // CZ_ITEM_PICKUP @ 20250604
-		0x0363: {size: 6, fn: (*MapServer).handleItemDrop},      // CZ_ITEM_DROP @ 20250604
+		0x0089: {size: 7, fn: (*MapServer).handleActionRequest},                        // CZ_ACTION_REQUEST
+		0x0090: {size: 7, fn: (*MapServer).handleContactNPC},                           // CZ_CONTACT_NPC (NPC click)
+		0x00b8: {size: 7, fn: (*MapServer).handleChooseMenu},                           // CZ_CHOOSE_MENU
+		0x00b9: {size: 6, fn: (*MapServer).handleReqNextScript},                        // CZ_REQ_NEXT_SCRIPT
+		0x0143: {size: 10, fn: (*MapServer).handleInputEditDlg},                        // CZ_INPUT_EDITDLG
+		0x01d5: {frameSize: variableFrameSize, fn: (*MapServer).handleInputEditDlgStr}, // CZ_INPUT_EDITDLGSTR (variable length)
+		0x0146: {size: 6, fn: (*MapServer).handleCloseDialog},                          // CZ_CLOSE_DIALOG
+		0x0362: {size: 6, fn: (*MapServer).handleItemPickup},                           // CZ_ITEM_PICKUP @ 20250604
+		0x0363: {size: 6, fn: (*MapServer).handleItemDrop},                             // CZ_ITEM_DROP @ 20250604
 	}
 }
 
@@ -50,7 +75,7 @@ func (s *MapServer) handleContactNPC(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: parse CZ_CONTACT_NPC", "err", err)
 		return
 	}
-	s.content.StartDialog(auth.accountID, auth.charID, req.AID, contentinfra.GnetPacketWriter{Conn: c})
+	s.content.StartDialog(auth.accountID, auth.charID, req.AID, gnetWriter{c: c})
 }
 
 // handleReqNextScript advances an active dialog (CZ_REQ_NEXT_SCRIPT 0x00b9).
@@ -83,6 +108,41 @@ func (s *MapServer) handleInputEditDlg(_ gnet.Conn, auth *mapAuth, frame []byte)
 		return
 	}
 	s.content.Signal(auth.accountID, dialogdomain.DialogSignal{Input: strconv.FormatInt(int64(req.Value), 10)})
+}
+
+// handleInputEditDlgStr delivers a text input (CZ_INPUT_EDITDLGSTR 0x01d5). The
+// frame is already detached and length-resolved by the dispatcher; this mirrors
+// the numeric handler, substituting the raw string value for a decimal string.
+func (s *MapServer) handleInputEditDlgStr(_ gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		return
+	}
+	req, err := ropacket.ParseCZInputEditDlgStr(frame)
+	if err != nil {
+		return
+	}
+	s.content.Signal(auth.accountID, dialogdomain.DialogSignal{Input: req.Value})
+}
+
+// variableFrameSize derives the full byte length of a length-prefixed variable
+// packet by reading its uint16 total-length field at offset 2 — the rAthena
+// convention for non-constant-length frames (CZ_INPUT_EDITDLGSTR 0x01d5 today).
+// It returns false until the whole frame has buffered. A malformed length
+// smaller than its own header resyncs over the 2-byte opcode (matching
+// unhandledSkip), so the dispatcher never spins on a zero-length read.
+func variableFrameSize(c gnet.Conn) (int, bool) {
+	prefix, err := c.Peek(4)
+	if err != nil {
+		return 0, false // length field not fully buffered yet
+	}
+	n := int(binary.LittleEndian.Uint16(prefix[2:4]))
+	if n < 4 {
+		return 2, true // malformed length prefix: resync over the header
+	}
+	if c.InboundBuffered() < n {
+		return 0, false // wait for the rest of the frame
+	}
+	return n, true
 }
 
 // handleCloseDialog cancels an active dialog (CZ_CLOSE_DIALOG 0x0146).
@@ -365,4 +425,14 @@ func authFromConn(c gnet.Conn) *mapAuth {
 		return nil
 	}
 	return &auth
+}
+
+// gnetWriter adapts a gnet.Conn to content/domain.PacketWriter. It is the
+// gateway's own bridge from the gnet wire to the content domain's writer port,
+// so the gateway app layer depends only on content/domain, not content/infra.
+type gnetWriter struct{ c gnet.Conn }
+
+// WritePacket sends raw bytes to the connection (concurrency-safe via AsyncWrite).
+func (w gnetWriter) WritePacket(data []byte) {
+	_ = w.c.AsyncWrite(data, nil)
 }
