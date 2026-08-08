@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - run: go mod download
+      - name: go vet
+        run: go vet ./...
+      - name: gofumpt check
+        run: |
+          go install mvdan.cc/gofumpt@latest
+          out="$(gofumpt -l . | grep -v '^third_party/' || true)"
+          if [ -n "$out" ]; then echo "needs task fmt:"; echo "$out"; exit 1; fi
+      - name: unit tests (-race)
+        run: go test -race -tags=unit ./internal/... ./pkg/...
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: ragnarok
+          MARIADB_DATABASE: n
+          MARIADB_USER: r
+          MARIADB_PASSWORD: r
+        ports:
+          - 13306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -uroot -pragnarok"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      valkey:
+        image: valkey/valkey:8
+        ports:
+          - 16379:6379
+        options: >-
+          --health-cmd="valkey-cli ping"
+          --health-interval=10s
+          --health-timeout=3s
+          --health-retries=10
+      nats:
+        image: nats:2-alpine
+        ports:
+          - 4222:4222
+        options: >-
+          --health-cmd="wget -qO- http://127.0.0.1:8222/healthz || exit 1"
+          --health-interval=10s
+          --health-timeout=3s
+          --health-retries=10
+    env:
+      DB_DRIVER: mariadb
+      DB_HOST: 127.0.0.1
+      DB_PORT: 13306
+      DB_NAME: n
+      DB_USER: r
+      DB_PASSWORD: r
+      VALKEY_HOST: 127.0.0.1
+      VALKEY_PORT: 16379
+      NATS_URL: nats://127.0.0.1:4222
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - run: go mod download
+      - name: apply schema
+        run: |
+          go build -o /tmp/goathena ./cmd/goathena
+          /tmp/goathena migrate up -config <(printf 'app:\n  environment: test\ndb:\n  driver: mariadb\n  host: 127.0.0.1\n  port: 13306\n  name: n\n  user: r\n  password: r\n  ssl_mode: disable\n')
+      - name: seed test data
+        run: |
+          docker run --rm --network host mariadb:11.4 \
+            mariadb -h 127.0.0.1 -P 13306 -ur -pr n \
+            -e "INSERT IGNORE INTO login (account_id,userid,user_pass,sex,email) VALUES (2000001,'testacc',MD5('s3cret'),'M','t@t');
+                INSERT IGNORE INTO \`char\` (account_id,char_num,name,base_level,job_level,max_hp,hp,max_sp,sp,last_map,save_map) VALUES (2000001,0,'Hero',1,1,1000,1000,50,50,'new_1-1','new_1-1');"
+      - name: integration tests (-race)
+        run: go test -race -tags=integration ./...
+
+  build:
+    name: Build image
+    needs: [lint, unit]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: build binary
+        run: go build -ldflags="-s -w" -o bin/goathena ./cmd/goathena
+      - name: build container image
+        run: docker build -f Containerfile -t goathena:ci .
