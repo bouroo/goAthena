@@ -1,0 +1,65 @@
+# goAthena local stack. Hobbyist tier: one goathena + MariaDB + Valkey + NATS.
+# `docker compose up -d mariadb valkey nats` starts just the backing services;
+# the goathena service runs the app (builds from Containerfile).
+services:
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: ragnarok
+      MARIADB_DATABASE: ragnarok
+      MARIADB_USER: ragnarok
+      MARIADB_PASSWORD: ragnarok
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb-initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:8
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    image: nats:2
+    command: ["-js"] # JetStream enabled for durable eventing
+    ports:
+      - "4222:4222" # client
+      - "8222:8222" # monitoring
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  goathena:
+    build:
+      context: .
+      dockerfile: Containerfile
+    depends_on:
+      mariadb: { condition: service_healthy }
+      valkey: { condition: service_healthy }
+      nats: { condition: service_healthy }
+    environment:
+      APP_ENVIRONMENT: production
+      DB_HOST: mariadb
+      VALKEY_HOST: valkey
+      NATS_URL: nats://nats:4222
+    ports:
+      - "8080:8080" # control plane (health/metrics/ops)
+      - "6900:6900" # login
+      - "6121:6121" # char
+      - "5121:5121" # map
+
+volumes:
+  mariadb-data: {}

@@ -1,0 +1,72 @@
+version: '3'
+
+vars:
+  BINARY: bin/goathena
+
+tasks:
+  default:
+    desc: Build the goathena binary into ./bin
+    cmds:
+      - go build -o {{.BINARY}} ./cmd/goathena
+
+  build:
+    desc: Build the goathena binary into ./bin
+    cmds:
+      - go build -o {{.BINARY}} ./cmd/goathena
+
+  build-tools:
+    desc: Build cmd/goathena and cmd/healthcheck
+    cmds:
+      - go build -o {{.BINARY}} ./cmd/goathena
+      - go build -o bin/healthcheck ./cmd/healthcheck
+
+  serve:
+    desc: Build + run `goathena serve` (blocks until SIGINT/SIGTERM)
+    deps: [build]
+    cmds:
+      - ./{{.BINARY}} serve {{.CLI_ARGS}}
+
+  fmt:
+    desc: Format the tree (gofumpt + goimports)
+    cmds:
+      - gofumpt -w .
+      - goimports -w -local github.com/bouroo/goAthena .
+
+  lint:
+    desc: Run golangci-lint v2
+    cmds:
+      - golangci-lint run --timeout=5m ./...
+
+  vet:
+    desc: go vet
+    cmds:
+      - go vet ./...
+
+  test-unit:
+    desc: Hermetic unit tests with -race (60% coverage gate target)
+    cmds:
+      - go test -race -tags=unit ./internal/... ./pkg/...
+
+  test-integration:
+    desc: Integration tests against real MariaDB/Valkey/NATS (needs compose)
+    cmds:
+      - go test -race -tags=integration ./...
+
+  tidy:
+    desc: go mod tidy
+    cmds:
+      - go mod tidy
+
+  verify:
+    desc: Leave the tree passing every gate (tidy + fmt + lint + vet + unit)
+    deps: [tidy]
+    cmds:
+      - gofumpt -l . | grep -v third_party | (! read) || (echo "needs task fmt" && exit 1)
+      - task: lint
+      - task: vet
+      - task: test-unit
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf bin

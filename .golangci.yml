@@ -1,0 +1,74 @@
+# golangci-lint v2 configuration. Merge-blocking: CI runs `golangci-lint run`.
+# Module-boundary enforcement (peer modules import domain-only) activates with
+# depguard rules once bounded contexts land in M1+.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - exhaustive
+    - funlen
+    - gocritic
+    - gocyclo
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - nestif
+    - revive
+    - staticcheck
+    - testifylint
+    - unconvert
+    - unparam
+    - unused
+    - wrapcheck
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+    funlen:
+      lines: 120
+      statements: 50
+    gocyclo:
+      min: 15
+    nestif:
+      min: 4
+    wrapcheck:
+      # Ignore our own packages and the stdlib fmt/strconv that already wrap;
+      # everything else from a third party must be wrapped with %w.
+      ignore-sig-regexps:
+        - ^github\.com/bouroo/goAthena/
+        - ^\.Wrap\(
+  exclusions:
+    presets:
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - "third_party"
+      - "_test\\.go"
+    rules:
+      # pkg/ro is a carried, proven kernel (wire-format encoders + a
+      # work-in-progress script VM). Style/length linters apply to new app-layer
+      # code only; correctness linters (errcheck/gosec/vet/exhaustive/...) run
+      # everywhere.
+      - linters: [funlen, gocyclo, revive, unparam]
+        path: pkg/ro
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/bouroo/goAthena
+  exclusions:
+    paths:
+      - "third_party"

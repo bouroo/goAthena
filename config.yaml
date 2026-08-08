@@ -1,0 +1,60 @@
+# goAthena default configuration. Every field has a built-in default and can be
+# overridden by an environment variable of the same name (see .env.example).
+# Local dev edits this file; containers set env vars.
+
+app:
+  name: goathena
+  environment: development          # development|staging|production|test
+  host: 0.0.0.0
+  port: 8080                        # control-plane HTTP (health/metrics/ops)
+  shutdown_timeout: 15s
+
+http:
+  host: 0.0.0.0
+  port: 8080
+  read_timeout: 10s
+  write_timeout: 10s
+  idle_timeout: 120s
+  health_probe_timeout: 2s
+
+db:                                 # mariadb:// (compat) or postgres:// (prod)
+  driver: mariadb
+  host: 127.0.0.1
+  port: 3306
+  name: ragnarok
+  user: ragnarok
+  password: ragnarok
+  ssl_mode: disable
+
+valkey:                             # sessions + hot cache (Redis-compatible)
+  host: 127.0.0.1
+  port: 6379
+  password: ""
+  db: 0
+
+nats:                               # inter-service event bus (scale-out seam)
+  url: nats://127.0.0.1:4222
+
+gateway:                            # RO game-protocol listeners
+  login_host: 0.0.0.0               # the only static port the client knows
+  login_port: 6900
+  char_port: 6121                   # advertised during login->char handoff
+  map_port: 5121                    # advertised during char->map handoff
+
+identity:
+  use_md5_passwords: true           # mirrors rAthena use_MD5_passwords
+  max_chars: 9                      # mirrors rAthena chars_per_account
+
+zone:
+  tick_rate_hz: 50                  # 20ms game loop (matches rAthena)
+  view_range_cells: 20              # AOI visibility radius
+
+log:
+  level: info                       # debug|info|warn|error
+  format: json                      # json|text
+
+otel:
+  exporter: none                    # none|otlp
+  endpoint: ""
+  service_name: goathena
+  sampling: 1.0
