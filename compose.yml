@@ -14,7 +14,10 @@ services:
     volumes:
       - mariadb-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mariadb-admin", "-uroot", "-pragnarok", "ping"]
+      # Use the env var (not a hardcoded password) so this stays correct if the
+      # root password changes. $$ escapes the $ so compose doesn't interpolate it;
+      # the container's sh resolves MARIADB_ROOT_PASSWORD at healthcheck time.
+      test: ["CMD-SHELL", "mariadb-admin ping -uroot -p\"$$MARIADB_ROOT_PASSWORD\""]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -32,11 +35,19 @@ services:
       retries: 10
 
   nats:
-    image: nats:2
-    command: ["-js"] # JetStream enabled for durable eventing
+    # 2-alpine ships wget (the scratch nats:2 has no shell/http-client), so a
+    # healthcheck can probe the monitoring /healthz endpoint.
+    image: nats:2-alpine
+    command: ["-js", "-m", "8222"] # JetStream + HTTP monitoring on 8222
     ports:
       - "4222:4222" # client
       - "8222:8222" # monitoring
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   goathena:
     build:
@@ -45,7 +56,7 @@ services:
     depends_on:
       mariadb: { condition: service_healthy }
       valkey: { condition: service_healthy }
-      nats: { condition: service_started }
+      nats: { condition: service_healthy }
     environment:
       APP_ENVIRONMENT: production
       DB_HOST: mariadb
