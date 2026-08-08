@@ -271,6 +271,7 @@ func resolveWorldHandlers(i do.Injector) (
 	chat *worldapp.ChatHandler, stats *worldapp.StatsHandler,
 	name *worldapp.NameHandler, whisper *worldapp.WhisperHandler,
 	tradeReq *worldapp.TradeRequestHandler, tradeAck *worldapp.TradeAckHandler, tradeCancel *worldapp.TradeCancelHandler,
+	addItem *worldapp.AddItemHandler, tradeOk *worldapp.TradeOkHandler,
 	err error,
 ) {
 	// Each handler resolves in registration order; the closure captures its
@@ -363,6 +364,14 @@ func resolveWorldHandlers(i do.Injector) (
 			return err
 		},
 		func() error {
+			addItem, err = invokeOr[*worldapp.AddItemHandler](i, "resolve CZ_ADD_EXCHANGE_ITEM handler")
+			return err
+		},
+		func() error {
+			tradeOk, err = invokeOr[*worldapp.TradeOkHandler](i, "resolve CZ_TRADE_OK handler")
+			return err
+		},
+		func() error {
 			stats, err = invokeOr[*worldapp.StatsHandler](i, "resolve CZ_STATUS_CHANGE handler")
 			return err
 		},
@@ -415,7 +424,7 @@ func resolveGatewayHandlers(injector do.Injector) error {
 	if err != nil {
 		return err
 	}
-	mapEnter, loadEndAck, move, action, timeH, changeDir, emotion, restart, pickup, drop, equip, takeoff, useItem, skill, topos, chat, stats, name, whisper, tradeReq, tradeAck, tradeCancel, err := resolveWorldHandlers(injector)
+	mapEnter, loadEndAck, move, action, timeH, changeDir, emotion, restart, pickup, drop, equip, takeoff, useItem, skill, topos, chat, stats, name, whisper, tradeReq, tradeAck, tradeCancel, addItem, tradeOk, err := resolveWorldHandlers(injector)
 	if err != nil {
 		return err
 	}
@@ -453,6 +462,8 @@ func resolveGatewayHandlers(injector do.Injector) error {
 		OnCZTradeRequest:       tradeReq.Handle,
 		OnCZTradeAck:           tradeAck.Handle,
 		OnCZTradeCancel:        tradeCancel.Handle,
+		OnCZAddExchangeItem:    addItem.Handle,
+		OnCZTradeOk:            tradeOk.Handle,
 		OnCZStatusChange:       stats.Handle,
 		OnCZContactNPC:         contact.Handle,
 		OnCZReqNextScript:      next.Handle,

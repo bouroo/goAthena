@@ -117,6 +117,13 @@ type Player struct {
 	tradePartnerID uint32
 	tradePartnerLv uint16
 	trading        bool
+	// deal is the shared staging state for an OPEN trade window (set at ack-
+	// accept, S1). Both trade partners hold a pointer to the SAME deal so staging
+	// (S2: AddItem/Ok) is consistent. The deal carries its own mutex (a TradeDeal
+	// is shared across two players, so it cannot reuse either player's mu). Cleared
+	// on cancel/commit. deal holds only REFERENCES to the staged items (index +
+	// amount), never the moved items themselves, so S2 moves no inventory.
+	deal *TradeDeal
 }
 
 // TradePartner returns the player's current trade partner's account id and base
@@ -146,21 +153,37 @@ func (p *Player) SetTradePartner(partnerID uint32, partnerLv uint16) {
 }
 
 // SetTrading marks the player's trade window open (ack accepted) or closed. The
-// partner id is unaffected; ClearTrade zeroes both.
-func (p *Player) SetTrading(open bool) {
+// partner id is unaffected; ClearTrade zeroes both. When opening, deal binds the
+// shared staging state both partners will mutate during S2.
+func (p *Player) SetTrading(open bool, deal *TradeDeal) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.trading = open
+	if open {
+		p.deal = deal
+	} else {
+		p.deal = nil
+	}
 }
 
-// ClearTrade zeroes this player's trade-partner state (id, level, trading flag) —
-// the cancel/close path (rAthena trade.cpp:147-160 on fail, :128-133 on cancel).
+// ClearTrade zeroes this player's trade-partner state (id, level, trading flag,
+// deal) — the cancel/close path (rAthena trade.cpp:147-160 on fail, :128-133 on
+// cancel).
 func (p *Player) ClearTrade() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.tradePartnerID = 0
 	p.tradePartnerLv = 0
 	p.trading = false
+	p.deal = nil
+}
+
+// TradeDeal returns the open trade's shared staging state, or nil if the player
+// has no open window. The caller mutates the deal under its own mutex.
+func (p *Player) TradeDeal() *TradeDeal {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.deal
 }
 
 // SpawnUnit builds the ZC_SPAWN_UNIT frame this player emits to a client —

@@ -101,6 +101,12 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCREQEXCHANGEITEM, "ZC_REQ_EXCHANGE_ITEM", sizeZCReqExchange, DirectionServerToClient},
 		{HeaderZCACKEXCHANGEITEM, "ZC_ACK_EXCHANGE_ITEM", sizeZCAckExchange, DirectionServerToClient},
 		{HeaderZCCANCELEXCHANGEITEM, "ZC_CANCEL_EXCHANGE_ITEM", sizeZCCancelExchange, DirectionServerToClient},
+		// S2: trade staging family (clif_packetdb.hpp:90,92; packets_struct.hpp:2642; packets.hpp:405,1067).
+		{HeaderCZADDEXCHANGEITEM, "CZ_ADD_EXCHANGE_ITEM", sizeCZAddExchangeItem, DirectionClientToServer},
+		{HeaderCZTRADEOK, "CZ_TRADE_OK", sizeCZTradeOk, DirectionClientToServer},
+		{HeaderZCADDEXCHANGEITEM, "ZC_ADD_EXCHANGE_ITEM", sizeZCAddExchangeItem, DirectionServerToClient},
+		{HeaderZCACKADDEXCHANGEITEM, "ZC_ACK_ADD_EXCHANGE_ITEM", sizeZCAckAddExchange, DirectionServerToClient},
+		{HeaderZCCONCLUDEEXCHANGEITEM, "ZC_CONCLUDE_EXCHANGE_ITEM", sizeZCConcludeExchange, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -151,8 +157,11 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// the ground-skill family (CZ_USE_SKILL_TOPOS 0x0AF4, ZC_NOTIFY_GROUNDSKILL
 	// 0x0117) → 87. S1 adds the trade-handshake family (CZ_TRADE_REQUEST 0x00e4,
 	// CZ_TRADE_ACK 0x00e6, CZ_TRADE_CANCEL 0x00ed, ZC_REQ_EXCHANGE_ITEM 0x01f4,
-	// ZC_ACK_EXCHANGE_ITEM 0x01f5, ZC_CANCEL_EXCHANGE_ITEM 0x00ee) → 93.
-	const want = 93
+	// ZC_ACK_EXCHANGE_ITEM 0x01f5, ZC_CANCEL_EXCHANGE_ITEM 0x00ee) → 93. S2 adds
+	// the staging family (CZ_ADD_EXCHANGE_ITEM 0x00e8, CZ_TRADE_OK 0x00eb,
+	// ZC_ADD_EXCHANGE_ITEM 0x0b42, ZC_ACK_ADD_EXCHANGE_ITEM 0x00ea,
+	// ZC_CONCLUDE_EXCHANGE_ITEM 0x00ec) → 98.
+	const want = 98
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

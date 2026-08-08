@@ -47,7 +47,7 @@ func newTradeFixture(t *testing.T) tradeFixture {
 	}
 	require.NoError(t, registry.Register(a))
 	require.NoError(t, registry.Register(b))
-	return tradeFixture{svc: app.NewTradeService(registry), a: a, b: b, aConn: aConn, bConn: bConn}
+	return tradeFixture{svc: app.NewTradeService(registry, nil, nil), a: a, b: b, aConn: aConn, bConn: bConn}
 }
 
 // resetConn drains a captureConn's buffered frames between phases.

@@ -141,35 +141,35 @@ const inputDefaultMax int64 = 2147483647
 // the builtin receives the name to store under.
 func builtinInput(vm *VM, args []Value) (Value, control) {
 	name := argStr(args, 0)
-	min, max := inputBounds(args)
+	minVal, maxVal := inputBounds(args)
 	if isStringVar(name) {
 		text, ok := vm.host.InputStr()
 		if !ok {
 			return NilVal(), ctrlEnd
 		}
 		vm.SetVar(name, StrVal(text))
-		return IntVal(inputRangeCode(int64(len(text)), min, max)), ctrlContinue
+		return IntVal(inputRangeCode(int64(len(text)), minVal, maxVal)), ctrlContinue
 	}
 	amount, ok := vm.host.Input()
 	if !ok {
 		return NilVal(), ctrlEnd
 	}
-	vm.SetVar(name, IntVal(clampInput(amount, min, max)))
-	return IntVal(inputRangeCode(amount, min, max)), ctrlContinue
+	vm.SetVar(name, IntVal(clampInput(amount, minVal, maxVal)))
+	return IntVal(inputRangeCode(amount, minVal, maxVal)), ctrlContinue
 }
 
 // inputBounds resolves the optional min/max arguments. rAthena defaults to
 // [0, INT_MAX] when the bounds are omitted (script.cpp:6158-6159); a script that
 // passes only min leaves max at the INT_MAX default.
-func inputBounds(args []Value) (min, max int64) {
-	min, max = 0, inputDefaultMax
+func inputBounds(args []Value) (minVal, maxVal int64) {
+	minVal, maxVal = 0, inputDefaultMax
 	if len(args) > 1 {
-		min = args[1].asInt()
+		minVal = args[1].asInt()
 	}
 	if len(args) > 2 {
-		max = args[2].asInt()
+		maxVal = args[2].asInt()
 	}
-	return min, max
+	return minVal, maxVal
 }
 
 // isStringVar reports whether name is a rAthena string variable (suffix "$").
@@ -177,11 +177,11 @@ func isStringVar(name string) bool { return strings.HasSuffix(name, "$") }
 
 // inputRangeCode returns rAthena's input result code: 0 in-range, -1 below min,
 // +1 above max (script.cpp:6181/6187).
-func inputRangeCode(v, min, max int64) int64 {
+func inputRangeCode(v, minVal, maxVal int64) int64 {
 	switch {
-	case v > max:
+	case v > maxVal:
 		return 1
-	case v < min:
+	case v < minVal:
 		return -1
 	default:
 		return 0
@@ -191,12 +191,12 @@ func inputRangeCode(v, min, max int64) int64 {
 // clampInput bounds v to [min, max], matching rAthena's cap_value(amount,min,max)
 // applied to the stored numeric value (script.cpp:6186). The range code is
 // computed against the original, unclamped value.
-func clampInput(v, min, max int64) int64 {
-	if v < min {
-		return min
+func clampInput(v, minVal, maxVal int64) int64 {
+	if v < minVal {
+		return minVal
 	}
-	if v > max {
-		return max
+	if v > maxVal {
+		return maxVal
 	}
 	return v
 }
@@ -219,7 +219,7 @@ func DefaultBuiltins() map[string]BuiltinFunc {
 		// return-the-index semantics, no label jump.
 		"prompt": builtinSelect, //nolint:goconst
 		"menu":   builtinMenu,   //nolint:goconst
-		"input":  builtinInput,
+		"input":  builtinInput,  //nolint:goconst
 	}
 }
 

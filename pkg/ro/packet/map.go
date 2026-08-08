@@ -1333,6 +1333,38 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCCancelExchange,
 		Direction: DirectionServerToClient,
 	})
+	// S2: trade add-item/ok/conclude. The 0x0b42 ZC_ADD variant is the
+	// PACKETVER >= 20200916 layout active at 20250604 (62B; see trade.go).
+	db.Register(Definition{
+		ID:        HeaderCZADDEXCHANGEITEM,
+		Name:      "CZ_ADD_EXCHANGE_ITEM",
+		Length:    sizeCZAddExchangeItem,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZTRADEOK,
+		Name:      "CZ_TRADE_OK",
+		Length:    sizeCZTradeOk,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCADDEXCHANGEITEM,
+		Name:      "ZC_ADD_EXCHANGE_ITEM",
+		Length:    sizeZCAddExchangeItem,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCACKADDEXCHANGEITEM,
+		Name:      "ZC_ACK_ADD_EXCHANGE_ITEM",
+		Length:    sizeZCAckAddExchange,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCCONCLUDEEXCHANGEITEM,
+		Name:      "ZC_CONCLUDE_EXCHANGE_ITEM",
+		Length:    sizeZCConcludeExchange,
+		Direction: DirectionServerToClient,
+	})
 	// P3c: ground item drop notification. rAthena binds opcode 0x0ADD
 	// with size 22 for PACKETVER >= 20180418 (clif_packetdb.hpp:1921);
 	// the v5 layout adds <showDropEffect> + <dropEffectMode> on top of

@@ -97,6 +97,10 @@ type Handlers struct {
 	OnCZTradeRequest domain.PacketHandler
 	OnCZTradeAck     domain.PacketHandler
 	OnCZTradeCancel  domain.PacketHandler
+	// OnCZAddExchangeItem / OnCZTradeOk serve S2 (staging + lock). Provided by the
+	// world module.
+	OnCZAddExchangeItem domain.PacketHandler
+	OnCZTradeOk         domain.PacketHandler
 	// OnCZContactNPC serves CZ_CONTACTNPC (0x0090), initiating an NPC dialog.
 	// Provided by the content module.
 	OnCZContactNPC domain.PacketHandler
@@ -193,6 +197,8 @@ func buildMapTable(h Handlers) domain.PacketHandlerTable {
 	table = addHandler(table, packet.HeaderCZTRADEREQUEST, h.OnCZTradeRequest)
 	table = addHandler(table, packet.HeaderCZTRADEACK, h.OnCZTradeAck)
 	table = addHandler(table, packet.HeaderCZTRADECANCEL, h.OnCZTradeCancel)
+	table = addHandler(table, packet.HeaderCZADDEXCHANGEITEM, h.OnCZAddExchangeItem)
+	table = addHandler(table, packet.HeaderCZTRADEOK, h.OnCZTradeOk)
 	table = addHandler(table, packet.HeaderCZCONTACTNPC, h.OnCZContactNPC)
 	table = addHandler(table, packet.HeaderCZREQNEXTSCRIPT, h.OnCZReqNextScript)
 	table = addHandler(table, packet.HeaderCZCHOOSEMENU, h.OnCZChooseMenu)

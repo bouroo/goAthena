@@ -2047,6 +2047,15 @@ func mapFrameSize(op uint16) int {
 	case packet.HeaderZCCANCELEXCHANGEITEM:
 		// S1: trade cancel notice (0x00ee, 2 bytes fixed).
 		return packet.CancelExchangeResponse{}.Size()
+	case packet.HeaderZCADDEXCHANGEITEM:
+		// S2: item staged, to PARTNER (0x0b42, 62 bytes fixed at 20250604).
+		return packet.ZCAddExchangeItem{}.Size()
+	case packet.HeaderZCACKADDEXCHANGEITEM:
+		// S2: add result to SELF (0x00ea, 5 bytes fixed).
+		return packet.AckAddExchangeItem{}.Size()
+	case packet.HeaderZCCONCLUDEEXCHANGEITEM:
+		// S2: Ok pressed (0x00ec, 3 bytes fixed).
+		return packet.ConcludeExchangeItem{}.Size()
 	case packet.HeaderZCACKTOUSESKILL:
 		// M14b: the skill cast result ack (0x0110, 14 bytes fixed; cause 12 =
 		// SP insufficient). Value receiver.
@@ -3194,7 +3203,29 @@ func TestServe_Trade_HandshakeOverTCP(t *testing.T) {
 	assert.Equal(t, uint8(packet.TradeAckAccept), aAck[2], "A's ZC_ACK result = ACCEPT")
 	assert.Equal(t, uint8(packet.TradeAckAccept), bAck[2], "B's ZC_ACK result = ACCEPT")
 
-	// 3) A cancels (0x00ed). Both conns receive ZC_CANCEL_EXCHANGE_ITEM (0x00ee).
+	// 3) S2 staging: A stages 100 zeny (Index==0 = zeny sentinel). B (the partner)
+	//    receives ZC_ADD_EXCHANGE_ITEM (0x0b42) carrying the zeny count; A receives
+	//    ZC_ACK_ADD success. Staging moves no inventory/zeny (zero dupe surface).
+	var addPkt bytes.Buffer
+	require.NoError(t, (packet.CZAddExchangeItem{Index: 0, Amount: 100}).Encode(&addPkt))
+	_, err = mapConnA.Write(addPkt.Bytes())
+	require.NoError(t, err, "send CZ_ADD_EXCHANGE_ITEM zeny")
+	bAdd := readUntilCmd(t, mapConnB, packet.HeaderZCADDEXCHANGEITEM, 5*time.Second)
+	assert.Equal(t, int32(100), int32(binary.LittleEndian.Uint32(bAdd[7:11])),
+		"ZC_ADD amount = staged zeny count")
+	assert.Equal(t, uint32(0), binary.LittleEndian.Uint32(bAdd[2:6]),
+		"ZC_ADD itemId = 0 for zeny")
+	readUntilCmd(t, mapConnA, packet.HeaderZCACKADDEXCHANGEITEM, 5*time.Second)
+
+	// 4) A presses Ok (0x00eb). Both receive ZC_CONCLUDE (0x00ec): A Who=0, B Who=1.
+	var okPkt bytes.Buffer
+	require.NoError(t, packet.EncodeCZTradeOk(&okPkt))
+	_, err = mapConnA.Write(okPkt.Bytes())
+	require.NoError(t, err, "send CZ_TRADE_OK")
+	readUntilCmd(t, mapConnA, packet.HeaderZCCONCLUDEEXCHANGEITEM, 5*time.Second)
+	readUntilCmd(t, mapConnB, packet.HeaderZCCONCLUDEEXCHANGEITEM, 5*time.Second)
+
+	// 5) A cancels (0x00ed). Both conns receive ZC_CANCEL_EXCHANGE_ITEM (0x00ee).
 	var cancelPkt bytes.Buffer
 	require.NoError(t, packet.EncodeCZTradeCancel(&cancelPkt))
 	_, err = mapConnA.Write(cancelPkt.Bytes())
