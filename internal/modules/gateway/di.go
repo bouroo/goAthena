@@ -13,6 +13,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/account/domain"
 	charapp "github.com/bouroo/goAthena/internal/modules/character/app"
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
 	"github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
@@ -83,7 +84,11 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve session store: %w", err)
 	}
-	ms, err := app.NewMapServer(world, spawn, combat, inv, sess, log)
+	content, err := do.Invoke[*contentapp.Engine](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve content engine: %w", err)
+	}
+	ms, err := app.NewMapServer(world, spawn, combat, inv, content, sess, log)
 	if err != nil {
 		return nil, fmt.Errorf("map server: %w", err)
 	}

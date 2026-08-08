@@ -11,6 +11,7 @@ import (
 	"github.com/panjf2000/gnet/v2"
 
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
@@ -37,13 +38,14 @@ type MapServer struct {
 	spawn    *worldapp.SpawnService
 	combat   *worldapp.CombatService
 	inv      *invapp.InventoryService
+	content  *contentapp.Engine
 	sess     chardomain.SessionStore
 	log      *slog.Logger
 }
 
 // NewMapServer builds a map listener.
-func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
-	return &MapServer{world: world, spawn: spawn, combat: combat, inv: inv, sess: sess, log: log, handlers: mapHandlers()}, nil
+func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, content *contentapp.Engine, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
+	return &MapServer{world: world, spawn: spawn, combat: combat, inv: inv, content: content, sess: sess, log: log, handlers: mapHandlers()}, nil
 }
 
 // OnBoot captures the engine for shutdown.

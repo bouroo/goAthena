@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/panjf2000/gnet/v2"
 
+	dialogdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
+	contentinfra "github.com/bouroo/goAthena/internal/modules/content/infra"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
@@ -25,8 +28,71 @@ func mapHandlers() map[uint16]mapHandler {
 		0x007d: {size: 2, fn: (*MapServer).handleLoadEndAck},
 		0x0085: {size: 5, fn: (*MapServer).handleRequestMove},
 		0x0089: {size: 7, fn: (*MapServer).handleActionRequest}, // CZ_ACTION_REQUEST
+		0x0090: {size: 7, fn: (*MapServer).handleContactNPC},    // CZ_CONTACT_NPC (NPC click)
+		0x00b8: {size: 7, fn: (*MapServer).handleChooseMenu},    // CZ_CHOOSE_MENU
+		0x00b9: {size: 6, fn: (*MapServer).handleReqNextScript}, // CZ_REQ_NEXT_SCRIPT
+		0x0143: {size: 10, fn: (*MapServer).handleInputEditDlg}, // CZ_INPUT_EDITDLG
+		0x0146: {size: 6, fn: (*MapServer).handleCloseDialog},   // CZ_CLOSE_DIALOG
 		0x0362: {size: 6, fn: (*MapServer).handleItemPickup},    // CZ_ITEM_PICKUP @ 20250604
 	}
+}
+
+// handleContactNPC starts an NPC dialog script on click (CZ_CONTACT_NPC 0x0090).
+func (s *MapServer) handleContactNPC(c gnet.Conn, frame []byte) {
+	auth := authFromConn(c)
+	if auth == nil {
+		return
+	}
+	req, err := ropacket.ParseCZContactNPC(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_CONTACT_NPC", "err", err)
+		return
+	}
+	s.content.StartDialog(auth.accountID, req.AID, contentinfra.GnetPacketWriter{Conn: c})
+}
+
+// handleReqNextScript advances an active dialog (CZ_REQ_NEXT_SCRIPT 0x00b9).
+func (s *MapServer) handleReqNextScript(c gnet.Conn, _ []byte) {
+	auth := authFromConn(c)
+	if auth == nil {
+		return
+	}
+	s.content.Signal(auth.accountID, dialogdomain.DialogSignal{Advance: true})
+}
+
+// handleChooseMenu delivers a menu selection (CZ_CHOOSE_MENU 0x00b8).
+func (s *MapServer) handleChooseMenu(c gnet.Conn, frame []byte) {
+	auth := authFromConn(c)
+	if auth == nil {
+		return
+	}
+	req, err := ropacket.ParseCZChooseMenu(frame)
+	if err != nil {
+		return
+	}
+	s.content.Signal(auth.accountID, dialogdomain.DialogSignal{Choice: uint8(req.Selected)}) //nolint:gosec // G115: -1→255 cancel.
+}
+
+// handleInputEditDlg delivers a numeric input (CZ_INPUT_EDITDLG 0x0143).
+func (s *MapServer) handleInputEditDlg(c gnet.Conn, frame []byte) {
+	auth := authFromConn(c)
+	if auth == nil {
+		return
+	}
+	req, err := ropacket.ParseCZInputEditDlg(frame)
+	if err != nil {
+		return
+	}
+	s.content.Signal(auth.accountID, dialogdomain.DialogSignal{Input: strconv.FormatInt(int64(req.Value), 10)})
+}
+
+// handleCloseDialog cancels an active dialog (CZ_CLOSE_DIALOG 0x0146).
+func (s *MapServer) handleCloseDialog(c gnet.Conn, _ []byte) {
+	auth := authFromConn(c)
+	if auth == nil {
+		return
+	}
+	s.content.Signal(auth.accountID, dialogdomain.DialogSignal{Cancel: true})
 }
 
 // handleEnterFrame wraps handleEnter to satisfy the dispatch signature (the
