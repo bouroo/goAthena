@@ -46,3 +46,18 @@ func (r *MemoryWorldRepository) SetOnline(_ context.Context, charID uint32, _ bo
 	r.data[id] = e
 	return nil
 }
+
+// SetPosition persists the char's destination map + position (in-memory).
+func (r *MemoryWorldRepository) SetPosition(_ context.Context, charID uint32, mapName string, pos domain.Position) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id := domain.EntityID(charID)
+	e, ok := r.data[id]
+	if !ok {
+		return domain.ErrEntityNotFound
+	}
+	e.Map = mapName
+	e.Pos = pos
+	r.data[id] = e
+	return nil
+}

@@ -222,3 +222,12 @@ func (w *WorldService) LeaveMap(ctx context.Context, charID uint32) error {
 	}
 	return nil
 }
+
+// SetPosition persists a char's destination map + position (warp/transit). The
+// caller sends MapMoveResponse so the client reconnects and EnterMap loads this.
+func (w *WorldService) SetPosition(ctx context.Context, charID uint32, mapName string, pos domain.Position) error {
+	if err := w.repo.SetPosition(ctx, charID, mapName, pos); err != nil {
+		return fmt.Errorf("set position: %w", err)
+	}
+	return nil
+}

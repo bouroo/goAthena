@@ -91,3 +91,14 @@ func boolToTiny(b bool) int {
 	}
 	return 0
 }
+
+// SetPosition persists the char's destination map + position (warp/transit).
+func (r *GORMWorldRepository) SetPosition(ctx context.Context, charID uint32, mapName string, pos domain.Position) error {
+	return r.db.WithContext(ctx).Table("char").
+		Where("char_id = ?", charID).
+		Updates(map[string]any{
+			"last_map": mapName,
+			"last_x":   pos.X,
+			"last_y":   pos.Y,
+		}).Error
+}

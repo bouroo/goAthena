@@ -21,6 +21,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/gateway"
 	"github.com/bouroo/goAthena/internal/modules/inventory"
 	"github.com/bouroo/goAthena/internal/modules/social"
+	"github.com/bouroo/goAthena/internal/modules/transit"
 	"github.com/bouroo/goAthena/internal/modules/world"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 )
@@ -90,6 +91,7 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	shopmod.Register(inj)
 	social.Register(inj)
 	content.Register(inj)
+	transit.Register(inj)
 	world.Register(inj, cfg.Zone.TickRateHz)
 
 	// Resolve the world service so App.Run can start/stop its tick loop.

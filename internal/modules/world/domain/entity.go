@@ -64,6 +64,9 @@ type WorldRepository interface {
 	LoadEnterState(ctx context.Context, charID uint32) (Entity, error)
 	// SetOnline marks a char online/offline and updates last position.
 	SetOnline(ctx context.Context, charID uint32, online bool, pos Position) error
+	// SetPosition persists the char's destination map + position (used by warp/
+	// transit before the client reconnects to re-enter the new map).
+	SetPosition(ctx context.Context, charID uint32, mapName string, pos Position) error
 }
 
 // errors  for the world domain.
