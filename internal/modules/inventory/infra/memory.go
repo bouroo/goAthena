@@ -9,7 +9,7 @@ import (
 
 // MemoryItemRepository is an in-memory inventory store for unit tests.
 type MemoryItemRepository struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	items map[domain.ItemID]domain.Item
 	next  uint32
 }
@@ -21,8 +21,8 @@ func NewMemoryItemRepository() *MemoryItemRepository {
 
 // LoadByChar returns the character's items.
 func (r *MemoryItemRepository) LoadByChar(_ context.Context, _, charID uint32) ([]domain.Item, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]domain.Item, 0)
 	for _, it := range r.items {
 		if it.CharID == charID {

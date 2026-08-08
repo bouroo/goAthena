@@ -9,7 +9,7 @@ import (
 
 // MemoryWorldRepository is an in-memory world repository for unit tests.
 type MemoryWorldRepository struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	data map[domain.EntityID]domain.Entity
 }
 
@@ -24,8 +24,8 @@ func NewMemoryWorldRepository(states ...domain.Entity) *MemoryWorldRepository {
 
 // LoadEnterState returns the stored enter state for charID.
 func (r *MemoryWorldRepository) LoadEnterState(_ context.Context, charID uint32) (domain.Entity, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	e, ok := r.data[domain.EntityID(charID)]
 	if !ok {
 		return domain.Entity{}, domain.ErrEntityNotFound
