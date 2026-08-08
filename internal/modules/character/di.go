@@ -34,4 +34,7 @@ func Register(inj do.Injector, maxChars int) {
 	do.Provide(inj, func(i do.Injector) (domain.SessionStore, error) {
 		return do.MustInvoke[*infra.ValkeySessionStore](i), nil
 	})
+	do.Provide(inj, func(i do.Injector) (domain.CharacterRepository, error) {
+		return do.MustInvoke[*infra.GORMCharacterRepository](i), nil
+	})
 }
