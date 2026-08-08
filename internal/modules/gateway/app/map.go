@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -24,18 +26,20 @@ const mapRefuseRejected uint8 = 0
 // MapServer is the gnet TCP listener for the map protocol. It admits a fresh
 // connection on CZ_ENTER (session verified via the SessionStore), registers the
 // player in the world, and replies with the map-enter + self-spawn packets.
+// Subsequent packets (LoadEndAck, movement) route through the dispatch table.
 type MapServer struct {
 	gnet.BuiltinEventEngine
-	engine gnet.Engine
-	booted bool
-	world  *worldapp.WorldService
-	sess   chardomain.SessionStore
-	log    *slog.Logger
+	engine   gnet.Engine
+	booted   bool
+	handlers map[uint16]mapHandler
+	world    *worldapp.WorldService
+	sess     chardomain.SessionStore
+	log      *slog.Logger
 }
 
 // NewMapServer builds a map listener.
 func NewMapServer(world *worldapp.WorldService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
-	return &MapServer{world: world, sess: sess, log: log}, nil
+	return &MapServer{world: world, sess: sess, log: log, handlers: mapHandlers()}, nil
 }
 
 // OnBoot captures the engine for shutdown.
@@ -46,19 +50,35 @@ func (s *MapServer) OnBoot(e gnet.Engine) gnet.Action {
 	return gnet.None
 }
 
-// OnTraffic reads complete CZ_ENTER frames. A connection's first packet is the
-// CZ_ENTER admission gate; once verified, the connection is authed for the rest
-// of the session. LoadEndAck (0x007d) and movement packets layer in M4+.
+// OnTraffic is the table-driven dispatcher: peek the 2-byte opcode, look up the
+// handler + frame size, read the full frame, and dispatch on a goroutine so the
+// reactor never blocks. Unknown opcodes close the connection (a variable-length
+// unknown packet can't be safely skipped without its size).
 func (s *MapServer) OnTraffic(c gnet.Conn) gnet.Action {
-	for c.InboundBuffered() >= czEnterSize {
-		frame, err := c.Next(czEnterSize)
-		if err != nil {
-			break
+	for {
+		if c.InboundBuffered() < 2 {
+			return gnet.None // need at least the 2-byte opcode header
 		}
-		cp := append([]byte(nil), frame...)
-		go s.handleEnter(c, cp)
+		hdr, err := c.Peek(2)
+		if err != nil {
+			return gnet.None
+		}
+		opcode := binary.LittleEndian.Uint16(hdr)
+		h, ok := s.handlers[opcode]
+		if !ok {
+			s.log.Warn("map: unknown opcode, closing conn", "cmd", fmt.Sprintf("0x%04x", opcode))
+			return gnet.Close
+		}
+		if c.InboundBuffered() < h.size {
+			return gnet.None // wait for the full frame to arrive
+		}
+		frame, err := c.Next(h.size)
+		if err != nil {
+			return gnet.None
+		}
+		cp := append([]byte(nil), frame...) // detach from gnet's ring buffer
+		go h.fn(s, c, cp)
 	}
-	return gnet.None
 }
 
 // handleEnter verifies the CZ_ENTER, admits the player into the world, and sends

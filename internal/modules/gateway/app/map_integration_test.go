@@ -131,3 +131,44 @@ func TestMap_RefuseEnterNoSessionOverTCP(t *testing.T) {
 		t.Fatalf("response header = 0x%04x, want ZC_REFUSE_ENTER (0x%04x)", got, ropacket.HeaderZCREFUSEENTER)
 	}
 }
+
+// TestMap_Dispatch_MovementAfterEnter exercises the table-driven dispatch: a
+// single connection sends CZ_ENTER (admitted), then CZ_REQUEST_MOVE, and the
+// dispatcher routes each to the right handler and replies.
+func TestMap_Dispatch_MovementAfterEnter(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	conn := startMapListener(t, port, sessions)
+	defer conn.Close()
+
+	// 1. CZ_ENTER → ZC_ACCEPT_ENTER (drain the 13-byte response).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	enterReply := make([]byte, 13)
+	if _, err := io.ReadFull(conn, enterReply); err != nil {
+		t.Fatalf("read accept-enter: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
+		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	}
+
+	// 2. CZ_REQUEST_MOVE → ZC_NOTIFY_PLAYERMOVE (12 bytes).
+	moveReq := make([]byte, 5)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	moveReq[2] = 100 // packed dest X (low byte; decodePos handles the 3-byte packing)
+	moveReq[3] = 200 // packed dest Y
+	moveReq[4] = 0   // dir
+	if _, err := conn.Write(moveReq); err != nil {
+		t.Fatalf("send move: %v", err)
+	}
+	moveReply := make([]byte, 12)
+	if _, err := io.ReadFull(conn, moveReply); err != nil {
+		t.Fatalf("read player-move reply: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE {
+		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE)
+	}
+}
