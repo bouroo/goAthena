@@ -83,7 +83,9 @@ jobs:
     runs-on: ubuntu-latest
     services:
       mariadb:
-        image: mariadb:${{ env.MARIADB_VERSION }}
+        # NB: the `env` context is not available in `services.image`; use
+        # `inputs` (which is) with coalesce to the latest-stable default.
+        image: mariadb:${{ inputs.mariadb-version || '11.4' }}
         env:
           MARIADB_ROOT_PASSWORD: ragnarok
           MARIADB_DATABASE: n
@@ -97,7 +99,7 @@ jobs:
           --health-timeout=5s
           --health-retries=10
       valkey:
-        image: valkey/valkey:${{ env.VALKEY_VERSION }}
+        image: valkey/valkey:${{ inputs.valkey-version || '8' }}
         ports:
           - 16379:6379
         options: >-
@@ -106,7 +108,7 @@ jobs:
           --health-timeout=3s
           --health-retries=10
       nats:
-        image: nats:${{ env.NATS_VERSION }}
+        image: nats:${{ inputs.nats-version || '2-alpine' }}
         ports:
           - 4222:4222
         options: >-
