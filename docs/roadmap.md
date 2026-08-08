@@ -166,19 +166,21 @@ lifecycle client (with a local no-op fallback) are already present at `cea42f8`.
 
 ## 5. Milestone roadmap
 
-Functional milestones M0–M7 are **proven** (merged to `main`, recovered at
-`cea42f8`). M8+ is the active rebuild frontier.
+The re-init wiped the tree; the rebuild re-lands each milestone fresh (keep the
+`pkg/ro` kernel, rewrite the app layer on the framework stack). **M0 and M1 are
+re-landed in the new tree**; M2–M7 (proven in the old build at `cea42f8`,
+recoverable as shape reference) are re-landed next, then M8+ is the frontier.
 
 | Milestone | Scope | Status |
 |---|---|---|
-| **M0** Scaffold | Binary boots; `/healthz`+`/readyz`; migrations apply; arch boundaries enforced | ✅ done |
-| **M1** Account / Login | `:6900` login handshake (v55 old-login), account auth, session keys | ✅ done |
-| **M2** Character | Char CRUD, char-select, stat/skill-point progression | ✅ done |
-| **M3** World core | Entity lifecycle, AOI grid, 50 Hz tick, map-enter (`LoadEndAck`) | ✅ done |
-| **M4** Gateway ingress | Codec, table-driven dispatch, broadcast render (TCP + WS) | ✅ done |
-| **M5** Inventory | Item-container aggregate (equip/cart/warehouse) | ✅ done |
-| **M6** Spawn / drops | Mob spawn, death, drops, pickup | ✅ done |
-| **M7** Combat | Battle formulas, melee/skill damage, equip/unequip + stat recompute | ✅ done |
+| **M0** Scaffold | Binary boots; `/healthz`+`/readyz`; migrations apply; arch boundaries enforced | ✅ re-landed |
+| **M1** Account / Login | `:6900` login handshake (v55 old-login), account auth, session keys, gnet listener | ✅ re-landed |
+| **M2** Character | Char CRUD, char-select, stat/skill-point progression | 🔜 re-land next |
+| **M3** World core | Entity lifecycle, AOI grid, 50 Hz tick, map-enter (`LoadEndAck`) | 🔜 re-land |
+| **M4** Gateway ingress | Codec, table-driven dispatch, broadcast render (TCP + WS) | 🔜 re-land |
+| **M5** Inventory | Item-container aggregate (equip/cart/warehouse) | 🔜 re-land |
+| **M6** Spawn / drops | Mob spawn, death, drops, pickup | 🔜 re-land |
+| **M7** Combat | Battle formulas, melee/skill damage, equip/unequip + stat recompute | 🔜 re-land |
 | **M8** Economy | `economy` zeny-ledger aggregate + ports | 🔜 frontier |
 | **M9** Commerce | `shop`/`trade`/`vending`/`storage` over economy+inventory (trade S1/S2 staged) | 🔜 frontier |
 | **M10** Content / script VM | `content` script engine (the 29k-LOC hard part) — NPC dialog/quest/item script | 🟡 partial |
@@ -209,16 +211,24 @@ it — never when the code merely looks right.
 
 ### Phase plan (committed, one per phase)
 
-| Phase | Deliverable | Commit gate |
-|---|---|---|
-| **P0** Kernel re-establishment | Keep proven `pkg/ro` kernel verbatim; decouple it from the app layer; rewrite README. App layer (modules/infra/cmd) is rebuilt fresh in P0b+ | `go build ./...` + kernel unit tests green |
-| **P1** Economy | `economy` zeny-ledger domain + app + port; wire into DI | L1+L2 + ledger unit tests |
-| **P2** Commerce | `shop` buy/sell + `trade` completion + `vending` + `storage` over economy+inventory | L1+L2+L3 (trade e2e over TCP) |
-| **P3** Content | `content` script VM — dialog/quest/item-script execution | L1+L2+L3 (NPC dialog e2e) |
-| **P4** Social | friend/party/guild/mail (move chat from `world`) | L1+L2+L3 |
-| **P5** Transit | cross-map handshake + Agones allocation path | L1+L2+L3 (map-change e2e) |
-| **P6** Scale-out | extract one module to a NATS binary; Agones fleet | L3 (multi-process transit) |
-| **P7** Harden | OTel coverage, security review, perf profiling, load test | perf budget met |
+| Phase | Deliverable | Commit gate | Status |
+|---|---|---|---|
+| **P0** Kernel re-establishment | Keep proven `pkg/ro` kernel verbatim; decouple it from the app layer; rewrite README | `go build ./...` + kernel unit tests green | ✅ done |
+| **M0** Scaffold | config (validator) + composition (echo/do) + db (GORM) + valkey + `goathena` binary + build config | `task verify` green; L3 live health/readyz | ✅ done |
+| **M1** Login | account module (domain/app/infra) + migration system + gnet login listener :6900 | L3 real-TCP handshake e2e | ✅ done |
+| **M2** Character | char CRUD, char-select, stat/skill-point progression; char TCP :6121 | L3 char-select over TCP | 🔜 next |
+| **M3** World | entity lifecycle, AOI grid, 50 Hz tick, map-enter | L3 map-enter over TCP | 🔜 |
+| **M4** Gateway ingress | full codec, table-driven dispatch, broadcast render (TCP + WS) | L3 | 🔜 |
+| **M5** Inventory | item-container aggregate (equip/cart/warehouse) | L1+L2+L3 | 🔜 |
+| **M6** Spawn / drops | mob spawn, death, drops, pickup | L3 | 🔜 |
+| **M7** Combat | battle formulas, melee/skill damage, equip + stat recompute | L3 | 🔜 |
+| **M8** Economy | `economy` zeny-ledger aggregate + ports | L1+L2 | 🔜 |
+| **M9** Commerce | `shop`/`trade`/`vending`/`storage` over economy+inventory | L3 (trade e2e) | 🔜 |
+| **M10** Content | `content` script VM — dialog/quest/item-script execution | L3 (NPC dialog e2e) | 🟡 |
+| **M11** Social | friend/party/guild/mail | L3 | 🔜 |
+| **M12** Transit | cross-map handshake + Agones allocation path | L3 (map-change e2e) | 🔜 |
+| **P-scale** Scale-out | extract one module to a NATS binary; Agones fleet | L3 (multi-process) | 📋 |
+| **P-hard** Harden | OTel coverage, security review, perf profiling, load test | perf budget met | 📋 |
 
 ### Phase 0 — recovery decision (recorded)
 
