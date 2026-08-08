@@ -1,5 +1,0 @@
-DROP TABLE IF EXISTS `loginlog`;
-DROP TABLE IF EXISTS `ipbanlist`;
-DROP TABLE IF EXISTS `storage`;
-DROP TABLE IF EXISTS `char`;
-DROP TABLE IF EXISTS `login`;

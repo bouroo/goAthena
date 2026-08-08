@@ -1,7 +1,0 @@
-prontera,150,160,4	script	Warper#prt	46,{
-	mes "[Warper]";
-	mes "I will send you to Izlude.";
-	next;
-	warp "izlude",128,128;
-	end;
-}

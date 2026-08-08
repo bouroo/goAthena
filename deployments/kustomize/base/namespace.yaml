@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: goathena
-  labels:
-    app.kubernetes.io/name: goathena
-    app.kubernetes.io/part-of: goathena
