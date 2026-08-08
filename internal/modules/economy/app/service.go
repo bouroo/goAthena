@@ -38,3 +38,53 @@ func (s *EconomyService) Balance(ctx context.Context, accountID, charID uint32) 
 	}
 	return domain.Zeny{}, fmt.Errorf("char %d: %w", charID, chardomain.ErrCharacterNotFound)
 }
+
+// DeductZeny subtracts amount from the character's balance and persists it.
+func (s *EconomyService) DeductZeny(ctx context.Context, charID uint32, amount int32) error {
+	c, err := s.findChar(ctx, charID)
+	if err != nil {
+		return err
+	}
+	z, err := domain.NewZeny(int32(c.Zeny)) //nolint:gosec // G115
+	if err != nil {
+		return fmt.Errorf("zeny load: %w", err)
+	}
+	next, err := z.Deduct(amount)
+	if err != nil {
+		return fmt.Errorf("deduct: %w", err)
+	}
+	if err := s.repos.UpdateZeny(ctx, c.ID, uint32(next.Amount())); err != nil { //nolint:gosec // G115
+		return fmt.Errorf("update zeny: %w", err)
+	}
+	return nil
+}
+
+// CreditZeny adds amount to the character's balance and persists it.
+func (s *EconomyService) CreditZeny(ctx context.Context, charID uint32, amount int32) error {
+	c, err := s.findChar(ctx, charID)
+	if err != nil {
+		return err
+	}
+	z, err := domain.NewZeny(int32(c.Zeny)) //nolint:gosec // G115
+	if err != nil {
+		return fmt.Errorf("zeny load: %w", err)
+	}
+	next, err := z.Credit(amount)
+	if err != nil {
+		return fmt.Errorf("credit: %w", err)
+	}
+	if err := s.repos.UpdateZeny(ctx, c.ID, uint32(next.Amount())); err != nil { //nolint:gosec // G115
+		return fmt.Errorf("update zeny: %w", err)
+	}
+	return nil
+}
+
+// findChar loads a character by charID (used when accountID is not available;
+// commerce callers have charID from the conn auth).
+func (s *EconomyService) findChar(ctx context.Context, charID uint32) (chardomain.Character, error) {
+	c, err := s.repos.FindByID(ctx, chardomain.CharID(charID))
+	if err != nil {
+		return chardomain.Character{}, fmt.Errorf("find char %d: %w", charID, err)
+	}
+	return c, nil
+}

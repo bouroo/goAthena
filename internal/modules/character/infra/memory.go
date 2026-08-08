@@ -71,6 +71,30 @@ func (r *MemoryCharacterRepository) NameExists(_ context.Context, name string) (
 	return r.names[name], nil
 }
 
+// UpdateZeny sets the zeny balance for charID (in-memory).
+func (r *MemoryCharacterRepository) UpdateZeny(_ context.Context, id domain.CharID, zeny uint32) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.byID[id]
+	if !ok {
+		return domain.ErrCharacterNotFound
+	}
+	c.Zeny = zeny
+	r.byID[id] = c
+	return nil
+}
+
+// FindByID returns the character by char_id (in-memory).
+func (r *MemoryCharacterRepository) FindByID(_ context.Context, id domain.CharID) (domain.Character, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.byID[id]
+	if !ok {
+		return domain.Character{}, domain.ErrCharacterNotFound
+	}
+	return c, nil
+}
+
 // MemorySessionStore is an in-memory session store for unit tests.
 type MemorySessionStore struct {
 	mu       sync.Mutex

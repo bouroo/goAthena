@@ -86,6 +86,10 @@ type CharacterRepository interface {
 	Delete(ctx context.Context, id CharID, accountID uint32) error
 	// NameExists reports whether a name is already in use.
 	NameExists(ctx context.Context, name string) (bool, error)
+	// UpdateZeny sets the zeny balance for charID.
+	UpdateZeny(ctx context.Context, id CharID, zeny uint32) error
+	// FindByID returns the character by char_id.
+	FindByID(ctx context.Context, id CharID) (Character, error)
 }
 
 // SessionStore is the port for the login session handed off from the login

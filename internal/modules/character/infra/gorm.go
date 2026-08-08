@@ -66,3 +66,22 @@ func (r *GORMCharacterRepository) NameExists(ctx context.Context, name string) (
 	}
 	return false, err
 }
+
+// UpdateZeny sets the zeny balance for charID.
+func (r *GORMCharacterRepository) UpdateZeny(ctx context.Context, id domain.CharID, zeny uint32) error {
+	return r.db.WithContext(ctx).Model(&domain.Character{}).
+		Where("char_id = ?", id).
+		Update("zeny", zeny).Error
+}
+
+// FindByID returns the character by char_id.
+func (r *GORMCharacterRepository) FindByID(ctx context.Context, id domain.CharID) (domain.Character, error) {
+	var c domain.Character
+	if err := r.db.WithContext(ctx).First(&c, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return domain.Character{}, domain.ErrCharacterNotFound
+		}
+		return domain.Character{}, err
+	}
+	return c, nil
+}
