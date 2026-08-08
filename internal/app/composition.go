@@ -13,7 +13,16 @@ import (
 	"github.com/bouroo/goAthena/internal/infrastructure/db"
 	"github.com/bouroo/goAthena/internal/infrastructure/messaging/valkey"
 	"github.com/bouroo/goAthena/internal/modules/account"
+	"github.com/bouroo/goAthena/internal/modules/gateway"
 )
+
+// loginServer is the lifecycle surface App.Run needs from a game-protocol
+// listener. Keeping it an interface (rather than importing gateway/app, whose
+// package name collides with this one) lets more listeners plug in later.
+type loginServer interface {
+	Start(addr string)
+	Stop()
+}
 
 // deps are the best-effort infrastructure singletons the control plane probes
 // for readiness. A nil field means the dependency could not be reached at boot;
@@ -21,6 +30,7 @@ import (
 type deps struct {
 	db     *gorm.DB
 	valkey vk.Client
+	login  loginServer
 }
 
 // compose opens the infrastructure singletons and registers them in the DI
@@ -56,6 +66,15 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	// Feature modules register their providers; they resolve infra lazily, so a
 	// down dependency surfaces as a resolution error at use time, not at boot.
 	account.Register(inj, cfg.Identity.UseMD5Passwords)
+
+	// The login listener resolves the account Authenticator from the injector.
+	// Best-effort: a build failure is logged and login simply won't serve.
+	if ls, err := gateway.NewLoginServer(inj, *cfg, log); err != nil {
+		log.Error("login listener build failed; login will not start", "err", err)
+	} else {
+		d.login = ls
+		closers = append(closers, ls.Stop)
+	}
 
 	closeAll := func() {
 		for i := len(closers) - 1; i >= 0; i-- {

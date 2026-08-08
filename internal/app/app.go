@@ -54,6 +54,13 @@ func (a *App) Close() { a.closeAll() }
 // Run serves the control plane until ctx is cancelled, then drains within the
 // configured grace period.
 func (a *App) Run(ctx context.Context) error {
+	// Game-protocol listeners start before the control plane so they are live
+	// by the time /healthz/readyz answer.
+	if a.deps.login != nil {
+		loginAddr := fmt.Sprintf("tcp://%s:%d", a.cfg.Gateway.LoginHost, a.cfg.Gateway.LoginPort)
+		a.deps.login.Start(loginAddr)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		a.log.Info("http control plane listening", "addr", a.server.Addr)
