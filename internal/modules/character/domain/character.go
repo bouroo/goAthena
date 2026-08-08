@@ -1,9 +1,11 @@
-// Package domain defines the character bounded context's value objects and
-// outbound ports: the Character aggregate (the char-list and progression slice
-// of the `char` table) and the repository the application layer depends on. It
-// is pure — no transport or persistence dependencies — so the GORM and
-// in-memory adapters, the char handlers, and tests program against these types
-// rather than against each other.
+// Package domain holds the character bounded context's pure domain model: the
+// Character aggregate (mirrors the rAthena `char` table) and the repository +
+// session ports. No infrastructure imports here.
+//
+// NOTE: the `char` table has two MariaDB-reserved column names — `int` (the INT
+// stat) and `rename` (the rename counter). GORM column tags keep them mapped
+// correctly, but any raw SELECT must back-quote them or MariaDB errors with
+// 1064 (only caught at L3 against a real DB).
 package domain
 
 import (
@@ -11,179 +13,105 @@ import (
 	"errors"
 )
 
-// Sentinel errors returned by the repository and the application layer. Service
-// code compares with errors.Is so wrapping is preserved; repository adapters
-// must return these (wrapped) rather than their own driver-specific types.
-// Character-creation sentinels map each to the matching HC_REFUSE_MAKECHAR error
-// byte (rathena char_clif.cpp chclif_createnewchar_refuse: -1→0x00, -2→0xFF,
-// -3→0x01, -4→0x03) — typed errors, not string matches, so the handler switches
-// on errors.Is rather than message text.
+// CharID is the rAthena char_id (auto-increment).
+type CharID uint32
+
+// Character mirrors the rAthena `char` table (sql-files/main.sql). Column tags
+// match the legacy schema exactly; the schema is owned by golang-migrate.
+type Character struct {
+	ID           CharID `gorm:"column:char_id;primaryKey;autoIncrement"`
+	AccountID    uint32 `gorm:"column:account_id"`
+	CharNum      int8   `gorm:"column:char_num"`
+	Name         string `gorm:"column:name"`
+	Class        uint16 `gorm:"column:class"`
+	BaseLevel    uint16 `gorm:"column:base_level"`
+	JobLevel     uint16 `gorm:"column:job_level"`
+	BaseExp      uint64 `gorm:"column:base_exp"`
+	JobExp       uint64 `gorm:"column:job_exp"`
+	Zeny         uint32 `gorm:"column:zeny"`
+	Str          uint16 `gorm:"column:str"`
+	Agi          uint16 `gorm:"column:agi"`
+	Vit          uint16 `gorm:"column:vit"`
+	Int          uint16 `gorm:"column:int"` // reserved word — keep quoted everywhere
+	Dex          uint16 `gorm:"column:dex"`
+	Luk          uint16 `gorm:"column:luk"`
+	MaxHP        uint32 `gorm:"column:max_hp"`
+	HP           uint32 `gorm:"column:hp"`
+	MaxSP        uint32 `gorm:"column:max_sp"`
+	SP           uint32 `gorm:"column:sp"`
+	StatusPoint  uint32 `gorm:"column:status_point"`
+	SkillPoint   uint32 `gorm:"column:skill_point"`
+	Sex          int8   `gorm:"column:sex"`
+	Hair         uint8  `gorm:"column:hair"`
+	HairColor    uint16 `gorm:"column:hair_color"`
+	ClothesColor uint16 `gorm:"column:clothes_color"`
+	Weapon       uint16 `gorm:"column:weapon"`
+	Shield       uint16 `gorm:"column:shield"`
+	HeadTop      uint16 `gorm:"column:head_top"`
+	HeadMid      uint16 `gorm:"column:head_mid"`
+	HeadBottom   uint16 `gorm:"column:head_bottom"`
+	LastMap      string `gorm:"column:last_map"`
+	LastX        uint16 `gorm:"column:last_x"`
+	LastY        uint16 `gorm:"column:last_y"`
+	SaveMap      string `gorm:"column:save_map"`
+	SaveX        uint16 `gorm:"column:save_x"`
+	SaveY        uint16 `gorm:"column:save_y"`
+	Fame         uint32 `gorm:"column:fame"`
+	Rename       uint16 `gorm:"column:rename"` // reserved word
+	DeleteDate   uint32 `gorm:"column:delete_date"`
+}
+
+// TableName fixes the legacy table name so GORM does not pluralize it.
+func (Character) TableName() string { return "char" }
+
+// Sentinel errors for character use cases.
 var (
-	// ErrCharacterNotFound: no char row matched the lookup key.
+	// ErrCharacterNotFound is returned when no character exists for the id/name.
 	ErrCharacterNotFound = errors.New("character not found")
-	// ErrCharNameTaken: the requested name is already in use or reserved
-	// (char_check_char_name -1; HC_REFUSE_MAKECHAR 0x00).
-	ErrCharNameTaken = errors.New("character name already taken")
-	// ErrSlotOccupied: the requested slot already holds a character
-	// (char_make_new_char -2 path; HC_REFUSE_MAKECHAR 0xFF).
-	ErrSlotOccupied = errors.New("character slot occupied")
-	// ErrInvalidSlot: the slot index is outside [0, char_slots)
-	// (char_make_new_char -4; HC_REFUSE_MAKECHAR 0x03).
-	ErrInvalidSlot = errors.New("invalid character slot")
-	// ErrInvalidInput: any other client-controlled input rejected by the
-	// create path (empty/short/control-char/'#'/reserved name, bad sex, job not
-	// allowed) — the -2 catch-all (HC_REFUSE_MAKECHAR 0xFF).
-	ErrInvalidInput = errors.New("invalid character creation input")
+	// ErrNameTaken is returned when a create/rename collides with an existing name.
+	ErrNameTaken = errors.New("character name already taken")
+	// ErrSlotTaken is returned when a create targets an occupied slot.
+	ErrSlotTaken = errors.New("character slot already occupied")
+	// ErrInvalidSession is returned when a CH_ENTER's LoginID1 doesn't match.
+	ErrInvalidSession = errors.New("invalid login session")
 )
 
-// CreateCharacter is the validated input to CharacterRepository.Create. The
-// fields mirror what the PACKETVER>=20151001 CH_MAKE_CHAR packet carries
-// (packets.hpp:123-132): name, slot, hair_color, hair_style, job, sex. The
-// server supplies base stats (1 each) and the starting economy/position, so
-// those are not client inputs here.
-type CreateCharacter struct {
-	// AccountID is the owning account, trusted from the per-conn auth cache
-	// (never from the packet).
-	AccountID uint32
-	// Name is the requested name (raw client bytes; validation trims/normalizes).
-	Name string
-	// Slot is the target char_num (0..char_slots-1).
-	Slot uint8
-	// HairColor is the requested hair-color palette.
-	HairColor uint16
-	// HairStyle is the requested hair style (stored in the char.hair column).
-	HairStyle uint16
-	// Job is the requested starting job (JOB_NOVICE etc.).
-	Job uint32
-	// Sex is the requested sex byte (0 = female, 1 = male).
-	Sex uint8
-}
-
-// Character is the char-list slice of a `char`-table row: exactly the fields
-// the CH_ENTER (char list) and CH_SELECT_CHAR (map redirect) flows read. The
-// field set mirrors the columns pkg/ro/packet.CharacterInfo serializes, so the
-// handler can map one straight to the other without loss. Time/state columns
-// the char-list path does not touch (unban_time, fame, font, …) are omitted;
-// GORM maps by column name so omitting them is safe.
-type Character struct {
-	CharID       uint32 // char_id  → CharacterInfo.GID
-	AccountID    uint32 // account_id (lookup key; trusted from the conn auth cache)
-	Slot         uint8  // char_num → CharacterInfo.CharNum
-	Name         string // name     → CharacterInfo.Name
-	Class        uint16 // class    → CharacterInfo.Job
-	BaseLevel    uint16 // base_level → CharacterInfo.Level
-	JobLevel     uint16 // job_level  → CharacterInfo.JobLevel
-	BaseExp      uint64 // base_exp → CharacterInfo.Exp
-	JobExp       uint64 // job_exp  → CharacterInfo.JobExp
-	Zeny         uint32 // zeny     → CharacterInfo.Money
-	Str          uint16
-	Agi          uint16
-	Vit          uint16
-	Int          uint16
-	Dex          uint16
-	Luk          uint16
-	MaxHP        uint32
-	HP           uint32
-	MaxSP        uint32
-	SP           uint32
-	StatusPoint  uint32 // status_point → CharacterInfo.SPPoint
-	SkillPoint   uint32 // skill_point → CharacterInfo.JobPoint
-	Option       uint32 // option → CharacterInfo.BodyState (effect bits)
-	Karma        uint8  // karma  → CharacterInfo.Virtue
-	Manner       uint16 // manner → CharacterInfo.Honor
-	Hair         uint8  // hair        → CharacterInfo.Head
-	HairColor    uint16 // hair_color  → CharacterInfo.HeadPalette + HairColor
-	ClothesColor uint16 // clothes_color → CharacterInfo.BodyPalette
-	Body         uint16 // body        → CharacterInfo.Body (sprite body override)
-	Weapon       uint16
-	Shield       uint16
-	HeadTop      uint16
-	HeadMid      uint16
-	HeadBottom   uint16
-	Robe         uint16
-	LastMap      string // last_map → CharacterInfo.MapName
-	LastX        uint16
-	LastY        uint16
-	Sex          uint8 // sex (wire byte: 0=F, 1=M) → CharacterInfo.Sex
-	DeleteDate   uint32
-	Moves        uint32
-	Rename       uint32
-}
-
-// Progression is the levelable slice of a `char`-table row: exactly the columns
-// that change through play (EXP, levels, zeny, status/skill points, HP/SP) and
-// nothing else. It is the write surface for SaveProgression: a caller loads a
-// Character, applies a play delta (EXP gained, a level-up), and hands back only
-// these fields. Identity is passed separately (accountID, charID) so the write
-// stays scoped by the trusted account — never a client-supplied id — and the
-// appearance/identity columns (name, class, hair, last_map, …) are structurally
-// outside what progression can touch.
-type Progression struct {
-	BaseExp     uint64 // base_exp
-	JobExp      uint64 // job_exp
-	BaseLevel   uint16 // base_level
-	JobLevel    uint16 // job_level
-	Zeny        uint32 // zeny
-	StatusPoint uint32 // status_point
-	SkillPoint  uint32 // skill_point
-	HP          uint32 // hp
-	MaxHP       uint32 // max_hp
-	SP          uint32 // sp
-	MaxSP       uint32 // max_sp
-}
-
-// ProgressionOf projects the levelable fields of a Character into a Progression.
-// Combat (and future play use cases) load a Character, mutate the result, and
-// pass it to SaveProgression; this helper fills the unchanged fields so the
-// caller overrides only the ones its delta touched.
-func ProgressionOf(c *Character) Progression {
-	return Progression{
-		BaseExp:     c.BaseExp,
-		JobExp:      c.JobExp,
-		BaseLevel:   c.BaseLevel,
-		JobLevel:    c.JobLevel,
-		Zeny:        c.Zeny,
-		StatusPoint: c.StatusPoint,
-		SkillPoint:  c.SkillPoint,
-		HP:          c.HP,
-		MaxHP:       c.MaxHP,
-		SP:          c.SP,
-		MaxSP:       c.MaxSP,
-	}
-}
-
-// CharacterRepository is the outbound persistence port for characters. The GORM
-// and in-memory adapters implement it.
+// CharacterRepository is the persistence port for the character aggregate.
 type CharacterRepository interface {
-	// ListByAccount returns every character owned by accountID, ordered by slot
-	// so the char-list display is stable. An account with no characters returns
-	// an empty (non-nil) slice and a nil error — that is an expected outcome,
-	// not a fault.
+	// ListByAccount returns all characters owned by an account, slot-ordered.
 	ListByAccount(ctx context.Context, accountID uint32) ([]Character, error)
-	// GetBySlot returns the character at (accountID, slot). Returns
-	// ErrCharacterNotFound when no row matches — the handler maps this to a
-	// HC_REFUSE_ENTER or a silent drop depending on the flow.
-	GetBySlot(ctx context.Context, accountID uint32, slot uint8) (*Character, error)
-	// GetByID returns the character at (accountID, charID). CZ_ENTER carries the
-	// char_id (not the slot), so the map-enter flow resolves the spawn appearance
-	// + last position through this lookup. Returns ErrCharacterNotFound when no
-	// row matches — the world spawn use case treats a mismatch as a stale or
-	// replayed enter and drops the connection.
-	GetByID(ctx context.Context, accountID uint32, charID uint32) (*Character, error)
-	// Create inserts a new character for the account at the requested slot,
-	// applying the server-side novice defaults (base stats, starting HP/SP,
-	// status points, zeny, position). It validates name uniqueness and slot
-	// availability and returns a typed sentinel (ErrCharNameTaken,
-	// ErrSlotOccupied, ErrInvalidSlot, ErrInvalidInput) on client-controlled
-	// rejection, so the handler can map it to the right HC_REFUSE_MAKECHAR byte
-	// without inspecting the underlying message.
-	Create(ctx context.Context, in CreateCharacter) (*Character, error)
-	// SaveProgression writes the levelable columns (EXP, levels, zeny,
-	// status/skill points, HP/SP) for the character at (accountID, charID). It
-	// is a column-selective update: appearance, identity, and position columns
-	// are untouched. Scoping by accountID is the impersonation guard — a charID
-	// belonging to another account yields ErrCharacterNotFound, never a cross-
-	// account write. RowsAffected==0 (the char does not exist under that
-	// account) is reported as ErrCharacterNotFound.
-	SaveProgression(ctx context.Context, accountID, charID uint32, p Progression) error
+	// Create inserts a new character at the given slot.
+	Create(ctx context.Context, c Character) (Character, error)
+	// Delete removes a character by id (and its owner check).
+	Delete(ctx context.Context, id CharID, accountID uint32) error
+	// NameExists reports whether a name is already in use.
+	NameExists(ctx context.Context, name string) (bool, error)
+	// UpdateZeny sets the zeny balance for charID.
+	UpdateZeny(ctx context.Context, id CharID, zeny uint32) error
+	// FindByID returns the character by char_id.
+	FindByID(ctx context.Context, id CharID) (Character, error)
 }
+
+// SessionStore is the port for the login session handed off from the login
+// server to the char server. The char server validates a CH_ENTER against this
+// before serving the character list.
+type SessionStore interface {
+	// PutSession stores the login session (AID + loginID1 + loginID2 + sex).
+	PutSession(ctx context.Context, s Session) error
+	// GetSession returns the session for an account, or ErrSessionNotFound.
+	GetSession(ctx context.Context, accountID uint32) (Session, error)
+	// DeleteSession removes a session (after it's consumed into the char/map flow).
+	DeleteSession(ctx context.Context, accountID uint32) error
+}
+
+// Session carries the login handshake state char/map servers need to validate
+// the client's CH_ENTER.
+type Session struct {
+	AccountID uint32
+	LoginID1  uint32
+	LoginID2  uint32
+	Sex       uint8
+}
+
+// ErrSessionNotFound is returned when no session exists for an account.
+var ErrSessionNotFound = errors.New("session not found")

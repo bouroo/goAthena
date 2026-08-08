@@ -6,11 +6,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bouroo/goAthena/pkg/ro/equip"
 )
 
 const fixtureYAML = `Header:
@@ -36,6 +39,8 @@ Body:
     EquipLevelMax: 99
     Refineable: true
     View: 2
+    Locations:
+      Right_Hand: true
     UnknownScalar: ignored
     Jobs:
       All: true
@@ -53,6 +58,61 @@ func loadFixture(t *testing.T) *Registry {
 	require.NoError(t, err)
 	require.NotNil(t, reg)
 	return reg
+}
+
+func TestItemEntry_HealParsesItemhealForms(t *testing.T) {
+	t.Parallel()
+	const yaml = `Header:
+  Type: ITEM_DB
+  Version: 3
+Body:
+  - Id: 503
+    Name: Red_Potion
+    Type: Healing
+    Script: |
+      itemheal rand(175,235),0;
+  - Id: 504
+    Name: White_Potion
+    Type: Healing
+    Script: |
+      itemheal rand(325,405),0;
+  - Id: 505
+    Name: Blue_Potion
+    Type: Healing
+    Script: |
+      itemheal 0,rand(40,60);
+  - Id: 600
+    Name: Fixed
+    Type: Healing
+    Script: itemheal 100,50;
+  - Id: 601
+    Name: NoScript
+    Type: Etc
+`
+	reg, err := Load(strings.NewReader(yaml))
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		id           int32
+		hpMin, hpMax int32
+		spMin, spMax int32
+	}{
+		{503, 175, 235, 0, 0},
+		{504, 325, 405, 0, 0},
+		{505, 0, 0, 40, 60},
+		{600, 100, 100, 50, 50},
+	} {
+		t.Run(strconv.FormatInt(int64(test.id), 10), func(t *testing.T) {
+			hpMin, hpMax, spMin, spMax, ok := reg.Get(test.id).Heal()
+			assert.True(t, ok)
+			assert.Equal(t, test.hpMin, hpMin)
+			assert.Equal(t, test.hpMax, hpMax)
+			assert.Equal(t, test.spMin, spMin)
+			assert.Equal(t, test.spMax, spMax)
+		})
+	}
+	_, _, _, _, ok := reg.Get(601).Heal()
+	assert.False(t, ok)
 }
 
 func TestLoad_ParsesAllScalarFields(t *testing.T) {
@@ -78,6 +138,8 @@ func TestLoad_ParsesAllScalarFields(t *testing.T) {
 	assert.Equal(t, int32(99), sword.EquipLevelMax)
 	assert.True(t, sword.Refineable)
 	assert.Equal(t, int32(2), sword.View)
+	// Locations block folds into the EQP_* bitmask the equip use case reads.
+	assert.Equal(t, equip.HandRight, sword.EquipLocations, "Right_Hand → EQP_HAND_R (2)")
 }
 
 func TestLoad_DefaultsTypeAndIgnoresUnknownFields(t *testing.T) {
@@ -87,6 +149,9 @@ func TestLoad_DefaultsTypeAndIgnoresUnknownFields(t *testing.T) {
 	require.NotNil(t, jellopy)
 	assert.Equal(t, "Etc", jellopy.Type)
 	assert.Equal(t, int32(10), jellopy.Weight)
+	// A non-equip item has no Locations block, so its bitmask is zero — the value
+	// the equip use case reads to reject a non-equipment item.
+	assert.Equal(t, uint32(0), jellopy.EquipLocations)
 }
 
 func TestRegistry_GetLenAndWeight(t *testing.T) {
@@ -171,6 +236,53 @@ Body:
 	require.NoError(t, err)
 	assert.Equal(t, 1, reg.Len())
 	assert.Equal(t, "Last", reg.Get(1).Name)
+}
+
+// TestLoad_DuplicateMappingKeyLastWins covers the rathenaThailand data quirk
+// where item_db_equip.yml repeats a Trade: block within one item
+// (lines 169692/169703). yaml.v3 rejects duplicate mapping keys when decoding
+// into a struct; the loader tolerates them, last occurrence wins, matching
+// rAthena's loader. Without this the whole item_db load aborts and item drops,
+// equip, and use-item healing all break at boot.
+func TestLoad_DuplicateMappingKeyLastWins(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unknown duplicate key tolerated", func(t *testing.T) {
+		t.Parallel()
+
+		reg, err := Load(strings.NewReader(`Header:
+  Type: ITEM_DB
+  Version: 3
+Body:
+  - Id: 1
+    AegisName: Helm
+    Name: Helm
+    Trade:
+      NoDraw: false
+      NoTrade: true
+    Trade:
+      NoDraw: true
+`))
+		require.NoError(t, err)
+		require.Equal(t, 1, reg.Len())
+		assert.Equal(t, "Helm", reg.Get(1).Name)
+	})
+
+	t.Run("known duplicate field last wins", func(t *testing.T) {
+		t.Parallel()
+
+		reg, err := Load(strings.NewReader(`Header:
+  Type: ITEM_DB
+  Version: 3
+Body:
+  - Id: 2
+    AegisName: Knife
+    Defense: 5
+    Defense: 42
+`))
+		require.NoError(t, err)
+		assert.Equal(t, int32(42), reg.Get(2).Defense)
+	})
 }
 
 func TestLoad_SkipsNullBodyEntries(t *testing.T) {

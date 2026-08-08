@@ -70,19 +70,43 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		// P3c: ground item drop — see NewMapServerDB for the rAthena
 		// packetdb citation (clif_packetdb.hpp:1921, opcode 0x0ADD).
 		{HeaderZCItemFallEntry, "ZC_ITEM_FALL_ENTRY", sizeZCItemFallEntry, DirectionServerToClient},
-		// A4: six C→S drop aliases share one CZ_ITEM_DROP layout (the
-		// seventh, 0x0438, collides with CZ_USE_SKILL2 and is excluded).
+		// A4: five C→S drop aliases share one CZ_ITEM_DROP layout (the
+		// effective 20250604 opcode is 0x0363, clif_shuffle.hpp:4733; 0x0438 is
+		// CZ_USE_SKILL2 and 0x0362 is the modern pickup opcode, both excluded).
 		{HeaderCZDROPITEM0363, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
 		{HeaderCZDROPITEM0885, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
 		{HeaderCZDROPITEM02C4, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
 		{HeaderCZDROPITEM0891, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
-		{HeaderCZDROPITEM0362, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
 		{HeaderCZDROPITEM089E, "CZ_ITEM_DROP", sizeCZDropItem, DirectionClientToServer},
+		// A4: the modern pickup alias 0x0362 (clif_shuffle.hpp:4732 TakeItem)
+		// shares the CZ_ITEM_PICKUP parser with the legacy 0x009f.
+		{HeaderCZITEMTAKE0362, "CZ_ITEM_PICKUP", sizeCZItemPickup, DirectionClientToServer},
 		// A4: server→client floor-item + ack frames.
 		{HeaderZCItemEntry, "ZC_ITEM_ENTRY", sizeZCItemEntry, DirectionServerToClient},
 		{HeaderZCItemDisappear, "ZC_ITEM_DISAPPEAR", sizeZCItemDisappear, DirectionServerToClient},
 		{HeaderZCItemThrowAck, "ZC_ITEM_THROW_ACK", sizeZCItemThrowAck, DirectionServerToClient},
 		{HeaderZCItemPickupAck, "ZC_ITEM_PICKUP_ACK", sizeZCItemPickupAck, DirectionServerToClient},
+		// M14c: NPC input dialogs (clif.cpp:13378/13397, packets.hpp:769/775/1837/1844).
+		{HeaderCZINPUTEDITDLG, "CZ_INPUT_EDITDLG", sizeCZInputEditDlg, DirectionClientToServer},
+		{HeaderCZINPUTEDITDLGSTR, "CZ_INPUT_EDITDLGSTR", VariableLength, DirectionClientToServer},
+		{HeaderZCOPENEDITDLG, "ZC_OPEN_EDITDLG", sizeZCOpenEditDlg, DirectionServerToClient},
+		{HeaderZCOPENEDITDLGSTR, "ZC_OPEN_EDITDLGSTR", sizeZCOpenEditDlg, DirectionServerToClient},
+		// M14d: ground-target skills (clif_packetdb.hpp:1905, packets_struct.hpp:4696).
+		{HeaderCZUSESKILLTOPOS, "CZ_USE_SKILL_TOPOS", sizeCZUseSkillToPos, DirectionClientToServer},
+		{HeaderZCNOTIFYGROUNDSKILL, "ZC_NOTIFY_GROUNDSKILL", sizeZCNotifyGroundSkill, DirectionServerToClient},
+		// S1: trade handshake family (clif_packetdb.hpp:87,89,93; packets.hpp:373,387; :1062).
+		{HeaderCZTRADEREQUEST, "CZ_TRADE_REQUEST", sizeCZTradeRequest, DirectionClientToServer},
+		{HeaderCZTRADEACK, "CZ_TRADE_ACK", sizeCZTradeAck, DirectionClientToServer},
+		{HeaderCZTRADECANCEL, "CZ_TRADE_CANCEL", sizeCZTradeCancel, DirectionClientToServer},
+		{HeaderZCREQEXCHANGEITEM, "ZC_REQ_EXCHANGE_ITEM", sizeZCReqExchange, DirectionServerToClient},
+		{HeaderZCACKEXCHANGEITEM, "ZC_ACK_EXCHANGE_ITEM", sizeZCAckExchange, DirectionServerToClient},
+		{HeaderZCCANCELEXCHANGEITEM, "ZC_CANCEL_EXCHANGE_ITEM", sizeZCCancelExchange, DirectionServerToClient},
+		// S2: trade staging family (clif_packetdb.hpp:90,92; packets_struct.hpp:2642; packets.hpp:405,1067).
+		{HeaderCZADDEXCHANGEITEM, "CZ_ADD_EXCHANGE_ITEM", sizeCZAddExchangeItem, DirectionClientToServer},
+		{HeaderCZTRADEOK, "CZ_TRADE_OK", sizeCZTradeOk, DirectionClientToServer},
+		{HeaderZCADDEXCHANGEITEM, "ZC_ADD_EXCHANGE_ITEM", sizeZCAddExchangeItem, DirectionServerToClient},
+		{HeaderZCACKADDEXCHANGEITEM, "ZC_ACK_ADD_EXCHANGE_ITEM", sizeZCAckAddExchange, DirectionServerToClient},
+		{HeaderZCCONCLUDEEXCHANGEITEM, "ZC_CONCLUDE_EXCHANGE_ITEM", sizeZCConcludeExchange, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -118,11 +142,26 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// ZC_ITEM_FALL_ENTRY (0x0ADD) for a grand total of 59.
 	// P4b adds 2 menu entries (CZ_CHOOSE_MENU, ZC_MENU_LIST) → 61.
 	// A3 adds the inventory bracket (ZC_INVENTORY_START, ZC_INVENTORY_END) → 63.
-	// A4 adds 6 C→S drop aliases (CZ_ITEM_DROP) + 4 S→C floor-item/ack
-	// frames (ZC_ITEM_ENTRY/DISAPPEAR/THROW_ACK/PICKUP_ACK) → 73.
+	// A4 adds 5 C→S drop aliases (CZ_ITEM_DROP) + the modern pickup alias
+	// 0x0362 (CZ_ITEM_PICKUP) + 4 S→C floor-item/ack frames
+	// (ZC_ITEM_ENTRY/DISAPPEAR/THROW_ACK/PICKUP_ACK) → 73.
 	// M7c adds ZC_LONGLONGPAR_CHANGE (0x0acb) for the 64-bit exp parameters at
 	// PACKETVER >= 20170830 → 74.
-	const want = 74
+	// M10a adds the legacy CZ_ITEM_PICKUP (0x009f) → 75. Name-resolution adds
+	// two S→C name replies (ZC_ACK_REQNAMEALL2 0x0a30, ZC_ACK_REQNAMEALL_NPC
+	// 0x0adf) → 77. P2A adds ZC_SPRITE_CHANGE (0x01d7) for the equip/unequip
+	// look-sprite broadcast → 78. P2c adds the whisper family (CZ_WHISPER
+	// 0x0096, ZC_WHISPER 0x09de, ZC_ACK_WHISPER 0x09df) → 81. M14c adds the
+	// NPC input-dialog family (CZ_INPUT_EDITDLG 0x0143, CZ_INPUT_EDITDLGSTR
+	// 0x01d5, ZC_OPEN_EDITDLG 0x0142, ZC_OPEN_EDITDLGSTR 0x01d4) → 85. M14d adds
+	// the ground-skill family (CZ_USE_SKILL_TOPOS 0x0AF4, ZC_NOTIFY_GROUNDSKILL
+	// 0x0117) → 87. S1 adds the trade-handshake family (CZ_TRADE_REQUEST 0x00e4,
+	// CZ_TRADE_ACK 0x00e6, CZ_TRADE_CANCEL 0x00ed, ZC_REQ_EXCHANGE_ITEM 0x01f4,
+	// ZC_ACK_EXCHANGE_ITEM 0x01f5, ZC_CANCEL_EXCHANGE_ITEM 0x00ee) → 93. S2 adds
+	// the staging family (CZ_ADD_EXCHANGE_ITEM 0x00e8, CZ_TRADE_OK 0x00eb,
+	// ZC_ADD_EXCHANGE_ITEM 0x0b42, ZC_ACK_ADD_EXCHANGE_ITEM 0x00ea,
+	// ZC_CONCLUDE_EXCHANGE_ITEM 0x00ec) → 98.
+	const want = 98
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -165,10 +204,12 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCACTIONRESPONSE, sizeZCActionResponse},
 		{HeaderZCCHANGEDIR, sizeZCChangeDir},
 		{HeaderZCEMOTION, sizeZCEmotion},
+		{HeaderZCSPRITECHANGE, sizeZCSpriteChange},
 		{HeaderZCACKREQNAME, sizeZCAckReqName},
 		{HeaderZCSETUNITIDLE, sizeZCSetUnitIdle},
 		{HeaderZCUNITWALKING, sizeZCUnitWalking},
 		// P2A: inventory equip/use family.
+		{HeaderCZITEMPICKUP, sizeCZItemPickup},
 		{HeaderCZUSEITEM2, sizeCZUseItem2},
 		{HeaderCZREQWEAREQUIPV5, sizeCZReqWearEquipV5},
 		{HeaderCZREQTAKEOFFEQUIP, sizeCZReqTakeoffEquip},
@@ -185,13 +226,14 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCNOTIFYEFFECT, sizeZCNotifyEffect},
 		// P3c: ground item drop.
 		{HeaderZCItemFallEntry, sizeZCItemFallEntry},
-		// A4: six C→S drop aliases + four S→C floor-item/ack frames.
+		// A4: five C→S drop aliases + the modern pickup alias + four S→C
+		// floor-item/ack frames.
 		{HeaderCZDROPITEM0363, sizeCZDropItem},
 		{HeaderCZDROPITEM0885, sizeCZDropItem},
 		{HeaderCZDROPITEM02C4, sizeCZDropItem},
 		{HeaderCZDROPITEM0891, sizeCZDropItem},
-		{HeaderCZDROPITEM0362, sizeCZDropItem},
 		{HeaderCZDROPITEM089E, sizeCZDropItem},
+		{HeaderCZITEMTAKE0362, sizeCZItemPickup},
 		{HeaderZCItemEntry, sizeZCItemEntry},
 		{HeaderZCItemDisappear, sizeZCItemDisappear},
 		{HeaderZCItemThrowAck, sizeZCItemThrowAck},

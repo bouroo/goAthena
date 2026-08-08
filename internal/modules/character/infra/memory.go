@@ -2,170 +2,133 @@ package infra
 
 import (
 	"context"
-	"slices"
-	"sort"
-	"strings"
+	"sync"
 
 	"github.com/bouroo/goAthena/internal/modules/character/domain"
 )
 
-// MemoryCharacterRepository is an in-memory domain.CharacterRepository for
-// hermetic unit tests. It returns defensive copies so callers cannot mutate the
-// store through a returned slice or pointer.
+// MemoryCharacterRepository is an in-memory character store for unit tests.
 type MemoryCharacterRepository struct {
-	bySlot map[accountSlot]domain.Character
+	mu    sync.Mutex
+	byID  map[domain.CharID]domain.Character
+	names map[string]bool
+	next  uint32
 }
 
-type accountSlot struct {
-	accountID uint32
-	slot      uint8
-}
-
-// NewMemoryCharacterRepository seeds the store with copies of the given
-// characters, keyed by (accountID, slot).
-func NewMemoryCharacterRepository(seeds ...domain.Character) *MemoryCharacterRepository {
-	r := &MemoryCharacterRepository{bySlot: make(map[accountSlot]domain.Character, len(seeds))}
-	for _, c := range seeds {
-		r.bySlot[accountSlot{c.AccountID, c.Slot}] = c
+// NewMemoryCharacterRepository creates an empty in-memory repo.
+func NewMemoryCharacterRepository() *MemoryCharacterRepository {
+	return &MemoryCharacterRepository{
+		byID:  make(map[domain.CharID]domain.Character),
+		names: make(map[string]bool),
+		next:  150000,
 	}
-	return r
 }
 
-// ListByAccount returns defensive copies of the account's characters, sorted by
-// slot for a stable display. An account with no characters yields an empty
-// (non-nil) slice and a nil error.
+// ListByAccount returns the account’s characters (in-memory).
 func (r *MemoryCharacterRepository) ListByAccount(_ context.Context, accountID uint32) ([]domain.Character, error) {
-	var out []domain.Character
-	for k, c := range r.bySlot {
-		if k.accountID == accountID {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]domain.Character, 0)
+	for _, c := range r.byID {
+		if c.AccountID == accountID {
 			out = append(out, c)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Slot < out[j].Slot })
-	return slices.Clone(out), nil
+	return out, nil
 }
 
-// GetBySlot returns a defensive copy or ErrCharacterNotFound.
-func (r *MemoryCharacterRepository) GetBySlot(_ context.Context, accountID uint32, slot uint8) (*domain.Character, error) {
-	c, ok := r.bySlot[accountSlot{accountID, slot}]
+// Create inserts a character and assigns an id (in-memory).
+func (r *MemoryCharacterRepository) Create(_ context.Context, c domain.Character) (domain.Character, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.names[c.Name] {
+		return domain.Character{}, domain.ErrNameTaken
+	}
+	r.next++
+	c.ID = domain.CharID(r.next)
+	r.byID[c.ID] = c
+	r.names[c.Name] = true
+	return c, nil
+}
+
+// Delete removes a character owned by accountID (in-memory).
+func (r *MemoryCharacterRepository) Delete(_ context.Context, id domain.CharID, accountID uint32) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.byID[id]
+	if !ok || c.AccountID != accountID {
+		return domain.ErrCharacterNotFound
+	}
+	delete(r.byID, id)
+	delete(r.names, c.Name)
+	return nil
+}
+
+// NameExists reports whether a name is in use (in-memory).
+func (r *MemoryCharacterRepository) NameExists(_ context.Context, name string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.names[name], nil
+}
+
+// UpdateZeny sets the zeny balance for charID (in-memory).
+func (r *MemoryCharacterRepository) UpdateZeny(_ context.Context, id domain.CharID, zeny uint32) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.byID[id]
 	if !ok {
-		return nil, domain.ErrCharacterNotFound
+		return domain.ErrCharacterNotFound
 	}
-	cp := c
-	return &cp, nil
+	c.Zeny = zeny
+	r.byID[id] = c
+	return nil
 }
 
-// GetByID returns the character at (accountID, charID). The store is keyed by
-// (accountID, slot), so this scans for a matching char_id within the account —
-// a linear cost that is fine for the hermetic unit-test seed sizes. Scoping by
-// accountID is the impersonation guard: a char_id from another account yields
-// ErrCharacterNotFound, never the wrong character.
-func (r *MemoryCharacterRepository) GetByID(_ context.Context, accountID uint32, charID uint32) (*domain.Character, error) {
-	for k, c := range r.bySlot {
-		if k.accountID == accountID && c.CharID == charID {
-			cp := c
-			return &cp, nil
-		}
+// FindByID returns the character by char_id (in-memory).
+func (r *MemoryCharacterRepository) FindByID(_ context.Context, id domain.CharID) (domain.Character, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.byID[id]
+	if !ok {
+		return domain.Character{}, domain.ErrCharacterNotFound
 	}
-	return nil, domain.ErrCharacterNotFound
+	return c, nil
 }
 
-// Create mirrors GORMCharacterRepository.Create: it guards name uniqueness and
-// slot occupancy, then stores a novice-defaults character with a char_id chosen
-// to mirror the DB's AUTO_INCREMENT (next = max(existing)+1, or 150000 when
-// empty). Name comparison is case-insensitive to match the char table's default
-// (case-insensitive) collation. It does not re-run the pure input validation
-// (empty/short/control-char/reserved) — that is the handler's responsibility.
-func (r *MemoryCharacterRepository) Create(_ context.Context, in domain.CreateCharacter) (*domain.Character, error) {
-	name := strings.ToLower(strings.TrimSpace(in.Name))
-
-	for _, c := range r.bySlot {
-		if strings.ToLower(strings.TrimSpace(c.Name)) == name {
-			return nil, domain.ErrCharNameTaken
-		}
-	}
-	key := accountSlot{in.AccountID, in.Slot}
-	if _, occupied := r.bySlot[key]; occupied {
-		return nil, domain.ErrSlotOccupied
-	}
-
-	created := newNoviceDomain(in, r.nextCharID())
-	r.bySlot[key] = created
-	cp := created
-	return &cp, nil
+// MemorySessionStore is an in-memory session store for unit tests.
+type MemorySessionStore struct {
+	mu       sync.Mutex
+	sessions map[uint32]domain.Session
 }
 
-// nextCharID mirrors the char table's AUTO_INCREMENT: the next id is the largest
-// in use plus one, or the initial seed (150000) when the store is empty.
-func (r *MemoryCharacterRepository) nextCharID() uint32 {
-	var maxID uint32 = firstCharID - 1
-	for _, c := range r.bySlot {
-		if c.CharID > maxID {
-			maxID = c.CharID
-		}
-	}
-	return maxID + 1
+// NewMemorySessionStore creates an empty in-memory session store.
+func NewMemorySessionStore() *MemorySessionStore {
+	return &MemorySessionStore{sessions: make(map[uint32]domain.Session)}
 }
 
-// firstCharID is the AUTO_INCREMENT seed of the char table (migration
-// 000002_identity.up.sql: AUTO_INCREMENT=150000).
-const firstCharID = 150000
-
-// SaveProgression writes the levelable columns for the character at
-// (accountID, charID). The store is keyed by (accountID, slot), so this locates
-// the row the same way GetByID does — a linear scan for a matching char_id
-// within the account (the impersonation guard: a char_id from another account
-// yields ErrCharacterNotFound). Only the Progression fields are overwritten;
-// appearance, identity, and position stay as Create set them.
-func (r *MemoryCharacterRepository) SaveProgression(_ context.Context, accountID, charID uint32, p domain.Progression) error {
-	for k, c := range r.bySlot {
-		if k.accountID == accountID && c.CharID == charID {
-			c.BaseExp = p.BaseExp
-			c.JobExp = p.JobExp
-			c.BaseLevel = p.BaseLevel
-			c.JobLevel = p.JobLevel
-			c.Zeny = p.Zeny
-			c.StatusPoint = p.StatusPoint
-			c.SkillPoint = p.SkillPoint
-			c.HP = p.HP
-			c.MaxHP = p.MaxHP
-			c.SP = p.SP
-			c.MaxSP = p.MaxSP
-			r.bySlot[k] = c
-			return nil
-		}
-	}
-	return domain.ErrCharacterNotFound
+// PutSession stores the session (in-memory).
+func (s *MemorySessionStore) PutSession(_ context.Context, sess domain.Session) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[sess.AccountID] = sess
+	return nil
 }
 
-// newNoviceDomain is the domain twin of newNoviceModel — same novice defaults,
-// expressed as a domain.Character for the in-memory adapter.
-func newNoviceDomain(in domain.CreateCharacter, charID uint32) domain.Character {
-	return domain.Character{
-		CharID:      charID,
-		AccountID:   in.AccountID,
-		Slot:        in.Slot,
-		Name:        strings.TrimSpace(in.Name),
-		Class:       uint16(in.Job), //nolint:gosec // G115: packet job→uint16 (domain Class), mirrors GORM adapter
-		BaseLevel:   1,
-		JobLevel:    1,
-		Str:         1,
-		Agi:         1,
-		Vit:         1,
-		Int:         1,
-		Dex:         1,
-		Luk:         1,
-		MaxHP:       noviceMaxHP,
-		HP:          noviceMaxHP,
-		MaxSP:       noviceMaxSP,
-		SP:          noviceMaxSP,
-		StatusPoint: noviceStatusPoints,
-		Hair:        uint8(in.HairStyle), //nolint:gosec // G115: packet hair_style→uint8 (domain Hair), mirrors GORM adapter
-		HairColor:   in.HairColor,
-		Body:        uint16(in.Job), //nolint:gosec // G115: packet job→uint16 (domain Body), mirrors GORM adapter
-		LastMap:     noviceStartMap,
-		LastX:       noviceStartX,
-		LastY:       noviceStartY,
-		Sex:         in.Sex,
+// GetSession returns the stored session (in-memory).
+func (s *MemorySessionStore) GetSession(_ context.Context, accountID uint32) (domain.Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessions[accountID]
+	if !ok {
+		return domain.Session{}, domain.ErrSessionNotFound
 	}
+	return sess, nil
+}
+
+// DeleteSession removes the session (in-memory).
+func (s *MemorySessionStore) DeleteSession(_ context.Context, accountID uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, accountID)
+	return nil
 }

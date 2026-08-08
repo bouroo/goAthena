@@ -89,6 +89,51 @@ func (r MapRefuseEnterResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// MapMoveResponse encodes a ZC_NPCACK_MAPMOVE packet (command 0x0091) — the
+// server's reply to a warp/teleport that changes the client's map. The client
+// loads the named map and reconnects with a fresh CZ_ENTER. Layout source:
+// rathena/src/map/packets.hpp PACKET_ZC_NPCACK_MAPMOVE.
+//
+// Fixed wire length: 22 bytes (int16 packetType + char mapName[16] + uint16 xPos
+// + uint16 yPos). MapName is the zone-side name without ".gat", zero-padded to
+// fill the 16-byte slot (MAP_NAME_LENGTH_EXT).
+type MapMoveResponse struct {
+	// MapName is the destination map name (no extension, e.g. "izlude").
+	MapName string
+	// X is the destination cell X.
+	X uint16
+	// Y is the destination cell Y.
+	Y uint16
+}
+
+// Size returns the on-wire byte length that Encode will write (always 22).
+func (r MapMoveResponse) Size() int {
+	return sizeZCNPCAckMapMove
+}
+
+// Encode writes the ZC_NPCACK_MAPMOVE packet to w. Returns a wrapped error
+// (sentinel + %w) if MapName exceeds 16 bytes; in that case no bytes are written
+// to w.
+func (r MapMoveResponse) Encode(w io.Writer) error {
+	if len(r.MapName) > mapNameExtSlot {
+		return fmt.Errorf("packet: encode ZC_NPCACK_MAPMOVE: %w", ErrMapNameTooLong)
+	}
+
+	buf := make([]byte, sizeZCNPCAckMapMove)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNPCACKMAPMOVE)
+	// char mapName[16] at offset 2 — zero-padded.
+	writeFixedString(buf[2:2+mapNameExtSlot], r.MapName)
+	// uint16 xPos at offset 18 (2+16).
+	binary.LittleEndian.PutUint16(buf[18:], r.X)
+	// uint16 yPos at offset 20.
+	binary.LittleEndian.PutUint16(buf[20:], r.Y)
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_NPCACK_MAPMOVE: %w", err)
+	}
+	return nil
+}
+
 // MapNotifyPlayerMoveResponse encodes a ZC_NOTIFY_PLAYERMOVE packet
 // (command 0x0087). The server broadcasts this to nearby clients every
 // time a player's path is computed, so each peer can interpolate the
@@ -1089,6 +1134,78 @@ func (r NotifyChatResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// ZCWhisperResponse encodes ZC_WHISPER (command 0x09de, variable length) — the
+// delivered private message the recipient receives. At PACKETVER
+// MAIN_NUM>=20131204 (ClientROThailand 20250604 qualifies) clif emits the
+// 0x09de branch (packets_struct.hpp:5347-5356), NOT the legacy 0x0097. Wire
+// shape:
+//
+//	[2:cmd=0x09de][2:packetLength][4:senderGID uint32][24:sender char[24]][1:isAdmin][n:message+null]
+//
+// senderGID is the sender's bl.id (= account_id for a PC). isAdmin is the GM
+// flag; goAthena sends 0 (no GM-level parity). The message is NUL-terminated.
+type ZCWhisperResponse struct {
+	SenderGID  uint32
+	SenderName string
+	IsAdmin    uint8
+	Message    string
+}
+
+// Encode writes the ZC_WHISPER frame. packetLength is computed from the
+// message size so the length slot cannot disagree with the trailing bytes.
+func (r ZCWhisperResponse) Encode(w io.Writer) error {
+	msg := []byte(r.Message)
+	// 4 (header) + 4 (GID) + 24 (sender) + 1 (isAdmin) + len(msg) + 1 (NUL).
+	total := 4 + 4 + sizeZCWhisperName + 1 + len(msg) + 1
+	if total > 0xffff {
+		return fmt.Errorf("packet: write ZC_WHISPER: message too long (%d bytes)", len(msg))
+	}
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCWHISPER)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint32(buf[4:], r.SenderGID)
+	off := 8
+	copy(buf[off:off+sizeZCWhisperName], r.SenderName)
+	// trailing bytes of the 24-byte sender slot stay 0x00 from make() (NUL-pad).
+	off += sizeZCWhisperName
+	buf[off] = r.IsAdmin
+	off++
+	copy(buf[off:], msg)
+	// buf[total-1] is already 0x00 from make() — the trailing NUL.
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_WHISPER: %w", err)
+	}
+	return nil
+}
+
+// ZCAckWhisperResponse encodes ZC_ACK_WHISPER (command 0x09df, fixed 7 bytes)
+// — the whisper result ack sent to the sender. At PACKETVER>=20131223
+// (20250604 qualifies; packets.hpp:1225-1231), NOT legacy 0x0098. Wire shape:
+//
+//	[2:cmd=0x09df][1:result][4:CID uint32 = sender char_id]
+//
+// result: 0=success, 1=target offline (2/3 ignored = not implemented, no
+// ignore-list feature).
+type ZCAckWhisperResponse struct {
+	Result uint8
+	CID    uint32
+}
+
+// Size returns the fixed wire size of ZC_ACK_WHISPER.
+func (ZCAckWhisperResponse) Size() int { return sizeZCAckWhisper }
+
+// Encode writes the 7-byte ZC_ACK_WHISPER frame.
+func (r ZCAckWhisperResponse) Encode(w io.Writer) error {
+	var buf [sizeZCAckWhisper]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKWHISPER)
+	buf[2] = r.Result
+	binary.LittleEndian.PutUint32(buf[3:], r.CID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_ACK_WHISPER: %w", err)
+	}
+	return nil
+}
+
 // ZCStatusChangeAck encodes ZC_STATUS_CHANGE_ACK (0x00bc) — the server's
 // response to a stat-point allocation request. Wire layout
 // (rathena/src/map/clif.cpp:4283):
@@ -1321,6 +1438,74 @@ func (r EmotionResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// LOOK_* view-sprite categories carried by ZC_SPRITE_CHANGE (rAthena's _look
+// enum, rathenaThailand/src/map/map.hpp:601). Only WEAPON is emitted today:
+// clif_changelook's PACKETVER>=4 path collapses the weapon+shield sprites into a
+// single LOOK_WEAPON packet (val=weapon, val2=shield).
+const (
+	LookBase   uint8 = 0
+	LookHair   uint8 = 1
+	LookWeapon uint8 = 2
+	LookShield uint8 = 8
+)
+
+// SpriteChangeResponse encodes a ZC_SPRITE_CHANGE2 packet (command 0x01d7). The
+// server broadcasts it to the actor and its AOI neighbors when an entity's look
+// sprite changes — for a player, the weapon/shield update on equip/unequip.
+//
+// Wire shape (rathenaThailand/src/map/packets_struct.hpp:2591-2604). The struct
+// has three PACKETVER-gated layouts for the val/val2 width; PACKETVER 20250604
+// selects the modern branch (PACKETVER_MAIN_NUM>=20181121 — satisfied because
+// PACKETVER_RE is undefined for 20250604, so MAIN_NUM=PACKETVER=20250604),
+// making val/val2 uint32 → 15 bytes, little-endian:
+//
+//	[0:2 cmd=0x01d7][2:6 GID uint32][6 type uint8][7:11 val uint32][11:15 val2 uint32]
+//
+// rAthena's clif_changelook (clif.cpp:3963) PACKETVER>=4 path remaps either
+// LOOK_WEAPON or LOOK_SHIELD into one combined LOOK_WEAPON packet (type=2,
+// val=weaponSprite, val2=shieldSprite) and clif_sends it AREA. clif_send emits
+// sizeof(struct)=15, not the packetdb static 11 (clif_packetdb.hpp:226); the
+// client built with the same PACKETVER parses 15.
+type SpriteChangeResponse struct {
+	// GID is the entity ID of the look owner (rAthena bl.id; for a PC the
+	// account_id — the same value spawn/EmotionResponse carry, so the client
+	// attributes the change to the sprite it spawned).
+	GID uint32
+	// Type is the LOOK_* category. For the combined weapon+shield change, WEAPON(2).
+	Type uint8
+	// Val is the primary look value. For LOOK_WEAPON: the weapon class sprite
+	// (rAthena weapon_type enum, derived from the item's SubType).
+	Val uint32
+	// Val2 is the secondary look value. For LOOK_WEAPON: the shield sprite (armor
+	// View) or 0 (no shield / left-hand weapon). Present for PACKETVER>=4.
+	Val2 uint32
+}
+
+// Size returns the on-wire byte length Encode writes (always 15 for the
+// PACKETVER 20250604 layout).
+func (r SpriteChangeResponse) Size() int {
+	return sizeZCSpriteChange
+}
+
+// Encode writes the ZC_SPRITE_CHANGE packet to w.
+func (r SpriteChangeResponse) Encode(w io.Writer) error {
+	var buf [sizeZCSpriteChange]byte
+	// int16 packetType = 0x01d7 (HeaderZCSPRITECHANGE).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSPRITECHANGE)
+	// uint32 GID at offset 2.
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	// uint8 type at offset 6.
+	buf[6] = r.Type
+	// uint32 val at offset 7, uint32 val2 at offset 11.
+	binary.LittleEndian.PutUint32(buf[7:], r.Val)
+	binary.LittleEndian.PutUint32(buf[11:], r.Val2)
+
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_SPRITE_CHANGE: %w", err)
+	}
+	return nil
+}
+
 // AckReqNameResponse encodes a ZC_ACK_REQNAME packet (command 0x0095,
 // 30 bytes fixed). The server sends this in response to
 // CZ_GETCHARNAMEREQUEST to tell the client the character name for a
@@ -1361,6 +1546,85 @@ func (r AckReqNameResponse) Encode(w io.Writer) error {
 
 	if _, err := w.Write(buf[:]); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_REQNAME: %w", err)
+	}
+	return nil
+}
+
+// writeNameField copies name into buf[off:off+sizeZCAckReqNameName] (24 bytes),
+// null-padding the remainder and truncating overlong names. Mirrors rAthena's
+// safestrncpy into a NAME_LENGTH field, shared by every REQNAMEALL variant.
+func writeNameField(buf []byte, off int, name string) {
+	copy(buf[off:off+sizeZCAckReqNameName], name)
+}
+
+// ReqNameAll2Response encodes ZC_ACK_REQNAMEALL2 (command 0x0a30, 106 bytes
+// fixed) — the full PC name reply rAthena's clif_name sends at PACKETVER >=
+// 20150225 (ClientROThailand 20250604). Wire shape (packets_struct.hpp:3564-3572):
+//
+//	[2:cmd=0x0a30][4:GID][24:name][24:party_name][24:guild_name][24:position_name][4:titleID]
+//
+// goAthena has no party/guild/clan systems, so PartyName/GuildName/PositionName
+// stay empty and TitleID stays 0 — matching rAthena for a PC with no
+// affiliations. Each name field is null-padded to 24 bytes; overlong names are
+// truncated.
+type ReqNameAll2Response struct {
+	GID          uint32
+	Name         string
+	PartyName    string
+	GuildName    string
+	PositionName string
+	TitleID      uint32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 106).
+func (r ReqNameAll2Response) Size() int { return sizeZCAckReqNameAll2 }
+
+// Encode writes the ZC_ACK_REQNAMEALL2 packet to w.
+func (r ReqNameAll2Response) Encode(w io.Writer) error {
+	var buf [sizeZCAckReqNameAll2]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREQNAMEALL2)
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	writeNameField(buf[:], 6, r.Name)
+	writeNameField(buf[:], 30, r.PartyName)
+	writeNameField(buf[:], 54, r.GuildName)
+	writeNameField(buf[:], 78, r.PositionName)
+	binary.LittleEndian.PutUint32(buf[102:], r.TitleID)
+
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_ACK_REQNAMEALL2: %w", err)
+	}
+	return nil
+}
+
+// ReqNameAllNPCResponse encodes ZC_ACK_REQNAMEALL_NPC (command 0x0adf, 58 bytes
+// fixed) — the NPC/mob/pet/hom/mer/elem name reply rAthena's clif_name sends at
+// PACKETVER >= 20180207. Wire shape (packets_struct.hpp:3587-3593):
+//
+//	[2:cmd=0x0adf][4:GID][4:groupId][24:name][24:title]
+//
+// GroupID and Title are 0/empty (no group/title systems); Name is the mob/NPC
+// display name, null-padded to 24 bytes.
+type ReqNameAllNPCResponse struct {
+	GID     uint32
+	GroupID uint32
+	Name    string
+	Title   string
+}
+
+// Size returns the on-wire byte length that Encode will write (always 58).
+func (r ReqNameAllNPCResponse) Size() int { return sizeZCAckReqNameAllNPC }
+
+// Encode writes the ZC_ACK_REQNAMEALL_NPC packet to w.
+func (r ReqNameAllNPCResponse) Encode(w io.Writer) error {
+	var buf [sizeZCAckReqNameAllNPC]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREQNAMEALLNPC)
+	binary.LittleEndian.PutUint32(buf[2:], r.GID)
+	binary.LittleEndian.PutUint32(buf[6:], r.GroupID)
+	writeNameField(buf[:], 10, r.Name)
+	writeNameField(buf[:], 34, r.Title)
+
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_ACK_REQNAMEALL_NPC: %w", err)
 	}
 	return nil
 }
@@ -1510,6 +1774,60 @@ func (r CloseDialogResponse) Encode(w io.Writer) error {
 	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
 	if _, err := w.Write(buf[:]); err != nil {
 		return fmt.Errorf("packet: write ZC_CLOSE_DIALOG: %w", err)
+	}
+	return nil
+}
+
+// OpenEditDlgResponse encodes a ZC_OPEN_EDITDLG packet (command 0x0142,
+// 6 bytes fixed). The server sends this to open the numeric-input dialog
+// window for an NPC; the client replies with CZ_INPUT_EDITDLG (0x0143).
+//
+// Wire layout (rathena/src/map/packets.hpp:769 PACKET_ZC_OPEN_EDITDLG):
+//
+//	int16  packetType (0x0142)
+//	uint32 NpcID
+type OpenEditDlgResponse struct {
+	// NpcID is the NPC entity ID the inputnum window is opened for.
+	NpcID uint32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 6).
+func (r OpenEditDlgResponse) Size() int { return sizeZCOpenEditDlg }
+
+// Encode writes the ZC_OPEN_EDITDLG packet to w.
+func (r OpenEditDlgResponse) Encode(w io.Writer) error {
+	var buf [sizeZCOpenEditDlg]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCOPENEDITDLG)
+	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_OPEN_EDITDLG: %w", err)
+	}
+	return nil
+}
+
+// OpenEditDlgStrResponse encodes a ZC_OPEN_EDITDLGSTR packet (command 0x01d4,
+// 6 bytes fixed). Same layout as ZC_OPEN_EDITDLG but opens the string-input
+// dialog window; the client replies with CZ_INPUT_EDITDLGSTR (0x01d5).
+//
+// Wire layout (rathena/src/map/packets.hpp:775 PACKET_ZC_OPEN_EDITDLGSTR):
+//
+//	int16  packetType (0x01d4)
+//	uint32 NpcID
+type OpenEditDlgStrResponse struct {
+	// NpcID is the NPC entity ID the inputstr window is opened for.
+	NpcID uint32
+}
+
+// Size returns the on-wire byte length that Encode will write (always 6).
+func (r OpenEditDlgStrResponse) Size() int { return sizeZCOpenEditDlg }
+
+// Encode writes the ZC_OPEN_EDITDLGSTR packet to w.
+func (r OpenEditDlgStrResponse) Encode(w io.Writer) error {
+	var buf [sizeZCOpenEditDlg]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCOPENEDITDLGSTR)
+	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_OPEN_EDITDLGSTR: %w", err)
 	}
 	return nil
 }

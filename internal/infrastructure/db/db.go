@@ -1,115 +1,114 @@
-// Package db wires database (MariaDB/MySQL or PostgreSQL) infrastructure into
-// the DI container. The driver is selected at runtime from cfg.DB.Driver.
+// Package db opens the process-wide GORM connection backing all bounded
+// contexts. The rAthena schema is applied by golang-migrate (never AutoMigrate),
+// so this package only dials the engine and configures the pool.
 package db
 
 import (
 	"context"
 	"fmt"
-	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"github.com/bouroo/goAthena/internal/config"
 )
 
-// NewDB builds a configured *gorm.DB from the application config. The driver is
-// chosen from cfg.DB.Driver (DriverMariaDB | DriverPostgres). The DSN is derived
-// from cfg.DBConnString() and augmented with driver-appropriate transport
-// timeouts before the GORM connection is opened. Pool tuning is applied via the
-// underlying *sql.DB and the database is pinged before returning.
-//
-// The caller is responsible for closing the underlying *sql.DB obtained via
-// (*gorm.DB).DB().
-//
-// Schema is owned by golang-migrate; AutoMigrate is never invoked here.
-func NewDB(ctx context.Context, cfg *config.Config, log *zerolog.Logger) (*gorm.DB, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("config is nil")
-	}
-
-	if log == nil {
-		return nil, fmt.Errorf("logger is nil")
-	}
-
-	dsn, err := buildDSN(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("build dsn: %w", err)
-	}
-
-	var dialector gorm.Dialector
-	switch cfg.DB.Driver {
-	case DriverMariaDB:
-		dialector = mysql.Open(dsn)
-	case DriverPostgres:
-		dialector = postgres.Open(dsn)
-	default:
-		return nil, fmt.Errorf("unsupported db driver: %s", cfg.DB.Driver)
-	}
-
-	gormDB, err := gorm.Open(dialector, &gorm.Config{
-		Logger:                 newGORMLogger(log, cfg),
+// New opens a GORM connection for the configured engine. mysql:// selects the
+// MariaDB driver (rAthena schema compat); postgres:// selects PostgreSQL (prod).
+func New(cfg config.DBConfig) (*gorm.DB, error) {
+	gormCfg := &gorm.Config{
+		Logger:                 logger.Default.LogMode(logger.Warn),
 		SkipDefaultTransaction: true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("open gorm: %w", err)
 	}
-
-	sqlDB, err := gormDB.DB()
-	if err != nil {
-		// (*gorm.DB).DB() is the only accessor for the underlying *sql.DB; on
-		// failure there is no handle to close, so the partially-opened pool is
-		// abandoned. Both mysql and postgres dialectors can return a *sql.DB.
-		return nil, fmt.Errorf("get sql db: %w", err)
+	switch normalize(cfg.Driver) {
+	case "mariadb":
+		d, err := gorm.Open(mysql.Open(dsnMariaDB(cfg)), gormCfg)
+		if err != nil {
+			return nil, fmt.Errorf("open mariadb: %w", err)
+		}
+		return applyPool(d), nil
+	case "postgres":
+		d, err := gorm.Open(postgres.Open(dsnPostgres(cfg)), gormCfg)
+		if err != nil {
+			return nil, fmt.Errorf("open postgres: %w", err)
+		}
+		return applyPool(d), nil
+	default:
+		return nil, fmt.Errorf("unsupported db driver %q", cfg.Driver)
 	}
-
-	sqlDB.SetMaxOpenConns(int(cfg.DB.MaxConns))
-	sqlDB.SetMaxIdleConns(int(cfg.DB.MaxIdleConns))
-	sqlDB.SetConnMaxIdleTime(cfg.DB.MaxConnIdle)
-	sqlDB.SetConnMaxLifetime(cfg.DB.MaxConnLife)
-
-	pingCtx, cancel := context.WithTimeout(ctx, cfg.DB.ConnectTimeout)
-	defer cancel()
-	if err := sqlDB.PingContext(pingCtx); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("ping db: %w", err)
-	}
-
-	return gormDB, nil
 }
 
-// buildDSN derives a transport-tuned DSN from cfg.DBConnString(). For MariaDB
-// the DSN is already in MySQL format; we append connect/read/write timeout
-// query parameters. For PostgreSQL we parse the URL and add the
-// connect_timeout integer-seconds query parameter.
-func buildDSN(cfg *config.Config) (string, error) {
-	switch cfg.DB.Driver {
-	case DriverPostgres:
-		u, err := url.Parse(cfg.DBConnString())
-		if err != nil {
-			return "", fmt.Errorf("parse dsn: %w", err)
-		}
-		q := u.Query()
-		seconds := int(cfg.DB.ConnectTimeout / time.Second)
-		seconds = max(seconds, 1)
-		q.Set("connect_timeout", strconv.Itoa(seconds))
-		u.RawQuery = q.Encode()
-		return u.String(), nil
-	default: // DriverMariaDB
-		seconds := int(cfg.DB.ConnectTimeout / time.Second)
-		seconds = max(seconds, 1)
-		sep := "?"
-		if strings.Contains(cfg.DBConnString(), "?") {
-			sep = "&"
-		}
-		return cfg.DBConnString() +
-			sep + "timeout=" + strconv.Itoa(seconds) + "s" +
-			"&readTimeout=30s" +
-			"&writeTimeout=30s", nil
+// Ping verifies the connection is live within a short deadline.
+func Ping(ctx context.Context, db *gorm.DB) error {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("raw db: %w", err)
 	}
+	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := sqlDB.PingContext(pingCtx); err != nil {
+		return fmt.Errorf("ping: %w", err)
+	}
+	return nil
+}
+
+// Close releases the underlying connection pool.
+func Close(db *gorm.DB) error {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("raw db: %w", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		return fmt.Errorf("close pool: %w", err)
+	}
+	return nil
+}
+
+// applyPool tunes the underlying connection pool. Values are conservative
+// defaults suitable for a single zone process; tune per-deployment via env later.
+func applyPool(d *gorm.DB) *gorm.DB {
+	sqlDB, err := d.DB()
+	if err != nil {
+		return d
+	}
+	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetMaxOpenConns(50)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	return d
+}
+
+func normalize(d string) string {
+	switch d {
+	case "mysql":
+		return "mariadb"
+	case "postgresql":
+		return "postgres"
+	default:
+		return d
+	}
+}
+
+func dsnMariaDB(c config.DBConfig) string {
+	// go-sql-driver's tls param accepts false|true|skip-verify|preferred|<name>,
+	// not the postgres-style "disable". Normalize the common no-TLS spellings.
+	tls := "false"
+	switch strings.ToLower(c.SSLMode) {
+	case "true", "skip-verify", "preferred":
+		tls = strings.ToLower(c.SSLMode)
+	}
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&tls=%s&charset=utf8mb4",
+		c.User, c.Password, c.Host, c.Port, c.Name, tls)
+}
+
+func dsnPostgres(c config.DBConfig) string {
+	ssl := c.SSLMode
+	if ssl == "" {
+		ssl = "disable"
+	}
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		c.User, c.Password, c.Host, c.Port, c.Name, ssl)
 }

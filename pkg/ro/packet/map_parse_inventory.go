@@ -183,3 +183,51 @@ func (r CZReqTakeoffEquipRequest) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// CZItemPickupRequest is the decoded form of a client → map-server CZ_ITEM_PICKUP
+// packet (header 0x009f, 6 bytes on the wire at PACKETVER 20250604). Source:
+// rathena/src/map/clif_packetdb.hpp:50
+// (`parseable_packet(0x009f,6,clif_parse_TakeItem,2)`).
+//
+// On-wire layout:
+//
+//	int16 packetType (0x009f)
+//	uint32 map_object_id — the floor item's ground id, the same id the
+//	                       drop packet ZC_ITEM_FALL_ENTRY carries at [2:6].
+//	                       clif_parse_TakeItem reads it with RFIFOL(fd,2).
+type CZItemPickupRequest struct {
+	GroundID uint32
+}
+
+// ParseCZItemPickup decodes a CZ_ITEM_PICKUP frame (including the 2-byte cmd
+// header) into a CZItemPickupRequest. The frame must carry cmd 0x009f (legacy)
+// or 0x0362 (the effective PACKETVER 20250604 opcode, clif_shuffle.hpp:4732) and
+// contain at least 6 bytes; trailing bytes are ignored.
+//
+// Returns a wrapped error naming the off-by-one byte count if the frame is
+// shorter than 6 bytes, or naming the unexpected cmd id if the header is not
+// 0x009f/0x0362.
+func ParseCZItemPickup(frame []byte) (CZItemPickupRequest, error) {
+	if len(frame) < sizeCZItemPickup {
+		return CZItemPickupRequest{}, fmt.Errorf("packet: parse CZ_ITEM_PICKUP: want at least %d bytes, got %d", sizeCZItemPickup, len(frame))
+	}
+	cmd := binary.LittleEndian.Uint16(frame[0:2])
+	if cmd != HeaderCZITEMPICKUP && cmd != HeaderCZITEMTAKE0362 {
+		return CZItemPickupRequest{}, fmt.Errorf("packet: parse CZ_ITEM_PICKUP: unexpected cmd 0x%04x", cmd)
+	}
+	return CZItemPickupRequest{
+		GroundID: binary.LittleEndian.Uint32(frame[2:6]),
+	}, nil
+}
+
+// Encode writes the CZ_ITEM_PICKUP packet to w, mirroring the on-wire layout
+// documented on CZItemPickupRequest: [2:cmd=0x009f][4:groundID] = 6 bytes.
+func (r CZItemPickupRequest) Encode(w io.Writer) error {
+	buf := make([]byte, sizeCZItemPickup)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZITEMPICKUP)
+	binary.LittleEndian.PutUint32(buf[2:], r.GroundID)
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_ITEM_PICKUP: %w", err)
+	}
+	return nil
+}

@@ -1,114 +1,176 @@
-// Command goathena is the single binary entry point for the goAthena modular
-// monolith. It dispatches to the `serve` (long-running login/char/map server
-// plus HTTP health/gRPC) and `migrate` (database schema migration) subcommands.
-//
-// serve blocks until SIGINT/SIGTERM (handled inside the application orchestrator)
-// or a fatal server error. migrate runs to completion and exits with a status
-// code reflecting whether the schema change applied.
+// Command goathena is the single deployable binary for the modular-monolith
+// Ragnarok Online server. It speaks three subcommands: serve (run the server),
+// migrate (apply the schema — lands with the persistence phase), and version.
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
 
 	"github.com/bouroo/goAthena/internal/app"
 	"github.com/bouroo/goAthena/internal/config"
 	"github.com/bouroo/goAthena/internal/infrastructure/db"
-)
-
-// Build metadata, set via -ldflags at release build time
-// (-X main.Version=... etc.). Defaults describe an untagged local build.
-var (
-	Version   = "dev"
-	CommitSHA = "unknown"
-	BuildTime = "unknown"
+	"github.com/bouroo/goAthena/internal/shared/log"
 )
 
 func main() {
-	os.Exit(run(os.Args[1:]))
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "goathena:", err)
+		os.Exit(1)
+	}
 }
 
-// run dispatches to a subcommand and returns the process exit code.
-func run(args []string) int {
+func run(args []string) error {
 	if len(args) == 0 {
-		printUsage()
-		return 1
+		usage()
+		return fmt.Errorf("no subcommand")
 	}
+	cmd, rest := args[0], args[1:]
 
-	switch args[0] {
+	switch cmd {
 	case "serve":
-		return runServe(args[1:])
+		return serve(rest)
 	case "migrate":
-		return runMigrate(args[1:])
+		return migrate(rest)
 	case "version":
-		return runVersion()
+		fmt.Printf("goathena %s (commit %s, built %s)\n", app.Version, app.Commit, app.BuildTime)
+		return nil
+	case "-h", "--help", "help":
+		usage()
+		return nil
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
-		printUsage()
-		return 1
+		usage()
+		return fmt.Errorf("unknown subcommand %q", cmd)
 	}
 }
 
-// runVersion prints the build metadata injected at release time. It lets an
-// operator confirm which revision a deployed binary was built from without
-// inspecting the image labels.
-func runVersion() int {
-	fmt.Printf("goathena %s (commit %s, built %s)\n", Version, CommitSHA, BuildTime)
-	return 0
-}
-
-// runServe loads config and runs the server until shutdown. The context is the
-// plain background context: Application.Run installs its own SIGINT/SIGTERM
-// handler internally, so a second signal context here would race it.
-func runServe(_ []string) int {
-	cfg, err := loadConfig()
+func migrate(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("migrate: need action up|down|version|force|steps")
+	}
+	action, rest := args[0], args[1:]
+	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
+	configPath := fs.String("config", envOr("CONFIG_PATH", "config.yaml"), "path to config file")
+	if err := fs.Parse(rest); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
+	cfg, err := config.Load(*configPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return fmt.Errorf("load config: %w", err)
 	}
-
-	if err := app.Serve(context.Background(), cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "goathena serve exited with error: %v\n", err)
-		return 1
-	}
-	return 0
-}
-
-// runMigrate loads config and runs the requested schema command. It passes the
-// remaining args straight to the runner so `goathena migrate up|down|force|
-// version` maps 1:1 to the migration subcommands.
-func runMigrate(args []string) int {
-	cfg, err := loadConfig()
+	mg, err := db.NewMigrator(cfg.DB)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return fmt.Errorf("migrator: %w", err)
 	}
-	return db.RunMigrate(cfg, args)
+	defer func() { _ = mg.Close() }()
+	return runMigrateAction(action, fs, mg)
 }
 
-// loadConfig reads and validates the application config, returning any failure
-// as an error ready to print to stderr.
-func loadConfig() (*config.Config, error) {
-	cfg, err := config.Load()
+// runMigrateAction dispatches a single migration verb against an open Migrator.
+func runMigrateAction(action string, fs *flag.FlagSet, mg *db.Migrator) error {
+	switch action {
+	case "up":
+		if err := mg.Up(); err != nil {
+			return fmt.Errorf("up: %w", err)
+		}
+		v, _, _ := mg.Version()
+		fmt.Printf("migrated up -> version %d\n", v)
+	case "down":
+		if err := mg.Down(); err != nil {
+			return fmt.Errorf("down: %w", err)
+		}
+		fmt.Println("migrated down")
+	case "version":
+		v, dirty, err := mg.Version()
+		if err != nil {
+			return fmt.Errorf("version: %w", err)
+		}
+		fmt.Printf("version %d (dirty=%v)\n", v, dirty)
+	case "force":
+		return migrateForce(fs, mg)
+	case "steps":
+		return migrateSteps(fs, mg)
+	default:
+		return fmt.Errorf("migrate: unknown action %q", action)
+	}
+	return nil
+}
+
+func migrateForce(fs *flag.FlagSet, mg *db.Migrator) error {
+	if fs.NArg() < 1 {
+		return fmt.Errorf("migrate force: need version")
+	}
+	v, err := strconv.Atoi(fs.Arg(0))
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+		return fmt.Errorf("force version: %w", err)
 	}
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
+	if err := mg.Force(v); err != nil {
+		return fmt.Errorf("force: %w", err)
 	}
-	return cfg, nil
+	fmt.Printf("forced version %d\n", v)
+	return nil
 }
 
-func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: goathena <command> [args]")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "commands:")
-	fmt.Fprintln(os.Stderr, "  serve                run the goAthena modular monolith")
-	fmt.Fprintln(os.Stderr, "  migrate              apply database schema migrations")
-	fmt.Fprintln(os.Stderr, "    up                 apply all pending migrations (default)")
-	fmt.Fprintln(os.Stderr, "    down [N]           roll back N migrations (default 1)")
-	fmt.Fprintln(os.Stderr, "    force VERSION      set the migration version, ignoring state")
-	fmt.Fprintln(os.Stderr, "    version            print the current migration version")
-	fmt.Fprintln(os.Stderr, "  version              print the goathena build version")
+func migrateSteps(fs *flag.FlagSet, mg *db.Migrator) error {
+	if fs.NArg() < 1 {
+		return fmt.Errorf("migrate steps: need n")
+	}
+	n, err := strconv.Atoi(fs.Arg(0))
+	if err != nil {
+		return fmt.Errorf("steps n: %w", err)
+	}
+	if err := mg.Steps(n); err != nil {
+		return fmt.Errorf("steps: %w", err)
+	}
+	fmt.Printf("stepped %d\n", n)
+	return nil
+}
+
+func serve(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	configPath := fs.String("config", envOr("CONFIG_PATH", "config.yaml"), "path to config file")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	logger := log.New(cfg.Log)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	a, err := app.New(ctx, cfg, logger)
+	if err != nil {
+		return fmt.Errorf("build app: %w", err)
+	}
+	logger.Info("starting goathena", "name", cfg.App.Name, "env", cfg.App.Environment, "version", app.Version)
+	if err := a.Run(ctx); err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	return nil
+}
+
+func usage() {
+	fmt.Fprint(os.Stderr, `goathena — modular-monolith Ragnarok Online server
+
+Usage:
+  goathena serve    [-config config.yaml]            Run the server until SIGINT/SIGTERM
+  goathena migrate  up|down|version|force N|steps N  Apply the embedded SQL schema
+  goathena version                                 Print build metadata
+`)
+}
+
+func envOr(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+	return fallback
 }

@@ -1,9 +1,6 @@
-// Package domain defines the account bounded context's value objects and
-// outbound ports: the account aggregate (auth slice only), the session minted
-// at CA_LOGIN, and the repository / session-store ports the application layer
-// depends on. It is pure — no transport or persistence dependencies — so the
-// GORM and in-memory adapters, the AuthService, and tests all program against
-// these types rather than against each other.
+// Package domain holds the account bounded context's pure domain model: the
+// Account aggregate (mirrors the rAthena `login` table), value objects, and the
+// authentication port other contexts depend on. No infrastructure imports here.
 package domain
 
 import (
@@ -11,57 +8,51 @@ import (
 	"time"
 )
 
-// Sex mirrors the login.sex enum('M','F','S') so repositories round-trip the
-// column without translation. rAthena rejects server accounts ('S') at login
-// (login.cpp:350-353).
+// AccountID is the rAthena account_id (auto-increment from 2000000).
+type AccountID uint32
+
+// Sex is the rAthena account sex enum: M, F, or S (server).
 type Sex string
 
-// The values are the login.sex enum literals, so repositories persist them
-// verbatim and no mapping layer is needed at the storage boundary.
+// rAthena sex enum wire values.
 const (
 	SexMale   Sex = "M"
 	SexFemale Sex = "F"
 	SexServer Sex = "S"
 )
 
-// WireByte returns the numeric e_sex sent in AC_ACCEPT_LOGIN, per sex_str2num
-// (login.hpp:128): 'F' → 0 (SEX_FEMALE), 'M' → 1 (SEX_MALE), anything else →
-// 3 (SEX_SERVER). SEX_BOTH (2) is never assigned to an account (mmo.hpp:1115).
-func (s Sex) WireByte() uint8 {
-	switch s {
-	case SexFemale:
-		return 0
-	case SexMale:
-		return 1
-	default:
-		return 3
-	}
-}
-
-// Account is the auth slice of a login-table row: exactly the fields the
-// CA_LOGIN use case reads or mutates. Time fields use unix seconds (matching
-// the int(11) SQL columns) with 0 meaning "not set", the SQL default; only
-// LastLogin is a time.Time because the column is a datetime.
+// Account mirrors the rAthena `login` table (sql-files/main.sql). Column tags
+// match the legacy schema exactly so GORM reads/writes stay compatible; the
+// schema itself is owned by golang-migrate, never AutoMigrate.
 type Account struct {
-	AccountID      uint32
-	UserID         string
-	UserPass       string
-	Sex            Sex
-	State          uint32
-	UnbanTime      int64 // unix seconds; 0 = no active ban
-	ExpirationTime int64 // unix seconds; 0 = never expires
-	WebAuthToken   string
-	LoginCount     uint32
-	LastIP         string
-	LastLogin      time.Time
+	ID             AccountID  `gorm:"column:account_id;primaryKey;autoIncrement"`
+	UserID         string     `gorm:"column:userid"`
+	UserPass       string     `gorm:"column:user_pass"`
+	Sex            Sex        `gorm:"column:sex"`
+	Email          string     `gorm:"column:email"`
+	GroupID        int8       `gorm:"column:group_id"`
+	State          uint32     `gorm:"column:state"`
+	UnbanTime      uint32     `gorm:"column:unban_time"`
+	ExpirationTime uint32     `gorm:"column:expiration_time"`
+	LoginCount     uint32     `gorm:"column:logincount"`
+	LastLogin      *time.Time `gorm:"column:lastlogin"`
+	LastIP         string     `gorm:"column:last_ip"`
+	Birthdate      *time.Time `gorm:"column:birthdate"`
+	CharacterSlots uint8      `gorm:"column:character_slots"`
+	Pincode        string     `gorm:"column:pincode"`
+	VipTime        uint32     `gorm:"column:vip_time"`
 }
 
-// Sentinel errors returned by the ports. Service code compares with errors.Is
-// so wrapping is preserved; repository adapters must return these (wrapped)
-// rather than their own driver-specific not-found types.
+// TableName fixes the legacy table name so GORM does not pluralize it.
+func (Account) TableName() string { return "login" }
+
+// IsBanned reports whether the account is currently blocked from login.
+func (a Account) IsBanned() bool { return a.State != 0 || a.UnbanTime != 0 }
+
+// errors  are sentinel auth outcomes mapped to AC_REFUSE_LOGIN codes on the
+// wire. The values mirror rAthena's REFUSE_* enum (packets.hpp).
 var (
-	// ErrAccountNotFound: no login row matched the lookup key.
-	ErrAccountNotFound = errors.New("account not found")
-	// ErrSessionNotFound: no session exists for the account id.
-	ErrSessionNotFound = errors.New("session not found")
+	ErrAccountNotFound = errors.New("account not found") // -> REFUSE_INVALID_ID
+	ErrInvalidPassword = errors.New("invalid password")  // -> REFUSE_INVALID_PASSWD
+	ErrAccountBanned   = errors.New("account banned")    // -> REFUSE_BLOCKED
 )

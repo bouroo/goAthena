@@ -1,60 +1,40 @@
-// Package character is the composition point for the character bounded
-// context's DI. It wires the GORM character repository into the CH_ENTER,
-// CH_SELECT_CHAR, and CH_MAKE_CHAR gateway handlers and provides the concrete
-// handlers for the composition root to thread into the gateway dispatch tables.
-//
-// This file lives at the module root rather than under app/ or infra/ because
-// it must import both its own app and infra layers. The clean-architecture
-// guard (internal/app/arch_test.go) forbids an app-layer file from importing
-// infra, but a module-root file is the designated wiring seam and is exempt.
+// Package character is the character bounded-context module root. Register
+// provisions the GORM character repo, the Valkey session store, and the
+// CharService into the DI injector.
 package character
 
 import (
-	"context"
-	"fmt"
+	"time"
 
 	"github.com/samber/do/v2"
+	"github.com/valkey-io/valkey-go"
 	"gorm.io/gorm"
 
-	"github.com/bouroo/goAthena/internal/config"
 	"github.com/bouroo/goAthena/internal/modules/character/app"
-	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	"github.com/bouroo/goAthena/internal/modules/character/domain"
 	"github.com/bouroo/goAthena/internal/modules/character/infra"
 )
 
-// Register builds the character bounded context over the GORM char repository:
-// the CH_ENTER (char-list), CH_SELECT_CHAR (zone redirect), and CH_MAKE_CHAR
-// (character creation) handlers. It provides the concrete handlers on the
-// injector for the composition root to thread into gwapp.Handlers. ctx is
-// accepted to match the samber/do v2 Register convention but is unused — the
-// repository derives a per-request context from the handler call.
-func Register(_ context.Context, c do.Injector) error {
-	db, err := do.Invoke[*gorm.DB](c)
-	if err != nil {
-		return fmt.Errorf("character: resolve gorm db: %w", err)
-	}
-	chars := infra.NewGORMCharacterRepository(db)
-	// Provide the repository as the domain port so other bounded contexts (the
-	// world module's spawn-on-enter flow) can resolve it via structural
-	// satisfaction without importing character/infra. The handlers below keep
-	// their *GORMCharacterRepository dependency; the cast here only widens the
-	// injector's view to the port.
-	do.ProvideValue(c, chardomain.CharacterRepository(chars))
-
-	cfg, err := do.Invoke[*config.Config](c)
-	if err != nil {
-		return fmt.Errorf("character: resolve config: %w", err)
-	}
-	zone, err := app.ParseZoneAddr(cfg.Gateway.MapAddr)
-	if err != nil {
-		return fmt.Errorf("character: parse map addr: %w", err)
-	}
-
-	do.ProvideValue(c, app.NewCharEnterHandler(chars))
-	do.ProvideValue(c, app.NewCharSelectHandler(chars, zone))
-	// MaxChars is the per-account slot ceiling (config Identity.MaxChars,
-	// validated [0,15], default 15 = rAthena's MAX_CHARS). The make-char handler
-	// rejects slot indices >= it with ErrInvalidSlot.
-	do.ProvideValue(c, app.NewCharMakeHandler(chars, uint8(cfg.Identity.MaxChars))) //nolint:gosec // G115: MaxChars is config-validated [0,15]
-	return nil
+// Register provisions the character module. The repo resolves the process-wide
+// *gorm.DB; the session store resolves the process-wide valkey.Client.
+func Register(inj do.Injector, maxChars int) {
+	do.Provide(inj, func(i do.Injector) (*infra.GORMCharacterRepository, error) {
+		gdb := do.MustInvoke[*gorm.DB](i)
+		return infra.NewGORMCharacterRepository(gdb), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*infra.ValkeySessionStore, error) {
+		vc := do.MustInvoke[valkey.Client](i)
+		return infra.NewValkeySessionStore(vc, 5*time.Minute), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*app.CharService, error) {
+		repo := do.MustInvoke[*infra.GORMCharacterRepository](i)
+		sess := do.MustInvoke[*infra.ValkeySessionStore](i)
+		return app.NewCharService(repo, sess, maxChars), nil
+	})
+	do.Provide(inj, func(i do.Injector) (domain.SessionStore, error) {
+		return do.MustInvoke[*infra.ValkeySessionStore](i), nil
+	})
+	do.Provide(inj, func(i do.Injector) (domain.CharacterRepository, error) {
+		return do.MustInvoke[*infra.GORMCharacterRepository](i), nil
+	})
 }

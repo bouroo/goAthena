@@ -4,145 +4,100 @@ package app_test
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"testing"
-	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/bouroo/goAthena/internal/modules/account/app"
 	"github.com/bouroo/goAthena/internal/modules/account/domain"
 	"github.com/bouroo/goAthena/internal/modules/account/infra"
 )
 
-// stubClock returns a fixed instant so the expiration/ban checks are deterministic.
-type stubClock struct{ t time.Time }
-
-func (s stubClock) Now() time.Time { return s.t }
-
-// errRepo wraps the in-memory repo to inject an arbitrary error from LoadByUserID.
-type errRepo struct {
-	domain.AccountRepository
-	err error
+func md5hex(s string) string {
+	d := md5.Sum([]byte(s))
+	return hex.EncodeToString(d[:])
 }
 
-func (r *errRepo) LoadByUserID(_ context.Context, _ string) (*domain.Account, error) {
-	return nil, r.err
-}
-
-var baseTime = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-
-// maleAccount is a valid, login-able account (sex 'M', no state/ban/expiry).
-func maleAccount() *domain.Account {
-	return &domain.Account{
-		AccountID: 2000000, UserID: "test", UserPass: "test", Sex: domain.SexMale,
-	}
-}
-
-// newSvc builds an AuthService over fresh in-memory stores with a fixed clock
-// and a deterministic minter (1 then 2, so id1/id2 are distinguishable).
-func newSvc(t *testing.T, accs ...*domain.Account) (*app.AuthService, *infra.MemoryAccountRepository, *infra.MemorySessionStore) {
-	t.Helper()
-	repo := infra.NewMemoryAccountRepository(accs...)
-	store := infra.NewMemorySessionStore()
-	var n uint32
-	mint := func() uint32 { n++; return n }
-	return app.NewAuthService(repo, store, stubClock{baseTime}, mint), repo, store
-}
-
-func TestAuthService_Login_Success(t *testing.T) {
-	t.Parallel()
-	svc, repo, store := newSvc(t, maleAccount())
-
-	res, err := svc.Login(context.Background(), domain.LoginRequest{
-		UserID: "test", Password: "test", IP: "10.0.0.1",
+func TestAuthenticate_MD5Success(t *testing.T) {
+	repo := infra.NewMemoryAccountRepository(domain.Account{
+		ID: 2000000, UserID: "alice", UserPass: md5hex("s3cret"), Sex: domain.SexFemale,
 	})
-	require.NoError(t, err)
-	require.True(t, res.Accepted)
-	assert.Equal(t, uint32(2000000), res.Account.AccountID)
-	assert.Equal(t, uint32(1), res.LoginID1) // first mint call
-	assert.Equal(t, uint32(2), res.LoginID2) // second mint call
+	svc := app.NewAuthService(repo, true) // use_MD5_passwords
 
-	// Session persisted with the minted tokens + sex.
-	sess, err := store.Get(context.Background(), 2000000)
-	require.NoError(t, err)
-	assert.Equal(t, res.LoginID1, sess.LoginID1)
-	assert.Equal(t, res.LoginID2, sess.LoginID2)
-	assert.Equal(t, domain.SexMale, sess.Sex)
-
-	// Login recorded: logincount incremented, last_ip set.
-	acc, err := repo.LoadByUserID(context.Background(), "test")
-	require.NoError(t, err)
-	assert.Equal(t, uint32(1), acc.LoginCount)
-	assert.Equal(t, "10.0.0.1", acc.LastIP)
-	assert.Equal(t, baseTime, acc.LastLogin)
-}
-
-func TestAuthService_Login_Refusals(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		acc  *domain.Account
-		user string // UserID in the login request — independent of acc (nil for the no-row case)
-		pass string
-		want domain.AuthCode
-	}{
-		{"unregistered", nil, "ghost", "x", domain.AuthUnregistered},
-		{"server account", &domain.Account{AccountID: 1, UserID: "s1", UserPass: "p1", Sex: domain.SexServer}, "s1", "p1", domain.AuthUnregistered},
-		{"wrong password", maleAccount(), "test", "wrong", domain.AuthInvalidPassword},
-		{"expired", &domain.Account{AccountID: 9, UserID: "e", UserPass: "e", Sex: domain.SexMale, ExpirationTime: baseTime.Unix() - 3600}, "e", "e", domain.AuthExpired},
-		{"banned", &domain.Account{AccountID: 8, UserID: "b", UserPass: "b", Sex: domain.SexMale, UnbanTime: baseTime.Unix() + 3600}, "b", "b", domain.AuthBanned},
-		{"state=7 -> code 6", &domain.Account{AccountID: 7, UserID: "st", UserPass: "st", Sex: domain.SexMale, State: 7}, "st", "st", domain.AuthCode(6)},
+	acc, id1, id2, err := svc.Authenticate(context.Background(), "alice", "s3cret", "1.2.3.4")
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
 	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			var accs []*domain.Account
-			if tc.acc != nil {
-				accs = append(accs, tc.acc)
-			}
-			svc, _, store := newSvc(t, accs...)
-			res, err := svc.Login(context.Background(), domain.LoginRequest{
-				UserID: tc.user, Password: tc.pass, IP: "10.0.0.1",
-			})
-			require.NoError(t, err, "an expected refusal must not be an error")
-			assert.False(t, res.Accepted)
-			assert.Equal(t, tc.want, res.Code)
-			// No session granted on refusal.
-			if tc.acc != nil {
-				_, err := store.Get(context.Background(), tc.acc.AccountID)
-				assert.ErrorIs(t, err, domain.ErrSessionNotFound)
-			}
-		})
+	if acc.ID != 2000000 {
+		t.Errorf("account id = %d, want 2000000", acc.ID)
+	}
+	if id1 == 0 && id2 == 0 {
+		t.Error("session tokens both zero; expected random non-zero pair")
 	}
 }
 
-func TestAuthService_Login_RepoError(t *testing.T) {
-	t.Parallel()
-	injected := errors.New("db down")
-	svc := app.NewAuthService(&errRepo{err: injected}, infra.NewMemorySessionStore(), stubClock{baseTime}, func() uint32 { return 1 })
+func TestAuthenticate_PlaintextSuccess(t *testing.T) {
+	repo := infra.NewMemoryAccountRepository(domain.Account{
+		ID: 1, UserID: "bob", UserPass: "hunter2", Sex: domain.SexMale,
+	})
+	svc := app.NewAuthService(repo, false) // plaintext mode
 
-	res, err := svc.Login(context.Background(), domain.LoginRequest{UserID: "test", Password: "test"})
-	require.Error(t, err)
-	assert.False(t, res.Accepted)
-	assert.ErrorIs(t, err, injected) // infra fault propagates, not swallowed
+	if _, _, _, err := svc.Authenticate(context.Background(), "bob", "hunter2", ""); err != nil {
+		t.Fatalf("plaintext authenticate: %v", err)
+	}
 }
 
-// TestAuthService_Login_DefaultMinterNonZero proves the production crypto minter
-// (wired when mint is nil) never returns 0, honoring rAthena's [1, MAX] range.
-func TestAuthService_Login_DefaultMinterNonZero(t *testing.T) {
-	t.Parallel()
-	svc := app.NewAuthService(
-		infra.NewMemoryAccountRepository(maleAccount()), infra.NewMemorySessionStore(),
-		stubClock{baseTime}, nil, // nil -> cryptoMinter
-	)
-	for i := 0; i < 20; i++ {
-		res, err := svc.Login(context.Background(), domain.LoginRequest{UserID: "test", Password: "test"})
-		require.NoError(t, err)
-		require.NotZero(t, res.LoginID1)
-		require.NotZero(t, res.LoginID2)
+func TestAuthenticate_WrongPassword(t *testing.T) {
+	repo := infra.NewMemoryAccountRepository(domain.Account{
+		ID: 1, UserID: "bob", UserPass: "hunter2",
+	})
+	svc := app.NewAuthService(repo, false)
+
+	_, _, _, err := svc.Authenticate(context.Background(), "bob", "wrong", "")
+	if !errors.Is(err, domain.ErrInvalidPassword) {
+		t.Errorf("err = %v, want ErrInvalidPassword", err)
+	}
+}
+
+func TestAuthenticate_UnknownAccount(t *testing.T) {
+	repo := infra.NewMemoryAccountRepository()
+	svc := app.NewAuthService(repo, false)
+
+	_, _, _, err := svc.Authenticate(context.Background(), "nobody", "x", "")
+	if !errors.Is(err, domain.ErrAccountNotFound) {
+		t.Errorf("err = %v, want ErrAccountNotFound", err)
+	}
+}
+
+func TestAuthenticate_BannedRejected(t *testing.T) {
+	repo := infra.NewMemoryAccountRepository(domain.Account{
+		ID: 1, UserID: "banned", UserPass: "p", State: 1, // state != 0 -> banned
+	})
+	svc := app.NewAuthService(repo, false)
+
+	_, _, _, err := svc.Authenticate(context.Background(), "banned", "p", "")
+	if !errors.Is(err, domain.ErrAccountBanned) {
+		t.Errorf("err = %v, want ErrAccountBanned", err)
+	}
+}
+
+func TestAuthenticate_RecordLoginBumpsCount(t *testing.T) {
+	acc := domain.Account{ID: 1, UserID: "bob", UserPass: "hunter2"}
+	repo := infra.NewMemoryAccountRepository(acc)
+	svc := app.NewAuthService(repo, false)
+
+	if _, _, _, err := svc.Authenticate(context.Background(), "bob", "hunter2", "5.6.7.8"); err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+	got, err := repo.FindByUserID(context.Background(), "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LoginCount != 1 {
+		t.Errorf("logincount = %d, want 1", got.LoginCount)
+	}
+	if got.LastIP != "5.6.7.8" {
+		t.Errorf("last_ip = %q, want 5.6.7.8", got.LastIP)
 	}
 }

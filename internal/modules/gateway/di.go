@@ -1,130 +1,96 @@
-// Package gateway is the composition point for the gateway bounded context's
-// DI. It builds the transport-agnostic dispatch core and the per-connection
-// codec factory from the handler contributions the composition root provides,
-// and registers a readiness probe over the configured listeners. Like the
-// account module's di.go, this file lives at the module root so it may import
-// both its own app and infra layers.
+// Package gateway is the ingress module root. It builds the login and char TCP
+// listeners, resolving the account Authenticator, character CharService, and
+// SessionStore ports from the injector.
 package gateway
 
 import (
-	"context"
 	"fmt"
-	"net"
-	"time"
+	"log/slog"
 
-	"github.com/rs/zerolog"
 	"github.com/samber/do/v2"
 
 	"github.com/bouroo/goAthena/internal/config"
-	netcodec "github.com/bouroo/goAthena/internal/infrastructure/net"
-	gwapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
-	"github.com/bouroo/goAthena/internal/modules/gateway/infra"
-	"github.com/bouroo/goAthena/internal/shared/telemetry"
-	rocrypto "github.com/bouroo/goAthena/pkg/ro/crypto"
-	"github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/internal/modules/account/domain"
+	charapp "github.com/bouroo/goAthena/internal/modules/character/app"
+	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
+	"github.com/bouroo/goAthena/internal/modules/gateway/app"
+	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
+	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 )
 
-// Register builds the gateway dispatch core and the per-connection codec
-// factory, and registers a readiness probe. It does NOT start the listeners:
-// they run under the Application's shutdown-governing context, which is only
-// available at Run time, so the composition root constructs the TCP/WS servers
-// against the *domain.Dispatcher and infra.DecoderFactory provided here and
-// registers them as Runnables.
-func Register(_ context.Context, c do.Injector) error {
-	if _, err := do.Invoke[*zerolog.Logger](c); err != nil {
-		return fmt.Errorf("gateway: resolve logger: %w", err)
-	}
-	cfg, err := do.Invoke[*config.Config](c)
+// NewLoginServer resolves the Authenticator + SessionStore and builds the login
+// listener. Called from the composition root after account + character register.
+func NewLoginServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.LoginServer, error) {
+	auth, err := do.Invoke[domain.Authenticator](inj)
 	if err != nil {
-		return fmt.Errorf("gateway: resolve config: %w", err)
+		return nil, fmt.Errorf("resolve authenticator: %w", err)
 	}
-
-	// The handler contributions come from the composition root (it alone may
-	// import the feature modules); build the immutable dispatcher from them.
-	handlers, err := do.Invoke[gwapp.Handlers](c)
+	sess, err := do.Invoke[chardomain.SessionStore](inj)
 	if err != nil {
-		return fmt.Errorf("gateway: resolve handler contributions: %w", err)
+		return nil, fmt.Errorf("resolve session store: %w", err)
 	}
-	disp := gwapp.BuildDispatcher(handlers)
-	do.ProvideValue(c, disp)
-
-	// Two listeners back the gateway, each with its own codec:
-	//
-	//   - The login/char listener multiplexes login (CA_*) and char (CH_*) on one
-	//     connection — the role advances RoleLogin → RoleChar in-connection, so its
-	//     decoder must frame both opcode sets. A login-only DB would reject
-	//     CH_ENTER (0x0065) as an unknown opcode and drop the connection the
-	//     moment the client entered the char flow. Merge the char C→S set into the
-	//     login DB once; packet.DB is concurrency-read-safe after construction, so
-	//     one shared DB backs every login/char connection.
-	//
-	//   - The map listener serves the fresh connections HC_NOTIFY_ZONESVR
-	//     redirects to after CH_SELECT_CHAR (a reconnect, not an in-connection role
-	//     advance). Its decoder uses map framing, keyed by the obfuscation triplet
-	//     for the configured PACKETVER. For Thai Classic (20250604)
-	//     crypto.KeysForVersion returns (0,0,0) — kRO dropped obfuscation after the
-	//     cutoff — so the map decoder is an identity transform; only the framing
-	//     differs from the login decoder.
-	loginDB := packet.NewLoginServerDB()
-	loginDB.Merge(packet.NewCharServerDB())
-	newLoginDec := infra.DecoderFactory(func() *netcodec.Decoder {
-		return netcodec.NewLoginDecoder(loginDB)
-	})
-	do.ProvideValue(c, newLoginDec)
-
-	mapDB := packet.NewMapServerDB()
-	key0, key1, key2 := rocrypto.KeysForVersion(cfg.Gateway.Packetver)
-	newMapDec := infra.MapDecoderFactory(func() *netcodec.Decoder {
-		return netcodec.NewMapDecoder(mapDB, key0, key1, key2)
-	})
-	do.ProvideValue(c, newMapDec)
-
-	registry, err := do.Invoke[*telemetry.Registry](c)
+	ls, err := app.NewLoginServer(
+		auth,
+		sess,
+		log,
+		cfg.Gateway.CharHost,
+		cfg.App.Name,
+		uint16(cfg.Gateway.CharPort), //nolint:gosec // G115: CharPort operator-set (default 6121).
+	)
 	if err != nil {
-		return fmt.Errorf("gateway: resolve health registry: %w", err)
+		return nil, fmt.Errorf("login server: %w", err)
 	}
-	registry.AddReadiness(gatewayChecker{
-		tcpAddr: cfg.Gateway.TCP.Addr,
-		wsAddr:  cfg.Gateway.WS.Addr,
-		mapAddr: cfg.Gateway.MapAddr,
-	})
-
-	return nil
+	return ls, nil
 }
 
-// readinessDialTimeout bounds the readiness dial so a hung or absent listener
-// cannot stall the /readyz probe.
-const readinessDialTimeout = time.Second
-
-// gatewayChecker reports ready only when every ingress listener accepts
-// connections: the login/char TCP and WS listeners plus the map TCP listener.
-// It dials rather than checking construction because readiness means "can serve
-// game traffic," and the listeners bind inside Run — until then the gateway is
-// correctly not-ready. Each dial is a connect-then-close with no protocol bytes,
-// which is benign for both the gnet TCP handler (OnOpen then OnClose) and the WS
-// http listener.
-type gatewayChecker struct {
-	tcpAddr string
-	wsAddr  string
-	mapAddr string
+// NewCharServer resolves the CharService and builds the char-select listener.
+func NewCharServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.CharServer, error) {
+	chars, err := do.Invoke[*charapp.CharService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve char service: %w", err)
+	}
+	cs, err := app.NewCharServer(
+		chars,
+		log,
+		cfg.Gateway.MapHost,
+		uint16(cfg.Gateway.MapPort), //nolint:gosec // G115: MapPort operator-set (default 5121).
+	)
+	if err != nil {
+		return nil, fmt.Errorf("char server: %w", err)
+	}
+	return cs, nil
 }
 
-func (g gatewayChecker) Name() string { return "gateway-listeners" }
-
-func (g gatewayChecker) Check(ctx context.Context) error {
-	dial := func(addr string) error {
-		d := net.Dialer{Timeout: readinessDialTimeout}
-		conn, err := d.DialContext(ctx, "tcp", addr)
-		if err != nil {
-			return fmt.Errorf("dial %s: %w", addr, err)
-		}
-		return conn.Close()
+// NewMapServer resolves the WorldService + SessionStore and builds the map listener.
+func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
+	world, err := do.Invoke[*worldapp.WorldService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve world service: %w", err)
 	}
-	if err := dial(g.tcpAddr); err != nil {
-		return err
+	spawn, err := do.Invoke[*worldapp.SpawnService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve spawn service: %w", err)
 	}
-	if err := dial(g.wsAddr); err != nil {
-		return err
+	combat, err := do.Invoke[*worldapp.CombatService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve combat service: %w", err)
 	}
-	return dial(g.mapAddr)
+	inv, err := do.Invoke[*invapp.InventoryService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve inventory service: %w", err)
+	}
+	sess, err := do.Invoke[chardomain.SessionStore](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve session store: %w", err)
+	}
+	content, err := do.Invoke[*contentapp.Engine](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve content engine: %w", err)
+	}
+	ms, err := app.NewMapServer(world, spawn, combat, inv, content, sess, log)
+	if err != nil {
+		return nil, fmt.Errorf("map server: %w", err)
+	}
+	return ms, nil
 }

@@ -185,6 +185,25 @@ const (
 	// Stack contract: pops name (top), idx (second), value (third),
 	// then stores value into ScopeStore.SetArray(name, idx).
 	OpIndexSet
+
+	// OpJumpIfFalse pops a value; if it is falsy (IsZero) the VM jumps to
+	// the instruction index named by the Str field (resolved through
+	// CompiledScript.Labels). Otherwise execution falls through. Used to
+	// compile if/while/for conditions and `&&` short-circuit. The popped
+	// value is consumed either way.
+	OpJumpIfFalse
+
+	// OpJumpIfTrue is the dual of OpJumpIfFalse: pops a value and jumps to
+	// the Str-named label only when the value is truthy. Used to compile
+	// `||` short-circuit.
+	OpJumpIfTrue
+
+	// OpPop discards the top of the stack. A builtin call in statement
+	// position (e.g. `mes "x";`) leaves its return value on the stack via
+	// OpFunc; the compiler emits OpPop so the void result does not leak.
+	// Expression-position calls (e.g. `select(...)`) keep the value for the
+	// surrounding expression and emit no OpPop.
+	OpPop
 )
 
 // String returns a mnemonic for debug disassembly.
@@ -254,4 +273,7 @@ var opcodeNames = [...]string{
 	OpLine:         "LINE",
 	OpIndexGet:     "INDEX_GET",
 	OpIndexSet:     "INDEX_SET",
+	OpJumpIfFalse:  "JMPF",
+	OpJumpIfTrue:   "JMPT",
+	OpPop:          "POP",
 }

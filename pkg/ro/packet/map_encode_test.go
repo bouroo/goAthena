@@ -5,6 +5,7 @@ package packet
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -1889,6 +1890,64 @@ func TestEmotionResponse_Encode(t *testing.T) {
 	}
 }
 
+// TestSpriteChangeResponse_Size pins the fixed 15-byte wire length ZC_SPRITE_CHANGE
+// advertises for PACKETVER 20250604 (packets_struct.hpp:2591, the
+// PACKETVER_MAIN_NUM>=20181121 branch).
+func TestSpriteChangeResponse_Size(t *testing.T) {
+	t.Parallel()
+	var r SpriteChangeResponse
+	if got, want := r.Size(), sizeZCSpriteChange; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+// TestSpriteChangeResponse_Encode exercises the P2A look-sprite change wire layout
+// byte-exact: [2:cmd=0x01d7][4:GID uint32][1:type uint8][4:val uint32][4:val2
+// uint32] = 15 bytes.
+func TestSpriteChangeResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := SpriteChangeResponse{
+		GID:  0xDEADBEEF,
+		Type: LookWeapon, // 2
+		Val:  5,          // weapon class (e.g. 1h-spear)
+		Val2: 3,          // shield sprite
+	}
+
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	const wantLen = 15
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+
+	// Opcode [0:2] = 0x01d7 (LE → 0xd7 0x01).
+	if got[0] != 0xd7 || got[1] != 0x01 {
+		t.Errorf("opcode bytes = %02x %02x, want d7 01 (LE 0x01d7 ZC_SPRITE_CHANGE)",
+			got[0], got[1])
+	}
+	// GID [2:6] = 0xDEADBEEF.
+	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
+		t.Errorf("GID = 0x%x, want 0xDEADBEEF", gid)
+	}
+	// type [6] = 2 (LOOK_WEAPON).
+	if got[6] != 2 {
+		t.Errorf("type = 0x%02x, want 0x02 (LOOK_WEAPON)", got[6])
+	}
+	// val [7:11] = 5.
+	if val := binary.LittleEndian.Uint32(got[7:11]); val != 5 {
+		t.Errorf("val = %d, want 5", val)
+	}
+	// val2 [11:15] = 3.
+	if val2 := binary.LittleEndian.Uint32(got[11:15]); val2 != 3 {
+		t.Errorf("val2 = %d, want 3", val2)
+	}
+}
+
 // TestEmotionResponse_Encode_ZeroValues verifies the byte-exact
 // encoding for a fresh all-zero emotion response (skipping the
 // always-non-zero opcode slot).
@@ -3031,5 +3090,152 @@ func TestRestartAckResponse_Encode_Refused(t *testing.T) {
 	got := buf.Bytes()
 	if len(got) != 3 || got[0] != 0xb3 || got[1] != 0x00 || got[2] != 0 {
 		t.Errorf("refuse bytes = %02x, want b3 00 00", got)
+	}
+}
+
+func TestMapMoveResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	if got, want := (MapMoveResponse{}).Size(), 22; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestMapMoveResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	if err := (MapMoveResponse{MapName: "izlude", X: 128, Y: 200}).Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+	if len(got) != 22 {
+		t.Fatalf("len = %d, want 22", len(got))
+	}
+	if got[0] != 0x91 || got[1] != 0x00 {
+		t.Errorf("header bytes = %02x %02x, want 91 00 (LE 0x0091)", got[0], got[1])
+	}
+	// mapName[16] at [2:18] — "izlude" zero-padded.
+	wantMap := make([]byte, 16)
+	copy(wantMap, "izlude")
+	if nameBytes := got[2:18]; !bytes.Equal(nameBytes, wantMap) {
+		t.Errorf("mapName slot = % x, want % x", nameBytes, wantMap)
+	}
+	if x := binary.LittleEndian.Uint16(got[18:20]); x != 128 {
+		t.Errorf("xPos = %d, want 128", x)
+	}
+	if y := binary.LittleEndian.Uint16(got[20:22]); y != 200 {
+		t.Errorf("yPos = %d, want 200", y)
+	}
+}
+
+func TestMapMoveResponse_Encode_ExactFitAndOverflow(t *testing.T) {
+	t.Parallel()
+
+	// 16-byte map name — exact fit, no error.
+	var fit bytes.Buffer
+	fitName := strings.Repeat("M", 16)
+	if err := (MapMoveResponse{MapName: fitName}).Encode(&fit); err != nil {
+		t.Fatalf("exact-fit Encode() unexpected error: %v", err)
+	}
+	if got := fit.Bytes()[2:18]; !bytes.Equal(got, []byte(fitName)) {
+		t.Errorf("exact-fit mapName = % x, want % x", got, []byte(fitName))
+	}
+
+	// 17-byte map name — overflow, sentinel error, no bytes written.
+	var over bytes.Buffer
+	if err := (MapMoveResponse{MapName: strings.Repeat("M", 17)}).Encode(&over); err == nil {
+		t.Errorf("overflow Encode() error = nil, want ErrMapNameTooLong")
+	} else if !errors.Is(err, ErrMapNameTooLong) {
+		t.Errorf("overflow Encode() error = %v, want ErrMapNameTooLong", err)
+	}
+	if over.Len() != 0 {
+		t.Errorf("overflow wrote %d bytes, want 0", over.Len())
+	}
+}
+
+func TestReqNameAll2Response_Size(t *testing.T) {
+	t.Parallel()
+	if got, want := (ReqNameAll2Response{}).Size(), sizeZCAckReqNameAll2; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+// TestReqNameAll2Response_Encode proves the PC name reply (0x0a30) matches
+// rAthena's clif_name at PACKETVER 20250604: 106 bytes, cmd 0x0a30 LE, GID at
+// offset 2, the char name at offset 6 null-padded, and party/guild/position
+// names plus titleID all zero (no party/guild systems). A name longer than 24
+// bytes is truncated.
+func TestReqNameAll2Response_Encode(t *testing.T) {
+	t.Parallel()
+	resp := ReqNameAll2Response{GID: 0xDEADBEEF, Name: "TestChar"}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+	if len(got) != sizeZCAckReqNameAll2 { // 106
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCAckReqNameAll2)
+	}
+	if got[0] != 0x30 || got[1] != 0x0a {
+		t.Errorf("header = %02x %02x, want 30 0a (LE 0x0a30)", got[0], got[1])
+	}
+	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
+		t.Errorf("GID = 0x%x, want 0xDEADBEEF", gid)
+	}
+	if s := string(bytes.TrimRight(got[6:6+24], "\x00")); s != "TestChar" {
+		t.Errorf("name = %q, want %q", s, "TestChar")
+	}
+	// party/guild/position name fields (offsets 30/54/78, 24 bytes each) and the
+	// trailing titleID (offset 102, 4 bytes) must be zero — no affiliations.
+	for _, off := range []int{30, 54, 78} {
+		for i := off; i < off+24; i++ {
+			if got[i] != 0 {
+				t.Errorf("name field byte[%d] = 0x%02x, want 0 (no party/guild/position)", i, got[i])
+			}
+		}
+	}
+	if tid := binary.LittleEndian.Uint32(got[102:106]); tid != 0 {
+		t.Errorf("titleID = %d, want 0", tid)
+	}
+}
+
+func TestReqNameAllNPCResponse_Size(t *testing.T) {
+	t.Parallel()
+	if got, want := (ReqNameAllNPCResponse{}).Size(), sizeZCAckReqNameAllNPC; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+// TestReqNameAllNPCResponse_Encode proves the NPC/mob name reply (0x0adf) matches
+// rAthena's clif_name at PACKETVER 20250604: 58 bytes, cmd 0x0adf LE, GID at
+// offset 2, groupId at offset 6 (0), name at offset 10, title empty.
+func TestReqNameAllNPCResponse_Encode(t *testing.T) {
+	t.Parallel()
+	resp := ReqNameAllNPCResponse{GID: 0xCAFEBABE, Name: "Poring"}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+	if len(got) != sizeZCAckReqNameAllNPC { // 58
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCAckReqNameAllNPC)
+	}
+	if got[0] != 0xdf || got[1] != 0x0a {
+		t.Errorf("header = %02x %02x, want df 0a (LE 0x0adf)", got[0], got[1])
+	}
+	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xCAFEBABE {
+		t.Errorf("GID = 0x%x, want 0xCAFEBABE", gid)
+	}
+	if gid := binary.LittleEndian.Uint32(got[6:10]); gid != 0 {
+		t.Errorf("groupID = %d, want 0", gid)
+	}
+	if s := string(bytes.TrimRight(got[10:10+24], "\x00")); s != "Poring" {
+		t.Errorf("name = %q, want %q", s, "Poring")
+	}
+	for i := 34; i < 58; i++ {
+		if got[i] != 0 {
+			t.Errorf("title field byte[%d] = 0x%02x, want 0 (no title)", i, got[i])
+		}
 	}
 }

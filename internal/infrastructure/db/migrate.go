@@ -1,189 +1,139 @@
 package db
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"os"
-	"strconv"
+	"io/fs"
 
 	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/mysql"    // registers the "mysql://" DSN scheme
-	_ "github.com/golang-migrate/migrate/v4/database/postgres" // registers the "postgres://" DSN scheme
+	migratedb "github.com/golang-migrate/migrate/v4/database"
+	"github.com/golang-migrate/migrate/v4/database/mysql"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
 	"github.com/bouroo/goAthena/internal/config"
 	"github.com/bouroo/goAthena/internal/infrastructure/db/migrations"
 )
 
-// RunMigrate applies the SQL migrations embedded in package migrations to the
-// database named by cfg, using golang-migrate with the iofs source driver. The
-// database engine is auto-detected from the DSN scheme: "mysql://" for MariaDB
-// and "postgres://" for PostgreSQL. args selects the command. It returns a
-// process exit code (0 success, 1 failure) so the caller can pass it straight
-// to os.Exit.
-func RunMigrate(cfg *config.Config, args []string) (exitCode int) {
-	cmd, count, forceVersion, err := parseMigrateArgs(args)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		printMigrateUsage()
-		return 1
-	}
+// Migrator applies the embedded schema to a live database. It is engine-aware:
+// mysql:// uses the MariaDB driver, postgres:// uses PostgreSQL. The same SQL
+// files run against both today; per-engine files can be added later.
+type Migrator struct {
+	m *migrate.Migrate
+}
 
-	m, err := newMigrator(cfg)
+// NewMigrator opens a dedicated *sql.DB from cfg and builds a Migrator.
+func NewMigrator(cfg config.DBConfig) (*Migrator, error) {
+	database, raw, err := openMigrateDB(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create migrator: %v\n", err)
-		return 1
+		return nil, err
 	}
-	defer func() {
-		// Close returns separate source/database errors; both must be surfaced so
-		// a half-closed migrator is never reported as clean. A failed close after
-		// an otherwise-successful run is itself a failure, so it overrides a zero
-		// exit code via the named return.
-		srcErr, dbErr := m.Close()
-		if srcErr != nil || dbErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to close migrator: source=%v db=%v\n", srcErr, dbErr)
-			if exitCode == 0 {
-				exitCode = 1
-			}
+	defer raw.Close()
+
+	src, err := iofs.New(migrationsFS(), ".")
+	if err != nil {
+		return nil, fmt.Errorf("migration source: %w", err)
+	}
+	m, err := migrate.NewWithInstance("iofs", src, cfg.Driver, database)
+	if err != nil {
+		return nil, fmt.Errorf("migrate init: %w", err)
+	}
+	return &Migrator{m: m}, nil
+}
+
+// Up applies all pending migrations. migrate.ErrNoChange is not an error here.
+func (mg *Migrator) Up() error {
+	if err := mg.m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return fmt.Errorf("migrate up: %w", err)
+	}
+	return nil
+}
+
+// Down rolls back all migrations. ErrNoChange is not an error here.
+func (mg *Migrator) Down() error {
+	if err := mg.m.Down(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return fmt.Errorf("migrate down: %w", err)
+	}
+	return nil
+}
+
+// Steps applies n migrations forward (n>0) or backward (n<0).
+func (mg *Migrator) Steps(n int) error {
+	if err := mg.m.Steps(n); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return fmt.Errorf("migrate steps %d: %w", n, err)
+	}
+	return nil
+}
+
+// Version reports the current schema version and dirty state.
+func (mg *Migrator) Version() (uint, bool, error) {
+	v, dirty, err := mg.m.Version()
+	if err != nil {
+		if errors.Is(err, migrate.ErrNilVersion) {
+			return 0, false, nil
 		}
-	}()
+		return 0, false, fmt.Errorf("migrate version: %w", err)
+	}
+	return v, dirty, nil
+}
 
-	switch cmd {
-	case "up":
-		return runMigrateUp(m)
-	case "down":
-		return runMigrateDown(m, count)
-	case "force":
-		return runMigrateForce(m, forceVersion)
-	case "version":
-		return runMigrateVersion(m)
+// Close releases the migrate handles.
+func (mg *Migrator) Close() error {
+	srcErr, dbErr := mg.m.Close()
+	return errors.Join(srcErr, dbErr)
+}
+
+// Force sets the schema version (unblocks a dirty state).
+func (mg *Migrator) Force(v int) error {
+	if err := mg.m.Force(v); err != nil {
+		return fmt.Errorf("migrate force %d: %w", v, err)
+	}
+	return nil
+}
+
+// openMigrateDB dials a dedicated connection and wraps it in the engine's
+// migrate driver. golang-migrate needs its own *sql.DB (not GORM's).
+func openMigrateDB(cfg config.DBConfig) (migratedb.Driver, *sql.DB, error) {
+	drv := normalize(cfg.Driver)
+	dsn := ""
+	if drv == "mariadb" {
+		dsn = dsnMariaDB(cfg)
+	} else {
+		dsn = dsnPostgres(cfg)
+	}
+
+	raw, err := sql.Open(sqlDriverName(drv), dsn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open migrate db: %w", err)
+	}
+	if err := raw.PingContext(context.Background()); err != nil {
+		_ = raw.Close()
+		return nil, nil, fmt.Errorf("ping migrate db: %w", err)
+	}
+
+	var d migratedb.Driver
+	switch drv {
+	case "mariadb":
+		d, err = mysql.WithInstance(raw, &mysql.Config{})
+	case "postgres":
+		d, err = postgres.WithInstance(raw, &postgres.Config{})
+	}
+	if err != nil {
+		_ = raw.Close()
+		return nil, nil, fmt.Errorf("migrate driver: %w", err)
+	}
+	return d, raw, nil
+}
+
+func sqlDriverName(drv string) string {
+	switch drv {
+	case "postgres":
+		return "postgres"
 	default:
-		fmt.Fprintf(os.Stderr, "unknown migrate command: %s\n", cmd)
-		printMigrateUsage()
-		return 1
+		return "mysql"
 	}
 }
 
-// newMigrator builds a golang-migrate instance backed by the SQL files embedded
-// in package migrations.
-func newMigrator(cfg *config.Config) (*migrate.Migrate, error) {
-	src, err := iofs.New(migrations.FS, ".")
-	if err != nil {
-		return nil, fmt.Errorf("create migration source: %w", err)
-	}
-
-	m, err := migrate.NewWithSourceInstance("iofs", src, migratorDSN(cfg))
-	if err != nil {
-		return nil, fmt.Errorf("create migrator: %w", err)
-	}
-
-	return m, nil
-}
-
-// migratorDSN converts the application DSN to the form golang-migrate expects.
-// The library auto-detects the database type from the URL scheme ("postgres://"
-// for PostgreSQL, "mysql://" for MariaDB). The MariaDB application DSN is a
-// go-sql-driver/mysql DSN, so it is wrapped with the "mysql://" scheme.
-func migratorDSN(cfg *config.Config) string {
-	if cfg.DB.Driver == DriverMariaDB {
-		return "mysql://" + cfg.DBConnString()
-	}
-	return cfg.DBConnString()
-}
-
-func runMigrateUp(m *migrate.Migrate) int {
-	// ErrNoChange means the schema is already at the latest version, which is
-	// a successful no-op rather than an error.
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		fmt.Fprintf(os.Stderr, "migration up failed: %v\n", err)
-		return 1
-	}
-	return printMigrateVersion(m)
-}
-
-func runMigrateDown(m *migrate.Migrate, count int) int {
-	if err := m.Steps(-count); err != nil {
-		fmt.Fprintf(os.Stderr, "migration down failed: %v\n", err)
-		return 1
-	}
-	return printMigrateVersion(m)
-}
-
-func runMigrateForce(m *migrate.Migrate, version int) int {
-	if err := m.Force(version); err != nil {
-		fmt.Fprintf(os.Stderr, "force migration version failed: %v\n", err)
-		return 1
-	}
-	return printMigrateVersion(m)
-}
-
-func runMigrateVersion(m *migrate.Migrate) int {
-	version, dirty, err := m.Version()
-	// ErrNilVersion means no migration has been applied yet (a fresh or fully
-	// rolled-back database) — a legitimate state, not a failure. Reported the
-	// same way as the post-migration version printer for consistency.
-	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
-		fmt.Fprintf(os.Stderr, "failed to read version: %v\n", err)
-		return 1
-	}
-	if errors.Is(err, migrate.ErrNilVersion) {
-		fmt.Println("no migrations applied")
-		return 0
-	}
-	fmt.Printf("version %d dirty=%v\n", version, dirty)
-	return 0
-}
-
-// printMigrateVersion reports the current version after a state-changing
-// command. ErrNilVersion (a fresh database) is reported, not treated as failure.
-func printMigrateVersion(m *migrate.Migrate) int {
-	version, dirty, err := m.Version()
-	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
-		fmt.Fprintf(os.Stderr, "failed to read version after migration: %v\n", err)
-		return 1
-	}
-	if errors.Is(err, migrate.ErrNilVersion) {
-		fmt.Println("no migrations applied")
-		return 0
-	}
-	fmt.Printf("migration complete: version %d dirty=%v\n", version, dirty)
-	return 0
-}
-
-// parseMigrateArgs extracts the command and its optional numeric argument from
-// the positional args. Defaults: command "up", down count 1. "force" requires a
-// version integer.
-func parseMigrateArgs(args []string) (cmd string, count int, forceVersion int, err error) {
-	cmd = "up"
-	count = 1
-	if len(args) == 0 {
-		return cmd, count, forceVersion, nil
-	}
-
-	cmd = args[0]
-	switch cmd {
-	case "down":
-		if len(args) >= 2 {
-			parsed, parseErr := strconv.Atoi(args[1])
-			if parseErr != nil || parsed <= 0 {
-				return cmd, count, forceVersion, fmt.Errorf("invalid down count %q: must be a positive integer", args[1])
-			}
-			count = parsed
-		}
-	case "force":
-		if len(args) < 2 {
-			return cmd, count, forceVersion, errors.New("force requires a version argument")
-		}
-		parsed, parseErr := strconv.Atoi(args[1])
-		if parseErr != nil {
-			return cmd, count, forceVersion, fmt.Errorf("invalid force version %q: must be an integer", args[1])
-		}
-		forceVersion = parsed
-	}
-
-	return cmd, count, forceVersion, nil
-}
-
-func printMigrateUsage() {
-	fmt.Fprintln(os.Stderr, "usage: goathena migrate [up | down [N] | force VERSION | version]")
-}
+func migrationsFS() fs.FS { return migrations.FS }

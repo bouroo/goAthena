@@ -1,60 +1,38 @@
-# syntax=docker/dockerfile:1
-#
-# Single-binary Containerfile for the goAthena modular monolith.
-#
-# The image runs the one `goathena` binary, which dispatches to its subcommands:
-#   - `serve`    (default, ENTRYPOINT CMD) the long-running server
-#   - `migrate`  schema migrations (used by the one-shot compose service)
-#   - `version`  build metadata
-#
-# Example:
-#   docker build -t goathena:dev .
-#   docker run --rm goathena:dev serve
-#   docker run --rm goathena:dev migrate up
-#
-# Notes:
-#   - Runtime base is `gcr.io/distroless/base-debian13:nonroot` — no shell, no
-#     wget. A dedicated /healthcheck binary (cmd/healthcheck) is compiled into
-#     the image so Docker healthchecks can probe /healthz without CMD-SHELL.
-#   - Version metadata is injected via -ldflags into the binary's main package
-#     (main.Version / main.CommitSHA / main.BuildTime), surfaced by
-#     `goathena version`.
+# syntax=docker/dockerfile:1.7
+# Multi-stage build → a single static goathena binary on distroless.
+# `serve` is the default; override command: ["migrate","up"] for the init
+# container once migrations land (persistence phase).
 
-# -----------------------------------------------------------------------------
-# Builder
-# -----------------------------------------------------------------------------
-FROM golang:1.26 AS builder
-
-WORKDIR /build
-
+# ---- builder ----
+FROM golang:1.26 AS build
+WORKDIR /src
+# Cache deps first.
 COPY go.mod go.sum ./
-RUN go mod download
-
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+# Build with trimmed paths + version metadata (overridable via build args).
 COPY . .
-
 ARG VERSION=dev
-ARG COMMIT_SHA=unknown
+ARG COMMIT=none
 ARG BUILD_TIME=unknown
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build \
+      -trimpath -ldflags "-s -w \
+        -X github.com/bouroo/goAthena/internal/app.Version=${VERSION} \
+        -X github.com/bouroo/goAthena/internal/app.Commit=${COMMIT} \
+        -X github.com/bouroo/goAthena/internal/app.BuildTime=${BUILD_TIME}" \
+      -o /out/goathena ./cmd/goathena && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" \
+      -o /out/healthcheck ./cmd/healthcheck
 
-RUN CGO_ENABLED=0 GOOS=linux go build \
-  -ldflags="-s -w \
-  -X main.Version=${VERSION} \
-  -X main.CommitSHA=${COMMIT_SHA} \
-  -X main.BuildTime=${BUILD_TIME}" \
-  -o /out/goathena ./cmd/goathena
-
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/healthcheck ./cmd/healthcheck
-
-# -----------------------------------------------------------------------------
-# Runtime
-# -----------------------------------------------------------------------------
-FROM gcr.io/distroless/base-debian13:nonroot AS runtime
-
-COPY --from=builder --chown=nonroot:nonroot /out/goathena /goathena
-COPY --from=builder --chown=nonroot:nonroot /out/healthcheck /healthcheck
-COPY --from=builder --chown=nonroot:nonroot /build/config.yaml /config.yaml
-
+# ---- runtime ----
+FROM gcr.io/distroless/static-debian13:nonroot AS runtime
+COPY --from=build /out/goathena /goathena
+COPY --from=build /out/healthcheck /healthcheck
+COPY config.yaml /config.yaml
+EXPOSE 6900 6121 5121 8080
 USER nonroot:nonroot
-
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["/healthcheck"]
 ENTRYPOINT ["/goathena"]
-CMD ["serve"]
+CMD ["serve", "-config", "/config.yaml"]

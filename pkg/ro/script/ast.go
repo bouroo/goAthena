@@ -116,54 +116,6 @@ func itoa(n int) string {
 // should not mutate positions after construction — the parser sets
 // them once and the VM consumes them at debug time.
 
-// MesStmt is `mes "..."` — push text to the dialog. Does not pause.
-type MesStmt struct {
-	Msg Expr
-	pos Position
-}
-
-// Pos returns the statement's source position.
-func (s *MesStmt) Pos() Position { return s.pos }
-
-func (*MesStmt) stmtNode()          {}
-func (*MesStmt) nodeString() string { return "MesStmt" }
-
-// NextStmt is `next;` — pause and wait for the Next button.
-type NextStmt struct{ pos Position }
-
-// Pos returns the statement's source position.
-func (s *NextStmt) Pos() Position { return s.pos }
-
-func (*NextStmt) stmtNode()          {}
-func (*NextStmt) nodeString() string { return "NextStmt" }
-
-// CloseStmt is `close;` — close dialog and end script.
-type CloseStmt struct{ pos Position }
-
-// Pos returns the statement's source position.
-func (s *CloseStmt) Pos() Position { return s.pos }
-
-func (*CloseStmt) stmtNode()          {}
-func (*CloseStmt) nodeString() string { return "CloseStmt" }
-
-// Close2Stmt is `close2;` — close dialog but continue executing.
-type Close2Stmt struct{ pos Position }
-
-// Pos returns the statement's source position.
-func (s *Close2Stmt) Pos() Position { return s.pos }
-
-func (*Close2Stmt) stmtNode()          {}
-func (*Close2Stmt) nodeString() string { return "Close2Stmt" }
-
-// EndStmt is the implicit `}` or explicit `end;` terminator.
-type EndStmt struct{ pos Position }
-
-// Pos returns the statement's source position.
-func (s *EndStmt) Pos() Position { return s.pos }
-
-func (*EndStmt) stmtNode()          {}
-func (*EndStmt) nodeString() string { return "EndStmt" }
-
 // MenuStmt is `menu("optA",L_a,"optB",L_b,...);` — pair-encoded options.
 // Each option pairs a string prompt with a label or callsub target.
 type MenuStmt struct {
@@ -595,11 +547,6 @@ func (sc *SwitchCase) Pos() Position { return sc.pos }
 // Compile-time interface assertions: every concrete type above must
 // satisfy the appropriate interface or compilation will fail.
 var (
-	_ Stmt = (*MesStmt)(nil)
-	_ Stmt = (*NextStmt)(nil)
-	_ Stmt = (*CloseStmt)(nil)
-	_ Stmt = (*Close2Stmt)(nil)
-	_ Stmt = (*EndStmt)(nil)
 	_ Stmt = (*MenuStmt)(nil)
 	_ Stmt = (*SelectStmt)(nil)
 	_ Stmt = (*InputStmt)(nil)

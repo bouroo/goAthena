@@ -31,6 +31,11 @@ const (
 	// clif_packetdb.hpp:40 (`parseable_packet(0x008c,-1,clif_parse_GlobalMessage,2,4)`).
 	// Variable length: [2:cmd][2:packetLength][n:text+null].
 	HeaderCZGLOBALMESSAGE uint16 = 0x008c
+	// CZ_WHISPER (0x0096) — private message to a named target. rathena/src/map/
+	// clif_packetdb.hpp:46 (`parseable_packet(0x0096,-1,clif_parse_WisMessage,2,4,28)`).
+	// Variable length: [2:cmd][2:packetLength][24:targetNick char[24]][n:message+null];
+	// fixed min 28 bytes (header + 24-byte name + ≥1 message byte).
+	HeaderCZWHISPER uint16 = 0x0096
 	// CZ_CHANGE_DIRECTION (0x009b) — direction change request. rathena/src/map/
 	// clif_packetdb.hpp:48 (`parseable_packet(0x009b,5,clif_parse_ChangeDir,2,4)`).
 	// Fixed 5 bytes: [2:cmd][2:headDir uint16][1:dir uint8]. The pos array
@@ -80,6 +85,28 @@ const (
 	// rathena/src/map/clif.cpp:9923 (`0095 <id>.L <char name>.24B`).
 	// Fixed 30 bytes: [2:cmd][4:GID int32][24:name char[24]].
 	HeaderZCACKREQNAME uint16 = 0x0095
+	// ZC_ACK_REQNAMEALL2 (0x0a30) — full name reply for a PC. At PACKETVER
+	// MAIN_NUM>=20150225 (ClientROThailand 20250604 qualifies) clif_name emits
+	// this — NOT the legacy 0x0095/0x0195 — carrying char/party/guild/position
+	// names plus a title id (packets_struct.hpp:3562-3573).
+	// Fixed 106 bytes: [2:cmd][4:GID][24:name][24:party][24:guild][24:position][4:titleID].
+	HeaderZCACKREQNAMEALL2 uint16 = 0x0a30
+	// ZC_ACK_REQNAMEALL_NPC (0x0adf) — name reply for an NPC/mob/pet/hom/mer/elem.
+	// At PACKETVER MAIN_NUM>=20180207 (20250604 qualifies) clif_name emits this
+	// carrying groupId, name, and title (packets_struct.hpp:3586-3594).
+	// Fixed 58 bytes: [2:cmd][4:GID][4:groupId][24:name][24:title].
+	HeaderZCACKREQNAMEALLNPC uint16 = 0x0adf
+	// ZC_WHISPER (0x09de) — delivered private message to the recipient. At
+	// PACKETVER MAIN_NUM>=20131204 (ClientROThailand 20250604 qualifies) clif
+	// emits this 0x09de branch (packets_struct.hpp:5347-5356), NOT the legacy
+	// 0x0097. Variable length:
+	// [2:cmd][2:packetLength][4:senderGID uint32][24:sender char[]][1:isAdmin][n:message+null].
+	HeaderZCWHISPER uint16 = 0x09de
+	// ZC_ACK_WHISPER (0x09df) — whisper result ack to the sender. At PACKETVER
+	// >= 20131223 (20250604 qualifies; packets.hpp:1225-1231), NOT legacy 0x0098.
+	// Fixed 7 bytes: [2:cmd][1:result][4:CID uint32=sender char_id]. result:
+	// 0=success, 1=target offline (2/3 ignored = not implemented, no ignore list).
+	HeaderZCACKWHISPER uint16 = 0x09df
 	// CZ_RESTART (0x00b2) — client requests respawn or return to char select.
 	// rathena/src/map/clif_packetdb.hpp:61 (`parseable_packet(0x00b2,3,clif_parse_Restart,2)`).
 	// Fixed 3 bytes: [2:cmd][1:type uint8] (0=respawn, 1=return to char select).
@@ -96,10 +123,39 @@ const (
 	// clif_packetdb.hpp:42 (`parseable_packet(0x0090,7,clif_parse_NpcClicked,2,6)`).
 	// Fixed 7 bytes: [2:cmd][4:AID uint32][1:type uint8] (1=click).
 	HeaderCZCONTACTNPC uint16 = 0x0090
+	// ZC_NPCACK_MAPMOVE (0x0091) — server tells the client to change maps after
+	// a warp/teleport (rAthena clif_changemap, clif.cpp). The client loads the
+	// named map and reconnects with a fresh CZ_ENTER; the map name carries no
+	// ".gat" extension (the client appends it). Wire:
+	// rathena/src/map/packets.hpp PACKET_ZC_NPCACK_MAPMOVE —
+	// `int16 packetType; char mapName[16]; uint16 xPos; uint16 yPos;` = 22 bytes.
+	HeaderZCNPCACKMAPMOVE uint16 = 0x0091
 	// CZ_REQNEXTSCRIPT (0x00b9) — client clicks "Next" in a dialog.
 	// rathena/src/map/clif_packetdb.hpp:60 (`parseable_packet(0x00b9,6,clif_parse_ScriptContinue,2)`).
 	// Fixed 6 bytes: [2:cmd][4:NpcID uint32].
 	HeaderCZREQNEXTSCRIPT uint16 = 0x00b9
+	// P2A: CZ_ITEM_PICKUP (0x009f) — client requests to pick up a floor item.
+	// rathena/src/map/clif_packetdb.hpp:50
+	// (`parseable_packet(0x009f,6,clif_parse_TakeItem,2)`); this is the band
+	// PACKETVER 20250604 resolves to (the higher-line 0x009f entries are older
+	// PACKETVER bands that do not apply). Fixed 6 bytes:
+	// [2:cmd=0x009f][4:map_object_id uint32] — the floor item's ground id (the
+	// same id ZC_ITEM_FALL_ENTRY carries). clif_parse_TakeItem reads it with
+	// RFIFOL(fd,2); EVERY failure branch falls through to a fail ack, so the
+	// pickup handler must always answer (see map_item_drop.go
+	// ItemPickupAckResponse).
+	//
+	// At PACKETVER 20250604 the effective C→S pickup opcode is 0x0362, NOT
+	// 0x009f: clif_shuffle.hpp:4732 maps 0x0362 to clif_parse_TakeItem (it
+	// overrides clif_packetdb.hpp:1561's DropItem binding because clif_shuffle
+	// is included after clif_packetdb and packetdb_addpacket last-writes-wins),
+	// while 0x009f's final active binding is UseItem (clif_packetdb.hpp:1205).
+	// Both share the 6-byte <cmd>.<W><ground id>.L layout, so dispatch accepts
+	// 0x009f (legacy) and 0x0362 (modern) through the same parser.
+	HeaderCZITEMPICKUP uint16 = 0x009f
+	// HeaderCZITEMTAKEOpcode is the modern pickup alias at PACKETVER 20250604
+	// (clif_shuffle.hpp:4732 — clif_parse_TakeItem). See HeaderCZITEMPICKUP.
+	HeaderCZITEMTAKE0362 uint16 = 0x0362
 	// P2A: CZ_USE_ITEM2 (0x0439) — client requests to use a consumable
 	// item. rathena/src/map/clif_packetdb.hpp:1151
 	// (`parseable_packet(0x0439,8,clif_parse_UseItem,2,4)`).
@@ -149,6 +205,24 @@ const (
 	// rathena/src/map/clif_packetdb.hpp:62 (`parseable_packet(0x00b8,7,clif_parse_NpcSelectMenu,2,6)`).
 	// Fixed 7 bytes: [2:cmd][4:NpcID][1:selected byte].
 	HeaderCZCHOOSEMENU uint16 = 0x00b8
+	// ZC_OPEN_EDITDLG (0x0142) — server opens the numeric-input dialog window.
+	// rathena/src/map/packets.hpp:769 PACKET_ZC_OPEN_EDITDLG.
+	// Fixed 6 bytes: [2:cmd][4:NpcID].
+	HeaderZCOPENEDITDLG uint16 = 0x0142
+	// ZC_OPEN_EDITDLGSTR (0x01d4) — server opens the string-input dialog window.
+	// rathena/src/map/packets.hpp:775 PACKET_ZC_OPEN_EDITDLGSTR.
+	// Fixed 6 bytes: [2:cmd][4:NpcID] (same layout as ZC_OPEN_EDITDLG).
+	HeaderZCOPENEDITDLGSTR uint16 = 0x01d4
+	// CZ_INPUT_EDITDLG (0x0143) — client sends a numeric input value.
+	// rathena/src/map/clif_packetdb.hpp:134
+	// (`parseable_packet(HEADER_CZ_INPUT_EDITDLG, sizeof(PACKET_CZ_INPUT_EDITDLG), clif_parse_NpcAmountInput, 0)`).
+	// Fixed 10 bytes: [2:cmd][4:GID/NpcID][4:int32 value].
+	HeaderCZINPUTEDITDLG uint16 = 0x0143
+	// CZ_INPUT_EDITDLGSTR (0x01d5) — client sends a string input value.
+	// rathena/src/map/clif_packetdb.hpp:225
+	// (`parseable_packet(HEADER_CZ_INPUT_EDITDLGSTR, -1, clif_parse_NpcStringInput, 0)`).
+	// Variable length: [2:cmd][2:packetLength][4:GID/NpcID][n:value + NUL].
+	HeaderCZINPUTEDITDLGSTR uint16 = 0x01d5
 	// M16: NPC shop interaction. CZ_ACK_SELECT_DEALTYPE / ZC_SELECT_DEALTYPE
 	// carry the deal-type selection (Buy / Sell / Cancel) that follows
 	// CZ_CONTACTNPC for shop-type NPCs. CZ_PC_PURCHASE_ITEMLIST /
@@ -204,6 +278,14 @@ const (
 	// PACKETVER >= 20110824 per clif.cpp:4338 — success becomes
 	// 0 on the wire).
 	HeaderZCREQTAKEOFFEQUIPACK uint16 = 0x099a
+	// P2A: ZC_SPRITE_CHANGE2 (0x01d7) — look-sprite update broadcast to the actor
+	// + AOI neighbors on equip/unequip (rAthena clif_sprite_change /
+	// clif_changelook AREA). Fixed 15 bytes for PACKETVER 20250604
+	// (PACKETVER_MAIN_NUM>=20181121 branch of packets_struct.hpp:2591):
+	// [2:cmd=0x01d7][4:GID uint32][1:type uint8][4:val uint32][4:val2 uint32].
+	// The packetdb static registration is 11 (clif_packetdb.hpp:226) but clif_send
+	// emits sizeof(struct)=15; see SpriteChangeResponse.
+	HeaderZCSPRITECHANGE uint16 = 0x01d7
 	// P2A: ZC_USE_ITEM_ACK2 (0x01c8) — server ack for
 	// CZ_USE_ITEM2. rathena/src/map/packets_struct.hpp:312
 	// (useItemAckType = 0x1c8, PACKETVER >= 3). Fixed 13 bytes:
@@ -224,6 +306,18 @@ const (
 	HeaderCZUSESKILL      uint16 = 0x0438 // CZ_USE_SKILL2 — clif_parse_UseSkillToId (clif_shuffle.hpp:4750)
 	HeaderZCNOTIFYSKILL   uint16 = 0x01de // ZC_NOTIFY_SKILL — packets_struct.hpp:4671 (PACKETVER >= 3)
 	HeaderZCACKTOUSESKILL uint16 = 0x0110 // ZC_ACK_TOUSESKILL — packets_struct.hpp:2461
+	// CZ_USE_SKILL_TOPOS (0x0AF4) — client casts a ground-target skill.
+	// rathena/src/map/clif_packetdb.hpp:1905
+	// (`#if PACKETVER >= 20180207 parseable_packet(0x0AF4,11,clif_parse_UseSkillToPos,2,4,6,8,10)`),
+	// the last UseSkillToPos binding (no rebind after). Fixed 11 bytes:
+	// [2:cmd][2:skillLv][2:skillID][2:xPos][2:yPos][1:moreinfo]. The trailing
+	// moreinfo byte is wire-present but server-ignored (rAthena clif.cpp:13137
+	// RFIFOB is commented out, passes -1), so goAthena consumes then discards it.
+	HeaderCZUSESKILLTOPOS uint16 = 0x0AF4
+	// ZC_NOTIFY_GROUNDSKILL (0x0117) — server broadcasts a ground skill's
+	// animation. rathena/src/map/packets_struct.hpp:4696 PACKET_ZC_NOTIFY_GROUNDSKILL.
+	// Fixed 18 bytes: [2:cmd][2:SKID][4:AID caster][2:level][2:xPos][2:yPos][4:startTime].
+	HeaderZCNOTIFYGROUNDSKILL uint16 = 0x0117
 	// P2C: stats & leveling — stat allocation + level-up effect.
 	// CZ_STATUS_CHANGE (0x00bb) is the client request to raise a base
 	// stat (rathena/src/map/clif.cpp:12714 clif_parse_StatusChange).
@@ -245,14 +339,13 @@ const (
 	// A4: CZ drop-item opcodes. rAthena registers seven modern DropItem
 	// aliases (clif_packetdb.hpp:1385-1606), all sharing the 6-byte
 	// <index>.W <amount>.W layout; which one a given client sends is
-	// build-specific. The gateway accepts all six FREE aliases below.
-	// 0x0438 is excluded — it collides with CZ_USE_SKILL2 (HeaderCZUSESKILL).
-	// 0x0094 is the pre-2004 layout and is CZ_GET_CHAR_NAME_REQUEST here.
+	// build-specific. The gateway accepts the five FREE aliases below; 0x0438 is
+	// excluded (clif_shuffle.hpp:4750 re-binds it to CZ_USE_SKILL2), and 0x0362
+	// is the modern pickup opcode (see HeaderCZITEMTAKE0362), NOT a drop alias.
 	HeaderCZDROPITEM0363 uint16 = 0x0363 // >=20110706
 	HeaderCZDROPITEM0885 uint16 = 0x0885 // >=20111005
 	HeaderCZDROPITEM02C4 uint16 = 0x02C4 // >=20120307
 	HeaderCZDROPITEM0891 uint16 = 0x0891 // >=20120410
-	HeaderCZDROPITEM0362 uint16 = 0x0362 // >=20120418
 	HeaderCZDROPITEM089E uint16 = 0x089e // >=20120702
 )
 
@@ -294,6 +387,10 @@ const (
 	// sizeZCRefuseEnter = int16 packetType + uint8 errorCode = 2+1 = 3
 	// (rathena/src/map/packets.hpp:585-589, static_assert at :589).
 	sizeZCRefuseEnter = 3
+	// sizeZCNPCAckMapMove = int16 packetType + char mapName[16] + uint16 xPos +
+	// uint16 yPos = 2+16+2+2 = 22 (rathena/src/map/packets.hpp
+	// PACKET_ZC_NPCACK_MAPMOVE).
+	sizeZCNPCAckMapMove = 22
 	// sizeCZEnter = int16 packetType + uint32 AID + uint32 CID +
 	// uint32 authCode + uint32 clientTime + uint8 sex = 2+4+4+4+4+1 = 19
 	// (rathena/src/map/clif.cpp:10642 + the WantToConnection handler
@@ -445,6 +542,11 @@ const (
 	// sizeZCEmotion = int16 packetType + int32 GID + uint8 type = 2+4+1 = 7
 	// (rathena/src/map/packets.hpp:1973-1978).
 	sizeZCEmotion = 7
+	// sizeZCSpriteChange = int16 packetType + uint32 GID + uint8 type +
+	// uint32 val + uint32 val2 = 2+4+1+4+4 = 15 (rathenaThailand/src/map/
+	// packets_struct.hpp:2591, PACKETVER_MAIN_NUM>=20181121 branch which
+	// PACKETVER 20250604 selects).
+	sizeZCSpriteChange = 15
 	// sizeCZGetCharNameRequest = int16 packetType + int32 GID = 2+4 = 6
 	// (rathena/src/map/clif_packetdb.hpp:45).
 	sizeCZGetCharNameRequest = 6
@@ -454,6 +556,18 @@ const (
 	// sizeZCAckReqNameName is the on-wire name field width in ZC_ACK_REQNAME
 	// (rathena/src/common/mmo.hpp:154 — NAME_LENGTH = 23+1 = 24).
 	sizeZCAckReqNameName = 24
+	// sizeZCAckReqNameAll2 = ZC_ACK_REQNAMEALL2 (0x0a30): cmd(2)+GID(4)+name(24)+
+	// party(24)+guild(24)+position(24)+titleID(4) = 106 (packets_struct.hpp:3564-3572).
+	sizeZCAckReqNameAll2 = 106
+	// sizeZCAckReqNameAllNPC = ZC_ACK_REQNAMEALL_NPC (0x0adf): cmd(2)+GID(4)+
+	// groupId(4)+name(24)+title(24) = 58 (packets_struct.hpp:3587-3593).
+	sizeZCAckReqNameAllNPC = 58
+	// sizeZCAckWhisper = ZC_ACK_WHISPER (0x09df): cmd(2)+result(1)+CID(4) = 7
+	// (rathena/src/map/packets.hpp:1225-1231).
+	sizeZCAckWhisper = 7
+	// sizeZCWhisperName is the on-wire sender-name field width in ZC_WHISPER
+	// (NAME_LENGTH = 24, same as ZC_ACK_REQNAME).
+	sizeZCWhisperName = 24
 	// sizeCZRestart = int16 packetType + uint8 type = 2+1 = 3
 	// (rathena/src/map/clif_packetdb.hpp:61).
 	sizeCZRestart = 3
@@ -478,6 +592,24 @@ const (
 	// sizeCZChooseMenu = int16 packetType + uint32 NpcID + uint8 selected = 2+4+1 = 7
 	// (rathena/src/map/clif_packetdb.hpp:62).
 	sizeCZChooseMenu = 7
+	// sizeZCOpenEditDlg = int16 packetType + uint32 NpcID = 2+4 = 6
+	// (rathena/src/map/packets.hpp:769). ZC_OPEN_EDITDLGSTR shares this 6-byte
+	// layout (packets.hpp:775).
+	sizeZCOpenEditDlg = 6
+	// sizeCZInputEditDlg = int16 packetType + uint32 GID + int32 value = 2+4+4 = 10
+	// (rathena/src/map/packets.hpp:1837 PACKET_CZ_INPUT_EDITDLG, fixed).
+	sizeCZInputEditDlg = 10
+	// sizeCZInputEditDlgStrMin = int16 packetType + uint16 packetLength + uint32 GID = 2+2+4 = 8
+	// (rathena/src/map/packets.hpp:1844 PACKET_CZ_INPUT_EDITDLGSTR). The header
+	// size before the variable-length value bytes; rAthena rejects a frame whose
+	// declared length does not exceed this (clif.cpp:13405).
+	sizeCZInputEditDlgStrMin = 8
+	// npcInputStrMax is rAthena's CHATBOX_SIZE (map.hpp:286, 70+1): the inputstr
+	// value buffer. clif_parse_NpcStringInput safestrncpy's the packet value into
+	// a buffer of this size (clif.cpp:13412), so a value longer than
+	// npcInputStrMax-1 visible bytes is truncated. ParseCZInputEditDlgStr mirrors
+	// that cap for parity and to bound a malicious oversized frame.
+	npcInputStrMax = 71
 	// sizeZCSelectDealtype = int16 packetType + uint32 NpcID = 2+4 = 6
 	// (rathena/src/map/packets.hpp: ZC_SELECT_DEALTYPE).
 	sizeZCSelectDealtype = 6
@@ -524,6 +656,14 @@ const (
 	// uint32 targetID = 2+2+2+4 = 10 (clif_shuffle.hpp:4750 binds
 	// opcode 0x0438 to length 10 for PACKETVER_RE_NUM >= 20190904).
 	sizeCZUseSkill2 = 10
+	// sizeCZUseSkillToPos = int16 packetType + int16 skillLv + uint16 skillID +
+	// uint16 xPos + uint16 yPos + uint8 moreinfo = 2+2+2+2+2+1 = 11
+	// (rathena/src/map/clif_packetdb.hpp:1905, PACKETVER >= 20180204 branch).
+	sizeCZUseSkillToPos = 11
+	// sizeZCNotifyGroundSkill = int16 packetType + uint16 SKID + uint32 AID +
+	// int16 level + int16 xPos + int16 yPos + uint32 startTime = 2+2+4+2+2+2+4 = 18
+	// (rathena/src/map/packets_struct.hpp:4696).
+	sizeZCNotifyGroundSkill = 18
 	// sizeZCNotifySkill = int16 packetType + uint16 SKID + uint32 AID +
 	// uint32 targetID + uint32 startTime + int32 attackMT +
 	// int32 attackedMT + int32 damage + int16 level + int16 count +
@@ -538,6 +678,9 @@ const (
 	// sizeCZUseItem2 = int16 packetType + uint16 index + uint32 AID = 2+2+4 = 8
 	// (rathena/src/map/clif_packetdb.hpp:1151).
 	sizeCZUseItem2 = 8
+	// sizeCZItemPickup = int16 packetType + uint32 map_object_id = 2+4 = 6
+	// (rathena/src/map/clif_packetdb.hpp:50).
+	sizeCZItemPickup = 6
 	// sizeCZDropItem = int16 packetType + uint16 index + uint16 amount = 2+2+2 = 6.
 	// Shared by every modern DropItem opcode band (clif_packetdb.hpp:1385-1606).
 	sizeCZDropItem = 6
@@ -819,11 +962,59 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCEmotion,
 		Direction: DirectionServerToClient,
 	})
+	// P2A: ZC_SPRITE_CHANGE2 (0x01d7) — look-sprite update broadcast to the actor
+	// + AOI neighbors on equip/unequip. 15 bytes for PACKETVER 20250604.
+	db.Register(Definition{
+		ID:        HeaderZCSPRITECHANGE,
+		Name:      "ZC_SPRITE_CHANGE",
+		Length:    sizeZCSpriteChange,
+		Direction: DirectionServerToClient,
+	})
 	// M13: ZC_ACK_REQNAME (fixed 30 bytes) — name lookup response.
 	db.Register(Definition{
 		ID:        HeaderZCACKREQNAME,
 		Name:      "ZC_ACK_REQNAME",
 		Length:    sizeZCAckReqName,
+		Direction: DirectionServerToClient,
+	})
+	// ZC_ACK_REQNAMEALL2 (0x0a30, fixed 106 bytes) — full PC name reply emitted by
+	// clif_name at PACKETVER >= 20150225 (party/guild/position names + title id).
+	db.Register(Definition{
+		ID:        HeaderZCACKREQNAMEALL2,
+		Name:      "ZC_ACK_REQNAMEALL2",
+		Length:    sizeZCAckReqNameAll2,
+		Direction: DirectionServerToClient,
+	})
+	// ZC_ACK_REQNAMEALL_NPC (0x0adf, fixed 58 bytes) — NPC/mob name reply emitted
+	// by clif_name at PACKETVER >= 20180207 (groupId + name + title).
+	db.Register(Definition{
+		ID:        HeaderZCACKREQNAMEALLNPC,
+		Name:      "ZC_ACK_REQNAMEALL_NPC",
+		Length:    sizeZCAckReqNameAllNPC,
+		Direction: DirectionServerToClient,
+	})
+	// P2c: CZ_WHISPER (0x0096) — private message request. Variable length;
+	// codec bounds by the embedded packetLength slot at offset 2.
+	db.Register(Definition{
+		ID:        HeaderCZWHISPER,
+		Name:      "CZ_WHISPER",
+		Length:    VariableLength,
+		Direction: DirectionClientToServer,
+	})
+	// P2c: ZC_WHISPER (0x09de) — delivered whisper to the recipient. Variable
+	// length (sender + message); 0x09de branch active at PACKETVER 20250604.
+	db.Register(Definition{
+		ID:        HeaderZCWHISPER,
+		Name:      "ZC_WHISPER",
+		Length:    VariableLength,
+		Direction: DirectionServerToClient,
+	})
+	// P2c: ZC_ACK_WHISPER (0x09df) — whisper result ack to the sender. Fixed 7
+	// bytes; 0x09df branch active at PACKETVER 20250604.
+	db.Register(Definition{
+		ID:        HeaderZCACKWHISPER,
+		Name:      "ZC_ACK_WHISPER",
+		Length:    sizeZCAckWhisper,
 		Direction: DirectionServerToClient,
 	})
 	// M14: ZC_SET_UNIT_IDLE (fixed 107 bytes) — NPC entity spawn.
@@ -873,6 +1064,33 @@ func NewMapServerDB() *DB {
 		Name:      "CZ_CHOOSE_MENU",
 		Length:    sizeCZChooseMenu,
 		Direction: DirectionClientToServer,
+	})
+	// M14c: NPC input dialogs. CZ_INPUT_EDITDLG (fixed 10 bytes) carries a
+	// numeric value; CZ_INPUT_EDITDLGSTR (variable) carries a string.
+	// ZC_OPEN_EDITDLG / ZC_OPEN_EDITDLGSTR (fixed 6 bytes) open the windows.
+	db.Register(Definition{
+		ID:        HeaderCZINPUTEDITDLG,
+		Name:      "CZ_INPUT_EDITDLG",
+		Length:    sizeCZInputEditDlg,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZINPUTEDITDLGSTR,
+		Name:      "CZ_INPUT_EDITDLGSTR",
+		Length:    VariableLength,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCOPENEDITDLG,
+		Name:      "ZC_OPEN_EDITDLG",
+		Length:    sizeZCOpenEditDlg,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCOPENEDITDLGSTR,
+		Name:      "ZC_OPEN_EDITDLGSTR",
+		Length:    sizeZCOpenEditDlg,
+		Direction: DirectionServerToClient,
 	})
 	// M15: ZC_SAY_DIALOG2 (variable length), ZC_WAIT_DIALOG2 (fixed 7 bytes),
 	// ZC_CLOSE_DIALOG (fixed 6 bytes).
@@ -975,6 +1193,12 @@ func NewMapServerDB() *DB {
 	// for the rAthena packetdb / packets.hpp / packets_struct.hpp
 	// lines that pin each opcode and on-wire size to PACKETVER 20250604.
 	db.Register(Definition{
+		ID:        HeaderCZITEMPICKUP,
+		Name:      "CZ_ITEM_PICKUP",
+		Length:    sizeCZItemPickup,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
 		ID:        HeaderCZUSEITEM2,
 		Name:      "CZ_USE_ITEM2",
 		Length:    sizeCZUseItem2,
@@ -1055,6 +1279,92 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCAckToUseSkill,
 		Direction: DirectionServerToClient,
 	})
+	// M14d: ground-target skills. CZ_USE_SKILL_TOPOS (fixed 11 bytes) requests a
+	// ground cast; ZC_NOTIFY_GROUNDSKILL (fixed 18 bytes) broadcasts the poseffect
+	// animation to the AREA around the cast tile.
+	db.Register(Definition{
+		ID:        HeaderCZUSESKILLTOPOS,
+		Name:      "CZ_USE_SKILL_TOPOS",
+		Length:    sizeCZUseSkillToPos,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCNOTIFYGROUNDSKILL,
+		Name:      "ZC_NOTIFY_GROUNDSKILL",
+		Length:    sizeZCNotifyGroundSkill,
+		Direction: DirectionServerToClient,
+	})
+	// S1: player-to-player trade handshake (request/ack/cancel). NO item or zeny
+	// movement (the atomic-commit slice is deferred). ZC_REQ/ZC_ACK use the
+	// PACKETVER > 6 layouts (packets.hpp:373/:387); see trade.go for field maps.
+	db.Register(Definition{
+		ID:        HeaderCZTRADEREQUEST,
+		Name:      "CZ_TRADE_REQUEST",
+		Length:    sizeCZTradeRequest,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZTRADEACK,
+		Name:      "CZ_TRADE_ACK",
+		Length:    sizeCZTradeAck,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZTRADECANCEL,
+		Name:      "CZ_TRADE_CANCEL",
+		Length:    sizeCZTradeCancel,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCREQEXCHANGEITEM,
+		Name:      "ZC_REQ_EXCHANGE_ITEM",
+		Length:    sizeZCReqExchange,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCACKEXCHANGEITEM,
+		Name:      "ZC_ACK_EXCHANGE_ITEM",
+		Length:    sizeZCAckExchange,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCCANCELEXCHANGEITEM,
+		Name:      "ZC_CANCEL_EXCHANGE_ITEM",
+		Length:    sizeZCCancelExchange,
+		Direction: DirectionServerToClient,
+	})
+	// S2: trade add-item/ok/conclude. The 0x0b42 ZC_ADD variant is the
+	// PACKETVER >= 20200916 layout active at 20250604 (62B; see trade.go).
+	db.Register(Definition{
+		ID:        HeaderCZADDEXCHANGEITEM,
+		Name:      "CZ_ADD_EXCHANGE_ITEM",
+		Length:    sizeCZAddExchangeItem,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZTRADEOK,
+		Name:      "CZ_TRADE_OK",
+		Length:    sizeCZTradeOk,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCADDEXCHANGEITEM,
+		Name:      "ZC_ADD_EXCHANGE_ITEM",
+		Length:    sizeZCAddExchangeItem,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCACKADDEXCHANGEITEM,
+		Name:      "ZC_ACK_ADD_EXCHANGE_ITEM",
+		Length:    sizeZCAckAddExchange,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCCONCLUDEEXCHANGEITEM,
+		Name:      "ZC_CONCLUDE_EXCHANGE_ITEM",
+		Length:    sizeZCConcludeExchange,
+		Direction: DirectionServerToClient,
+	})
 	// P3c: ground item drop notification. rAthena binds opcode 0x0ADD
 	// with size 22 for PACKETVER >= 20180418 (clif_packetdb.hpp:1921);
 	// the v5 layout adds <showDropEffect> + <dropEffectMode> on top of
@@ -1066,13 +1376,15 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCItemFallEntry,
 		Direction: DirectionServerToClient,
 	})
-	// A4: item drop + pickup. Six C→S drop aliases share one 6-byte
-	// <index>.W <amount>.W layout (clif_packetdb.hpp:1385-1606); which one a
-	// client sends is build-specific, so the gateway accepts all six. The
-	// seventh alias 0x0438 collides with CZ_USE_SKILL2 and is excluded.
+	// A4: item drop + pickup. The C→S drop frame is <index>.W <amount>.W
+	// (clif_packetdb.hpp:1385-1606). Which opcode the client sends is
+	// build-specific, so the gateway accepts the five free aliases below; the
+	// effective drop opcode at PACKETVER 20250604 is 0x0363 (clif_shuffle.hpp:4733).
+	// 0x0362 is the modern pickup opcode (clif_shuffle.hpp:4732) and 0x0438 is
+	// CZ_USE_SKILL2 (clif_shuffle.hpp:4750), so neither is a drop alias here.
 	for _, op := range []uint16{
 		HeaderCZDROPITEM0363, HeaderCZDROPITEM0885, HeaderCZDROPITEM02C4,
-		HeaderCZDROPITEM0891, HeaderCZDROPITEM0362, HeaderCZDROPITEM089E,
+		HeaderCZDROPITEM0891, HeaderCZDROPITEM089E,
 	} {
 		db.Register(Definition{
 			ID:        op,
@@ -1081,6 +1393,15 @@ func NewMapServerDB() *DB {
 			Direction: DirectionClientToServer,
 		})
 	}
+	// A4: the modern pickup alias 0x0362 (clif_shuffle.hpp:4732 TakeItem). The
+	// 0x009f legacy pickup registration above stays for older PACKETVERs; both
+	// route through the same CZ_ITEM_PICKUP parser (see HeaderCZITEMTAKE0362).
+	db.Register(Definition{
+		ID:        HeaderCZITEMTAKE0362,
+		Name:      "CZ_ITEM_PICKUP",
+		Length:    sizeCZItemPickup,
+		Direction: DirectionClientToServer,
+	})
 	// A4: server→client floor-item and ack frames. Sizes + opcodes verified
 	// in map_item_drop.go.
 	db.Register(Definition{

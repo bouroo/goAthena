@@ -4,12 +4,26 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-
-	"github.com/bouroo/goAthena/internal/config"
 )
 
-// keyMap maps rAthena .conf keys to setter closures that mutate a
-// config.Config in place. The Initial key map (decision D-008) is
+// Config is the kernel-local apply target for the subset of server identity
+// configuration that rAthena .conf files can populate. It mirrors the
+// application-layer config shape so the applier can stay in the kernel (it
+// owns rAthena conf semantics) without importing the app layer; the app layer
+// maps or embeds these fields into its own Config.
+type Config struct {
+	Identity Identity
+}
+
+// Identity holds the rAthena login/char-server identity knobs the kernel knows
+// how to populate from .conf files.
+type Identity struct {
+	UseMD5Passwords bool
+	MaxChars        int
+}
+
+// keyMap maps rAthena .conf keys to setter closures that mutate an
+// athenaconf.Config in place. The Initial key map (decision D-008) is
 // intentionally narrow: only keys with a typed Config field home today
 // are wired; everything else is surfaced via Manifest.Unmapped so the
 // round-trip test can assert it is non-empty.
@@ -21,7 +35,7 @@ import (
 // lookup is O(1)).
 type keyMapEntry struct {
 	aliases []string
-	apply   func(cfg *config.Config, v Value) error
+	apply   func(cfg *Config, v Value) error
 }
 
 // initialKeyMap returns a fresh C1 mapping table each call so callers
@@ -32,7 +46,7 @@ func initialKeyMap() map[string]keyMapEntry {
 
 	out["use_MD5_passwords"] = keyMapEntry{
 		aliases: []string{"use_MD5_passwords", "use_md5_passwds"},
-		apply: func(cfg *config.Config, v Value) error {
+		apply: func(cfg *Config, v Value) error {
 			if v.Kind != KindBool {
 				return fmt.Errorf("use_MD5_passwords: expected bool, got %s", v.Kind)
 			}
@@ -43,7 +57,7 @@ func initialKeyMap() map[string]keyMapEntry {
 
 	out["chars_per_account"] = keyMapEntry{
 		aliases: []string{"chars_per_account", "max_char"},
-		apply: func(cfg *config.Config, v Value) error {
+		apply: func(cfg *Config, v Value) error {
 			if v.Kind != KindInt {
 				return fmt.Errorf("chars_per_account: expected int, got %s", v.Kind)
 			}
@@ -63,7 +77,7 @@ func initialKeyMap() map[string]keyMapEntry {
 //
 // Apply errors from individual keys (e.g. type mismatch) are returned
 // joined; the caller decides whether to abort or log and continue.
-func ApplyToConfig(cfg *config.Config, f *File, manifest *Manifest) error {
+func ApplyToConfig(cfg *Config, f *File, manifest *Manifest) error {
 	if manifest == nil {
 		manifest = &Manifest{KeyOrigin: map[string]string{}}
 	}

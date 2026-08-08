@@ -26,10 +26,13 @@ const (
 	sizeZCItemPickupAck = 70 // see ItemPickupAckResponse doc
 )
 
-// ItemFallEntryResponse encodes ZC_ITEM_FALL_ENTRY (0x0ADD, v5) — the
-// throw/fall animation played when an item lands on the ground. Distinct
-// from ZC_ITEM_ENTRY (0x009d) which spawns the *pickable* floor entity;
-// rAthena sends BOTH for a drop.
+// ItemFallEntryResponse encodes ZC_ITEM_FALL_ENTRY (0x0ADD, v5) — the only packet
+// the rathenaThailand fork sends when a new item lands on the ground. The drop
+// path is map_addflooritem (map.cpp) → clif_dropflooritem (clif.cpp:865), which
+// emits 0x0ADD alone. ZC_ITEM_ENTRY (0x009d) is NOT on the drop path: it is sent
+// by clif_getareachar_item only when a player's AOI reveal sweeps over an
+// already-present floor item (map-enter / walk-in). Sending 0x009d on a fresh
+// drop would be a vanilla-rAthena behavior the fork dropped.
 //
 // Wire layout at PACKETVER 20250604 (struct packet_dropflooritem, all
 // gates open). NOTE: the legacy clif.cpp:864 comment "<name id>.W" is
@@ -182,8 +185,16 @@ func (r *ItemThrowAckResponse) Encode(w io.Writer) error {
 }
 
 // ItemPickupAckResponse encodes ZC_ITEM_PICKUP_ACK (0x0b41) — the SELF ack
-// of a successful pickup. The >=20200916 band wins at PACKETVER 20250604;
-// every conditional gate below is open. Result: 0=fail, 1=success.
+// of a pickup. The >=20200916 band wins at PACKETVER 20250604; every conditional
+// gate below is open. Result byte (offset 33): 0 = success (the item fields are
+// valid and the client adds the row to the bag), nonzero = failure — clif_additem
+// (clif.cpp:2836) zeroes the whole frame and writes only result=fail, and
+// clif_parse_TakeItem's (clif.cpp:12024) every failure branch falls through to
+// clif_additem(sd,0,0,6) with the verbatim comment "Client REQUIRES a fail packet
+// or you can no longer pick items." So a pickup request must always yield one of
+// these frames: success result=0, or fail result=6. (The wire also carries
+// low-level/low-weight results elsewhere — ADDITEM_* — but the pickup path only
+// emits 0 and 6.)
 //
 //	int16  PacketType      (2) offset 0
 //	uint16 Index           (2) offset 2   destination inventory slot

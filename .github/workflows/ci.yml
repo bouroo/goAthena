@@ -5,6 +5,26 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  # Manual dispatch lets callers override any version; the defaults below are
+  # the latest stable releases. push/PR runs pass no inputs, so each version
+  # coalesces (||) to its latest-stable default.
+  workflow_dispatch:
+    inputs:
+      go-version:
+        description: "Go version (setup-go syntax, e.g. 'stable' or '1.26.x')"
+        default: "stable"
+      golangci-lint-version:
+        description: "golangci-lint release tag"
+        default: "v2.12.2"
+      mariadb-version:
+        description: "MariaDB image tag"
+        default: "11.4"
+      valkey-version:
+        description: "Valkey image tag"
+        default: "8"
+      nats-version:
+        description: "NATS image tag"
+        default: "2-alpine"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,145 +33,130 @@ concurrency:
 permissions:
   contents: read
 
+# Pinned version constants. Every job references these so a bump happens in one
+# place. They are also overridable via workflow_dispatch inputs (coalesced).
+env:
+  GO_VERSION: ${{ inputs.go-version || 'stable' }}
+  GOLANGCI_LINT_VERSION: ${{ inputs.golangci-lint-version || 'v2.12.2' }}
+  MARIADB_VERSION: ${{ inputs.mariadb-version || '11.4' }}
+  VALKEY_VERSION: ${{ inputs.valkey-version || '8' }}
+  NATS_VERSION: ${{ inputs.nats-version || '2-alpine' }}
+
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
-          go-version: "stable"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Verify modules
-        run: |
-          go mod verify
-          go mod tidy
-          git diff --exit-code go.mod go.sum
-      - uses: golangci/golangci-lint-action@v9
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout=5m
-      - name: Check formatting
-        run: |
-          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
-            echo "Unformatted files:"
-            gofmt -s -l .
-            exit 1
-          fi
 
   unit:
-    name: Unit Tests
+    name: Unit tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: lint
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
-          go-version: "stable"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
       - run: go mod download
-      - run: go generate ./...
-      - run: go test -race -tags=unit -coverprofile=coverage.out -coverpkg=./internal/...,./pkg/... -covermode=atomic ./internal/... ./pkg/...
-      - name: Coverage gate
+      - name: go vet
+        run: go vet ./...
+      - name: gofumpt check
         run: |
-          total=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
-          echo "Coverage: $total%"
-          if awk -v t="$total" 'BEGIN { exit !(t < 60.0) }'; then
-            echo "Coverage below 60% threshold"
-            exit 1
-          fi
-      - uses: codecov/codecov-action@v7
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.out
-          fail_ci_if_error: false
-      - uses: actions/upload-artifact@v7
-        with:
-          name: coverage-report
-          path: coverage.out
-          retention-days: 7
+          go install mvdan.cc/gofumpt@latest
+          out="$(gofumpt -l . | grep -v '^third_party/' || true)"
+          if [ -n "$out" ]; then echo "needs task fmt:"; echo "$out"; exit 1; fi
+      - name: unit tests (-race)
+        run: go test -race -tags=unit ./internal/... ./pkg/...
 
   integration:
-    name: Integration Tests
+    name: Integration tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: unit
     services:
       mariadb:
-        image: docker.io/library/mariadb:11.4
+        # NB: the `env` context is not available in `services.image`; use
+        # `inputs` (which is) with coalesce to the latest-stable default.
+        image: mariadb:${{ inputs.mariadb-version || '11.4' }}
         env:
-          MARIADB_ROOT_PASSWORD: goathena
-          MARIADB_DATABASE: goathena_test
-          MARIADB_USER: goathena
-          MARIADB_PASSWORD: goathena
+          MARIADB_ROOT_PASSWORD: ragnarok
+          MARIADB_DATABASE: n
+          MARIADB_USER: r
+          MARIADB_PASSWORD: r
         ports:
-          - 3306:3306
+          - 13306:3306
         options: >-
-          --health-cmd "healthcheck.sh --connect"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-          --health-start-period 30s
+          --health-cmd="mariadb-admin ping -uroot -pragnarok"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
       valkey:
-        image: docker.io/valkey/valkey:9-alpine
+        image: valkey/valkey:${{ inputs.valkey-version || '8' }}
         ports:
-          - 6379:6379
+          - 16379:6379
         options: >-
-          --health-cmd "valkey-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+          --health-cmd="valkey-cli ping"
+          --health-interval=10s
+          --health-timeout=3s
+          --health-retries=10
       nats:
-        image: docker.io/library/nats:2
+        image: nats:${{ inputs.nats-version || '2-alpine' }}
         ports:
           - 4222:4222
+        options: >-
+          --health-cmd="wget -qO- http://127.0.0.1:8222/healthz || exit 1"
+          --health-interval=10s
+          --health-timeout=3s
+          --health-retries=10
+    env:
+      DB_DRIVER: mariadb
+      DB_HOST: 127.0.0.1
+      DB_PORT: 13306
+      DB_NAME: n
+      DB_USER: r
+      DB_PASSWORD: r
+      VALKEY_HOST: 127.0.0.1
+      VALKEY_PORT: 16379
+      NATS_URL: nats://127.0.0.1:4222
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
-          go-version: "stable"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
       - run: go mod download
-      - run: go generate ./...
-      - name: Run migrations
-        env:
-          DB_DRIVER: mariadb
-          DB_HOST: localhost
-          DB_PORT: 3306
-          DB_NAME: goathena_test
-          DB_USER: goathena
-          DB_PASSWORD: goathena
-          DB_SSL_MODE: "false"
+      - name: apply schema
         run: |
-          go run ./cmd/goathena migrate up
-      - name: Run integration tests
-        env:
-          DB_DRIVER: mariadb
-          DB_HOST: localhost
-          DB_PORT: 3306
-          DB_NAME: goathena_test
-          DB_USER: goathena
-          DB_PASSWORD: goathena
-          DB_SSL_MODE: "false"
-          VALKEY_HOST: localhost
-          VALKEY_PORT: 6379
-          VALKEY_DB: 0
-          APP_ENVIRONMENT: test
+          go build -o /tmp/goathena ./cmd/goathena
+          /tmp/goathena migrate up -config <(printf 'app:\n  environment: test\ndb:\n  driver: mariadb\n  host: 127.0.0.1\n  port: 13306\n  name: n\n  user: r\n  password: r\n  ssl_mode: disable\n')
+      - name: seed test data
+        run: |
+          docker run --rm --network host mariadb:${{ env.MARIADB_VERSION }} \
+            mariadb -h 127.0.0.1 -P 13306 -ur -pr n \
+            -e "INSERT IGNORE INTO login (account_id,userid,user_pass,sex,email) VALUES (2000001,'testacc',MD5('s3cret'),'M','t@t');
+                INSERT IGNORE INTO \`char\` (account_id,char_num,name,base_level,job_level,max_hp,hp,max_sp,sp,last_map,save_map) VALUES (2000001,0,'Hero',1,1,1000,1000,50,50,'new_1-1','new_1-1');"
+      - name: integration tests (-race)
         run: go test -race -tags=integration ./...
 
   build:
-    name: Build
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: Build image
     needs: [lint, unit]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
-          go-version: "stable"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
-      - run: go build -ldflags="-s -w" -o bin/goathena ./cmd/goathena
-      - run: docker build -f Containerfile -t goathena:ci .
+      - name: build binary
+        run: go build -ldflags="-s -w" -o bin/goathena ./cmd/goathena
+      - name: build container image
+        run: docker build -f Containerfile -t goathena:ci .

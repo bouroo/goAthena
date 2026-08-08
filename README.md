@@ -6,7 +6,8 @@
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
 
 A Go re-implementation of the **Ragnarok Online** server, built as a modular
-monolith on domain-driven / clean-architecture principles.
+monolith on domain-driven / clean-architecture principles and designed to scale
+from a hobbyist Podman node to an enterprise Kubernetes + Agones fleet.
 
 ## What is this?
 
@@ -24,14 +25,15 @@ deployable **modular monolith** — one binary, supervised listeners — whose
 bounded-context modules are split-ready (every seam is a Go interface; the first
 real scale-out extracts a module into its own binary over the NATS bus).
 
-> **Project status — greenfield rebuild in progress.** The application layer was
-> rebuilt from an empty tree into a modular monolith, carrying the verified,
-> tested **kernel** verbatim (`pkg/ro` protocol/data libraries, the
-> infrastructure adapters, and the 11-wave SQL schema). **Milestone M0 (scaffold)
-> is complete:** the single binary boots, serves `/healthz` + `/readyz`, and
-> applies migrations. The gameplay milestones (login → character → world →
-> combat → commerce → script → transit) land in M1–M12. goAthena is **not yet a
-> drop-in replacement**; it is a usable, tested foundation under active rebuild.
+> **Project status — greenfield rebuild in progress.** The application layer is
+> being rebuilt as a modular monolith on a **verified, tested foundation**:
+> the `pkg/ro` protocol/data kernel, the infrastructure adapters, and the 11-wave
+> SQL schema (all carried verbatim). **Milestones M0–M7** (scaffold, login,
+> character, world core, gateway, inventory, spawn/drops, combat) are **done and
+> proven**; the active frontier is **M8–M12** (economy, commerce, the script VM,
+> social, transit). goAthena is **not yet a drop-in replacement**; it is a
+> usable, tested foundation under active rebuild. See **[docs/roadmap.md](docs/roadmap.md)**
+> for the full plan, milestone status, and phase-by-phase implementation.
 
 ## Who is this for?
 
@@ -41,6 +43,20 @@ real scale-out extracts a module into its own binary over the NATS bus).
   on it.
 - **RO community** — server operators and scripters evaluating a modern
   alternative to rAthena.
+
+## Technology stack
+
+| Layer | Choice | Why |
+|---|---|---|
+| Language | **Go 1.26+** | Concurrency, single-static-binary deploy, GC fit for a game loop |
+| Primary DB | **PostgreSQL** (MariaDB as compatibility fallback) | PG for production durability; MariaDB preserves rAthena schema read/write compat |
+| Cache / sessions | **Valkey** (Redis-fork) | Session keys, hot state, rate-limit counters |
+| Inter-service eventing | **NATS** | The scale-out bus when modules extract into separate binaries |
+| Game-server orchestration | **Agones** | Per-zone `GameServer` allocation on Kubernetes |
+| Network | **gnet v2** (TCP) + **coder/websocket** (roBrowser) | Zero-copy event loop for the map protocol; WS for browser clients |
+| Migrations | **golang-migrate** (embedded `go:embed`) | Self-contained, idempotent, 11-wave schema |
+| DI | **samber/do v2** | Auditable, line-by-line wiring; infra singletons, plain-ctor use cases |
+| Observability | **OpenTelemetry** + Prometheus + Grafana | Traces/metrics across the tick loop and cross-module calls |
 
 ## Prerequisites
 
@@ -79,6 +95,11 @@ narrow domain port to the others; cross-module calls go through interfaces, not
 concrete types. Layering inside a module is clean-architecture: `domain`
 (ports + value objects, pure) → `app` (use cases) → `infra` (adapters) → `di`
 (wiring). Dependency direction is strictly inward.
+
+The server mirrors rAthena's tick model with Go-native concurrency: a
+**fixed-timestep game loop at 50 Hz (20 ms)** drives AOI, timers, and combat,
+while a goroutine-per-connection reader feeds a serializing dispatcher per entity
+so game-state mutation stays race-free without a global lock.
 
 Three boundary mechanisms are enforced from the first commit (merge-blocking in
 CI, not advisory):
@@ -126,10 +147,16 @@ Carried verbatim and unit-tested — the spec everything else builds on:
 |---|---|
 | `packet` | Typed request parsers (`Parse*`), `(*Response).Encode`, streaming `Decoder.Feed/Next`, opcode tables |
 | `packetdb` | Version-gated opcode compiler (`ForPacketVer`) — the dispatcher's per-`PACKETVER` seam |
-| `crypto` / `textenc` | Stream crypto and the multi-byte text encoding (Thai codepage) |
+| `crypto` / `textenc` | Stream crypto and the multi-byte text encoding (Korean/Thai codepages) |
 | `aoi` / `pathfinding` / `romap` | Area-of-interest grid, A*, and map/tile models |
-| `script` | Script types/opcode/parse (the engine that runs them lands in `content`, M9) |
+| `script` | Script types/opcode/parse (the engine that runs them lands in `content`) |
 | `itemdb`, `mobdb`, `skilldb`, `skilltree`, `jobdb`, `jobbasepoints`, `statpoint`, `constdb`, `rathenadb`, `athenaconf`, `mapindex` | Game-data registries loaded from rAthena YAMLs |
+
+**Compatibility facts** (verified against the rAthena source): at
+`PACKETVER 20250604` the stream codec is an **identity transform (no
+obfuscation)**; Thai Classic is **non-renewal** so the `db/pre-re` tree and
+pre-renewal stat formulas are authoritative; the client declares
+`servicetype=korea`, `langtype=0`, `version=55`.
 
 ## Project layout
 
@@ -150,9 +177,36 @@ pkg/ro/              # RO protocol & data libraries (the kernel)
 api/                 # per-BC NATS event contracts — rebuilt alongside the modules
 deployments/         # agones, docker, kustomize, observability manifests
 data/                # game data: mob_db, mob_spawns, npc
+docs/                # project plan & roadmap (docs/roadmap.md)
 config.yaml          # default configuration (overridable per-env)
 compose.yml          # mariadb + valkey + nats + goathena (+ observability profile)
 ```
+
+## Deployment — hobbyist to enterprise
+
+A single binary and one image serve both ends; only the surrounding topology
+differs.
+
+- **Tier 1 — Hobbyist (single node).** `podman compose up`: one `goathena`
+  container with MariaDB + Valkey + NATS as sidecars. One process, one map zone,
+  hundreds of concurrent players. No Kubernetes.
+- **Tier 2 — Small fleet.** The monolith behind a load balancer; Valkey for
+  shared sessions so any node can resume a login; NATS for cross-node
+  broadcasts; PG read-replicas.
+- **Tier 3 — Enterprise (Kubernetes + Agones).** Agones `Fleet` allocates
+  **per-zone `GameServer` processes** (the natural unit of horizontal scale for a
+  zone-based world); bounded contexts extract into **separate binaries over
+  NATS** as load demands (e.g. a sharded `economy` zeny-ledger); PostgreSQL
+  primary+replicas, Valkey cluster, OTel Collector → Prometheus/Grafana.
+
+Deployment assets:
+
+- `deployments/docker/` — the `Containerfile` builds the single `goathena`
+  image (`serve` by default; override `command: ["migrate", "up"]` for the init
+  container).
+- `deployments/kustomize/` — Kubernetes manifests (base + dev/prod overlays).
+- `deployments/agones/` — Agones `Fleet` / `GameServer` CRDs for the game world.
+- `deployments/observability/` — OpenTelemetry Collector + Prometheus configs.
 
 ## Reference: testing, schema, codegen, lint
 
@@ -185,22 +239,13 @@ login/char tables must stay read-compatible with the legacy
 CI also checks `gofmt -s`. `task tidy && task verify` fails if `go.mod`/`go.sum`
 have diff.
 
-## Deployment
-
-- `deployments/docker/` — the `Containerfile` builds the single `goathena`
-  image (`serve` by default; override `command: ["migrate", "up"]` for the init
-  container).
-- `deployments/kustomize/` — Kubernetes manifests (base + overlays).
-- `deployments/agones/` — Agones `Fleet` / `GameServer` CRDs for the game world.
-- `deployments/observability/` — OpenTelemetry Collector + Prometheus configs.
-
 ## Reference: rAthena
 
 goAthena's source of truth for legacy RO behavior — packet formats, the script
 dialect, map file formats, the DB schema, and game-data YAMLs — is the upstream
-[rAthena](https://github.com/rathena/rathena) C/C++ codebase. It's checked out
-locally as `third_party/rathena` and is read for reference only; nothing from it
-is vendored into goAthena.
+[rAthena](https://github.com/rathena/rathena) C/C++ codebase (and its Thai
+Classic fork, checked out as `third_party/rathenaThailand`). It's read for
+reference only; nothing from it is vendored into goAthena.
 
 Quick map (where to look in rAthena for a given concern):
 
@@ -211,8 +256,8 @@ Quick map (where to look in rAthena for a given concern):
 | Character server / inter-server comms | `src/char/` |
 | Map server / pathfinding / script VM | `src/map/` |
 | Shared utilities (timer, sql, grf, md5) | `src/common/` |
-| Game DBs | `db/` |
-| Script corpus | `npc/` |
+| Game DBs (pre-re authoritative for Thai Classic) | `db/`, `db/pre-re/` |
+| Script corpus + spawns | `npc/`, `npcTH/` |
 | SQL schema | `sql-files/main.sql` |
 
 ## License
