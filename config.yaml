@@ -36,9 +36,11 @@ nats:                               # inter-service event bus (scale-out seam)
   url: nats://127.0.0.1:4222
 
 gateway:                            # RO game-protocol listeners
-  login_host: 0.0.0.0               # the only static port the client knows
-  login_port: 6900
+  login_host: 0.0.0.0               # bind host for all listeners
+  login_port: 6900                  # the only static port the client knows
+  char_host: 127.0.0.1              # advertised char-server host (client-facing)
   char_port: 6121                   # advertised during login->char handoff
+  map_host: 127.0.0.1               # advertised map-server host (client-facing)
   map_port: 5121                    # advertised during char->map handoff
 
 identity:

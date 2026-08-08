@@ -31,7 +31,7 @@ func NewLoginServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.
 		auth,
 		sess,
 		log,
-		cfg.Gateway.LoginHost,
+		cfg.Gateway.CharHost,
 		cfg.App.Name,
 		uint16(cfg.Gateway.CharPort), //nolint:gosec // G115: CharPort operator-set (default 6121).
 	)
@@ -50,7 +50,7 @@ func NewCharServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.C
 	cs, err := app.NewCharServer(
 		chars,
 		log,
-		cfg.Gateway.LoginHost,
+		cfg.Gateway.MapHost,
 		uint16(cfg.Gateway.MapPort), //nolint:gosec // G115: MapPort operator-set (default 5121).
 	)
 	if err != nil {

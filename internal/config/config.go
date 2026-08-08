@@ -111,9 +111,11 @@ type NATSConfig struct {
 // GatewayConfig holds the game-protocol listeners. The client only knows the
 // login port statically; char/map ports are advertised during the handoff.
 type GatewayConfig struct {
-	LoginHost string `yaml:"login_host" env:"GATEWAY_LOGIN_HOST"`
+	LoginHost string `yaml:"login_host" env:"GATEWAY_LOGIN_HOST"` // bind host for all listeners
 	LoginPort int    `yaml:"login_port" env:"GATEWAY_LOGIN_PORT"`
+	CharHost  string `yaml:"char_host"  env:"GATEWAY_CHAR_HOST"` // advertised char-server host (client-facing)
 	CharPort  int    `yaml:"char_port"  env:"GATEWAY_CHAR_PORT"`
+	MapHost   string `yaml:"map_host"   env:"GATEWAY_MAP_HOST"` // advertised map-server host (client-facing)
 	MapPort   int    `yaml:"map_port"   env:"GATEWAY_MAP_PORT"`
 }
 
@@ -186,10 +188,14 @@ func defaults() *Config {
 			IdleTimeout:        120 * time.Second,
 			HealthProbeTimeout: 2 * time.Second,
 		},
-		DB:       DBConfig{Driver: "mariadb", Port: 3306, SSLMode: "disable"},
-		Valkey:   ValkeyConfig{Port: 6379},
-		NATS:     NATSConfig{URL: "nats://127.0.0.1:4222"},
-		Gateway:  GatewayConfig{LoginPort: 6900, CharPort: 6121, MapPort: 5121},
+		DB:     DBConfig{Driver: "mariadb", Port: 3306, SSLMode: "disable"},
+		Valkey: ValkeyConfig{Port: 6379},
+		NATS:   NATSConfig{URL: "nats://127.0.0.1:4222"},
+		Gateway: GatewayConfig{
+			LoginHost: "0.0.0.0", LoginPort: 6900,
+			CharHost: "127.0.0.1", CharPort: 6121,
+			MapHost: "127.0.0.1", MapPort: 5121,
+		},
 		Identity: IdentityConfig{UseMD5Passwords: true, MaxChars: 9},
 		Zone:     ZoneConfig{TickRateHz: 50, ViewRangeCells: 20},
 		Log:      LogConfig{Level: "info", Format: "json"},

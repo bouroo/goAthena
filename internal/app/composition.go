@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/samber/do/v2"
 	vk "github.com/valkey-io/valkey-go"
@@ -15,6 +16,8 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/account"
 	"github.com/bouroo/goAthena/internal/modules/character"
 	"github.com/bouroo/goAthena/internal/modules/gateway"
+	"github.com/bouroo/goAthena/internal/modules/world"
+	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 )
 
 // protoListener is the lifecycle surface App.Run needs from a game-protocol
@@ -33,6 +36,13 @@ type deps struct {
 	valkey vk.Client
 	login  protoListener
 	char   protoListener
+	tick   tickStarter
+}
+
+// tickStarter is the lifecycle surface for the world tick loop.
+type tickStarter interface {
+	StartTick(ctx context.Context, update func(ctx context.Context, dt time.Duration))
+	Stop()
 }
 
 // compose opens the infrastructure singletons and registers them in the DI
@@ -69,6 +79,14 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	// down dependency surfaces as a resolution error at use time, not at boot.
 	account.Register(inj, cfg.Identity.UseMD5Passwords)
 	character.Register(inj, cfg.Identity.MaxChars)
+	world.Register(inj, cfg.Zone.TickRateHz)
+
+	// Resolve the world service so App.Run can start/stop its tick loop.
+	if ws, err := do.Invoke[*worldapp.WorldService](inj); err != nil {
+		log.Error("world service resolve failed; tick loop will not run", "err", err)
+	} else {
+		d.tick = ws
+	}
 
 	// Listeners resolve their ports from the injector. Best-effort: a build
 	// failure is logged and the listener simply won't serve.

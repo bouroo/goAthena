@@ -64,6 +64,10 @@ func (a *App) Run(ctx context.Context) error {
 		charAddr := fmt.Sprintf("tcp://%s:%d", a.cfg.Gateway.LoginHost, a.cfg.Gateway.CharPort)
 		a.deps.char.Start(charAddr)
 	}
+	// The world tick loop drives entity/AOI updates at the configured rate.
+	if a.deps.tick != nil {
+		go a.deps.tick.StartTick(ctx, nil) //nolint:contextcheck // lifecycle tied to ctx via select
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -81,6 +85,11 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		a.log.Info("shutdown signal received, draining", "timeout", a.cfg.App.ShutdownTimeout)
+	}
+
+	// Stop the world tick loop before draining listeners.
+	if a.deps.tick != nil {
+		a.deps.tick.Stop()
 	}
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), a.cfg.App.ShutdownTimeout)
