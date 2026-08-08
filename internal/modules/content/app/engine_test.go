@@ -189,3 +189,63 @@ func TestScriptHost_CompiledWarpHealScript(t *testing.T) {
 		t.Errorf("frame 1 header = %#x, want ZC_NPCACK_MAPMOVE", got)
 	}
 }
+
+// TestScriptHost_InputStr drives InputStr with a fake string reply and asserts it
+// returns the exact text the client typed, not a numeric encoding of it.
+func TestScriptHost_InputStr(t *testing.T) {
+	h, w := newTestHost(nil, 150001)
+
+	// Buffer the client's non-numeric string reply before the blocking call.
+	h.session.Signal <- domain.DialogSignal{Input: "the quick brown fox"}
+
+	got, ok := h.InputStr()
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if got != "the quick brown fox" {
+		t.Errorf("InputStr = %q, want %q (raw string, not numeric encoding)", got, "the quick brown fox")
+	}
+	// InputStr must emit the string-input prompt (ZC_OPEN_EDITDLGSTR).
+	if len(w.frames) != 1 {
+		t.Fatalf("frames = %d, want 1 (ZC_OPEN_EDITDLGSTR)", len(w.frames))
+	}
+	if got := binary.LittleEndian.Uint16(w.frames[0][0:]); got != ropacket.HeaderZCOPENEDITDLGSTR {
+		t.Errorf("frame 0 header = %#x, want ZC_OPEN_EDITDLGSTR", got)
+	}
+}
+
+// TestScriptHost_InputStr_Cancel asserts a cancel/close signal yields "", false.
+func TestScriptHost_InputStr_Cancel(t *testing.T) {
+	h, _ := newTestHost(nil, 150001)
+
+	h.session.Signal <- domain.DialogSignal{Cancel: true}
+
+	got, ok := h.InputStr()
+	if ok {
+		t.Errorf("ok = true, want false on cancel")
+	}
+	if got != "" {
+		t.Errorf("InputStr = %q, want \"\" on cancel", got)
+	}
+}
+
+// TestScriptHost_Input guards the numeric sibling: a numeric reply still parses.
+func TestScriptHost_Input(t *testing.T) {
+	h, w := newTestHost(nil, 150001)
+
+	h.session.Signal <- domain.DialogSignal{Input: "12345"}
+
+	got, ok := h.Input()
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if got != 12345 {
+		t.Errorf("Input = %d, want 12345", got)
+	}
+	if len(w.frames) != 1 {
+		t.Fatalf("frames = %d, want 1 (ZC_OPEN_EDITDLG)", len(w.frames))
+	}
+	if got := binary.LittleEndian.Uint16(w.frames[0][0:]); got != ropacket.HeaderZCOPENEDITDLG {
+		t.Errorf("frame 0 header = %#x, want ZC_OPEN_EDITDLG", got)
+	}
+}

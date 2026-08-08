@@ -86,7 +86,11 @@ func (s *MapServer) OnTraffic(c gnet.Conn) gnet.Action {
 				return gnet.None
 			}
 			cp := append([]byte(nil), frame...) // detach from gnet's ring buffer
-			go h.fn(s, c, cp)
+			// Resolve auth on the eventloop — the only goroutine that mutates the
+			// conn's context — and pass it in. Handlers must not read c.Context()
+			// off-loop, where gnet's conn.release() races it on close.
+			auth := authFromConn(c)
+			go h.fn(s, c, auth, cp)
 			continue
 		}
 		// Unwired opcode: skip the frame using the DB's length so the client
@@ -141,7 +145,7 @@ func (s *MapServer) unhandledSkip(c gnet.Conn, opcode uint16) (skip int, buffere
 
 // handleEnter verifies the CZ_ENTER, admits the player into the world, and sends
 // the map-enter + self-spawn reply.
-func (s *MapServer) handleEnter(c gnet.Conn, frame []byte) {
+func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 	req, err := ropacket.ParseCZEnter(frame)
 	if err != nil {
 		s.log.Warn("map: unparseable CZ_ENTER", "err", err)

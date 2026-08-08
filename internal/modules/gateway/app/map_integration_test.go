@@ -317,13 +317,94 @@ func TestMap_Dispatch_PickupFloorItem(t *testing.T) {
 	}
 }
 
-// TestMap_Dispatch_SurvivesUnwiredOpcode proves the map server keeps a client
-// connected when it sends a DB-registered but not-yet-wired opcode. A Thai
-// Classic client sending CZ_ITEM_DROP (0x0363, 6B) — which has no entry in the
-// mapHandlers dispatch table — must not be booted: the dispatcher skips the
-// frame via the packet DB length, and a following CZ_REQUEST_MOVE still elicits
-// its ZC_NOTIFY_PLAYERMOVE reply on the same socket.
-func TestMap_Dispatch_SurvivesUnwiredOpcode(t *testing.T) {
+// TestMap_Dispatch_DropItem exercises CZ_ITEM_DROP (0x0363 @ 20250604): the
+// player drops an inventory item, which removes it from the bag and places a
+// floor item on the ground. The bag is seeded through the already-wired pickup
+// path (drop a floor item server-side, CZ_ITEM_PICKUP it into inventory) so the
+// test needs no private access to the MapServer's InventoryService. After the
+// drop the handler replies ZC_ITEM_THROW_ACK (SELF) + ZC_ITEM_FALL_ENTRY, and
+// the dropped item is observable on the floor via SpawnService.FloorItems.
+func TestMap_Dispatch_DropItem(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	conn, spawn := startMapListenerWithSpawn(t, port, sessions)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// Seed the bag via the pickup path: drop a floor item server-side, then
+	// CZ_ITEM_PICKUP it into the player's inventory (slot 1).
+	seed := spawn.DropItem(512, 3, "new_1-1", worlddomain.Position{X: 53, Y: 111}, 0)
+	pickup := make([]byte, 6)
+	binary.LittleEndian.PutUint16(pickup[0:], ropacket.HeaderCZITEMTAKE0362)
+	binary.LittleEndian.PutUint32(pickup[2:], seed.GroundID)
+	if _, err := conn.Write(pickup); err != nil {
+		t.Fatalf("send seed CZ_ITEM_PICKUP: %v", err)
+	}
+	if _, err := io.ReadFull(conn, make([]byte, 70)); err != nil { // sizeZCItemPickupAck
+		t.Fatalf("read seed pickup-ack: %v", err)
+	}
+
+	// CZ_ITEM_DROP (0x0363, 6B): drop 1 unit from inventory slot 1.
+	dropReq := make([]byte, 6)
+	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
+	binary.LittleEndian.PutUint16(dropReq[2:], 1) // inventory index (1-based)
+	binary.LittleEndian.PutUint16(dropReq[4:], 1) // amount
+	if _, err := conn.Write(dropReq); err != nil {
+		t.Fatalf("send CZ_ITEM_DROP: %v", err)
+	}
+
+	// Expect ZC_ITEM_THROW_ACK (6B, SELF) + ZC_ITEM_FALL_ENTRY (24B).
+	throwAck := make([]byte, 6) // sizeZCItemThrowAck
+	if _, err := io.ReadFull(conn, throwAck); err != nil {
+		t.Fatalf("read ZC_ITEM_THROW_ACK: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(throwAck[0:2]); got != ropacket.HeaderZCItemThrowAck {
+		t.Fatalf("throw-ack header = 0x%04x, want ZC_ITEM_THROW_ACK (0x%04x)", got, ropacket.HeaderZCItemThrowAck)
+	}
+	if got := binary.LittleEndian.Uint16(throwAck[2:4]); got != 1 {
+		t.Fatalf("throw-ack index = %d, want 1", got)
+	}
+	if got := binary.LittleEndian.Uint16(throwAck[4:6]); got != 1 {
+		t.Fatalf("throw-ack count = %d, want 1", got)
+	}
+	fallEntry := make([]byte, 24) // sizeZCItemFallEntry
+	if _, err := io.ReadFull(conn, fallEntry); err != nil {
+		t.Fatalf("read ZC_ITEM_FALL_ENTRY: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(fallEntry[0:2]); got != ropacket.HeaderZCItemFallEntry {
+		t.Fatalf("fall-entry header = 0x%04x, want ZC_ITEM_FALL_ENTRY (0x%04x)", got, ropacket.HeaderZCItemFallEntry)
+	}
+	if got := binary.LittleEndian.Uint32(fallEntry[6:10]); got != 512 {
+		t.Fatalf("fall-entry nameID = %d, want 512", got)
+	}
+
+	// Observable proof: the dropped item is now on the floor.
+	var found bool
+	for _, fi := range spawn.FloorItems("new_1-1") {
+		if fi.NameID == 512 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("dropped item 512 not on floor")
+	}
+}
+
+// TestMap_Dispatch_DropOutOfRangeKeepsConnection proves a CZ_ITEM_DROP
+// (0x0363 @ 20250604) against an inventory slot the player does not own must not
+// close the connection. The handler resolves the 1-based index, finds it out of
+// range (no items seeded), logs, and returns without replying; a following
+// CZ_REQUEST_MOVE still elicits its ZC_NOTIFY_PLAYERMOVE reply on the same socket.
+func TestMap_Dispatch_DropOutOfRangeKeepsConnection(t *testing.T) {
 	port := freePort(t)
 	sessions := charinfra.NewMemorySessionStore()
 	_ = sessions.PutSession(t.Context(), chardomain.Session{
@@ -339,9 +420,8 @@ func TestMap_Dispatch_SurvivesUnwiredOpcode(t *testing.T) {
 		t.Fatalf("drain accept-enter: %v", err)
 	}
 
-	// 2. CZ_ITEM_DROP (0x0363, 6B): DB-registered (sizeCZDropItem = 6) but
-	//    unwired — must be skipped, not closed. Fields are filler; nothing
-	//    parses them.
+	// 2. CZ_ITEM_DROP (0x0363, 6B) against slot 1, which the player does not own
+	//    (no items seeded) → handler logs + returns; no reply, connection kept.
 	dropReq := make([]byte, 6)
 	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
 	binary.LittleEndian.PutUint16(dropReq[2:], 1) // inventory index
@@ -350,7 +430,7 @@ func TestMap_Dispatch_SurvivesUnwiredOpcode(t *testing.T) {
 		t.Fatalf("send CZ_ITEM_DROP: %v", err)
 	}
 
-	// 3. CZ_REQUEST_MOVE on the same connection. If the unwired drop had closed
+	// 3. CZ_REQUEST_MOVE on the same connection. If the rejected drop had closed
 	//    the socket, this write or the reply read fails with EOF.
 	moveReq := make([]byte, 5)
 	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
@@ -359,12 +439,12 @@ func TestMap_Dispatch_SurvivesUnwiredOpcode(t *testing.T) {
 	moveReq[4] = 0   // dest dir
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := conn.Write(moveReq); err != nil {
-		t.Fatalf("send CZ_REQUEST_MOVE after unwired opcode: %v", err)
+		t.Fatalf("send CZ_REQUEST_MOVE after rejected drop: %v", err)
 	}
 
 	moveReply := make([]byte, 12)
 	if _, err := io.ReadFull(conn, moveReply); err != nil {
-		t.Fatalf("read player-move reply after unwired opcode: %v (conn likely closed)", err)
+		t.Fatalf("read player-move reply after rejected drop: %v (conn likely closed)", err)
 	}
 	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE {
 		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE)

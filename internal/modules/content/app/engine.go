@@ -175,8 +175,7 @@ func (h *ScriptHost) InputStr() (string, bool) {
 	var buf bytes.Buffer
 	_ = ropacket.OpenEditDlgStrResponse{NpcID: h.session.NpcID}.Encode(&buf)
 	h.session.Writer.WritePacket(buf.Bytes())
-	in, ok := h.waitInput()
-	return strconv.FormatInt(in, 10), ok // numeric-encode stub; full str path in M10b
+	return h.waitInputStr()
 }
 
 // Close sends the close-dialog frame (ZC_CLOSE_DIALOG).
@@ -263,5 +262,20 @@ func (h *ScriptHost) waitInput() (int64, bool) {
 		return n, true
 	case <-t.C:
 		return 0, false
+	}
+}
+
+// waitInputStr blocks for a string input. Close/timeout → "", false.
+func (h *ScriptHost) waitInputStr() (string, bool) {
+	t := time.NewTimer(dialogTimeout)
+	defer t.Stop()
+	select {
+	case sig := <-h.session.Signal:
+		if sig.Cancel {
+			return "", false
+		}
+		return sig.Input, true
+	case <-t.C:
+		return "", false
 	}
 }

@@ -17,8 +17,9 @@ import (
 
 // WorldService owns the in-memory entity registry and per-map AOI grids. It is
 // safe for concurrent use: a mutex protects the registry; the AOI grid manages
-// its own internal synchronization. The 50 Hz tick loop drives periodic entity
-// updates (spawn/despawn/visibility refresh).
+// its own internal synchronization. The periodic tick loop fires a
+// caller-supplied update callback; respawn and combat advance on their own
+// event paths, not this loop.
 type WorldService struct {
 	mu       sync.RWMutex
 	entities map[domain.EntityID]*domain.Entity  // global by EntityID
@@ -163,12 +164,21 @@ func (w *WorldService) QueryVisible(mapName string, x, y int) []domain.EntityID 
 	return out
 }
 
-// StartTick runs the 50 Hz game loop. Each tick fires the update callback (the
-// gateway/ingress layer registers its broadcast logic there). Blocks until Stop.
+// StartTick runs the periodic game loop. Each tick fires update (the gateway/
+// ingress layer registers its broadcast logic there) and blocks until ctx is
+// cancelled or Stop is called. When update is nil no periodic entity-state work
+// is established yet -- respawn runs on SpawnService's own timers and combat is
+// event-driven -- so StartTick logs a single boot warning and returns instead of
+// spinning the ticker at the configured rate for nothing.
 func (w *WorldService) StartTick(ctx context.Context, update func(ctx context.Context, dt time.Duration)) {
+	rateHz := int(time.Second / w.tickRate)
+	if update == nil {
+		w.log.Warn("world tick loop idle: no update callback registered; periodic entity-state advance is disabled (spawn/combat remain event-driven)", "rate_hz", rateHz)
+		return
+	}
+	w.log.Info("world tick loop started", "rate_hz", rateHz)
 	ticker := time.NewTicker(w.tickRate)
 	defer ticker.Stop()
-	w.log.Info("world tick loop started", "rate_hz", int(time.Second/w.tickRate))
 	for {
 		select {
 		case <-ctx.Done():
@@ -176,9 +186,7 @@ func (w *WorldService) StartTick(ctx context.Context, update func(ctx context.Co
 		case <-w.stopCh:
 			return
 		case t := <-ticker.C:
-			if update != nil {
-				update(ctx, t.Sub(t.Add(-w.tickRate)))
-			}
+			update(ctx, t.Sub(t.Add(-w.tickRate)))
 		}
 	}
 }

@@ -130,3 +130,22 @@ func TestStartTick_FiresUpdates(t *testing.T) {
 		t.Error("tick loop never fired update callback")
 	}
 }
+
+func TestStartTick_IdleWithoutCallback(t *testing.T) {
+	w := app.NewWorldService(infra.NewMemoryWorldRepository(), slog.Default(), 1000) // 1ms tick
+	// With no update callback there is no periodic entity-state work to do
+	// (spawn/combat are event-driven), so StartTick must return immediately
+	// rather than spin the ticker, and Stop must drain idempotently.
+	done := make(chan struct{})
+	go func() {
+		w.StartTick(context.Background(), nil)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("StartTick with nil callback blocked instead of returning idle")
+	}
+	w.Stop()
+	w.Stop() // idempotent: must not panic on double-close
+}

@@ -54,10 +54,18 @@ type tickStarter interface {
 }
 
 // compose opens the infrastructure singletons and registers them in the DI
-// injector so bounded contexts can resolve them later. DB and Valkey connect
+// injector so bounded contexts can resolve them later.
+//
+// Error classification: cfg arrives already validated, so any non-recoverable
+// misconfiguration (malformed YAML, missing required field, unsupported value)
+// was rejected by config.Load — wrapping config.ErrConfigFatal — before this
+// function runs; the process exits at main rather than entering compose. The
+// failures compose CAN still see are therefore transient infrastructure
+// outages (DB/Valkey unreachable, listener bind refused). Those stay
 // best-effort: a boot failure is logged and the singleton left unregistered
 // rather than crashing the process, so /healthz stays 200 and /readyz reflects
-// the outage. The returned closer tears everything down in reverse order.
+// the outage for the readiness loop to keep probing. The returned closer tears
+// everything down in reverse order.
 func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Injector, *deps, func()) {
 	inj := do.New()
 	d := &deps{}

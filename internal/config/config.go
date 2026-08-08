@@ -11,6 +11,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"reflect"
 	"strconv"
@@ -21,6 +22,24 @@ import (
 	"github.com/go-playground/validator/v10"
 	"gopkg.in/yaml.v3"
 )
+
+// ErrConfigFatal marks a configuration error that no amount of retrying will
+// fix: malformed YAML, an unsupported enum value, or a missing required field.
+// Callers must treat it as a hard exit, not a transient outage the readiness
+// loop could recover from. Infrastructure reachability failures (DB/Valkey
+// unreachable, including auth errors) are NEVER wrapped with this sentinel —
+// those stay best-effort so the process keeps probing and reporting /readyz.
+var ErrConfigFatal = errors.New("config fatal")
+
+// IsFatal reports whether err (or an error it wraps) is a non-recoverable
+// configuration error. main uses this to exit immediately on a bad config
+// instead of entering the retry loop reserved for transient outages. Pure so
+// the classification is unit-testable without a live process.
+func IsFatal(err error) bool { return errors.Is(err, ErrConfigFatal) }
+
+// fatal wraps err so callers can detect it via IsFatal. The sentinel is the
+// leading wrapped value so errors.Is matches before the detail.
+func fatal(err error) error { return fmt.Errorf("%w: %w", ErrConfigFatal, err) }
 
 // validate is the process-wide, concurrency-safe validator instance. Built once
 // with a custom rule so time.Duration fields can enforce a minimum like 1s.
@@ -112,11 +131,11 @@ type NATSConfig struct {
 // login port statically; char/map ports are advertised during the handoff.
 type GatewayConfig struct {
 	LoginHost string `yaml:"login_host" env:"GATEWAY_LOGIN_HOST"` // bind host for all listeners
-	LoginPort int    `yaml:"login_port" env:"GATEWAY_LOGIN_PORT"`
+	LoginPort int    `yaml:"login_port" env:"GATEWAY_LOGIN_PORT" validate:"min=1,max=65535"`
 	CharHost  string `yaml:"char_host"  env:"GATEWAY_CHAR_HOST"` // advertised char-server host (client-facing)
-	CharPort  int    `yaml:"char_port"  env:"GATEWAY_CHAR_PORT"`
+	CharPort  int    `yaml:"char_port"  env:"GATEWAY_CHAR_PORT" validate:"min=1,max=65535"`
 	MapHost   string `yaml:"map_host"   env:"GATEWAY_MAP_HOST"` // advertised map-server host (client-facing)
-	MapPort   int    `yaml:"map_port"   env:"GATEWAY_MAP_PORT"`
+	MapPort   int    `yaml:"map_port"   env:"GATEWAY_MAP_PORT" validate:"min=1,max=65535"`
 }
 
 // IdentityConfig holds the login/char-server identity knobs rAthena .conf files
@@ -152,20 +171,34 @@ type OTelConfig struct {
 }
 
 // Load reads the YAML file at path, applies defaults, overlays environment
-// variables, and validates the result. A missing path is an error.
+// variables, and validates the result.
+//
+// A missing file is NOT fatal: the process runs on defaults + env overlay
+// (12-factor/container mode). This lets an image ship no config file at all
+// and be configured purely through environment variables, so no secrets are
+// baked into the image. A genuinely misconfigured deployment still fails
+// fast — Validate rejects missing required fields with a fatal error.
+//
+// Malformed input (unparseable YAML, a bad env value, or a violated required
+// field) returns an error wrapping ErrConfigFatal; callers use IsFatal to
+// distinguish those from a transient file-system error and exit immediately.
 func Load(path string) (*Config, error) {
 	cfg := defaults()
 
 	raw, err := os.ReadFile(path)
-	if err != nil {
+	switch {
+	case err == nil:
+		if err := yaml.Unmarshal(raw, cfg); err != nil {
+			return nil, fmt.Errorf("parse config %s: %w", path, fatal(err))
+		}
+	case errors.Is(err, fs.ErrNotExist):
+		// No file: fall through to defaults + env overlay.
+	default:
 		return nil, fmt.Errorf("read config %s: %w", path, err)
-	}
-	if err := yaml.Unmarshal(raw, cfg); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 
 	if err := applyEnv(cfg); err != nil {
-		return nil, fmt.Errorf("apply env: %w", err)
+		return nil, fatal(fmt.Errorf("apply env: %w", err))
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
@@ -207,13 +240,36 @@ func defaults() *Config {
 	}
 }
 
-// Validate enforces the struct `validate:` tags via go-playground/validator.
-// Violations are collected and returned as one wrapped error.
+// Validate enforces the struct `validate:` tags plus required-field checks the
+// tag system cannot express (non-empty connection/address fields). Every
+// violation is a fatal config error: violations are collected and returned as a
+// single error wrapping ErrConfigFatal so callers can detect it via IsFatal.
 func (c *Config) Validate() error {
+	var errs []error
+
 	if err := validate().Struct(c); err != nil {
-		return fmt.Errorf("config: %w", err)
+		errs = append(errs, err)
 	}
-	return nil
+
+	// Required fields a usable config cannot run without: the DB connection
+	// target and the game-protocol listen/advertise hosts. Password is optional
+	// (some engines allow passwordless local auth), so it is not checked here.
+	require := func(field, val string) {
+		if strings.TrimSpace(val) == "" {
+			errs = append(errs, fmt.Errorf("%s is required", field))
+		}
+	}
+	require("db.host", c.DB.Host)
+	require("db.name", c.DB.Name)
+	require("db.user", c.DB.User)
+	require("gateway.login_host", c.Gateway.LoginHost)
+	require("gateway.char_host", c.Gateway.CharHost)
+	require("gateway.map_host", c.Gateway.MapHost)
+
+	if len(errs) == 0 {
+		return nil
+	}
+	return fatal(fmt.Errorf("config: %w", errors.Join(errs...)))
 }
 
 // applyEnv overlays environment variables onto any struct field carrying an
