@@ -14,6 +14,7 @@ import (
 	charapp "github.com/bouroo/goAthena/internal/modules/character/app"
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
 	"github.com/bouroo/goAthena/internal/modules/gateway/app"
+	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 )
 
 // NewLoginServer resolves the Authenticator + SessionStore and builds the login
@@ -57,4 +58,21 @@ func NewCharServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.C
 		return nil, fmt.Errorf("char server: %w", err)
 	}
 	return cs, nil
+}
+
+// NewMapServer resolves the WorldService + SessionStore and builds the map listener.
+func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
+	world, err := do.Invoke[*worldapp.WorldService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve world service: %w", err)
+	}
+	sess, err := do.Invoke[chardomain.SessionStore](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve session store: %w", err)
+	}
+	ms, err := app.NewMapServer(world, sess, log)
+	if err != nil {
+		return nil, fmt.Errorf("map server: %w", err)
+	}
+	return ms, nil
 }

@@ -64,6 +64,10 @@ func (a *App) Run(ctx context.Context) error {
 		charAddr := fmt.Sprintf("tcp://%s:%d", a.cfg.Gateway.LoginHost, a.cfg.Gateway.CharPort)
 		a.deps.char.Start(charAddr)
 	}
+	if a.deps.mapSrv != nil {
+		mapAddr := fmt.Sprintf("tcp://%s:%d", a.cfg.Gateway.LoginHost, a.cfg.Gateway.MapPort)
+		a.deps.mapSrv.Start(mapAddr)
+	}
 	// The world tick loop drives entity/AOI updates at the configured rate.
 	if a.deps.tick != nil {
 		go a.deps.tick.StartTick(ctx, nil) //nolint:contextcheck // lifecycle tied to ctx via select

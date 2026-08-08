@@ -36,6 +36,7 @@ type deps struct {
 	valkey vk.Client
 	login  protoListener
 	char   protoListener
+	mapSrv protoListener
 	tick   tickStarter
 }
 
@@ -101,6 +102,12 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	} else {
 		d.char = cs
 		closers = append(closers, cs.Stop)
+	}
+	if ms, err := gateway.NewMapServer(inj, log); err != nil {
+		log.Error("map listener build failed; map will not start", "err", err)
+	} else {
+		d.mapSrv = ms
+		closers = append(closers, ms.Stop)
 	}
 
 	closeAll := func() {
