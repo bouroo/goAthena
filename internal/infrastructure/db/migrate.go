@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"io/fs"
 
 	"github.com/golang-migrate/migrate/v4"
 	migratedb "github.com/golang-migrate/migrate/v4/database"
@@ -18,25 +17,28 @@ import (
 )
 
 // Migrator applies the embedded schema to a live database. It is engine-aware:
-// mysql:// uses the MariaDB driver, postgres:// uses PostgreSQL. The same SQL
-// files run against both today; per-engine files can be added later.
+// it selects the migration subdirectory matching the driver (mariadb/ or
+// postgres/) so each engine gets DDL in its own dialect.
 type Migrator struct {
 	m *migrate.Migrate
 }
 
-// NewMigrator opens a dedicated *sql.DB from cfg and builds a Migrator.
+// NewMigrator opens a dedicated *sql.DB from cfg and builds a Migrator. The
+// migration source roots at the driver-specific subdirectory (mariadb/ or
+// postgres/) inside the embedded FS.
 func NewMigrator(cfg config.DBConfig) (*Migrator, error) {
+	drv := normalize(cfg.Driver)
 	database, raw, err := openMigrateDB(cfg)
 	if err != nil {
 		return nil, err
 	}
 	defer raw.Close()
 
-	src, err := iofs.New(migrationsFS(), ".")
+	src, err := iofs.New(migrations.FS, drv)
 	if err != nil {
-		return nil, fmt.Errorf("migration source: %w", err)
+		return nil, fmt.Errorf("migration source (%s): %w", drv, err)
 	}
-	m, err := migrate.NewWithInstance("iofs", src, cfg.Driver, database)
+	m, err := migrate.NewWithInstance("iofs", src, drv, database)
 	if err != nil {
 		return nil, fmt.Errorf("migrate init: %w", err)
 	}
@@ -135,5 +137,3 @@ func sqlDriverName(drv string) string {
 		return "mysql"
 	}
 }
-
-func migrationsFS() fs.FS { return migrations.FS }

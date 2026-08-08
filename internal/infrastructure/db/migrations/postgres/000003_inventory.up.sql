@@ -1,0 +1,38 @@
+-- Wave 3: rAthena `inventory` table (sql-files/main.sql, Thai Classic).
+-- PostgreSQL version. No unsigned types; tinyint→smallint, mediumint→integer.
+CREATE TABLE IF NOT EXISTS "inventory" (
+  "id" integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  "char_id" integer NOT NULL DEFAULT 0,
+  "nameid" integer NOT NULL DEFAULT 0,
+  "amount" integer NOT NULL DEFAULT 0,
+  "equip" integer NOT NULL DEFAULT 0,
+  "identify" smallint NOT NULL DEFAULT 0,
+  "refine" smallint NOT NULL DEFAULT 0,
+  "attribute" smallint NOT NULL DEFAULT 0,
+  "card0" integer NOT NULL DEFAULT 0,
+  "card1" integer NOT NULL DEFAULT 0,
+  "card2" integer NOT NULL DEFAULT 0,
+  "card3" integer NOT NULL DEFAULT 0,
+  "option_id0" smallint NOT NULL DEFAULT 0,
+  "option_val0" smallint NOT NULL DEFAULT 0,
+  "option_parm0" smallint NOT NULL DEFAULT 0,
+  "option_id1" smallint NOT NULL DEFAULT 0,
+  "option_val1" smallint NOT NULL DEFAULT 0,
+  "option_parm1" smallint NOT NULL DEFAULT 0,
+  "option_id2" smallint NOT NULL DEFAULT 0,
+  "option_val2" smallint NOT NULL DEFAULT 0,
+  "option_parm2" smallint NOT NULL DEFAULT 0,
+  "option_id3" smallint NOT NULL DEFAULT 0,
+  "option_val3" smallint NOT NULL DEFAULT 0,
+  "option_parm3" smallint NOT NULL DEFAULT 0,
+  "option_id4" smallint NOT NULL DEFAULT 0,
+  "option_val4" smallint NOT NULL DEFAULT 0,
+  "option_parm4" smallint NOT NULL DEFAULT 0,
+  "expire_time" integer NOT NULL DEFAULT 0,
+  "favorite" smallint NOT NULL DEFAULT 0,
+  "bound" smallint NOT NULL DEFAULT 0,
+  "unique_id" bigint NOT NULL DEFAULT 0,
+  "equip_switch" integer NOT NULL DEFAULT 0,
+  "enchantgrade" smallint NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS "inventory_char_id_idx" ON "inventory" ("char_id");

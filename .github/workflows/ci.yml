@@ -21,7 +21,7 @@ on:
         default: "11.4"
       valkey-version:
         description: "Valkey image tag"
-        default: "8"
+        default: "9"
       nats-version:
         description: "NATS image tag"
         default: "2-alpine"
@@ -39,7 +39,7 @@ env:
   GO_VERSION: ${{ inputs.go-version || 'stable' }}
   GOLANGCI_LINT_VERSION: ${{ inputs.golangci-lint-version || 'v2.12.2' }}
   MARIADB_VERSION: ${{ inputs.mariadb-version || '11.4' }}
-  VALKEY_VERSION: ${{ inputs.valkey-version || '8' }}
+  VALKEY_VERSION: ${{ inputs.valkey-version || '9' }}
   NATS_VERSION: ${{ inputs.nats-version || '2-alpine' }}
 
 jobs:
