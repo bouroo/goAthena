@@ -59,6 +59,13 @@ type Registry struct {
 	entries map[int32]*MobEntry
 }
 
+// NewRegistry returns an empty, non-nil Registry. It is the zero value the app
+// wiring falls back to when the mob_db.yml file is absent or unreadable: lookups
+// then return nil (mob resolves 0 DEF) instead of failing boot.
+func NewRegistry() *Registry {
+	return &Registry{entries: make(map[int32]*MobEntry)}
+}
+
 // Load parses a rAthena mob_db.yml from an io.Reader and returns a Registry.
 // It expects the rAthena YAML format with Header.Type=="MOB_DB" and Header.Version==5.
 // Unknown fields are silently ignored.

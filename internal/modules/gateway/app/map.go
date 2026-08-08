@@ -34,18 +34,22 @@ type MapServer struct {
 	engine   gnet.Engine
 	booted   bool
 	handlers map[uint16]mapHandler
-	world    *worldapp.WorldService
-	spawn    *worldapp.SpawnService
-	combat   *worldapp.CombatService
-	inv      *invapp.InventoryService
-	content  *contentapp.Engine
-	sess     chardomain.SessionStore
-	log      *slog.Logger
+	// db is the wire-length oracle for opcodes that have no handler wired into
+	// the dispatch table yet. OnTraffic consults it to skip a DB-registered
+	// frame (drop/trade/skill) instead of disconnecting the client.
+	db      *ropacket.DB
+	world   *worldapp.WorldService
+	spawn   *worldapp.SpawnService
+	combat  *worldapp.CombatService
+	inv     *invapp.InventoryService
+	content *contentapp.Engine
+	sess    chardomain.SessionStore
+	log     *slog.Logger
 }
 
 // NewMapServer builds a map listener.
 func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, content *contentapp.Engine, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
-	return &MapServer{world: world, spawn: spawn, combat: combat, inv: inv, content: content, sess: sess, log: log, handlers: mapHandlers()}, nil
+	return &MapServer{world: world, spawn: spawn, combat: combat, inv: inv, content: content, sess: sess, log: log, handlers: mapHandlers(), db: ropacket.NewMapServerDB()}, nil
 }
 
 // OnBoot captures the engine for shutdown.
@@ -58,8 +62,11 @@ func (s *MapServer) OnBoot(e gnet.Engine) gnet.Action {
 
 // OnTraffic is the table-driven dispatcher: peek the 2-byte opcode, look up the
 // handler + frame size, read the full frame, and dispatch on a goroutine so the
-// reactor never blocks. Unknown opcodes close the connection (a variable-length
-// unknown packet can't be safely skipped without its size).
+// reactor never blocks. An opcode without a wired handler is not fatal: the
+// packet DB supplies its on-wire length (or, for an opcode unknown to the DB
+// too, the 2-byte header) so the frame is skipped and the connection stays
+// alive — a client sending a not-yet-wired playable action (drop/trade/skill)
+// must not be booted.
 func (s *MapServer) OnTraffic(c gnet.Conn) gnet.Action {
 	for {
 		if c.InboundBuffered() < 2 {
@@ -70,21 +77,66 @@ func (s *MapServer) OnTraffic(c gnet.Conn) gnet.Action {
 			return gnet.None
 		}
 		opcode := binary.LittleEndian.Uint16(hdr)
-		h, ok := s.handlers[opcode]
-		if !ok {
-			s.log.Warn("map: unknown opcode, closing conn", "cmd", fmt.Sprintf("0x%04x", opcode))
-			return gnet.Close
+		if h, ok := s.handlers[opcode]; ok {
+			if c.InboundBuffered() < h.size {
+				return gnet.None // wait for the full frame to arrive
+			}
+			frame, err := c.Next(h.size)
+			if err != nil {
+				return gnet.None
+			}
+			cp := append([]byte(nil), frame...) // detach from gnet's ring buffer
+			go h.fn(s, c, cp)
+			continue
 		}
-		if c.InboundBuffered() < h.size {
-			return gnet.None // wait for the full frame to arrive
+		// Unwired opcode: skip the frame using the DB's length so the client
+		// stays connected. Never close on a registered (playable) opcode.
+		skip, buffered := s.unhandledSkip(c, opcode)
+		if !buffered {
+			return gnet.None // variable-length frame not fully arrived yet
 		}
-		frame, err := c.Next(h.size)
-		if err != nil {
+		if _, err := c.Discard(skip); err != nil {
 			return gnet.None
 		}
-		cp := append([]byte(nil), frame...) // detach from gnet's ring buffer
-		go h.fn(s, c, cp)
+		s.log.Debug("map: skipping unhandled opcode", "cmd", fmt.Sprintf("0x%04x", opcode), "skip", skip)
 	}
+}
+
+// unhandledSkip returns how many leading bytes to discard for an opcode that has
+// no wired handler, and whether that many bytes are already buffered. A
+// DB-registered opcode skips its definition's fixed length; a variable-length
+// packet reads its on-wire length from the uint16 at offset 2. An opcode absent
+// from the DB skips only the 2-byte header — a truly unknown stream cannot be
+// safely aligned, so we resync one header and keep the connection alive rather
+// than booting the client.
+func (s *MapServer) unhandledSkip(c gnet.Conn, opcode uint16) (skip int, buffered bool) {
+	def, ok := s.db.Lookup(opcode)
+	if !ok {
+		return 2, true
+	}
+	if def.Length != ropacket.VariableLength {
+		if c.InboundBuffered() < def.Length {
+			return def.Length, false // wait for the full fixed frame
+		}
+		return def.Length, true
+	}
+	// Variable-length frame: [cmd:2][len:2][payload...]. The length prefix is
+	// the uint16 at byte offset 2.
+	if c.InboundBuffered() < 4 {
+		return 0, false
+	}
+	prefix, err := c.Peek(4)
+	if err != nil {
+		return 0, false
+	}
+	n := int(binary.LittleEndian.Uint16(prefix[2:4]))
+	if n < 4 {
+		return 2, true // malformed length prefix: resync over the header
+	}
+	if c.InboundBuffered() < n {
+		return n, false // wait for the rest of the frame
+	}
+	return n, true
 }
 
 // handleEnter verifies the CZ_ENTER, admits the player into the world, and sends

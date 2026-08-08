@@ -37,8 +37,16 @@ type charRow struct {
 	HeadTop   uint16 `gorm:"column:head_top"`
 	HP        uint32 `gorm:"column:hp"`
 	MaxHP     uint32 `gorm:"column:max_hp"`
+	SP        uint32 `gorm:"column:sp"`
+	MaxSP     uint32 `gorm:"column:max_sp"`
 	Name      string `gorm:"column:name"`
 	AccountID uint32 `gorm:"column:account_id"`
+	Str       uint16 `gorm:"column:str"`
+	Agi       uint16 `gorm:"column:agi"`
+	Vit       uint16 `gorm:"column:vit"`
+	Int       uint16 `gorm:"column:int"` // reserved word; GORM auto-SELECT quotes it
+	Dex       uint16 `gorm:"column:dex"`
+	Luk       uint16 `gorm:"column:luk"`
 }
 
 func (charRow) TableName() string { return "char" }
@@ -69,8 +77,16 @@ func (r *GORMWorldRepository) LoadEnterState(ctx context.Context, charID uint32)
 		Shield:  uint32(cr.Shield),
 		HP:      int32(cr.HP),
 		MaxHP:   int32(cr.MaxHP),
+		SP:      int32(cr.SP),
+		MaxSP:   int32(cr.MaxSP),
 		Name:    cr.Name,
 		Speed:   150, // rAthena default walk speed (150 ms per cell)
+		Str:     cr.Str,
+		Agi:     cr.Agi,
+		Vit:     cr.Vit,
+		Int:     cr.Int,
+		Dex:     cr.Dex,
+		Luk:     cr.Luk,
 	}, nil
 }
 

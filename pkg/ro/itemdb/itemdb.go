@@ -121,6 +121,11 @@ type Registry struct {
 	aegis   map[string]*ItemEntry // reverse lookup AegisName → entry
 }
 
+// NewRegistry returns an empty item registry (no entries). Used for graceful
+// degradation when no item_db file is loadable: mob drop resolution then yields
+// no items rather than failing boot.
+func NewRegistry() *Registry { return build() }
+
 // Load parses a rAthena item_db YAML file from an io.Reader and returns a Registry.
 // It expects the rAthena YAML format with Header.Type=="ITEM_DB" and Header.Version==3.
 // Unknown fields are silently ignored. The document is streamed through

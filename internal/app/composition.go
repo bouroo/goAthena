@@ -92,7 +92,7 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	social.Register(inj)
 	content.Register(inj)
 	transit.Register(inj)
-	world.Register(inj, cfg.Zone.TickRateHz)
+	world.Register(inj, cfg.Zone.TickRateHz, cfg.Zone.DBPath)
 
 	// Resolve the world service so App.Run can start/stop its tick loop.
 	if ws, err := do.Invoke[*worldapp.WorldService](inj); err != nil {

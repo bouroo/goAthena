@@ -35,19 +35,35 @@ type Entity struct {
 	ID      EntityID
 	Account uint32 // AID (account_id); 0 for mobs/NPCs
 	Type    EntityType
-	Map     string
-	Pos     Position
-	Dir     uint8
-	Speed   int16
-	Job     int16
-	Sex     uint8
-	Name    string
-	Head    uint16
-	Weapon  uint32
-	Shield  uint32
-	HP      int32
-	MaxHP   int32
-	Level   int16
+	// Class is the mob_db class id for EntityTypeMob (0 for PC/NPC); the combat
+	// service resolves the mob's DEF/stats from mob_db by this id.
+	Class  int32
+	Map    string
+	Pos    Position
+	Dir    uint8
+	Speed  int16
+	Job    int16
+	Sex    uint8
+	Name   string
+	Head   uint16
+	Weapon uint32
+	Shield uint32
+	HP     int32
+	MaxHP  int32
+	// SP/MaxSP are the skill-point vitals; PercentHeal (and later skill cost)
+	// mutate them. Mobs leave them zero — only PCs load them from the char table.
+	SP    int32
+	MaxSP int32
+	Level int16
+	// Str/Agi/Vit/Int/Dex/Luk are the six base stats the combat service feeds to
+	// the kernel's Attacker/Defender profiles. PCs load them from the char table
+	// at map-enter; mobs leave them zero (mob stats come from mob_db by Class).
+	Str uint16
+	Agi uint16
+	Vit uint16
+	Int uint16
+	Dex uint16
+	Luk uint16
 }
 
 // PlayerEntity wraps a PC entity with its connection session for the map server.

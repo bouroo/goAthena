@@ -231,3 +231,55 @@ func (w *WorldService) SetPosition(ctx context.Context, charID uint32, mapName s
 	}
 	return nil
 }
+
+// WarpPlayer persists a player's warp destination (map + tile). The caller emits
+// ZC_NPCACK_MAPMOVE; the client reconnects and EnterMap reloads this position.
+// It is the script `warp` builtin's world capability and satisfies the content
+// domain's ScriptWorld port (structural — world stays free of content imports).
+func (w *WorldService) WarpPlayer(charID uint32, mapName string, x, y int16) error {
+	pos := domain.Position{X: x, Y: y}
+	if err := w.repo.SetPosition(context.Background(), charID, mapName, pos); err != nil {
+		return fmt.Errorf("warp player: %w", err)
+	}
+	return nil
+}
+
+// HealPlayer restores a player's HP and SP by hpPct/spPct percent of their
+// maximums, clamped to [0, max], and returns the resulting values so the caller
+// can emit ZC_PAR_CHANGE. It is the script `percentheal` builtin's world
+// capability and satisfies the content domain's ScriptWorld port.
+func (w *WorldService) HealPlayer(charID uint32, hpPct, spPct int) (hp, sp int32, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	e, ok := w.entities[domain.EntityID(charID)]
+	if !ok {
+		return 0, 0, domain.ErrEntityNotFound
+	}
+	e.HP = applyPctHeal(e.HP, e.MaxHP, hpPct)
+	e.SP = applyPctHeal(e.SP, e.MaxSP, spPct)
+	return e.HP, e.SP, nil
+}
+
+// applyPctHeal adds rate percent of max to cur, clamped to [0, max]. A non-positive
+// max yields 0 (no vitals to heal). rate is clamped to [0,100] first; the int64
+// intermediate avoids overflow when rate*max would exceed int32.
+func applyPctHeal(cur, maxV int32, rate int) int32 {
+	if rate < 0 {
+		rate = 0
+	}
+	if rate > 100 {
+		rate = 100
+	}
+	if maxV <= 0 {
+		return 0
+	}
+	v := int64(cur) + int64(rate)*int64(maxV)/100
+	switch {
+	case v > int64(maxV):
+		return maxV
+	case v < 0:
+		return 0
+	default:
+		return int32(v) //nolint:gosec // G115: bounded to [0, max] which fits int32.
+	}
+}

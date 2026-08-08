@@ -26,11 +26,28 @@ type PacketWriter interface {
 	WritePacket(data []byte)
 }
 
+// ScriptWorld is the world capability the script VM bridge needs for effect
+// builtins (warp, heal). It is implemented by the world bounded context and
+// injected into the Engine; isolating the port here keeps the content domain
+// free of world/app imports. Methods are best-effort: a not-found error means
+// the player is not currently on a map, and the builtin drops the effect frame.
+type ScriptWorld interface {
+	// WarpPlayer persists the player's destination map + tile. The caller emits
+	// ZC_NPCACK_MAPMOVE; the client reconnects and re-enters there.
+	WarpPlayer(charID uint32, mapName string, x, y int16) error
+	// HealPlayer restores HP and SP by hpPct/spPct percent of the player's
+	// maximums, clamped to [0, max], and returns the resulting (HP, SP) so the
+	// caller can emit the stat-change packets.
+	HealPlayer(charID uint32, hpPct, spPct int) (hp, sp int32, err error)
+}
+
 // DialogSession is one player's active NPC dialog: the writer to send dialog
 // packets to the client, and the channel the VM goroutine blocks on while
-// waiting for the client's response.
+// waiting for the client's response. CharID is the player's entity id (char_id)
+// so effect builtins can target the player in the world.
 type DialogSession struct {
 	NpcID  uint32
+	CharID uint32
 	Writer PacketWriter
 	Signal chan DialogSignal
 }

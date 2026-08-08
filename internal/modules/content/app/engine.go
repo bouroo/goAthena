@@ -26,22 +26,24 @@ const dialogTimeout = 30 * time.Second
 type Engine struct {
 	scripts *script.CompiledScriptSet
 	npcs    domain.NPCStore
+	world   domain.ScriptWorld
 	log     *slog.Logger
 
 	mu       sync.Mutex
 	sessions map[uint32]*domain.DialogSession // key = accountID
 }
 
-// NewEngine builds an Engine from compiled scripts and an NPC store. scripts may
-// be nil (no scripts loaded); clicks are then a no-op.
-func NewEngine(scripts *script.CompiledScriptSet, npcs domain.NPCStore, log *slog.Logger) *Engine {
-	return &Engine{scripts: scripts, npcs: npcs, log: log, sessions: make(map[uint32]*domain.DialogSession)}
+// NewEngine builds an Engine from compiled scripts, an NPC store, and the world
+// port used by effect builtins (warp/heal). scripts and world may be nil: clicks
+// are then a no-op and effect builtins drop their frames.
+func NewEngine(scripts *script.CompiledScriptSet, npcs domain.NPCStore, world domain.ScriptWorld, log *slog.Logger) *Engine {
+	return &Engine{scripts: scripts, npcs: npcs, world: world, log: log, sessions: make(map[uint32]*domain.DialogSession)}
 }
 
 // StartDialog resolves the NPC's script, creates a dialog session, and runs the
 // VM in a goroutine. Called from the CZ_CONTACT_NPC handler. No-op if the NPC
 // has no script or no scripts are loaded.
-func (e *Engine) StartDialog(accountID, npcGID uint32, writer domain.PacketWriter) {
+func (e *Engine) StartDialog(accountID, charID, npcGID uint32, writer domain.PacketWriter) {
 	if e.scripts == nil || e.npcs == nil {
 		return
 	}
@@ -59,9 +61,9 @@ func (e *Engine) StartDialog(accountID, npcGID uint32, writer domain.PacketWrite
 		e.log.Debug("content: dialog already active", "accountID", accountID)
 		return
 	}
-	sess := &domain.DialogSession{NpcID: npcGID, Writer: writer, Signal: make(chan domain.DialogSignal, 1)}
+	sess := &domain.DialogSession{NpcID: npcGID, CharID: charID, Writer: writer, Signal: make(chan domain.DialogSignal, 1)}
 	e.put(accountID, sess)
-	host := &ScriptHost{session: sess}
+	host := &ScriptHost{session: sess, world: e.world, log: e.log}
 	go e.runScript(accountID, cs, host)
 }
 
@@ -122,6 +124,8 @@ func (e *Engine) end(accountID uint32) {
 // via the session's Signal channel.
 type ScriptHost struct {
 	session *domain.DialogSession
+	world   domain.ScriptWorld
+	log     *slog.Logger
 }
 
 // Mes sends a ZC_SAY_DIALOG2 dialog line. Non-blocking.
@@ -182,12 +186,39 @@ func (h *ScriptHost) Close() {
 	h.session.Writer.WritePacket(buf.Bytes())
 }
 
-// Warp moves the player to the named map tile. TODO: wire world.MoveEntity +
-// ZC_NPC_ACK_MAPMOVE once the world connection registry exists.
-func (h *ScriptHost) Warp(_ string, _, _ int) {}
+// Warp moves the player to the named map tile: it persists the destination via
+// the world port and emits ZC_NPCACK_MAPMOVE so the client reconnects there.
+// No-ops when no world is wired or the player is not on a map.
+func (h *ScriptHost) Warp(mapName string, x, y int) {
+	if h.world == nil {
+		return
+	}
+	if err := h.world.WarpPlayer(h.session.CharID, mapName, int16(x), int16(y)); err != nil { //nolint:gosec // G115: x/y are map-tile coords bounded by map dimensions.
+		h.log.Debug("content: warp dropped (player not on map)", "charID", h.session.CharID, "map", mapName, "err", err)
+		return
+	}
+	var buf bytes.Buffer
+	_ = ropacket.MapMoveResponse{MapName: mapName, X: uint16(x), Y: uint16(y)}.Encode(&buf) //nolint:errcheck,gosec // G115: x/y are map-tile coords; map names are bounded by data.
+	h.session.Writer.WritePacket(buf.Bytes())
+}
 
-// PercentHeal restores HP/SP. TODO: wire world stat update + ZC_PAR_CHANGE.
-func (h *ScriptHost) PercentHeal(_, _ int) {}
+// PercentHeal restores HP/SP by the given percentages of the player's maximums
+// via the world port, then emits a ZC_PAR_CHANGE per vital with the new totals.
+// No-ops when no world is wired or the player is not on a map.
+func (h *ScriptHost) PercentHeal(hpPct, spPct int) {
+	if h.world == nil {
+		return
+	}
+	hp, sp, err := h.world.HealPlayer(h.session.CharID, hpPct, spPct)
+	if err != nil {
+		h.log.Debug("content: heal dropped (player not on map)", "charID", h.session.CharID, "err", err)
+		return
+	}
+	var buf bytes.Buffer
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPHP, Count: hp}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: sp}.Encode(&buf)
+	h.session.Writer.WritePacket(buf.Bytes())
+}
 
 // waitAdvance blocks for a Next/OK signal. Cancel/close/timeout → false.
 func (h *ScriptHost) waitAdvance() bool {

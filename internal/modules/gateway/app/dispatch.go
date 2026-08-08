@@ -48,7 +48,7 @@ func (s *MapServer) handleContactNPC(c gnet.Conn, frame []byte) {
 		s.log.Warn("map: parse CZ_CONTACT_NPC", "err", err)
 		return
 	}
-	s.content.StartDialog(auth.accountID, req.AID, contentinfra.GnetPacketWriter{Conn: c})
+	s.content.StartDialog(auth.accountID, auth.charID, req.AID, contentinfra.GnetPacketWriter{Conn: c})
 }
 
 // handleReqNextScript advances an active dialog (CZ_REQ_NEXT_SCRIPT 0x00b9).
@@ -198,8 +198,10 @@ func (s *MapServer) handleItemPickup(c gnet.Conn, frame []byte) {
 }
 
 // handleActionRequest handles CZ_ACTION_REQUEST (0x0089, 7B): sit/stand/attack.
-// Attack (action 0x07) resolves melee damage via CombatService and echoes the
-// action; sit/stand just echo back.
+// Sit/stand just echo back; attack (action 0x07) resolves melee damage via
+// CombatService, echoes the action, and — when the hit kills a mob — drives the
+// death loop: drops + despawn (SpawnService.OnMobDeath) then a ZC_NOTIFY_VANISH
+// + one ZC_ITEM_ENTRY per rolled drop.
 func (s *MapServer) handleActionRequest(c gnet.Conn, frame []byte) {
 	auth := authFromConn(c)
 	if auth == nil {
@@ -211,21 +213,76 @@ func (s *MapServer) handleActionRequest(c gnet.Conn, frame []byte) {
 		s.log.Warn("map: parse CZ_ACTION_REQUEST", "err", err)
 		return
 	}
-	if req.Action == 0x07 { // attack
-		dmg, err := s.combat.Attack(worlddomain.EntityID(auth.charID), worlddomain.EntityID(req.TargetGID))
-		if err != nil {
-			s.log.Warn("map: attack", "err", err)
-			return
-		}
-		s.log.Debug("map: attack", "attacker", auth.charID, "target", req.TargetGID, "dmg", dmg)
+	if req.Action != 0x07 { // sit/stand: echo only
+		s.sendActionResponse(c, auth.charID, req.Action, req.TargetGID)
+		return
 	}
-	resp := ropacket.ActionResponse{GID: auth.charID, Action: req.Action, TargetGID: req.TargetGID}
+	// attack (0x07)
+	dmg, died, err := s.combat.Attack(worlddomain.EntityID(auth.charID), worlddomain.EntityID(req.TargetGID))
+	if err != nil {
+		s.log.Warn("map: attack", "err", err)
+		return
+	}
+	s.log.Debug("map: attack", "attacker", auth.charID, "target", req.TargetGID, "dmg", dmg)
+	s.sendActionResponse(c, auth.charID, req.Action, req.TargetGID)
+	if died {
+		s.handleMobDeath(c, req.TargetGID)
+	}
+}
+
+// sendActionResponse encodes and writes ZC_ACTION_RESPONSE (the action echo).
+func (s *MapServer) sendActionResponse(c gnet.Conn, charID uint32, action uint8, targetGID uint32) {
+	resp := ropacket.ActionResponse{GID: charID, Action: action, TargetGID: targetGID}
 	out := make([]byte, resp.Size())
 	if err := resp.Encode(sliceWriter(out)); err != nil {
 		s.log.Error("map: encode action-response", "err", err)
 		return
 	}
 	_ = c.AsyncWrite(out, nil)
+}
+
+// handleMobDeath despawns a dead mob, rolls its drops, and notifies the client:
+// ZC_NOTIFY_VANISH (mob leaves the map) then one ZC_ITEM_ENTRY per rolled drop.
+// The death/drop state lives in SpawnService.OnMobDeath; this only does the wire
+// side. Only mobs despawn+drop on death (a PC reaching 0 HP is a revive flow).
+// The frames are coalesced into one AsyncWrite. Full AOI-neighbor broadcast
+// lands with a connection registry; today the killing player's connection is
+// notified, matching the per-connection pattern used by move/pickup.
+func (s *MapServer) handleMobDeath(c gnet.Conn, mobGID uint32) {
+	defender, err := s.world.Get(worlddomain.EntityID(mobGID))
+	if err != nil {
+		return // already removed (concurrent death) — nothing to broadcast
+	}
+	if defender.Type != worlddomain.EntityTypeMob {
+		return
+	}
+	drops := s.spawn.OnMobDeath(defender.Class, defender.Map, defender.Pos, worlddomain.EntityID(mobGID))
+
+	var burst []byte
+	vanish := ropacket.NotifyVanishResponse{GID: mobGID, Type: ropacket.VanishDead}
+	vbuf := make([]byte, vanish.Size())
+	if err := vanish.Encode(sliceWriter(vbuf)); err != nil {
+		s.log.Error("map: encode vanish", "err", err)
+		return
+	}
+	burst = append(burst, vbuf...)
+	for _, fi := range drops {
+		entry := ropacket.ItemEntryResponse{
+			AID:        fi.GroundID,
+			NameID:     fi.NameID,
+			Identified: 1,
+			X:          uint16(fi.PosX),   //nolint:gosec // G115: map coords are non-negative int16.
+			Y:          uint16(fi.PosY),   //nolint:gosec // G115: map coords are non-negative int16.
+			Amount:     uint16(fi.Amount), //nolint:gosec // G115: amount bounded to small stack values.
+		}
+		ebuf := make([]byte, entry.Size())
+		if err := entry.Encode(sliceWriter(ebuf)); err != nil {
+			s.log.Error("map: encode item-entry", "err", err)
+			continue
+		}
+		burst = append(burst, ebuf...)
+	}
+	_ = c.AsyncWrite(burst, nil)
 }
 
 // authFromConn extracts the cached mapAuth from a gnet connection, or nil if the

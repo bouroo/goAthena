@@ -129,8 +129,9 @@ type IdentityConfig struct {
 
 // ZoneConfig holds the game-world loop parameters.
 type ZoneConfig struct {
-	TickRateHz     int `yaml:"tick_rate_hz"     env:"ZONE_TICK_RATE_HZ" validate:"min=1,max=200"`
-	ViewRangeCells int `yaml:"view_range_cells" env:"ZONE_VIEW_RANGE_CELLS" validate:"min=1"`
+	TickRateHz     int    `yaml:"tick_rate_hz"     env:"ZONE_TICK_RATE_HZ" validate:"min=1,max=200"`
+	ViewRangeCells int    `yaml:"view_range_cells" env:"ZONE_VIEW_RANGE_CELLS" validate:"min=1"`
+	DBPath         string `yaml:"db_path"          env:"ZONE_DB_PATH"`
 }
 
 // LogConfig selects the structured logger (log/slog).
@@ -197,7 +198,7 @@ func defaults() *Config {
 			MapHost: "127.0.0.1", MapPort: 5121,
 		},
 		Identity: IdentityConfig{UseMD5Passwords: true, MaxChars: 9},
-		Zone:     ZoneConfig{TickRateHz: 50, ViewRangeCells: 20},
+		Zone:     ZoneConfig{TickRateHz: 50, ViewRangeCells: 20, DBPath: "db"},
 		Log:      LogConfig{Level: "info", Format: "json"},
 		OTel:     OTelConfig{Exporter: "none", ServiceName: "goathena", Sampling: 1.0},
 	}
