@@ -1,0 +1,31 @@
+# The third_party/ reference trees are git submodules (rathena C/C++ source +
+# the 8.3GB client assets). They must never enter the Docker build context: they
+# balloon the context, slow the COPY, and the euc-kr client filenames crash the
+# xattr copier ("cannot allocate memory"). goAthena compiles from Go source only.
+third_party/
+
+# Git history (including .git/modules submodule packfiles — also multi-GB) is
+# never needed at build time; exclude the whole .git tree.
+.git/
+
+# Build artifacts
+bin/
+*.test
+*.out
+
+# Local environment / IDE
+.env
+.env.local
+.vscode/
+.idea/
+
+# Agent planning layer (gitignored locally; keep out of images)
+.agents/
+
+# Docker build metadata that must not recurse
+Dockerfile
+**/Dockerfile
+
+# OS noise
+.DS_Store
+Thumbs.db

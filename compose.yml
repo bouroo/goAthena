@@ -14,10 +14,11 @@ services:
     volumes:
       - mariadb-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb-initialized"]
+      test: ["CMD", "mariadb-admin", "-uroot", "-pragnarok", "ping"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 15s
 
   valkey:
     image: valkey/valkey:9
@@ -36,11 +37,6 @@ services:
     ports:
       - "4222:4222" # client
       - "8222:8222" # monitoring
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
 
   goathena:
     build:
@@ -49,7 +45,7 @@ services:
     depends_on:
       mariadb: { condition: service_healthy }
       valkey: { condition: service_healthy }
-      nats: { condition: service_healthy }
+      nats: { condition: service_started }
     environment:
       APP_ENVIRONMENT: production
       DB_HOST: mariadb

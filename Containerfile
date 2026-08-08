@@ -33,6 +33,6 @@ COPY config.yaml /config.yaml
 EXPOSE 6900 6121 5121 8080
 USER nonroot:nonroot
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    ["/healthcheck"]
+    CMD ["/healthcheck"]
 ENTRYPOINT ["/goathena"]
 CMD ["serve", "-config", "/config.yaml"]
