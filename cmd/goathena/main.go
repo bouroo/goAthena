@@ -65,7 +65,7 @@ func serve(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	a, err := app.New(cfg, logger)
+	a, err := app.New(ctx, cfg, logger)
 	if err != nil {
 		return fmt.Errorf("build app: %w", err)
 	}

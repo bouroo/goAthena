@@ -15,10 +15,26 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"gopkg.in/yaml.v3"
 )
+
+// validate is the process-wide, concurrency-safe validator instance. Built once
+// with a custom rule so time.Duration fields can enforce a minimum like 1s.
+var validate = sync.OnceValue(func() *validator.Validate {
+	v := validator.New(validator.WithRequiredStructEnabled())
+	_ = v.RegisterValidation("min_duration", minDuration) // 1s minimum, ns precise
+	return v
+})
+
+// minDuration validates a time.Duration field is >= 1 second.
+func minDuration(fl validator.FieldLevel) bool {
+	d, ok := fl.Field().Interface().(time.Duration)
+	return ok && d >= time.Second
+}
 
 // Config is the root runtime configuration for the goathena binary.
 type Config struct {
@@ -36,17 +52,17 @@ type Config struct {
 
 // AppConfig holds process-level identity and lifecycle knobs.
 type AppConfig struct {
-	Name            string        `yaml:"name"            env:"APP_NAME"`
-	Environment     string        `yaml:"environment"     env:"APP_ENVIRONMENT"`
-	Host            string        `yaml:"host"            env:"APP_HOST"`
-	Port            int           `yaml:"port"            env:"APP_PORT"`
-	ShutdownTimeout time.Duration `yaml:"shutdown_timeout" env:"APP_SHUTDOWN_TIMEOUT"`
+	Name            string        `yaml:"name"             env:"APP_NAME"`
+	Environment     string        `yaml:"environment"      env:"APP_ENVIRONMENT" validate:"oneof=development staging production test"`
+	Host            string        `yaml:"host"             env:"APP_HOST"`
+	Port            int           `yaml:"port"             env:"APP_PORT" validate:"min=1,max=65535"`
+	ShutdownTimeout time.Duration `yaml:"shutdown_timeout" env:"APP_SHUTDOWN_TIMEOUT" validate:"min_duration"`
 }
 
 // HTTPConfig is the control-plane HTTP server (health/metrics/ops).
 type HTTPConfig struct {
 	Host               string        `yaml:"host"                 env:"HTTP_HOST"`
-	Port               int           `yaml:"port"                 env:"HTTP_PORT"`
+	Port               int           `yaml:"port"                 env:"HTTP_PORT" validate:"min=1,max=65535"`
 	ReadTimeout        time.Duration `yaml:"read_timeout"         env:"HTTP_READ_TIMEOUT"`
 	WriteTimeout       time.Duration `yaml:"write_timeout"        env:"HTTP_WRITE_TIMEOUT"`
 	IdleTimeout        time.Duration `yaml:"idle_timeout"         env:"HTTP_IDLE_TIMEOUT"`
@@ -56,9 +72,9 @@ type HTTPConfig struct {
 // DBConfig selects the persistence engine. mysql:// → MariaDB, postgres:// →
 // PostgreSQL. Both stay read/write compatible with the rAthena schema.
 type DBConfig struct {
-	Driver   string `yaml:"driver"   env:"DB_DRIVER"`
+	Driver   string `yaml:"driver"   env:"DB_DRIVER" validate:"oneof=mariadb mysql postgres postgresql"`
 	Host     string `yaml:"host"     env:"DB_HOST"`
-	Port     int    `yaml:"port"     env:"DB_PORT"`
+	Port     int    `yaml:"port"     env:"DB_PORT" validate:"min=1,max=65535"`
 	Name     string `yaml:"name"     env:"DB_NAME"`
 	User     string `yaml:"user"     env:"DB_USER"`
 	Password string `yaml:"password" env:"DB_PASSWORD"`
@@ -111,8 +127,8 @@ type IdentityConfig struct {
 
 // ZoneConfig holds the game-world loop parameters.
 type ZoneConfig struct {
-	TickRateHz     int `yaml:"tick_rate_hz"     env:"ZONE_TICK_RATE_HZ"`
-	ViewRangeCells int `yaml:"view_range_cells" env:"ZONE_VIEW_RANGE_CELLS"`
+	TickRateHz     int `yaml:"tick_rate_hz"     env:"ZONE_TICK_RATE_HZ" validate:"min=1,max=200"`
+	ViewRangeCells int `yaml:"view_range_cells" env:"ZONE_VIEW_RANGE_CELLS" validate:"min=1"`
 }
 
 // LogConfig selects the structured logger (log/slog).
@@ -123,10 +139,10 @@ type LogConfig struct {
 
 // OTelConfig is the OpenTelemetry exporter.
 type OTelConfig struct {
-	Exporter    string  `yaml:"exporter"     env:"OTEL_EXPORTER"`
+	Exporter    string  `yaml:"exporter"     env:"OTEL_EXPORTER" validate:"oneof=none otlp"`
 	Endpoint    string  `yaml:"endpoint"     env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	ServiceName string  `yaml:"service_name" env:"OTEL_SERVICE_NAME"`
-	Sampling    float64 `yaml:"sampling"     env:"OTEL_TRACES_SAMPLER_ARG"`
+	Sampling    float64 `yaml:"sampling"     env:"OTEL_TRACES_SAMPLER_ARG" validate:"min=0,max=1"`
 }
 
 // Load reads the YAML file at path, applies defaults, overlays environment
@@ -181,35 +197,13 @@ func defaults() *Config {
 	}
 }
 
-// Validate enforces required fields and value ranges without a third-party
-// validator dependency. Returns the first violation joined with any others.
+// Validate enforces the struct `validate:` tags via go-playground/validator.
+// Violations are collected and returned as one wrapped error.
 func (c *Config) Validate() error {
-	var errs []error
-	env := c.App.Environment
-	if env != "development" && env != "staging" && env != "production" && env != "test" {
-		errs = append(errs, fmt.Errorf("app.environment %q: want development|staging|production|test", env))
+	if err := validate().Struct(c); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
-	if c.App.Port < 1 || c.App.Port > 65535 {
-		errs = append(errs, fmt.Errorf("app.port %d out of range 1-65535", c.App.Port))
-	}
-	if c.HTTP.Port < 1 || c.HTTP.Port > 65535 {
-		errs = append(errs, fmt.Errorf("http.port %d out of range 1-65535", c.HTTP.Port))
-	}
-	if c.App.ShutdownTimeout < time.Second {
-		errs = append(errs, errors.New("app.shutdown_timeout must be >= 1s"))
-	}
-	switch strings.ToLower(c.DB.Driver) {
-	case "mariadb", "mysql", "postgres", "postgresql":
-	default:
-		errs = append(errs, fmt.Errorf("db.driver %q: want mariadb|postgres", c.DB.Driver))
-	}
-	if c.Zone.TickRateHz < 1 || c.Zone.TickRateHz > 200 {
-		errs = append(errs, fmt.Errorf("zone.tick_rate_hz %d out of range 1-200", c.Zone.TickRateHz))
-	}
-	if c.OTel.Sampling < 0 || c.OTel.Sampling > 1 {
-		errs = append(errs, fmt.Errorf("otel.sampling %v out of range 0-1", c.OTel.Sampling))
-	}
-	return errors.Join(errs...)
+	return nil
 }
 
 // applyEnv overlays environment variables onto any struct field carrying an
