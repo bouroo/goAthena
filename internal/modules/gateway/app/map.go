@@ -48,6 +48,7 @@ type MapServer struct {
 	content *contentapp.Engine
 	skills  *worldapp.SkillService
 	shops   *shopapp.ShopService
+	trade   *worldapp.TradeService
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
 	// DEALTYPE carries an NPC id, not a shop name).
 	shopStore contentdomain.ShopStore
@@ -61,12 +62,21 @@ type MapServer struct {
 	// bounded, char-count leak acceptable until a connection-close hook lands).
 	openedShops map[uint32]string
 	shopMu      sync.RWMutex
+	// conns maps charID to its live gnet connection so player-to-player trade
+	// packets reach the partner (who is on a DIFFERENT connection than the
+	// sender). Registered on CZ_ENTER. This is a pragmatic test-enabling shim for
+	// the known M4b connection-registry gap: it is mutex-guarded (conn-context
+	// race lesson) but not pruned on disconnect, mirroring openedShops. A proper
+	// conn-registry driven by a connection-close hook is the right fix.
+	conns  map[uint32]gnet.Conn
+	connMu sync.RWMutex
 }
 
 // NewMapServer builds a map listener. shops and shopStore wire the NPC shop
-// commerce verb (open/buy/sell); they may be nil in a reduced harness where
-// shop packets are never exercised, but production wiring resolves both.
-func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
+// commerce verb (open/buy/sell); trade wires the player-to-player trade verb.
+// shops/shopStore/trade may be nil in a reduced harness where their packets are
+// never exercised, but production wiring resolves all three.
+func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
 	return &MapServer{
 		world:       world,
 		spawn:       spawn,
@@ -76,9 +86,11 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 		skills:      skills,
 		shops:       shops,
 		shopStore:   shopStore,
+		trade:       trade,
 		sess:        sess,
 		log:         log,
 		handlers:    mapHandlers(),
+		conns:       make(map[uint32]gnet.Conn),
 		db:          ropacket.NewMapServerDB(),
 		openedShops: make(map[uint32]string),
 	}, nil
@@ -99,6 +111,24 @@ func (s *MapServer) openedShop(charID uint32) (string, bool) {
 	defer s.shopMu.RUnlock()
 	name, ok := s.openedShops[charID]
 	return name, ok
+}
+
+// registerConn records a charID's live connection so peer-to-peer packets
+// (trade) can reach a partner on a different connection. Safe off the reactor.
+func (s *MapServer) registerConn(charID uint32, c gnet.Conn) {
+	s.connMu.Lock()
+	s.conns[charID] = c
+	s.connMu.Unlock()
+}
+
+// connFor returns the live connection for a charID, or false if none is
+// registered (the char has not entered this map-server, or its shim entry was
+// never created).
+func (s *MapServer) connFor(charID uint32) (gnet.Conn, bool) {
+	s.connMu.RLock()
+	c, ok := s.conns[charID]
+	s.connMu.RUnlock()
+	return c, ok
 }
 
 // OnBoot captures the engine for shutdown.
@@ -232,6 +262,10 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 	// re-verifying. AID/GID are sourced from the verified session, never the
 	// client-controlled packet fields.
 	c.SetContext(mapAuth{accountID: req.AccountID, charID: req.CharID})
+	// Index the connection by charID so peer-to-peer trade packets (whose target
+	// is on a different connection) can be delivered. Pragmatic shim for the M4b
+	// conn-registry gap; not pruned on disconnect.
+	s.registerConn(req.CharID, c)
 
 	s.writeAcceptEnter(c, entity)
 	s.log.Info("map entered", "aid", req.AccountID, "gid", req.CharID, "map", entity.Map)

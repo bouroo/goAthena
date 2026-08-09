@@ -102,7 +102,11 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve shop store: %w", err)
 	}
-	ms, err := app.NewMapServer(world, spawn, combat, inv, content, skills, shops, shopStore, sess, log)
+	trade, err := do.Invoke[*worldapp.TradeService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve trade service: %w", err)
+	}
+	ms, err := app.NewMapServer(world, spawn, combat, inv, content, skills, shops, shopStore, trade, sess, log)
 	if err != nil {
 		return nil, fmt.Errorf("map server: %w", err)
 	}

@@ -10,6 +10,8 @@ import (
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
 
+	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
+	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	"github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/internal/modules/world/infra"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
@@ -60,6 +62,14 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		combatSvc := do.MustInvoke[*app.CombatService](i)
 		skills := do.MustInvoke[*skilldb.Registry](i)
 		return app.NewSkillService(world, combatSvc, skills), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*app.TradeService, error) {
+		// inventory and economy register before world (composition.go), so their
+		// services resolve here. Both satisfy the trade ports directly.
+		world := do.MustInvoke[*app.WorldService](i)
+		inv := do.MustInvoke[*invapp.InventoryService](i)
+		econ := do.MustInvoke[*economyapp.EconomyService](i)
+		return app.NewTradeService(world, inv, econ), nil
 	})
 }
 

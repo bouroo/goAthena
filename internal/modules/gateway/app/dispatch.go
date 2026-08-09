@@ -69,6 +69,11 @@ func mapHandlers() map[uint16]mapHandler {
 		0x0363:                              {size: 6, fn: (*MapServer).handleItemDrop},                              // CZ_ITEM_DROP @ 20250604
 		0x0438:                              {size: 10, fn: (*MapServer).handleUseSkill2},                            // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
 		0x0af4:                              {size: 11, fn: (*MapServer).handleUseSkillToPos},                        // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
+		ropacket.HeaderCZTRADEREQUEST:       {size: 6, fn: (*MapServer).handleTradeRequest},                          // CZ_TRADE_REQUEST 0x00e4 (cmd+targetGID)
+		ropacket.HeaderCZTRADEACK:           {size: 3, fn: (*MapServer).handleTradeAck},                              // CZ_TRADE_ACK 0x00e6 (cmd+type)
+		ropacket.HeaderCZADDEXCHANGEITEM:    {size: 8, fn: (*MapServer).handleAddExchangeItem},                       // CZ_ADD_EXCHANGE_ITEM 0x00e8 (cmd+index+amount)
+		ropacket.HeaderCZTRADEOK:            {size: 2, fn: (*MapServer).handleTradeOK},                               // CZ_TRADE_OK 0x00eb (cmd only)
+		ropacket.HeaderCZTRADECANCEL:        {size: 2, fn: (*MapServer).handleTradeCancel},                           // CZ_TRADE_CANCEL 0x00ed (cmd only)
 	}
 }
 
@@ -849,6 +854,312 @@ func (s *MapServer) sendSkillFail(c gnet.Conn, skillID uint16, castErr error) {
 		return
 	}
 	_ = c.AsyncWrite(out, nil)
+}
+
+// --- player-to-player trade handlers ---
+//
+// Trade runs a request→ack→(stage)→ok state machine across TWO connections: the
+// sender's (c) and the partner's (resolved through the conn-registry shim by
+// charID). Every handler resolves the partner BEFORE calling a service method
+// that may tear the session down (Ack cancel / OK conclude / Cancel), since
+// Partner() needs the live session to map charID→partner.
+
+// handleTradeRequest opens a trade request (CZ_TRADE_REQUEST 0x00e4). The
+// requester targets a partner GID; on success the server opens the TARGET's trade
+// dialog (ZC_REQ_EXCHANGE_ITEM carries the requester's name/AID/level — the real
+// wire format sends this to the TARGET only, never the requester). On failure the
+// requester gets a ZC_ACK_EXCHANGE_ITEM reject reason.
+func (s *MapServer) handleTradeRequest(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_TRADE_REQUEST from unauthed conn")
+		return
+	}
+	if s.trade == nil {
+		s.log.Debug("map: trade not wired, ignoring CZ_TRADE_REQUEST")
+		return
+	}
+	req, err := ropacket.ParseCZTradeRequest(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_TRADE_REQUEST", "err", err)
+		return
+	}
+	targetGID := req.TargetGID
+	if err := s.trade.Request(context.Background(), auth.charID, targetGID); err != nil {
+		s.writeTradeAck(c, tradeAckResult(err), 0, 0)
+		s.log.Debug("map: trade request rejected", "req", auth.charID, "tgt", targetGID, "err", err)
+		return
+	}
+	// Request succeeded: resolve the requester's name/AID/level to populate the
+	// target's dialog, then deliver it to the target's connection.
+	reqEnt, gerr := s.world.Get(worlddomain.EntityID(auth.charID))
+	if gerr != nil {
+		s.trade.Cancel(context.Background(), auth.charID)
+		s.log.Error("map: resolve requester entity for trade", "gid", auth.charID, "err", gerr)
+		return
+	}
+	targetConn, ok := s.connFor(targetGID)
+	if !ok {
+		// Target is an online PC (Request verified it) but not reachable through
+		// the conn-registry shim — tear the session down and reject the requester.
+		s.trade.Cancel(context.Background(), auth.charID)
+		s.writeTradeAck(c, ropacket.TradeAckCharNotExist, 0, 0)
+		return
+	}
+	s.writeTradeRequest(targetConn, reqEnt.Name, auth.accountID, uint16(reqEnt.Level)) //nolint:gosec // G115: base level fits uint16
+}
+
+// handleTradeAck applies the target's accept/cancel of a pending request
+// (CZ_TRADE_ACK 0x00e6). Type 3 = accept, anything else = cancel. On accept both
+// sides get ZC_ACK_EXCHANGE_ITEM(Accept) carrying the OTHER party's AID/level; on
+// cancel both get ZC_CANCEL_EXCHANGE_ITEM. The ack-sender is the target (the one
+// whose dialog was opened); its partner is the requester.
+func (s *MapServer) handleTradeAck(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_TRADE_ACK from unauthed conn")
+		return
+	}
+	if s.trade == nil {
+		s.log.Debug("map: trade not wired, ignoring CZ_TRADE_ACK")
+		return
+	}
+	req, err := ropacket.ParseCZTradeAck(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_TRADE_ACK", "err", err)
+		return
+	}
+	accept := req.Type == ropacket.CZTradeAckAccept
+	// Resolve the partner BEFORE Ack: an accept leaves both sessions active, but a
+	// cancel tears both down.
+	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
+	if !ok {
+		s.log.Debug("map: CZ_TRADE_ACK with no active trade", "gid", auth.charID)
+		return
+	}
+	if err := s.trade.Ack(context.Background(), auth.charID, accept); err != nil {
+		s.log.Debug("map: trade ack failed", "gid", auth.charID, "err", err)
+		return
+	}
+	if !accept {
+		s.writeTradeCancel(c)
+		if pc, ok := s.connFor(partnerID); ok {
+			s.writeTradeCancel(pc)
+		}
+		return
+	}
+	// Accept: cross-echo each side the OTHER party's AID/level.
+	selfEnt, _ := s.world.Get(worlddomain.EntityID(auth.charID))
+	partnerEnt, _ := s.world.Get(worlddomain.EntityID(partnerID))
+	s.writeTradeAck(c, ropacket.TradeAckAccept, partnerEnt.Account, uint16(partnerEnt.Level)) //nolint:gosec // G115: base level fits uint16
+	if pc, ok := s.connFor(partnerID); ok {
+		s.writeTradeAck(pc, ropacket.TradeAckAccept, selfEnt.Account, uint16(selfEnt.Level)) //nolint:gosec // G115: base level fits uint16
+	}
+}
+
+// handleAddExchangeItem stages an item (index>0) or zeny (index==0) on the
+// sender's side (CZ_ADD_EXCHANGE_ITEM 0x00e8). On success the SENDER gets
+// ZC_ACK_ADD_EXCHANGE_ITEM(Success) and the PARTNER gets ZC_ADD_EXCHANGE_ITEM (the
+// staged view); on failure only the sender is told.
+func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_ADD_EXCHANGE_ITEM from unauthed conn")
+		return
+	}
+	if s.trade == nil {
+		s.log.Debug("map: trade not wired, ignoring CZ_ADD_EXCHANGE_ITEM")
+		return
+	}
+	req, err := ropacket.ParseCZAddExchangeItem(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_ADD_EXCHANGE_ITEM", "err", err)
+		return
+	}
+	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
+	if !ok {
+		s.writeAckAddItem(c, req.Index, ropacket.TradeItemAddCanceled)
+		s.log.Debug("map: CZ_ADD_EXCHANGE_ITEM with no active trade", "gid", auth.charID)
+		return
+	}
+	res, err := s.trade.AddItem(context.Background(), auth.charID, int(req.Index), int(req.Amount)) //nolint:gosec // G115: wire index/amount are small positives
+	if err != nil {
+		s.writeAckAddItem(c, req.Index, tradeItemAddResult(err))
+		s.log.Debug("map: trade add-item rejected", "gid", auth.charID, "err", err)
+		return
+	}
+	s.writeAckAddItem(c, req.Index, ropacket.TradeItemAddSuccess)
+	if pc, ok := s.connFor(partnerID); ok {
+		s.writeZCAddItem(pc, res)
+	}
+}
+
+// handleTradeOK locks the sender's side (CZ_TRADE_OK 0x00eb). While the partner has
+// not yet locked, both sides get ZC_CONCLUDE_EXCHANGE_ITEM (Who=0 to the locker,
+// Who=1 to the partner). When both lock, the service runs the atomic conclude
+// swap; the lock notifications are still emitted. A conclude failure (the known
+// verify-then-swap TOCTOU window) rolls back, cancels both sessions, and tells both
+// sides the trade was cancelled.
+func (s *MapServer) handleTradeOK(c gnet.Conn, auth *mapAuth, _ []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_TRADE_OK from unauthed conn")
+		return
+	}
+	if s.trade == nil {
+		s.log.Debug("map: trade not wired, ignoring CZ_TRADE_OK")
+		return
+	}
+	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
+	if !ok {
+		s.log.Debug("map: CZ_TRADE_OK with no active trade", "gid", auth.charID)
+		return
+	}
+	concluded, err := s.trade.OK(context.Background(), auth.charID)
+	if err != nil {
+		s.writeTradeCancel(c)
+		if pc, ok := s.connFor(partnerID); ok {
+			s.writeTradeCancel(pc)
+		}
+		s.log.Warn("map: trade conclude failed", "gid", auth.charID, "err", err)
+		return
+	}
+	s.writeConclude(c, 0) // you pressed Ok
+	if pc, ok := s.connFor(partnerID); ok {
+		s.writeConclude(pc, 1) // your partner pressed Ok
+	}
+	if concluded {
+		s.log.Info("map: trade concluded", "gid", auth.charID, "partner", partnerID)
+	}
+}
+
+// handleTradeCancel tears down the sender's trade (CZ_TRADE_CANCEL 0x00ed) and
+// tells both sides via ZC_CANCEL_EXCHANGE_ITEM. A no-op when the sender is not
+// trading.
+func (s *MapServer) handleTradeCancel(c gnet.Conn, auth *mapAuth, _ []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_TRADE_CANCEL from unauthed conn")
+		return
+	}
+	if s.trade == nil {
+		return
+	}
+	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
+	s.trade.Cancel(context.Background(), auth.charID)
+	s.writeTradeCancel(c)
+	if ok {
+		if pc, ok := s.connFor(partnerID); ok {
+			s.writeTradeCancel(pc)
+		}
+	}
+}
+
+// --- trade write helpers ---
+
+func (s *MapServer) writeTradeRequest(c gnet.Conn, requesterName string, requesterAID uint32, requesterLv uint16) {
+	resp := ropacket.TradeRequestResponse{RequesterName: requesterName, TargetID: requesterAID, TargetLv: requesterLv}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_REQ_EXCHANGE_ITEM", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+func (s *MapServer) writeTradeAck(c gnet.Conn, result uint8, targetAID uint32, targetLv uint16) {
+	resp := ropacket.TradeAckResponse{Result: result, TargetID: targetAID, TargetLv: targetLv}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_ACK_EXCHANGE_ITEM", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+func (s *MapServer) writeTradeCancel(c gnet.Conn) {
+	resp := ropacket.CancelExchangeResponse{}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_CANCEL_EXCHANGE_ITEM", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+func (s *MapServer) writeAckAddItem(c gnet.Conn, index uint16, result uint8) {
+	resp := ropacket.AckAddExchangeItem{Index: index, Result: result}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_ACK_ADD_EXCHANGE_ITEM", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// writeZCAddItem emits the partner's staged view (ZC_ADD_EXCHANGE_ITEM). Item
+// rendering fields that need item_db (ItemType, Location, Look, item options) are
+// left zero — a best-effort view; the trade state machine and atomic swap do not
+// depend on it.
+func (s *MapServer) writeZCAddItem(c gnet.Conn, res worldapp.AddItemResult) {
+	resp := ropacket.ZCAddExchangeItem{}
+	if res.Index == 0 {
+		resp.Amount = res.Zeny
+	} else {
+		it := res.Item
+		resp.ItemID = it.NameID
+		resp.Amount = int32(it.Amount) //nolint:gosec // G115: stack count fits int32
+		resp.Damaged = it.Attribute
+		resp.Refine = it.Refine
+		resp.Cards = [4]uint32{it.Card0, it.Card1, it.Card2, it.Card3}
+		if it.Identify > 0 {
+			resp.Identified = 1
+		}
+	}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_ADD_EXCHANGE_ITEM", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+func (s *MapServer) writeConclude(c gnet.Conn, who uint8) {
+	resp := ropacket.ConcludeExchangeItem{Who: who}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_CONCLUDE_EXCHANGE_ITEM", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// tradeAckResult maps a TradeService sentinel to the ZC_ACK_EXCHANGE_ITEM result
+// byte for a request/ack failure (sentinel errors only; no error-string branch).
+// The success path emits Accept/Cancel directly, so this only chooses a reject
+// reason for the (logged) failure cases.
+func tradeAckResult(err error) uint8 {
+	switch {
+	case errors.Is(err, worldapp.ErrTradeTargetOffline):
+		return ropacket.TradeAckCharNotExist
+	case errors.Is(err, worldapp.ErrTradeDifferentMap):
+		return ropacket.TradeAckTooFar
+	case errors.Is(err, worldapp.ErrTradeAlreadyTrading):
+		return ropacket.TradeAckBusy
+	default:
+		return ropacket.TradeAckFailed
+	}
+}
+
+// tradeItemAddResult maps a TradeService sentinel to the ZC_ACK_ADD_EXCHANGE_ITEM
+// result byte (sentinel errors only). Best-effort: the codes do not map 1:1 to the
+// failure causes, and only the success path is asserted by tests.
+func tradeItemAddResult(err error) uint8 {
+	switch {
+	case errors.Is(err, worldapp.ErrTradeNotActive), errors.Is(err, worldapp.ErrTradeLocked):
+		return ropacket.TradeItemAddCanceled
+	case errors.Is(err, worldapp.ErrTradeItemInsufficient):
+		return ropacket.TradeItemAddStackExceed
+	case errors.Is(err, worldapp.ErrTradeItemOutOfRange), errors.Is(err, worldapp.ErrTradeItemEquipped):
+		return ropacket.TradeItemAddInvFull
+	default:
+		return ropacket.TradeItemAddStackExceed
+	}
 }
 
 // authFromConn extracts the cached mapAuth from a gnet connection, or nil if the

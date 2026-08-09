@@ -22,6 +22,7 @@ import (
 	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
 	gwapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
+	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
 	invinfra "github.com/bouroo/goAthena/internal/modules/inventory/infra"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
@@ -87,7 +88,7 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	shopStore := contentinfra.NewMemoryShopStore()
 	shopStore.RegisterShop(shop.DevShopGID, devTestShopName)
 
-	ms, err := gwapp.NewMapServer(world, spawn, combat, inv, content, skills, shops, shopStore, sessions, slog.Default())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, inv, content, skills, shops, shopStore, nil, sessions, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -867,4 +868,193 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	if potionAmount != 1 {
 		t.Fatalf("potion amount after buy = %d, want 1", potionAmount)
 	}
+}
+
+// buildTradeMapDeps is the 2-player variant of buildTestMapDeps: it seeds TWO PC
+// entities on the same map (so trade.Request's same-map/online check passes) and
+// wires the TradeService over the real inventory + economy services. The two
+// connections are dialed separately by startAndDialTwo.
+func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gwapp.MapServer, mapTestEnv) {
+	t.Helper()
+	wrepo := worldinfra.NewMemoryWorldRepository(
+		worlddomain.Entity{ID: 150001, Account: 2000001, Map: "new_1-1",
+			Pos: worlddomain.Position{X: 53, Y: 111}, Sex: 1, Job: 0, Level: 1,
+			Name: "Hero", HP: 1000, MaxHP: 1000, SP: 100, MaxSP: 100, Speed: 150},
+		worlddomain.Entity{ID: 150002, Account: 2000002, Map: "new_1-1",
+			Pos: worlddomain.Position{X: 54, Y: 111}, Sex: 1, Job: 0, Level: 1,
+			Name: "Partner", HP: 1000, MaxHP: 1000, SP: 100, MaxSP: 100, Speed: 150},
+	)
+	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
+	spawn := worldapp.NewSpawnService(world, nil, nil)
+	combat := worldapp.NewCombatService(world, nil)
+	itemRepo := invinfra.NewMemoryItemRepository()
+	inv := invapp.NewInventoryService(itemRepo)
+	content := contentapp.NewEngine(nil, nil, nil, slog.Default())
+	skills := worldapp.NewSkillService(world, combat, testSkillDB())
+	charRepo := charinfra.NewMemoryCharacterRepository()
+	econ := economyapp.NewEconomyService(charRepo)
+	trade := worldapp.NewTradeService(world, inv, econ)
+
+	ms, err := gwapp.NewMapServer(world, spawn, combat, inv, content, skills, nil, nil, trade, sessions, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ms, mapTestEnv{spawn: spawn, charRepo: charRepo, itemRepo: itemRepo}
+}
+
+// startAndDialTwo starts one map listener and dials two independent connections
+// (the two trade partners).
+func startAndDialTwo(t *testing.T, ms *gwapp.MapServer, port int) (net.Conn, net.Conn) {
+	t.Helper()
+	ms.Start("tcp://127.0.0.1:" + strconv.Itoa(port))
+	t.Cleanup(ms.Stop)
+	dial := func() net.Conn {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if c, derr := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 500*time.Millisecond); derr == nil {
+				return c
+			}
+		}
+		t.Fatal("map listener never accepted")
+		return nil
+	}
+	return dial(), dial()
+}
+
+// readTradeFrame reads exactly size bytes and asserts the leading header. Trade
+// responses are fixed-length and the conn is quiescent between steps (no tick
+// broadcasts in the test harness), so an exact read is reliable.
+func readTradeFrame(t *testing.T, c net.Conn, want uint16, size int) []byte {
+	t.Helper()
+	c.SetDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, size)
+	if _, err := io.ReadFull(c, buf); err != nil {
+		t.Fatalf("read frame 0x%04x: %v", want, err)
+	}
+	if got := binary.LittleEndian.Uint16(buf[0:2]); got != want {
+		t.Fatalf("frame header = 0x%04x, want 0x%04x", got, want)
+	}
+	return buf
+}
+
+// sendRaw writes frame bytes to conn with a deadline.
+func sendRaw(t *testing.T, c net.Conn, frame []byte) {
+	t.Helper()
+	c.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c.Write(frame); err != nil {
+		t.Fatalf("send frame 0x%04x: %v", binary.LittleEndian.Uint16(frame), err)
+	}
+}
+
+// TestMap_Dispatch_TradeItemSwap drives the full player-to-player trade flow over
+// two real connections: request → both see the open → ack(accept) → stage one item
+// → both OK → atomic conclude. It asserts every state-machine packet header lands
+// on the right conn, and that the atomic swap moved the staged item from the
+// offerer to the partner (no duplication or loss).
+func TestMap_Dispatch_TradeItemSwap(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	ms, env := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+
+	// Offerer (player 1) owns one Red Potion (501) at bag slot 1.
+	if _, err := env.itemRepo.Add(t.Context(), 150001, 501, 1); err != nil {
+		t.Fatalf("seed offerer item: %v", err)
+	}
+
+	// 1. Both players enter (each drains its 13-byte ZC_ACCEPT_ENTER).
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p1 accept-enter: %v", err)
+	}
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p2 accept-enter: %v", err)
+	}
+
+	// 2. Player 1 requests a trade with player 2. Real wire format: the TARGET
+	//    (player 2) gets ZC_REQ_EXCHANGE_ITEM; the requester gets nothing yet.
+	reqFrame := make([]byte, 6)
+	binary.LittleEndian.PutUint16(reqFrame[0:], ropacket.HeaderCZTRADEREQUEST)
+	binary.LittleEndian.PutUint32(reqFrame[2:], 150002)
+	sendRaw(t, conn1, reqFrame)
+	readTradeFrame(t, conn2, ropacket.HeaderZCREQEXCHANGEITEM, 32)
+
+	// 3. Player 2 accepts (CZ_TRADE_ACK type=3). Both get ZC_ACK_EXCHANGE_ITEM.
+	ackFrame := make([]byte, 3)
+	binary.LittleEndian.PutUint16(ackFrame[0:], ropacket.HeaderCZTRADEACK)
+	ackFrame[2] = ropacket.CZTradeAckAccept
+	sendRaw(t, conn2, ackFrame)
+	ack1 := readTradeFrame(t, conn1, ropacket.HeaderZCACKEXCHANGEITEM, 9)
+	ack2 := readTradeFrame(t, conn2, ropacket.HeaderZCACKEXCHANGEITEM, 9)
+	if ack1[2] != ropacket.TradeAckAccept || ack2[2] != ropacket.TradeAckAccept {
+		t.Fatalf("trade ack result = %d/%d, want %d", ack1[2], ack2[2], ropacket.TradeAckAccept)
+	}
+
+	// 4. Player 1 stages the potion (slot 1, amount 1). Self gets the per-add ack,
+	//    partner gets the staged view.
+	addFrame := make([]byte, 8)
+	binary.LittleEndian.PutUint16(addFrame[0:], ropacket.HeaderCZADDEXCHANGEITEM)
+	binary.LittleEndian.PutUint16(addFrame[2:], 1) // index (slot 1)
+	binary.LittleEndian.PutUint32(addFrame[4:], 1) // amount
+	sendRaw(t, conn1, addFrame)
+	selfAck := readTradeFrame(t, conn1, ropacket.HeaderZCACKADDEXCHANGEITEM, 5)
+	if selfAck[4] != ropacket.TradeItemAddSuccess {
+		t.Fatalf("add-item self result = %d, want %d", selfAck[4], ropacket.TradeItemAddSuccess)
+	}
+	readTradeFrame(t, conn2, ropacket.HeaderZCADDEXCHANGEITEM, 62)
+
+	// 5. Player 1 presses OK → both get ZC_CONCLUDE_EXCHANGE_ITEM (Who=0 to p1,
+	//    Who=1 to p2).
+	okFrame := make([]byte, 2)
+	binary.LittleEndian.PutUint16(okFrame[0:], ropacket.HeaderCZTRADEOK)
+	sendRaw(t, conn1, okFrame)
+	conc1a := readTradeFrame(t, conn1, ropacket.HeaderZCCONCLUDEEXCHANGEITEM, 3)
+	conc2a := readTradeFrame(t, conn2, ropacket.HeaderZCCONCLUDEEXCHANGEITEM, 3)
+	if conc1a[2] != 0 || conc2a[2] != 1 {
+		t.Fatalf("first OK conclude who = %d/%d, want 0/1", conc1a[2], conc2a[2])
+	}
+
+	// 6. Player 2 presses OK → both locked → atomic conclude swap. Both get a
+	//    conclude notification; player 2 (the locker) Who=0, player 1 Who=1.
+	sendRaw(t, conn2, okFrame)
+	conc2b := readTradeFrame(t, conn2, ropacket.HeaderZCCONCLUDEEXCHANGEITEM, 3)
+	conc1b := readTradeFrame(t, conn1, ropacket.HeaderZCCONCLUDEEXCHANGEITEM, 3)
+	if conc2b[2] != 0 || conc1b[2] != 1 {
+		t.Fatalf("second OK conclude who = %d/%d, want 0/1", conc2b[2], conc1b[2])
+	}
+
+	// 7. Atomic swap: player 1 lost the potion, player 2 gained it (no dup/loss).
+	p1Items, err := env.itemRepo.LoadByChar(t.Context(), 2000001, 150001)
+	if err != nil {
+		t.Fatalf("load p1 inventory: %v", err)
+	}
+	if hasItem(p1Items, 501) {
+		t.Fatalf("offerer still owns the traded item after conclude (not removed)")
+	}
+	p2Items, err := env.itemRepo.LoadByChar(t.Context(), 2000002, 150002)
+	if err != nil {
+		t.Fatalf("load p2 inventory: %v", err)
+	}
+	if amt := itemAmount(p2Items, 501); amt != 1 {
+		t.Fatalf("partner potion amount after conclude = %d, want 1", amt)
+	}
+}
+
+// hasItem reports whether the item list contains nameID.
+func hasItem(items []invdomain.Item, nameID uint32) bool { return itemAmount(items, nameID) > 0 }
+
+// itemAmount returns the stacked amount of nameID in the list, or 0 if absent.
+func itemAmount(items []invdomain.Item, nameID uint32) uint32 {
+	for _, it := range items {
+		if it.NameID == nameID {
+			return it.Amount
+		}
+	}
+	return 0
 }
