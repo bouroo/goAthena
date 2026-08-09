@@ -29,6 +29,11 @@ type WorldService struct {
 	log      *slog.Logger
 	tickRate time.Duration
 	stopCh   chan struct{}
+	// respawnCtx cancels timers armed by ArmRespawn so in-flight respawn timers
+	// drain on Stop (a dead PC that has not yet respawned does not fire after
+	// shutdown). Mirrors SpawnService's ctx/cancel respawn-timer pattern.
+	respawnCtx    context.Context
+	respawnCancel context.CancelFunc
 	// regenAcc holds per-entity elapsed time since the last HP/SP regen tick.
 	// Per-entity (not global) so sitters (interval halved) and standers (full
 	// interval) advance on the same 50 Hz tick independently. It is read and
@@ -40,6 +45,13 @@ type WorldService struct {
 	// entity's GID (char_id). nil = regen is silent (server state still advances;
 	// useful for tests and headless operation). Invoked off the world mutex.
 	OnStatChange func(charID uint32, hp, sp int32)
+	// OnRespawn, when set, is invoked after RespawnPlayer revives a PC at its save
+	// point so the gateway can broadcast the save-point appear (ZC_SPAWN_UNIT to
+	// neighbors) and relocate the player's own client (ZC_ACCEPT_ENTER). charID is
+	// the entity's GID (char_id). nil = respawn is silent (server state still
+	// advances; useful for tests and headless operation). Invoked off the world
+	// mutex, after OnStatChange, so the HP/SP bar settles before the appear burst.
+	OnRespawn func(charID uint32)
 }
 
 // Pre-renewal standing natural-regen intervals (rAthena status_natural_heal).
@@ -49,6 +61,11 @@ const (
 	hpRegenInterval = 6 * time.Second
 	spRegenInterval = 8 * time.Second
 )
+
+// respawnRevivePct is the fraction of MaxHP/MaxSP a dead PC is revived to on
+// respawn (100 = full). rAthena revives at a percentage of max vitals; goAthena
+// revives to full — a documented default, NOT derived from rAthena source.
+const respawnRevivePct = 100
 
 // regenAccum tracks elapsed time since the last HP/SP regen for one entity.
 // Stored per EntityID in WorldService.regenAcc.
@@ -62,15 +79,18 @@ func NewWorldService(repo domain.WorldRepository, log *slog.Logger, tickRateHz i
 	if tickRateHz < 1 {
 		tickRateHz = 50
 	}
+	respawnCtx, respawnCancel := context.WithCancel(context.Background())
 	return &WorldService{
-		entities: make(map[domain.EntityID]*domain.Entity),
-		byMap:    make(map[string]map[domain.EntityID]bool),
-		grids:    make(map[string]*aoi.GridManager),
-		regenAcc: make(map[domain.EntityID]regenAccum),
-		repo:     repo,
-		log:      log,
-		tickRate: time.Second / time.Duration(tickRateHz),
-		stopCh:   make(chan struct{}),
+		entities:      make(map[domain.EntityID]*domain.Entity),
+		byMap:         make(map[string]map[domain.EntityID]bool),
+		grids:         make(map[string]*aoi.GridManager),
+		regenAcc:      make(map[domain.EntityID]regenAccum),
+		repo:          repo,
+		log:           log,
+		tickRate:      time.Second / time.Duration(tickRateHz),
+		stopCh:        make(chan struct{}),
+		respawnCtx:    respawnCtx,
+		respawnCancel: respawnCancel,
 	}
 }
 
@@ -80,6 +100,14 @@ func NewWorldService(repo domain.WorldRepository, log *slog.Logger, tickRateHz i
 func (w *WorldService) ensureGrid(mapName string) *aoi.GridManager {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.ensureGridLocked(mapName)
+}
+
+// ensureGridLocked is the lock-free core of ensureGrid. The caller MUST hold w.mu.
+// It creates the grid and an empty byMap set on first access for a map, but never
+// clobbers an existing set — so a caller that has already added an entity to
+// byMap[mapName] under the lock can safely ensure the map exists first.
+func (w *WorldService) ensureGridLocked(mapName string) *aoi.GridManager {
 	gm, ok := w.grids[mapName]
 	if !ok {
 		gm = aoi.NewGridManager(512, 512)
@@ -262,8 +290,10 @@ func (w *WorldService) StartTick(ctx context.Context, update func(ctx context.Co
 	}
 }
 
-// Stop signals the tick loop to drain.
+// Stop signals the tick loop to drain and cancels in-flight respawn timers so a
+// pending respawn does not fire after shutdown.
 func (w *WorldService) Stop() {
+	w.respawnCancel()
 	select {
 	case <-w.stopCh:
 	default:
@@ -431,6 +461,113 @@ func (w *WorldService) WarpPlayer(charID uint32, mapName string, x, y int16) err
 		return fmt.Errorf("warp player: %w", err)
 	}
 	return nil
+}
+
+// RespawnPlayer moves a dead PC to its save point and revives its vitals, so a
+// mob-killed player reappears at its save point instead of sitting dead forever.
+// It is the bounded goAthena death model: no ghost/tomb/respawn-button — a killed
+// PC vanishes (broadcast by the caller, gateway STEP), is out of the visible set
+// for the respawn delay, then reappears here with HP/SP restored. The player's
+// connection stays alive across the delay.
+//
+// The save point is the runtime-cached Entity.SaveMap/SavePos; a char without a
+// seeded save point respawns on its current map in place (bounded default — every
+// production char loads one from the char table). Vitals revive to
+// respawnRevivePct of max. All mutations run under w.mu and the AOI reseat happens
+// off-lock (the grid synchronizes itself), mirroring MoveEntity; OnStatChange is
+// collected under the lock and dispatched off it so the gateway's HP/SP-bar emit
+// never runs on the world mutex. Thread-safe against the tick loop: MonsterTick
+// drops dead targets on death, so moving a revived PC mid-tick is race-free.
+func (w *WorldService) RespawnPlayer(charID uint32) error {
+	type statNotify struct {
+		charID uint32
+		hp, sp int32
+	}
+	var (
+		notify   *statNotify
+		oldMap   string
+		saveMap  string
+		savePos  domain.Position
+		oldGrid  *aoi.GridManager
+		saveGrid *aoi.GridManager
+	)
+	w.mu.Lock()
+	e, ok := w.entities[domain.EntityID(charID)]
+	if !ok {
+		w.mu.Unlock()
+		return domain.ErrEntityNotFound
+	}
+	// Resolve save point, falling back to the current cell when none is seeded.
+	saveMap = e.SaveMap
+	savePos = e.SavePos
+	if saveMap == "" {
+		saveMap = e.Map
+		savePos = e.Pos
+	}
+	// Re-seat on the save map: ensure its grid+set exist (ensureGridLocked never
+	// clobbers an existing set), drop the entity from the death map's set, then
+	// seat it on the save map. Calling ensureGridLocked before the byMap add mirrors
+	// AddEntity's ensureGrid-then-byMap order so the entity is never orphaned.
+	oldMap = e.Map
+	saveGrid = w.ensureGridLocked(saveMap)
+	if saveMap != oldMap {
+		if set, ok := w.byMap[oldMap]; ok {
+			delete(set, e.ID)
+		}
+		e.Map = saveMap
+	}
+	w.byMap[saveMap][e.ID] = true
+	e.Pos = savePos
+	// Revive vitals to respawnRevivePct of max (applyPctHeal from 0 = fraction of max).
+	e.HP = applyPctHeal(0, e.MaxHP, respawnRevivePct)
+	e.SP = applyPctHeal(0, e.MaxSP, respawnRevivePct)
+	if w.OnStatChange != nil {
+		notify = &statNotify{charID: charID, hp: e.HP, sp: e.SP}
+	}
+	oldGrid = w.grids[oldMap]
+	w.mu.Unlock()
+
+	// AOI reseat off-lock: remove from the death cell's grid, then re-add at the
+	// save cell on the already-ensured save grid. The grid synchronizes itself, so
+	// this is race-free with the tick loop (matching MoveEntity's reseat pattern).
+	if oldGrid != nil {
+		_ = oldGrid.RemoveEntity(aoi.EntityID(charID))
+	}
+	_ = saveGrid.RemoveEntity(aoi.EntityID(charID)) // clear a stale cell on the save grid
+	if err := saveGrid.AddEntity(&aoi.Entity{
+		ID: aoi.EntityID(charID), X: int(savePos.X), Y: int(savePos.Y),
+	}); err != nil {
+		return fmt.Errorf("respawn aoi add: %w", err)
+	}
+
+	if notify != nil {
+		w.OnStatChange(notify.charID, notify.hp, notify.sp)
+	}
+	if w.OnRespawn != nil {
+		w.OnRespawn(charID)
+	}
+	return nil
+}
+
+// ArmRespawn arms a cancellable timer that fires RespawnPlayer(charID) after
+// delay. Each death arms one timer; Stop cancels in-flight timers via the service
+// context so a pending respawn never fires after shutdown. Mirrors SpawnService's
+// NewTimer+goroutine respawn pattern. The gateway calls this when a mob kills a
+// PC (after broadcasting the death-cell vanish); the timer callback performs the
+// respawn + save-point appear (the gateway STEP wires the appear broadcast).
+func (w *WorldService) ArmRespawn(charID uint32, delay time.Duration) {
+	go func() {
+		t := time.NewTimer(delay)
+		defer t.Stop()
+		select {
+		case <-w.respawnCtx.Done():
+			return
+		case <-t.C:
+			if err := w.RespawnPlayer(charID); err != nil {
+				w.log.Warn("respawn failed", "char_id", charID, "err", err)
+			}
+		}
+	}()
 }
 
 // HealPlayer restores a player's HP and SP by hpPct/spPct percent of their

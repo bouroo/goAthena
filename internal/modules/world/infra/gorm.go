@@ -25,9 +25,14 @@ func NewGORMWorldRepository(db *gorm.DB) *GORMWorldRepository {
 // charRow is a minimal read model for map-enter (only the columns the world
 // needs). Kept local to avoid a dependency on the character module's domain.
 type charRow struct {
-	LastMap   string `gorm:"column:last_map"`
-	LastX     uint16 `gorm:"column:last_x"`
-	LastY     uint16 `gorm:"column:last_y"`
+	LastMap string `gorm:"column:last_map"`
+	LastX   uint16 `gorm:"column:last_x"`
+	LastY   uint16 `gorm:"column:last_y"`
+	// SaveMap/SaveX/SaveY back the runtime save-point cache (Entity.SaveMap/SavePos)
+	// used by respawn. Read-only here — the world repo never writes the save point.
+	SaveMap   string `gorm:"column:save_map"`
+	SaveX     uint16 `gorm:"column:save_x"`
+	SaveY     uint16 `gorm:"column:save_y"`
 	Sex       int8   `gorm:"column:sex"`
 	Class     uint16 `gorm:"column:class"`
 	BaseLevel uint16 `gorm:"column:base_level"`
@@ -69,6 +74,8 @@ func (r *GORMWorldRepository) LoadEnterState(ctx context.Context, charID uint32)
 		Account: cr.AccountID,
 		Map:     cr.LastMap,
 		Pos:     domain.Position{X: int16(cr.LastX), Y: int16(cr.LastY)},
+		SaveMap: cr.SaveMap,
+		SavePos: domain.Position{X: int16(cr.SaveX), Y: int16(cr.SaveY)},
 		Sex:     uint8(cr.Sex),
 		Job:     int16(cr.Class),
 		Level:   int16(cr.BaseLevel),

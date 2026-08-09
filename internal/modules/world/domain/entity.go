@@ -37,19 +37,25 @@ type Entity struct {
 	Type    EntityType
 	// Class is the mob_db class id for EntityTypeMob (0 for PC/NPC); the combat
 	// service resolves the mob's DEF/stats from mob_db by this id.
-	Class  int32
-	Map    string
-	Pos    Position
-	Dir    uint8
-	Speed  int16
-	Job    int16
-	Sex    uint8
-	Name   string
-	Head   uint16
-	Weapon uint32
-	Shield uint32
-	HP     int32
-	MaxHP  int32
+	Class int32
+	Map   string
+	Pos   Position
+	// SaveMap/SavePos are a runtime cache of the character's save (respawn) point,
+	// populated at map-enter from the char table (save_map/save_x/save_y). They are
+	// NOT authoritative — the char table is — but RespawnPlayer reads them so a
+	// killed PC reappears at its save point without a round-trip to the DB.
+	SaveMap string
+	SavePos Position
+	Dir     uint8
+	Speed   int16
+	Job     int16
+	Sex     uint8
+	Name    string
+	Head    uint16
+	Weapon  uint32
+	Shield  uint32
+	HP      int32
+	MaxHP   int32
 	// SP/MaxSP are the skill-point vitals; PercentHeal (and later skill cost)
 	// mutate them. Mobs leave them zero — only PCs load them from the char table.
 	SP    int32

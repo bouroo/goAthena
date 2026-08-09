@@ -98,6 +98,9 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 		ID: 150001, Account: 2000001, Map: "new_1-1",
 		Pos: worlddomain.Position{X: 53, Y: 111}, Sex: 1, Job: 0, Level: 1,
 		Name: "Hero", HP: 1000, MaxHP: 1000, SP: 100, MaxSP: 100, Speed: 150,
+		// Save point distinct from the enter cell so respawn relocate/reseat is
+		// observable (died PC respawns here, not at its death cell).
+		SaveMap: "new_1-1", SavePos: worlddomain.Position{X: 1, Y: 1},
 	})
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
 	spawn := worldapp.NewSpawnService(world, nil, nil)
@@ -542,6 +545,142 @@ func TestMap_MobAttacksPlayer(t *testing.T) {
 	hpAfter := int32(binary.LittleEndian.Uint32(par[4:8]))
 	if want := int32(1000) - dmg; hpAfter != want {
 		t.Fatalf("player HP after mob hit = %d, want %d (1000 − %d damage)", hpAfter, want, dmg)
+	}
+}
+
+// TestMap_MobKillsPlayerRespawns proves the full player-death → respawn path:
+// an aggressive mob kills a PC (HP→0, died=true), the PC vanishes at its death
+// cell (ZC_NOTIFY_VANISH VanishDead, seen by the dying player), then respawns at
+// its save point with HP/SP restored and relocates (ZC_ACCEPT_ENTER). The death +
+// vanish are driven by the real MonsterTick; respawn is driven deterministically
+// via RespawnPlayer (the same code the ArmRespawn timer runs), so the test is not
+// timing-fragile. The bounded goAthena model: no ghost/tomb — vanish then respawn.
+func TestMap_MobKillsPlayerRespawns(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	// Stop cancels the respawn timer armed by the death path so it does not fire
+	// spuriously after this test (respawn is driven directly below).
+	defer env.world.Stop()
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	// CZ_ENTER → ZC_ACCEPT_ENTER; draining the 13-byte reply registers the conn
+	// for charID 150001 (the PC, HP 1000 at new_1-1 (53,111), save point (1,1)).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// Re-seed the PC at 1 HP so a single mob swing is lethal (the conn stays
+	// registered: RemoveEntity does not touch ms.conns). The save point is
+	// preserved so respawn relocates to (1,1), not the death cell.
+	if err := env.world.RemoveEntity(150001); err != nil {
+		t.Fatalf("RemoveEntity: %v", err)
+	}
+	if err := env.world.AddEntity(worlddomain.Entity{
+		ID: 150001, Type: worlddomain.EntityTypePC, Account: 2000001, Map: "new_1-1",
+		Pos: worlddomain.Position{X: 53, Y: 111}, HP: 1, MaxHP: 1000,
+		SP: 100, MaxSP: 100, Speed: 150,
+		SaveMap: "new_1-1", SavePos: worlddomain.Position{X: 1, Y: 1},
+	}); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+
+	// Spawn the aggressive mob one cell east (Chebyshev dist 1 ≤ AttackRange 2).
+	const mobGID = 160000
+	if err := env.spawn.SpawnMob(mobGID, 8001, "new_1-1", worlddomain.Position{X: 54, Y: 111}, "AggroMob", 1000, 1000, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+
+	// One cadence interval (2 s) ⇒ one lethal swing: HP 1 → 0, died=true.
+	env.mobAI.MonsterTick(t.Context(), 2*time.Second)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+
+	// ZC_NOTIFY_ACT (34 B): the killing blow, srcID=mob, targetID=PC.
+	act := make([]byte, (ropacket.NotifyActResponse{}).Size())
+	if _, err := io.ReadFull(conn, act); err != nil {
+		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT {
+		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT)
+	}
+	if got := binary.LittleEndian.Uint32(act[2:6]); got != mobGID {
+		t.Fatalf("ZC_NOTIFY_ACT srcID = %d, want mob GID %d", got, mobGID)
+	}
+	if got := binary.LittleEndian.Uint32(act[6:10]); got != 150001 {
+		t.Fatalf("ZC_NOTIFY_ACT targetID = %d, want player GID 150001", got)
+	}
+
+	// ZC_PAR_CHANGE HP+SP (16 B): HP dropped to 0 on the killing blow.
+	par := make([]byte, 16)
+	if _, err := io.ReadFull(conn, par); err != nil {
+		t.Fatalf("read ZC_PAR_CHANGE after kill: %v", err)
+	}
+	if hpAfter := int32(binary.LittleEndian.Uint32(par[4:8])); hpAfter != 0 {
+		t.Fatalf("player HP after kill = %d, want 0", hpAfter)
+	}
+
+	// ZC_NOTIFY_VANISH (7 B): VanishDead at the death cell, broadcast to the
+	// dying player (exclude 0) so it sees its own death.
+	van := make([]byte, (ropacket.NotifyVanishResponse{}).Size())
+	if _, err := io.ReadFull(conn, van); err != nil {
+		t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(van[0:2]); got != ropacket.HeaderZCNOTIFYVANISH {
+		t.Fatalf("ZC_NOTIFY_VANISH header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYVANISH)
+	}
+	if got := binary.LittleEndian.Uint32(van[2:6]); got != 150001 {
+		t.Fatalf("ZC_NOTIFY_VANISH GID = %d, want player GID 150001", got)
+	}
+	if van[6] != ropacket.VanishDead {
+		t.Fatalf("ZC_NOTIFY_VANISH type = %d, want VanishDead (%d)", van[6], ropacket.VanishDead)
+	}
+
+	// Respawn deterministically (the ArmRespawn timer runs the same RespawnPlayer
+	// after playerRespawnDelay). OnRespawn fires the save-point appear burst.
+	if err := env.world.RespawnPlayer(150001); err != nil {
+		t.Fatalf("RespawnPlayer: %v", err)
+	}
+
+	// ZC_PAR_CHANGE HP+SP (16 B): vitals restored to full (respawnRevivePct=100).
+	par2 := make([]byte, 16)
+	if _, err := io.ReadFull(conn, par2); err != nil {
+		t.Fatalf("read ZC_PAR_CHANGE after respawn: %v", err)
+	}
+	if hpRestored := int32(binary.LittleEndian.Uint32(par2[4:8])); hpRestored != 1000 {
+		t.Fatalf("player HP after respawn = %d, want 1000 (full)", hpRestored)
+	}
+
+	// ZC_ACCEPT_ENTER (13 B): the player's own client relocates to the save point.
+	enter := make([]byte, 13)
+	if _, err := io.ReadFull(conn, enter); err != nil {
+		t.Fatalf("read ZC_ACCEPT_ENTER relocate: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(enter[0:2]); got != ropacket.HeaderZCACCEPTENTER {
+		t.Fatalf("ZC_ACCEPT_ENTER header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	}
+	// posDir[3] at [6:9] packs (x,y,dir); decode to confirm the save cell (1,1).
+	x := int16((uint16(enter[6]) << 2) | (uint16(enter[7]) >> 6))      //nolint:gosec // G115: wire bit layout; coords are non-negative.
+	y := int16((uint16(enter[7]&0x3f) << 4) | (uint16(enter[8]) >> 4)) //nolint:gosec // G115: wire bit layout; coords are non-negative.
+	if x != 1 || y != 1 {
+		t.Fatalf("relocate cell = (%d,%d), want save point (1,1)", x, y)
+	}
+
+	// The world is the source of truth: the PC is at its save point, alive.
+	pc, err := env.world.Get(150001)
+	if err != nil {
+		t.Fatalf("Get respawned PC: %v", err)
+	}
+	if pc.HP != 1000 {
+		t.Errorf("respawned PC HP = %d, want 1000", pc.HP)
+	}
+	if pc.Pos != (worlddomain.Position{X: 1, Y: 1}) {
+		t.Errorf("respawned PC pos = %+v, want {1,1}", pc.Pos)
 	}
 }
 

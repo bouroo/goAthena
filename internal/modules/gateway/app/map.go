@@ -29,6 +29,11 @@ const czEnterSize = 19
 // mapRefuseRejected mirrors rAthena REFUSE_ENTER_REJECTED (0).
 const mapRefuseRejected uint8 = 0
 
+// playerRespawnDelay is how long a mob-killed PC stays vanished before respawning
+// at its save point. rAthena pre-re auto-returns a dead PC to its save point after
+// a short delay; goAthena uses a documented 5 s default — NOT derived from source.
+const playerRespawnDelay = 5 * time.Second
+
 // MapServer is the gnet TCP listener for the map protocol. It admits a fresh
 // connection on CZ_ENTER (session verified via the SessionStore), registers the
 // player in the world, and replies with the map-enter + self-spawn packets.
@@ -104,6 +109,11 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 	// changed vitals back to the player's client as ZC_PAR_CHANGE (mirrors the
 	// script percentheal path). A char with no live conn is a no-op.
 	world.OnStatChange = s.notifyStatChange
+	// RespawnPlayer revives a dead PC off the reactor (ArmRespawn timer); this sink
+	// bridges the revive back to the wire — ZC_SPAWN_UNIT to save-map neighbors +
+	// ZC_ACCEPT_ENTER to relocate the player's own client. Mirrors handleEnter's
+	// appear. A char whose conn dropped before the timer fires is a no-op.
+	world.OnRespawn = s.notifyRespawn
 	// Mob AI runs on the same world tick; this sink bridges a mob's landed hit
 	// back to the player as ZC_NOTIFY_ACT so the swing is visible and the target's
 	// HP bar drops. A headless harness (no mob AI) leaves mobs passive.
@@ -169,14 +179,12 @@ func (s *MapServer) notifyStatChange(charID uint32, hp, sp int32) {
 // AOI neighbors so the mob's swing is visible, then refreshes the target's own
 // HP/SP bar via notifyStatChange (applyDamage mutates HP directly without firing
 // OnStatChange). dmg may be 0 (miss/block) and is still broadcast so the client
-// renders the swing. The hook's died flag is part of the OnMobAttack contract
-// (MobAIService uses it to drop a killed target); this sink does not yet branch
-// on it — a killing blow already lands as ZC_NOTIFY_ACT + a 0-HP ZC_PAR_CHANGE,
-// and player vanish/respawn is a separate, deferred feature — so it is accepted
-// unnamed. ServerTick/Speed fields are left zero: mob_db carries no amotion, so
-// the per-hit cadence (mobAttackInterval) is the only timing a first cut needs.
-// A target that left the world is a no-op.
-func (s *MapServer) notifyMobAttack(mobID, targetID worlddomain.EntityID, dmg int32, _ bool) {
+// renders the swing. On a killing blow (died==true) against a PC, handlePlayerDeath
+// takes over: VanishDead at the death cell + an armed respawn timer. ServerTick/
+// Speed are zero: mob_db carries no amotion, so the per-hit cadence
+// (mobAttackInterval) is the only timing a first cut needs. A target that left the
+// world is a no-op.
+func (s *MapServer) notifyMobAttack(mobID, targetID worlddomain.EntityID, dmg int32, died bool) {
 	target, err := s.world.Get(targetID)
 	if err != nil {
 		return // disconnected/despawned between swing and notify: nothing to show
@@ -198,6 +206,46 @@ func (s *MapServer) notifyMobAttack(mobID, targetID worlddomain.EntityID, dmg in
 	s.broadcast(out, target.Map, target.Pos, 0)
 	// Refresh the target's own vitals so their HP bar drops by the damage dealt.
 	s.notifyStatChange(uint32(targetID), target.HP, target.SP) //nolint:gosec // G115: EntityID wraps a uint32 GID
+	if died && target.Type == worlddomain.EntityTypePC {
+		s.handlePlayerDeath(uint32(targetID), target.Map, target.Pos) //nolint:gosec // G115: EntityID wraps a uint32 GID
+	}
+}
+
+// handlePlayerDeath performs the bounded PC death model: broadcast ZC_NOTIFY_VANISH
+// (VanishDead) at the death cell — the dying player's own conn included so it sees
+// its own death — then arm a respawn timer that revives the PC at its save point.
+// Called from notifyMobAttack when a mob's killing blow (died==true) lands on a PC.
+// The player's connection stays alive across the delay; the bounded goAthena model
+// has no ghost/tomb/respawn-button — the PC simply vanishes then reappears.
+func (s *MapServer) handlePlayerDeath(charID uint32, deathMap string, deathPos worlddomain.Position) {
+	vanish := ropacket.NotifyVanishResponse{GID: charID, Type: ropacket.VanishDead}
+	vbuf := make([]byte, vanish.Size())
+	if err := vanish.Encode(sliceWriter(vbuf)); err != nil {
+		s.log.Error("map: encode player vanish", "err", err)
+	} else {
+		// exclude 0 so the dying player's own conn receives its death frame.
+		s.broadcast(vbuf, deathMap, deathPos, 0)
+	}
+	s.world.ArmRespawn(charID, playerRespawnDelay)
+}
+
+// notifyRespawn is the WorldService.OnRespawn sink: after a dead PC is revived at
+// its save point, broadcast ZC_SPAWN_UNIT so save-map neighbors see it appear and
+// deliver ZC_ACCEPT_ENTER so the player's own client relocates to the save cell.
+// Mirrors handleEnter's appear (spawn-unit to others + accept-enter to self).
+// RespawnPlayer settled state off the world mutex, so Get + broadcast here take no
+// held mutex; a player whose conn dropped before the timer fired is a no-op.
+func (s *MapServer) notifyRespawn(charID uint32) {
+	e, err := s.world.Get(worlddomain.EntityID(charID)) //nolint:gosec // G115: charID is a char_id (uint32).
+	if err != nil {
+		return // player left between respawn and appear: nothing to broadcast
+	}
+	if sbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(e)); ok {
+		s.broadcast(sbuf, e.Map, e.Pos, charID)
+	}
+	if c, ok := s.connFor(charID); ok {
+		s.writeAcceptEnter(c, e)
+	}
 }
 
 // unregisterConn drops a charID's live connection and its last-opened shop from

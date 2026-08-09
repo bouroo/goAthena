@@ -404,6 +404,223 @@ func TestSetSitting(t *testing.T) {
 	}
 }
 
+// containsID reports whether ids contains id.
+func containsID(ids []domain.EntityID, id domain.EntityID) bool {
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRespawnPlayer_SavePointAndGridReseat verifies a dead PC respawns at its
+// save point with vitals restored to full, and the AOI grid is re-seated (removed
+// from the death cell, added at the save cell).
+func TestRespawnPlayer_SavePointAndGridReseat(t *testing.T) {
+	w := newRegenWorld()
+	dead := domain.Entity{
+		ID: 150001, Type: domain.EntityTypePC,
+		Map: "prontera", Pos: domain.Position{X: 50, Y: 50},
+		SaveMap: "prontera", SavePos: domain.Position{X: 100, Y: 100},
+		HP: 0, MaxHP: 1000, SP: 0, MaxSP: 500,
+	}
+	if err := w.AddEntity(dead); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+	if !containsID(w.QueryVisible("prontera", 50, 50), 150001) {
+		t.Fatal("pre-respawn: dead PC not visible at death cell")
+	}
+
+	if err := w.RespawnPlayer(150001); err != nil {
+		t.Fatalf("RespawnPlayer: %v", err)
+	}
+	e, err := w.Get(150001)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if e.Map != "prontera" || e.Pos != (domain.Position{X: 100, Y: 100}) {
+		t.Errorf("after respawn Map/Pos = %q %+v, want prontera {100 100}", e.Map, e.Pos)
+	}
+	if e.HP != 1000 {
+		t.Errorf("HP = %d, want 1000 (full revive)", e.HP)
+	}
+	if e.SP != 500 {
+		t.Errorf("SP = %d, want 500 (full revive)", e.SP)
+	}
+	if containsID(w.QueryVisible("prontera", 50, 50), 150001) {
+		t.Error("death cell still shows the PC; grid reseat failed")
+	}
+	if !containsID(w.QueryVisible("prontera", 100, 100), 150001) {
+		t.Error("save cell does not show the PC; grid reseat failed")
+	}
+}
+
+// TestRespawnPlayer_CrossMap verifies a PC that dies on one map respawns on its
+// save map: it leaves the death map's player set and joins the save map's set.
+func TestRespawnPlayer_CrossMap(t *testing.T) {
+	w := newRegenWorld()
+	dead := domain.Entity{
+		ID: 150001, Type: domain.EntityTypePC,
+		Map: "dungeon", Pos: domain.Position{X: 10, Y: 10},
+		SaveMap: "prontera", SavePos: domain.Position{X: 5, Y: 5},
+		HP: 0, MaxHP: 200, MaxSP: 100,
+	}
+	if err := w.AddEntity(dead); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+
+	if err := w.RespawnPlayer(150001); err != nil {
+		t.Fatalf("RespawnPlayer: %v", err)
+	}
+	e, err := w.Get(150001)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if e.Map != "prontera" || e.Pos != (domain.Position{X: 5, Y: 5}) {
+		t.Errorf("after respawn Map/Pos = %q %+v, want prontera {5 5}", e.Map, e.Pos)
+	}
+	if containsID(w.PlayersOnMap("dungeon"), 150001) {
+		t.Error("PC still on death map after respawn")
+	}
+	if !containsID(w.PlayersOnMap("prontera"), 150001) {
+		t.Error("PC not on save map after respawn")
+	}
+}
+
+// TestRespawnPlayer_NoSavePointFallsBackInPlace documents the bounded default: a
+// char with no seeded save point respawns on its current map in place (vitals
+// restored, position unchanged). Every production char loads a save point from
+// the char table, so this is a safety net, not the normal path.
+func TestRespawnPlayer_NoSavePointFallsBackInPlace(t *testing.T) {
+	w := newRegenWorld()
+	dead := domain.Entity{
+		ID: 150001, Type: domain.EntityTypePC,
+		Map: "prontera", Pos: domain.Position{X: 30, Y: 30},
+		HP: 0, MaxHP: 100, MaxSP: 50,
+	}
+	if err := w.AddEntity(dead); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+
+	if err := w.RespawnPlayer(150001); err != nil {
+		t.Fatalf("RespawnPlayer: %v", err)
+	}
+	e, _ := w.Get(150001)
+	if e.Map != "prontera" || e.Pos != (domain.Position{X: 30, Y: 30}) {
+		t.Errorf("no-save respawn Map/Pos = %q %+v, want prontera {30 30} (in place)", e.Map, e.Pos)
+	}
+	if e.HP != 100 {
+		t.Errorf("HP = %d, want 100 (full revive)", e.HP)
+	}
+}
+
+// TestRespawnPlayer_UnknownEntity verifies the not-found sentinel.
+func TestRespawnPlayer_UnknownEntity(t *testing.T) {
+	w := newRegenWorld()
+	if err := w.RespawnPlayer(999999); !errors.Is(err, domain.ErrEntityNotFound) {
+		t.Errorf("RespawnPlayer unknown = %v, want ErrEntityNotFound", err)
+	}
+}
+
+// TestRespawnPlayer_OnStatChangeHook verifies RespawnPlayer collects the revive
+// notification under the lock and dispatches OnStatChange off it with the
+// restored vitals (so the gateway's HP/SP-bar emit never runs on the world mutex).
+func TestRespawnPlayer_OnStatChangeHook(t *testing.T) {
+	w := newRegenWorld()
+	if err := w.AddEntity(domain.Entity{
+		ID: 150001, Type: domain.EntityTypePC, Map: "prontera",
+		SaveMap: "prontera", SavePos: domain.Position{X: 1, Y: 1},
+		HP: 0, MaxHP: 1000, SP: 0, MaxSP: 500,
+	}); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+	var got []statChange
+	w.OnStatChange = func(charID uint32, hp, sp int32) {
+		got = append(got, statChange{charID, hp, sp})
+	}
+
+	if err := w.RespawnPlayer(150001); err != nil {
+		t.Fatalf("RespawnPlayer: %v", err)
+	}
+	if !equalNotifs(got, []statChange{{charID: 150001, hp: 1000, sp: 500}}) {
+		t.Fatalf("OnStatChange = %+v, want {{150001 1000 500}}", got)
+	}
+}
+
+// TestRespawnPlayer_OnRespawnHook verifies RespawnPlayer fires OnRespawn (off the
+// world mutex) with the revived PC's charID, after OnStatChange, so the gateway's
+// save-point appear burst runs only once the world state has settled.
+func TestRespawnPlayer_OnRespawnHook(t *testing.T) {
+	w := newRegenWorld()
+	if err := w.AddEntity(domain.Entity{
+		ID: 150001, Type: domain.EntityTypePC, Map: "prontera",
+		SaveMap: "prontera", SavePos: domain.Position{X: 1, Y: 1},
+		HP: 0, MaxHP: 1000, SP: 0, MaxSP: 500,
+	}); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+	var seq []string
+	w.OnStatChange = func(_ uint32, _, _ int32) { seq = append(seq, "stat") }
+	w.OnRespawn = func(charID uint32) {
+		if charID != 150001 {
+			t.Errorf("OnRespawn charID = %d, want 150001", charID)
+		}
+		seq = append(seq, "respawn")
+	}
+
+	if err := w.RespawnPlayer(150001); err != nil {
+		t.Fatalf("RespawnPlayer: %v", err)
+	}
+	if len(seq) != 2 || seq[0] != "stat" || seq[1] != "respawn" {
+		t.Fatalf("hook order = %v, want [stat respawn] (stat settles before appear)", seq)
+	}
+}
+
+// TestArmRespawn_FiresAfterDelay verifies ArmRespawn arms a timer that respawns
+// the dead PC after the delay. Polled with a generous deadline so it is not
+// timing-sensitive.
+func TestArmRespawn_FiresAfterDelay(t *testing.T) {
+	w := newRegenWorld()
+	if err := w.AddEntity(domain.Entity{
+		ID: 150001, Type: domain.EntityTypePC, Map: "prontera",
+		SaveMap: "prontera", SavePos: domain.Position{X: 1, Y: 1},
+		HP: 0, MaxHP: 1000,
+	}); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+
+	w.ArmRespawn(150001, 10*time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if hpOf(t, w, 150001) == 1000 {
+			return // respawned
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("ArmRespawn timer never fired within deadline; HP still 0")
+}
+
+// TestArmRespawn_StopCancels verifies Stop drains an in-flight respawn timer: an
+// armed timer with a long delay never fires after Stop.
+func TestArmRespawn_StopCancels(t *testing.T) {
+	w := newRegenWorld()
+	if err := w.AddEntity(domain.Entity{
+		ID: 150001, Type: domain.EntityTypePC, Map: "prontera",
+		SaveMap: "prontera", SavePos: domain.Position{X: 1, Y: 1},
+		HP: 0, MaxHP: 1000,
+	}); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+
+	w.ArmRespawn(150001, time.Hour)
+	w.Stop()
+	time.Sleep(50 * time.Millisecond)
+	if got := hpOf(t, w, 150001); got != 0 {
+		t.Fatalf("HP = %d after Stop, want 0 (timer should have been cancelled)", got)
+	}
+}
+
 func equalNotifs(a, b []statChange) bool {
 	if len(a) != len(b) {
 		return false
