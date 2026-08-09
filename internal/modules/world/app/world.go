@@ -412,6 +412,30 @@ func (w *WorldService) HealPlayer(charID uint32, hpPct, spPct int) (hp, sp int32
 	return e.HP, e.SP, nil
 }
 
+// AddVitals applies an absolute HP/SP delta to a player, clamped to [0, Max], and
+// returns the resulting values. It is the usable-item (potion) use case's world
+// capability: a healing item's flat restore (Red Potion +45 HP) flows through
+// here, unlike HealPlayer's percentage restore. HP/SP is transient runtime state
+// and is not persisted (mirroring HealPlayer). Like RegenTick it fires
+// OnStatChange off the world mutex so the gateway can emit ZC_PAR_CHANGE; delta
+// may be negative (the [0, Max] clamp keeps it symmetric for future drain paths).
+func (w *WorldService) AddVitals(charID uint32, hp, sp int32) (hpAfter, spAfter int32, err error) {
+	w.mu.Lock()
+	e, ok := w.entities[domain.EntityID(charID)]
+	if !ok {
+		w.mu.Unlock()
+		return 0, 0, domain.ErrEntityNotFound
+	}
+	e.HP = clampVitals(e.HP, hp, e.MaxHP)
+	e.SP = clampVitals(e.SP, sp, e.MaxSP)
+	hpAfter, spAfter = e.HP, e.SP
+	w.mu.Unlock()
+	if w.OnStatChange != nil {
+		w.OnStatChange(charID, hpAfter, spAfter)
+	}
+	return hpAfter, spAfter, nil
+}
+
 // applyPctHeal adds rate percent of max to cur, clamped to [0, max]. A non-positive
 // max yields 0 (no vitals to heal). rate is clamped to [0,100] first; the int64
 // intermediate avoids overflow when rate*max would exceed int32.
@@ -433,5 +457,24 @@ func applyPctHeal(cur, maxV int32, rate int) int32 {
 		return 0
 	default:
 		return int32(v) //nolint:gosec // G115: bounded to [0, max] which fits int32.
+	}
+}
+
+// clampVitals adds delta to cur, clamped to [0, max]. A non-positive max yields 0
+// (no vitals to change). delta may be negative (drain); the floor at 0 keeps the
+// clamp symmetric. The int64 intermediate avoids overflow when cur+delta would
+// exceed int32.
+func clampVitals(cur, delta, maxV int32) int32 {
+	if maxV <= 0 {
+		return 0
+	}
+	v := int64(cur) + int64(delta)
+	switch {
+	case v > int64(maxV):
+		return maxV
+	case v < 0:
+		return 0
+	default:
+		return int32(v) //nolint:gosec // G115: bounded to [0, maxV] which fits int32.
 	}
 }

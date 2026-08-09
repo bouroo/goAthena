@@ -67,6 +67,7 @@ func mapHandlers() map[uint16]mapHandler {
 		ropacket.HeaderCZPCSELLITEMLIST:     {frameSize: variableFrameSize, fn: (*MapServer).handleSellItemList},     // CZ_PC_SELL_ITEMLIST (variable)
 		0x0362:                              {size: 6, fn: (*MapServer).handleItemPickup},                            // CZ_ITEM_PICKUP @ 20250604
 		0x0363:                              {size: 6, fn: (*MapServer).handleItemDrop},                              // CZ_ITEM_DROP @ 20250604
+		0x0439:                              {size: 8, fn: (*MapServer).handleUseItem},                               // CZ_USE_ITEM2 @ 20250604 (cmd+index+AID)
 		0x0438:                              {size: 10, fn: (*MapServer).handleUseSkill2},                            // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
 		0x0af4:                              {size: 11, fn: (*MapServer).handleUseSkillToPos},                        // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
 		ropacket.HeaderCZTRADEREQUEST:       {size: 6, fn: (*MapServer).handleTradeRequest},                          // CZ_TRADE_REQUEST 0x00e4 (cmd+targetGID)
@@ -709,6 +710,56 @@ func (s *MapServer) handleReqWearEquip(c gnet.Conn, auth *mapAuth, frame []byte)
 	out := make([]byte, resp.Size())
 	if err := resp.Encode(sliceWriter(out)); err != nil {
 		s.log.Error("map: encode wear-equip ack", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// handleUseItem handles CZ_USE_ITEM2 (0x0439, 8B): the client double-clicks a
+// usable item (e.g. a potion) at inventory Index. It consumes one unit and
+// applies the item's effects via ItemUseService, then replies ZC_USE_ITEM_ACK2.
+// For a healing item AddVitals fires the world OnStatChange hook (set in
+// NewMapServer), so ZC_PAR_CHANGE is emitted during the Use call itself; this
+// handler emits only the ack to avoid a duplicate stat-change frame.
+//
+// Index convention: the wire Index is the 1-based inventory-list position (same
+// as the wear-equip handler); the ack carries the client-visible index (server
+// index + 2 for PACKETVER 20250604, per the ZC_USE_ITEM_ACK2 doc comment /
+// clif.cpp:4482). On a validation failure (sentinel error) it emits the ack with
+// Result=0 and keeps the connection alive — the failure encoding is known.
+func (s *MapServer) handleUseItem(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_USE_ITEM2 from unauthed conn")
+		return
+	}
+	req, err := ropacket.ParseCZUseItem(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_USE_ITEM2", "err", err)
+		return
+	}
+	ack, err := s.itemUse.Use(context.Background(), auth.accountID, auth.charID, int(req.Index))
+	if err != nil {
+		s.log.Warn("map: use item", "gid", auth.charID, "index", req.Index, "err", err)
+		s.writeUseItemAck(c, auth.accountID, req.Index+2, 0, 0, 0)
+		return
+	}
+	s.writeUseItemAck(c, auth.accountID, req.Index+2, ack.ItemID, ack.Remaining, 1)
+}
+
+// writeUseItemAck emits ZC_USE_ITEM_ACK2 (0x01c8). clientIndex is the already
+// +2-translated client-visible index; result is 1 (success) or 0 (failure). On
+// an encode error it logs and keeps the connection alive.
+func (s *MapServer) writeUseItemAck(c gnet.Conn, aid uint32, clientIndex, itemID, remaining uint16, result uint8) {
+	resp := ropacket.UseItemAck2Response{
+		Index:  clientIndex,
+		ItemID: itemID,
+		AID:    aid,
+		Amount: remaining,
+		Result: result,
+	}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode use-item ack", "err", err)
 		return
 	}
 	_ = c.AsyncWrite(out, nil)

@@ -46,6 +46,7 @@ type MapServer struct {
 	spawn   *worldapp.SpawnService
 	combat  *worldapp.CombatService
 	equip   *worldapp.EquipService
+	itemUse *worldapp.ItemUseService
 	inv     *invapp.InventoryService
 	content *contentapp.Engine
 	skills  *worldapp.SkillService
@@ -77,12 +78,13 @@ type MapServer struct {
 // commerce verb (open/buy/sell); trade wires the player-to-player trade verb.
 // shops/shopStore/trade may be nil in a reduced harness where their packets are
 // never exercised, but production wiring resolves all three.
-func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, equip *worldapp.EquipService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
+func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, equip *worldapp.EquipService, itemUse *worldapp.ItemUseService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
 	s := &MapServer{
 		world:       world,
 		spawn:       spawn,
 		combat:      combat,
 		equip:       equip,
+		itemUse:     itemUse,
 		inv:         inv,
 		content:     content,
 		skills:      skills,

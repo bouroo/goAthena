@@ -75,6 +75,15 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		items := do.MustInvoke[*itemdb.Registry](i)
 		return app.NewEquipService(inv, items), nil
 	})
+	do.Provide(inj, func(i do.Injector) (*app.ItemUseService, error) {
+		// inventory registers before world (composition.go), so its service
+		// resolves here and satisfies the ItemUseService's inventory port. The
+		// *WorldService satisfies the vitals port via AddVitals.
+		inv := do.MustInvoke[*invapp.InventoryService](i)
+		items := do.MustInvoke[*itemdb.Registry](i)
+		world := do.MustInvoke[*app.WorldService](i)
+		return app.NewItemUseService(inv, items, world), nil
+	})
 	do.Provide(inj, func(i do.Injector) (*skilldb.Registry, error) {
 		log := do.MustInvoke[*slog.Logger](i)
 		return loadSkillDB(dbPath, log), nil

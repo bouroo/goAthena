@@ -84,6 +84,7 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	// EquipService so combat picks up WeaponATK when the player equips it.
 	items := testItemDB(t)
 	equipSvc := worldapp.NewEquipService(inv, items)
+	itemUse := worldapp.NewItemUseService(inv, items, world)
 	combat := worldapp.NewCombatService(world, nil, equipSvc)
 	content := contentapp.NewEngine(nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
@@ -96,7 +97,7 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	shopStore := contentinfra.NewMemoryShopStore()
 	shopStore.RegisterShop(shop.DevShopGID, devTestShopName)
 
-	ms, err := gwapp.NewMapServer(world, spawn, combat, equipSvc, inv, content, skills, shops, shopStore, nil, sessions, slog.Default())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, equipSvc, itemUse, inv, content, skills, shops, shopStore, nil, sessions, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,21 +170,29 @@ func testSkillDB() *skilldb.Registry {
 	return reg
 }
 
-// testItemDB seeds a one-entry item registry for integration tests: a Knife
-// (id 1201, ATK 50) wearable in the right hand. The Attack feeds WeaponATK into
-// combat once equipped; Locations maps to equip.HandRight so the wear request's
-// position validates.
+// testItemDB seeds a tiny item registry for integration tests: a Knife (id 1201,
+// ATK 50) wearable in the right hand (Locations → equip.HandRight so the wear
+// request's position validates), and a Red Potion (id 501, itemheal 45,0) so the
+// usable-item verb resolves a healing item. The Knife's WeaponATK folds into
+// combat once equipped; the Red Potion drives the use→heal path.
 func testItemDB(t *testing.T) *itemdb.Registry {
 	t.Helper()
 	const yaml = "Header:\n  Type: ITEM_DB\n  Version: 3\nBody:\n" +
 		"  - Id: 1201\n    AegisName: Knife\n    Name: Knife\n    Type: Weapon\n" +
-		"    SubType: Dagger\n    Attack: 50\n    Locations:\n      Right_Hand: true\n"
+		"    SubType: Dagger\n    Attack: 50\n    Locations:\n      Right_Hand: true\n" +
+		"  - Id: 501\n    AegisName: Red_Potion\n    Name: Red Potion\n    Type: Healing\n" +
+		"    Script: itemheal 45,0\n"
 	reg, err := itemdb.Load(strings.NewReader(yaml))
 	if err != nil {
 		t.Fatalf("load test item_db: %v", err)
 	}
 	if e := reg.Get(1201); e == nil || e.Attack != 50 || e.EquipLocations != equip.HandRight {
 		t.Fatalf("test item_db knife not resolved: %+v", e)
+	}
+	if e := reg.Get(501); e == nil {
+		t.Fatalf("test item_db red potion not resolved")
+	} else if hpMin, hpMax, spMin, spMax, ok := e.Heal(); !ok || hpMin != 45 || hpMax != 45 || spMin != 0 || spMax != 0 {
+		t.Fatalf("test item_db red potion heal not parsed: hp=[%d,%d] sp=[%d,%d] ok=%v", hpMin, hpMax, spMin, spMax, ok)
 	}
 	return reg
 }
@@ -628,6 +637,118 @@ func TestMap_Dispatch_EquipIncreasesDamage(t *testing.T) {
 	armedDmg := castSkillHit(t, conn, mobGID)
 	if armedDmg <= bareDmg {
 		t.Fatalf("equipped weapon did not increase damage: bare=%d armed=%d (want armed > bare)", bareDmg, armedDmg)
+	}
+}
+
+// TestMap_Dispatch_UseItemHeals proves the usable-item verb end-to-end through
+// the real gnet reactor: a player drinks a Red Potion (itemheal 45,0), the server
+// consumes one unit, applies the flat heal, and emits the client-visible result.
+// The world tick loop is idle in tests (no StartTick), so the only frames on the
+// wire are the ones from this use. AddVitals runs the NewMapServer-wired
+// OnStatChange hook synchronously inside the use, so ZC_PAR_CHANGE (HP then SP)
+// arrives before ZC_USE_ITEM_ACK2; the handler emits only the ack to avoid a
+// duplicate stat-change frame. The single-unit stack must then be consumed.
+func TestMap_Dispatch_UseItemHeals(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	// 1. CZ_ENTER -> ZC_ACCEPT_ENTER (drain 13 bytes so the reactor has the conn).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// 2. Seed one Red Potion (id 501) at inventory slot 1 and drop the player to
+	//    HP 500/1000 so the +45 heal lands at 545 (not clamped). RemoveEntity does
+	//    not touch ms.conns, so the live wire stays registered.
+	if _, err := env.itemRepo.Add(t.Context(), 150001, 501, 1); err != nil {
+		t.Fatalf("seed red potion: %v", err)
+	}
+	if err := env.world.RemoveEntity(150001); err != nil {
+		t.Fatalf("RemoveEntity: %v", err)
+	}
+	if err := env.world.AddEntity(worlddomain.Entity{
+		ID: 150001, Type: worlddomain.EntityTypePC, Map: "new_1-1",
+		Pos: worlddomain.Position{X: 53, Y: 111}, HP: 500, MaxHP: 1000,
+		SP: 100, MaxSP: 100, Speed: 150,
+	}); err != nil {
+		t.Fatalf("AddEntity at HP 500: %v", err)
+	}
+
+	// 3. Send CZ_USE_ITEM2 (0x0439, 8B): cmd + inventory index 1 + AID.
+	useReq := make([]byte, 8)
+	binary.LittleEndian.PutUint16(useReq[0:], ropacket.HeaderCZUSEITEM2)
+	binary.LittleEndian.PutUint16(useReq[2:], 1)       // inventory index (1-based)
+	binary.LittleEndian.PutUint32(useReq[4:], 2000001) // AID
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write(useReq); err != nil {
+		t.Fatalf("send CZ_USE_ITEM2: %v", err)
+	}
+
+	// 4. Expected wire order: ZC_PAR_CHANGE HP (8B), ZC_PAR_CHANGE SP (8B), then
+	//    ZC_USE_ITEM_ACK2 (13B). PAR_CHANGE fires first because AddVitals runs the
+	//    OnStatChange hook synchronously inside the use before the ack is emitted.
+	out := make([]byte, 29)
+	if _, err := io.ReadFull(conn, out); err != nil {
+		t.Fatalf("read use-item response: %v", err)
+	}
+	// PAR_CHANGE HP: 500 + 45 = 545.
+	if got := binary.LittleEndian.Uint16(out[0:2]); got != ropacket.HeaderZCPARCHANGE {
+		t.Fatalf("frame 0 header = 0x%04x, want ZC_PAR_CHANGE", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[2:4]); got != ropacket.SPHP {
+		t.Fatalf("frame 0 varID = %d, want SPHP (%d)", got, ropacket.SPHP)
+	}
+	if got := binary.LittleEndian.Uint32(out[4:8]); got != 545 {
+		t.Fatalf("HP after potion = %d, want 545", got)
+	}
+	// PAR_CHANGE SP: the potion heals 0 SP, so SP echoes its unchanged value (100).
+	if got := binary.LittleEndian.Uint16(out[8:10]); got != ropacket.HeaderZCPARCHANGE {
+		t.Fatalf("frame 1 header = 0x%04x, want ZC_PAR_CHANGE", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[10:12]); got != ropacket.SPSP {
+		t.Fatalf("frame 1 varID = %d, want SPSP (%d)", got, ropacket.SPSP)
+	}
+	if got := binary.LittleEndian.Uint32(out[12:16]); got != 100 {
+		t.Fatalf("SP after potion = %d, want 100 (potion heals 0 SP)", got)
+	}
+	// ZC_USE_ITEM_ACK2: index=server(1)+2=3, itemID=501, AID=2000001, amount=0,
+	// result=1 (success).
+	if got := binary.LittleEndian.Uint16(out[16:18]); got != ropacket.HeaderZCUSEITEMACK2 {
+		t.Fatalf("ack header = 0x%04x, want ZC_USE_ITEM_ACK2 (0x01c8)", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[18:20]); got != 3 {
+		t.Fatalf("ack index = %d, want 3 (server index 1 + 2)", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[20:22]); got != 501 {
+		t.Fatalf("ack itemID = %d, want 501", got)
+	}
+	if got := binary.LittleEndian.Uint32(out[22:26]); got != 2000001 {
+		t.Fatalf("ack AID = %d, want 2000001", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[26:28]); got != 0 {
+		t.Fatalf("ack amount = %d, want 0 (stack consumed)", got)
+	}
+	if got := out[28]; got != 1 {
+		t.Fatalf("ack result = %d, want 1 (success)", got)
+	}
+
+	// 5. The single-unit stack must be deleted from the inventory.
+	remaining, err := env.itemRepo.LoadByChar(t.Context(), 0, 150001)
+	if err != nil {
+		t.Fatalf("load inventory after use: %v", err)
+	}
+	for _, it := range remaining {
+		if it.NameID == 501 {
+			t.Fatalf("red potion not consumed: %+v", it)
+		}
 	}
 }
 
@@ -1090,7 +1211,7 @@ func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*g
 	econ := economyapp.NewEconomyService(charRepo)
 	trade := worldapp.NewTradeService(world, inv, econ)
 
-	ms, err := gwapp.NewMapServer(world, spawn, combat, nil, inv, content, skills, nil, nil, trade, sessions, slog.Default())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, nil, nil, inv, content, skills, nil, nil, trade, sessions, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
