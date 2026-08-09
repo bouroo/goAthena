@@ -119,6 +119,7 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 	// HP bar drops. A headless harness (no mob AI) leaves mobs passive.
 	if mobAI != nil {
 		mobAI.OnMobAttack = s.notifyMobAttack
+		mobAI.OnMobMove = s.notifyMobMove
 	}
 	return s, nil
 }
@@ -209,6 +210,41 @@ func (s *MapServer) notifyMobAttack(mobID, targetID worlddomain.EntityID, dmg in
 	if died && target.Type == worlddomain.EntityTypePC {
 		s.handlePlayerDeath(uint32(targetID), target.Map, target.Pos) //nolint:gosec // G115: EntityID wraps a uint32 GID
 	}
+}
+
+// notifyMobMove is the MobAIService.OnMobMove sink: after a mob takes a chase
+// step (MoveEntity reseated it at `to`), broadcast ZC_UNIT_WALKING so every AOI
+// neighbor near the destination cell sees the mob walk there. Mirrors the
+// player-move observer broadcast but with ObjectType=MOB and exclude=0 — a mob
+// has no own connection, so every nearby player is told (the player move excludes
+// the mover, who receives a separate self-ack). mob_db WalkSpeed is already in
+// ms per cell, the same unit as the packet Speed field (PC default 150), so it
+// passes through unchanged. The mob's map/name resolve from the entity (Get runs
+// off the world lock, so no mutex is held here); a mob that despawned between
+// MoveEntity and the notify is a no-op.
+func (s *MapServer) notifyMobMove(mobID worlddomain.EntityID, from, to worlddomain.Position, speed int16) {
+	e, err := s.world.Get(mobID)
+	if err != nil {
+		return // despawned between step and notify: nothing to broadcast
+	}
+	resp := ropacket.UnitWalkingResponse{
+		ObjectType: objectTypeMob,
+		AID:        uint32(mobID), //nolint:gosec // G115: EntityID wraps a uint32 GID; AID=GID for mobs.
+		GID:        uint32(mobID), //nolint:gosec // G115: EntityID wraps a uint32 GID.
+		Speed:      speed,
+		SrcX:       from.X,
+		SrcY:       from.Y,
+		DestX:      to.X,
+		DestY:      to.Y,
+		Name:       e.Name,
+	}
+	out, ok := encodeUnitWalk(s, resp)
+	if !ok {
+		return
+	}
+	// Anchor at the destination cell (where the mob lands), matching the player-
+	// move observer broadcast; exclude 0 because a mob has no conn of its own.
+	s.broadcast(out, e.Map, to, 0)
 }
 
 // handlePlayerDeath performs the bounded PC death model: broadcast ZC_NOTIFY_VANISH

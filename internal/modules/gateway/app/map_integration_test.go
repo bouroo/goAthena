@@ -69,6 +69,8 @@ type mapTestEnv struct {
 // testMobAIFixture is a one-mob mob_db.yml with a single aggressive monster
 // (Ai=4 ≥ aggressive threshold 3). It backs the gateway's combat + mob AI so a
 // spawned monster resolves real stats and the aggro loop swings at the player.
+// WalkSpeed (400 ms/cell) makes it chasable: a target within ChaseRange but
+// outside AttackRange is pursued one cell per WalkSpeed of accumulated tick time.
 const testMobAIFixture = `Header:
   Type: MOB_DB
   Version: 5
@@ -85,6 +87,7 @@ Body:
     Vit: 0
     AttackRange: 2
     ChaseRange: 12
+    WalkSpeed: 400
 `
 
 // buildTestMapDeps constructs the MapServer's collaborators against in-memory
@@ -545,6 +548,129 @@ func TestMap_MobAttacksPlayer(t *testing.T) {
 	hpAfter := int32(binary.LittleEndian.Uint32(par[4:8]))
 	if want := int32(1000) - dmg; hpAfter != want {
 		t.Fatalf("player HP after mob hit = %d, want %d (1000 − %d damage)", hpAfter, want, dmg)
+	}
+}
+
+// TestMap_MobChasesPlayer proves the full chase→approach→swing→notify path: an
+// aggressive mob spawned within ChaseRange but outside AttackRange pursues one
+// greedy cell toward the player per WalkSpeed of accumulated tick time, the
+// NewMapServer-wired OnMobMove sink delivers a ZC_UNIT_WALKING (ObjectType=MOB)
+// frame to the player's conn each step, the mob stops at AttackRange without
+// overshooting, and the next attack-cadence tick lands a hit (HP drops). The mob
+// reaches range in (chaseCells × WalkSpeed) ms; MonsterTick is driven directly so
+// the assertions are deterministic, not timing-fragile.
+func TestMap_MobChasesPlayer(t *testing.T) {
+	const (
+		mobGID    = 160000
+		mobClass  = 8001
+		mobWalkMs = 400 // matches testMobAIFixture WalkSpeed (ms/cell)
+		// Fixture mob: AttackRange=2, ChaseRange=12. Player enters at (53,111).
+		// Spawn 7 cells east ⇒ Chebyshev dist 7 ≤ ChaseRange, > AttackRange: pursue.
+		mobStartX      = 60
+		playerX        = 53
+		attackRange    = 2 // fixture AttackRange; mob halts at dist attackRange from the player
+		attackInterval = 2 * time.Second
+		wantSteps      = mobStartX - (playerX + attackRange) // 60-55 = 5 steps to reach range
+		// mobObjType mirrors the wire object-type byte for a monster (rAthena
+		// clif_bl_type: 5=MOB); it is unexported in package app, so the test asserts
+		// the literal the production notifyMobMove writes into ZC_UNIT_WALKING[4].
+		mobObjType uint8 = 5
+	)
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	// CZ_ENTER -> ZC_ACCEPT_ENTER; draining the 13-byte reply registers the conn
+	// for charID 150001 (the PC, full HP 1000 at new_1-1 (53,111)).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// Spawn the aggressive mob 7 cells east (Chebyshev dist 7: within ChaseRange
+	// 12, outside AttackRange 2) so the chase loop pursues toward the player.
+	if err := env.spawn.SpawnMob(mobGID, mobClass, "new_1-1",
+		worlddomain.Position{X: mobStartX, Y: 111}, "AggroMob", 1000, 1000, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+
+	// Drive one WalkSpeed of tick time per step: each call banks exactly one
+	// chase step (moveDue resets on a full cell), and the step's ZC_UNIT_WALKING
+	// frame lands on the player's conn. Assert the mob's world cell advances one
+	// toward the player and each frame is the MOB walk broadcast.
+	mobEntity := func() worlddomain.Entity {
+		e, err := env.world.Get(mobGID)
+		if err != nil {
+			t.Fatalf("Get mob: %v", err)
+		}
+		return e
+	}
+	unitWalkSize := (ropacket.UnitWalkingResponse{}).Size()
+	for step := 1; step <= wantSteps; step++ {
+		env.mobAI.MonsterTick(t.Context(), time.Duration(mobWalkMs)*time.Millisecond)
+		if got := int(mobEntity().Pos.X); got != mobStartX-step {
+			t.Fatalf("chase step %d: mob X = %d, want %d (one cell toward player)", step, got, mobStartX-step)
+		}
+		// One ZC_UNIT_WALKING frame per step, broadcast at the mob's new cell.
+		frame := make([]byte, unitWalkSize)
+		conn.SetDeadline(time.Now().Add(3 * time.Second))
+		if _, err := io.ReadFull(conn, frame); err != nil {
+			t.Fatalf("chase step %d: read ZC_UNIT_WALKING: %v", step, err)
+		}
+		if got := binary.LittleEndian.Uint16(frame[0:2]); got != ropacket.HeaderZCUNITWALKING {
+			t.Fatalf("chase step %d: header = 0x%04x, want ZC_UNIT_WALKING (0x%04x)", step, got, ropacket.HeaderZCUNITWALKING)
+		}
+		if frame[4] != mobObjType {
+			t.Fatalf("chase step %d: ObjectType = %d, want MOB (%d)", step, frame[4], mobObjType)
+		}
+		if got := binary.LittleEndian.Uint32(frame[9:13]); got != mobGID {
+			t.Fatalf("chase step %d: GID = %d, want mob GID %d", step, got, mobGID)
+		}
+	}
+
+	// Stop-short: the mob halted at AttackRange (dist 2), not on the player's
+	// cell. Further chase ticks must not move it (resolve switches to the attack
+	// branch at dist ≤ AttackRange).
+	finalX := int(mobEntity().Pos.X)
+	if want := playerX + attackRange; finalX != want {
+		t.Fatalf("mob stopped at X=%d, want %d (player's cell %d + AttackRange %d)", finalX, want, playerX, attackRange)
+	}
+
+	// The mob is now in range. Drive one attack-cadence tick (attackInterval) to
+	// land a swing — no move frame this tick, just the hit + HP refresh. This
+	// proves the mob both closes to range AND swings once there.
+	env.mobAI.MonsterTick(t.Context(), attackInterval)
+	if got := int(mobEntity().Pos.X); got != finalX {
+		t.Fatalf("attack tick moved the mob: X = %d, want %d (must hold at AttackRange)", got, finalX)
+	}
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	act := make([]byte, (ropacket.NotifyActResponse{}).Size())
+	if _, err := io.ReadFull(conn, act); err != nil {
+		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT {
+		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT)
+	}
+	dmg := int32(binary.LittleEndian.Uint32(act[22:26]))
+	if dmg <= 0 {
+		t.Fatalf("ZC_NOTIFY_ACT damage = %d, want > 0", dmg)
+	}
+	// The target's HP refresh: ZC_PAR_CHANGE HP frame, HP = 1000 − damage.
+	par := make([]byte, 8)
+	if _, err := io.ReadFull(conn, par); err != nil {
+		t.Fatalf("read ZC_PAR_CHANGE HP frame: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(par[2:4]); got != ropacket.SPHP {
+		t.Fatalf("PAR_CHANGE varID = %d, want SPHP (%d)", got, ropacket.SPHP)
+	}
+	if got := int32(binary.LittleEndian.Uint32(par[4:8])); got != int32(1000)-dmg {
+		t.Fatalf("player HP after mob hit = %d, want %d (1000 − %d damage)", got, int32(1000)-dmg, dmg)
 	}
 }
 

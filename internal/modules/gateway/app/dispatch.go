@@ -481,6 +481,10 @@ func (s *MapServer) handleRequestMove(c gnet.Conn, auth *mapAuth, frame []byte) 
 // player character (rAthena's clif_bl_type: 0=PC).
 const objectTypePC uint8 = 0
 
+// objectTypeMob is the ZC_UNIT_WALKING object-type byte for a monster
+// (rAthena's clif_bl_type: 5=MOB). Used by the mob-chase broadcast.
+const objectTypeMob uint8 = 5
+
 // unitWalkFromEntity builds the ZC_UNIT_WALKING (0x09fd) observer broadcast for
 // a PC moving from src to dest. The mover's own move-ack (ZC_NOTIFY_PLAYERMOVE
 // 0x0087) is a separate packet; this is what OTHER nearby clients receive so

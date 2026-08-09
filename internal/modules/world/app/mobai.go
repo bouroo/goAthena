@@ -32,13 +32,17 @@ const aggressiveMobAi int32 = 3
 // the mob_db registry, and the combat service, with MonsterTick invoked from the
 // 50 Hz loop alongside RegenTick.
 //
-// Only the aggro→attack loop is implemented here: an aggressive mob (mob_db
-// Ai>=aggressiveMobAi) acquires the nearest player within its ChaseRange
-// (Chebyshev distance, matching RO's cell/grid adjacency), keeps it while the
-// player stays within ChaseRange and alive, and swings every mobAttackInterval
-// when the player is within the mob's AttackRange. Passive mobs idle. Movement
-// (chasing a player that stepped out of AttackRange but not ChaseRange) is
-// deferred — a first deliverable that makes mobs hit adjacent players.
+// An aggressive mob (mob_db Ai>=aggressiveMobAi) acquires the nearest player
+// within its ChaseRange (Chebyshev distance, matching RO's cell/grid adjacency),
+// keeps it while the player stays within ChaseRange and alive, and swings every
+// mobAttackInterval when the player is within the mob's AttackRange. When the
+// target is within ChaseRange but outside AttackRange, the mob pursues: one
+// greedy step toward the target every WalkSpeed ms (mob_db, ms per cell) until it
+// closes to AttackRange, then swings. The chase step is a bounded greedy
+// step-toward, not A* pathfinding: rAthena's real pathing is far richer
+// (walkable-cell maps, obstacle avoidance), but the current world model is an
+// open field, so a greedy step is correct and obstacle-aware pathing is deferred.
+// Passive mobs idle.
 type MobAIService struct {
 	world  *WorldService
 	mobs   *mobdb.Registry
@@ -54,12 +58,23 @@ type MobAIService struct {
 	// after Attack has applied its damage, on the same goroutine as MonsterTick.
 	OnMobAttack func(mobID, targetID domain.EntityID, dmg int32, died bool)
 
-	// mu guards target and atk. MonsterTick advances on the single world loop
-	// goroutine, but the public surface allows tests to drive it concurrently
+	// OnMobMove, when set, is invoked after a mob takes one chase step toward a
+	// target (MoveEntity reseated it in the AOI grid), carrying the from/to cells
+	// and the mob_db WalkSpeed (ms per cell; the gateway converts to kRO units
+	// when it builds the UnitWalkingResponse broadcast). It mirrors OnMobAttack:
+	// the gateway sets it to emit ZC_UNIT_WALKING to the mob's AOI neighbors so
+	// players see the mob walk. nil = silent/headless (tests that only assert
+	// cell deltas leave it unset). Called off the world lock, after MoveEntity, on
+	// the same goroutine as MonsterTick.
+	OnMobMove func(mobID domain.EntityID, from, to domain.Position, speed int16)
+
+	// mu guards target, atk and move. MonsterTick advances on the single world
+	// loop goroutine, but the public surface allows tests to drive it concurrently
 	// (e.g. under -race), so the state is lock-protected.
 	mu     sync.Mutex
 	target map[domain.EntityID]domain.EntityID // mob→current target (0 = none)
 	atk    map[domain.EntityID]time.Duration   // mob→attack accumulator
+	move   map[domain.EntityID]time.Duration   // mob→chase-step accumulator
 }
 
 // pendingAttack is a mob→target pair resolved under the world read-lock, to be
@@ -68,6 +83,16 @@ type MobAIService struct {
 type pendingAttack struct {
 	mob    domain.EntityID
 	target domain.EntityID
+}
+
+// pendingMove is a chase step resolved under the world read-lock (the from/to
+// cells plus the mob_db WalkSpeed), executed off-lock because MoveEntity takes
+// the world write-lock — holding the read-lock across it would deadlock the tick.
+type pendingMove struct {
+	mob   domain.EntityID
+	from  domain.Position
+	to    domain.Position
+	speed int16
 }
 
 // NewMobAIService builds a MobAIService. mobs/combat mirror the CombatService
@@ -81,19 +106,21 @@ func NewMobAIService(world *WorldService, mobs *mobdb.Registry, combat *CombatSe
 		log:    log,
 		target: make(map[domain.EntityID]domain.EntityID),
 		atk:    make(map[domain.EntityID]time.Duration),
+		move:   make(map[domain.EntityID]time.Duration),
 	}
 }
 
-// MonsterTick advances every mob's aggro/attack state by dt. It must not hold
-// world.mu across CombatService.Attack (Attack locks world.mu in applyDamage),
-// so it collects mob+target snapshots under a read-lock, releases it, accumulates
-// cadence, then fires attacks off-lock.
+// MonsterTick advances every mob's aggro/attack/chase state by dt. It must not
+// hold world.mu across CombatService.Attack (Attack locks world.mu in
+// applyDamage) or MoveEntity (which locks world.mu), so it collects mob+target
+// snapshots under a read-lock, releases it, accumulates cadence, then fires
+// attacks and chase steps off-lock.
 //
 // The distance metric is Chebyshev: max(|dx|,|dy|). RO's map is a cell grid and
 // its movement/attack adjacency is the 8-neighbor (king-move) metric, so a
 // player is "in range" when their Chebyshev distance to the mob is <= the range.
 func (a *MobAIService) MonsterTick(ctx context.Context, dt time.Duration) {
-	attacks := a.resolve(ctx, dt)
+	attacks, moves := a.resolve(ctx, dt)
 	for _, atk := range attacks {
 		// Attack locks world.mu (applyDamage); calling it here, off the read-lock
 		// taken in resolve, is the deadlock-avoidance contract. died=true lets us
@@ -115,12 +142,28 @@ func (a *MobAIService) MonsterTick(ctx context.Context, dt time.Duration) {
 			a.OnMobAttack(atk.mob, atk.target, dmg, died)
 		}
 	}
+	for _, mv := range moves {
+		// MoveEntity locks world.mu; calling it here, off the read-lock taken in
+		// resolve, is the deadlock-avoidance contract. It reseats the mob in the
+		// AOI grid so neighbor queries resolve at the new cell.
+		if err := a.world.MoveEntity(mv.mob, mv.to); err != nil {
+			a.log.Warn("mob move failed", "mob", mv.mob, "from", mv.from, "to", mv.to, "err", err)
+			continue
+		}
+		// Surface the step to the gateway so AOI neighbors see the mob walk; fires
+		// off the world lock, after MoveEntity applied the new position.
+		if a.OnMobMove != nil {
+			a.OnMobMove(mv.mob, mv.from, mv.to, mv.speed)
+		}
+	}
 }
 
 // resolve snapshots mobs and their nearby players under world.mu, then advances
-// per-mob aggro/cadence state and returns the attacks to fire off-lock. It is
-// the sole lock-taking section: everything after returns plain values.
-func (a *MobAIService) resolve(_ context.Context, dt time.Duration) []pendingAttack {
+// per-mob aggro/cadence state and returns the attacks and chase steps to fire
+// off-lock. It is the sole lock-taking section: everything after returns plain
+// values (MoveEntity and CombatService.Attack each take the world write-lock, so
+// neither may run while the read-lock is held).
+func (a *MobAIService) resolve(_ context.Context, dt time.Duration) ([]pendingAttack, []pendingMove) {
 	a.world.mu.RLock()
 	defer a.world.mu.RUnlock()
 
@@ -139,6 +182,7 @@ func (a *MobAIService) resolve(_ context.Context, dt time.Duration) []pendingAtt
 	}
 
 	var attacks []pendingAttack
+	var moves []pendingMove
 	for id, e := range a.world.entities {
 		if e.Type != domain.EntityTypeMob || e.HP <= 0 {
 			continue
@@ -153,16 +197,50 @@ func (a *MobAIService) resolve(_ context.Context, dt time.Duration) []pendingAtt
 		if targetID == 0 {
 			continue // no target in range: idle this tick
 		}
-		if int64(chebyshev(e.Pos, players[targetID])) > int64(atkRange) {
-			continue // target present but out of attack range: hold, do not swing
+		targetPos := players[targetID]
+		if int64(chebyshev(e.Pos, targetPos)) > int64(atkRange) {
+			// Target within ChaseRange but outside AttackRange: pursue one greedy
+			// step toward it when the WalkSpeed cadence elapses. resolve only calls
+			// pursue while dist>atkRange, and each step cuts the Chebyshev distance
+			// by one, so the mob halts at AttackRange (stop-short) rather than
+			// stepping onto the player. The step is snapshotted off-lock: MoveEntity
+			// takes the world write-lock.
+			if mv, ok := a.pursue(id, e.Pos, targetPos, mob.WalkSpeed, dt); ok {
+				moves = append(moves, mv)
+			}
+			continue // out of attack range: hold target, do not swing this tick
 		}
-		// Cadence accumulates only when a swing is due; a mob with a target but
-		// out of range does not bank attack time.
+		// In range: bank attack cadence; swing when due. Cadence accumulates only
+		// while in range, so a mob that just closed to range swings on its next
+		// due tick (movement does not bank attack time).
 		if a.advanceAndDue(id, dt) {
 			attacks = append(attacks, pendingAttack{mob: id, target: targetID})
 		}
 	}
-	return attacks
+	return attacks, moves
+}
+
+// pursue decides a single chase step for a mob whose target is within
+// ChaseRange but outside AttackRange. It returns the pending step (ok=true) when
+// the mob's WalkSpeed (ms per cell) cadence has elapsed and a step toward the
+// target is possible. stop-short holds because resolve only calls pursue while
+// dist>atkRange and each step reduces the Chebyshev distance by one (mob_db
+// AttackRange is >=1, so a step never lands on the target's cell). A mob with
+// WalkSpeed<=0 cannot chase. The accumulator is guarded by a.mu.
+func (a *MobAIService) pursue(mobID domain.EntityID, mobPos, targetPos domain.Position, walkSpeed int32, dt time.Duration) (pendingMove, bool) {
+	if walkSpeed <= 0 || !a.moveDue(mobID, dt, walkSpeed) {
+		return pendingMove{}, false
+	}
+	dest, ok := stepToward(mobPos, targetPos)
+	if !ok {
+		return pendingMove{}, false
+	}
+	return pendingMove{
+		mob:   mobID,
+		from:  mobPos,
+		to:    dest,
+		speed: int16(walkSpeed), //nolint:gosec // G115: mob_db WalkSpeed (ms/cell) is small, well within int16.
+	}, true
 }
 
 // acquireOrKeep returns the mob's current target if it is still valid (alive,
@@ -208,4 +286,71 @@ func (a *MobAIService) advanceAndDue(mobID domain.EntityID, dt time.Duration) bo
 	}
 	a.atk[mobID] = 0
 	return true
+}
+
+// moveDue adds dt to the mob's chase-step accumulator and returns true when one
+// one-cell step is due (>= the mob's WalkSpeed, in ms per cell), resetting the
+// accumulator. It mirrors advanceAndDue: cadence banked only while actively
+// pursuing, reset (not carried over) on each step. Guarded by a.mu.
+func (a *MobAIService) moveDue(mobID domain.EntityID, dt time.Duration, walkSpeedMs int32) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.move[mobID] += dt
+	if a.move[mobID] < time.Duration(walkSpeedMs)*time.Millisecond {
+		return false
+	}
+	a.move[mobID] = 0
+	return true
+}
+
+// gridMaxCell is the inclusive upper bound on a mob cell coordinate. WorldService
+// builds every map's AOI grid as a 512×512 cell space (world.go ensureGridLocked
+// → aoi.NewGridManager(512, 512)), so chase-step destinations clamp into
+// [0, gridMaxCell] and can never feed the grid an out-of-bounds cell.
+const gridMaxCell int16 = 511
+
+// stepToward computes one greedy chase step from mob toward target, reducing the
+// Chebyshev distance by one cell. It advances each axis by the sign of the delta
+// (a diagonal move when both axes differ), then clamps the destination into the
+// AOI grid [0, gridMaxCell]. ok=false means no step is possible — the mob is
+// already on the target's cell, or every advancing axis clamped back to the mob
+// (a mob jammed against the grid edge toward an out-of-bounds target).
+//
+// This is a bounded greedy approximation, not A*: it makes no attempt to route
+// around obstacles (the world model has no walkable-cell map yet — cells are
+// open), which is correct on an open field. Stop-short is enforced by resolve:
+// stepToward is reached only when dist>atkRange, and each call reduces distance
+// by exactly one, so the mob halts at AttackRange and never steps onto the
+// target. The clamp is defensive — an in-bounds target always yields an
+// in-bounds step (the destination lies between mob and target) — but it guards
+// against corrupt/OOB target state and future obstacle-aware detours.
+func stepToward(mob, target domain.Position) (domain.Position, bool) {
+	nx := mob.X
+	if target.X > mob.X {
+		nx++
+	} else if target.X < mob.X {
+		nx--
+	}
+	ny := mob.Y
+	if target.Y > mob.Y {
+		ny++
+	} else if target.Y < mob.Y {
+		ny--
+	}
+	dest := domain.Position{X: clampCoord(nx), Y: clampCoord(ny)}
+	if dest == mob {
+		return mob, false
+	}
+	return dest, true
+}
+
+// clampCoord clamps a cell coordinate into the AOI grid [0, gridMaxCell].
+func clampCoord(c int16) int16 {
+	if c < 0 {
+		return 0
+	}
+	if c > gridMaxCell {
+		return gridMaxCell
+	}
+	return c
 }
