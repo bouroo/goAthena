@@ -87,17 +87,31 @@ func loadMobDB(dbPath string, log *slog.Logger) *mobdb.Registry {
 	return reg
 }
 
-// loadItemDB loads item_db.yml from the pre-renewal db root. A load failure is
+// loadItemDB loads the pre-renewal item database from the db root. Unlike
+// mob_db/skill_db, item data ships across several sibling files
+// (item_db.yml + item_db_usable.yml + item_db_equip.yml + item_db_etc.yml):
+// item_db.yml is a Header/Footer import manifest with zero Body entries, the
+// rest carry the real rows. LoadFiles merges them (dup-AegisName/id last-wins,
+// tolerant of the rAthena duplicate-mapping-key quirk). A load failure is
 // non-fatal and symmetric with loadMobDB: the server still boots and mob drops
 // resolve no items until the operator points ZONE_DB_PATH at a rAthena checkout.
 func loadItemDB(dbPath string, log *slog.Logger) *itemdb.Registry {
-	path := filepath.Join(dbPath, "pre-re", "item_db.yml")
-	reg, err := itemdb.LoadFile(path)
+	pattern := filepath.Join(dbPath, "pre-re", "item_db*.yml")
+	paths, err := filepath.Glob(pattern)
 	if err != nil {
-		log.Warn("item_db load failed; mob drops resolve no items", "path", path, "err", err)
+		log.Warn("item_db glob failed; mob drops resolve no items", "pattern", pattern, "err", err)
 		return itemdb.NewRegistry()
 	}
-	log.Info("item_db loaded", "path", path, "items", reg.Len())
+	if len(paths) == 0 {
+		log.Warn("item_db load found no files; mob drops resolve no items", "pattern", pattern)
+		return itemdb.NewRegistry()
+	}
+	reg, err := itemdb.LoadFiles(paths...)
+	if err != nil {
+		log.Warn("item_db load failed; mob drops resolve no items", "pattern", pattern, "err", err)
+		return itemdb.NewRegistry()
+	}
+	log.Info("item_db loaded", "pattern", pattern, "files", len(paths), "items", reg.Len())
 	return reg
 }
 
