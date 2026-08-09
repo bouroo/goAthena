@@ -68,3 +68,16 @@ func (r *MemoryItemRepository) Remove(_ context.Context, id domain.ItemID, amoun
 	r.items[id] = item
 	return nil
 }
+
+// SetEquip overwrites the equip bitmask of one item row (0 to unequip).
+func (r *MemoryItemRepository) SetEquip(_ context.Context, id domain.ItemID, equip uint32) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.items[id]
+	if !ok {
+		return domain.ErrItemNotFound
+	}
+	item.Equip = equip
+	r.items[id] = item
+	return nil
+}

@@ -74,6 +74,8 @@ func mapHandlers() map[uint16]mapHandler {
 		ropacket.HeaderCZADDEXCHANGEITEM:    {size: 8, fn: (*MapServer).handleAddExchangeItem},                       // CZ_ADD_EXCHANGE_ITEM 0x00e8 (cmd+index+amount)
 		ropacket.HeaderCZTRADEOK:            {size: 2, fn: (*MapServer).handleTradeOK},                               // CZ_TRADE_OK 0x00eb (cmd only)
 		ropacket.HeaderCZTRADECANCEL:        {size: 2, fn: (*MapServer).handleTradeCancel},                           // CZ_TRADE_CANCEL 0x00ed (cmd only)
+		ropacket.HeaderCZREQWEAREQUIPV5:     {size: 8, fn: (*MapServer).handleReqWearEquip},                          // CZ_REQ_WEAR_EQUIP_V5 0x0998 (cmd+index+position)
+		ropacket.HeaderCZREQTAKEOFFEQUIP:    {size: 4, fn: (*MapServer).handleReqTakeoffEquip},                       // CZ_REQ_TAKEOFF_EQUIP 0x00ab (cmd+index)
 	}
 }
 
@@ -671,6 +673,101 @@ func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
 	// throw-ack above is dropper-only, so just the fall-entry is fanned out. The
 	// anchor is the dropper's cell, where the item spawns at the player's feet.
 	s.broadcast(fbuf, entity.Map, entity.Pos, auth.charID)
+}
+
+// handleReqWearEquip handles CZ_REQ_WEAR_EQUIP_V5 (0x0998, 8B): the client
+// requests wearing the item at inventory Index into Position (an EQP_* bitmask).
+// On success it persists the equip via EquipService (which resolves slot
+// conflicts) and replies ZC_REQ_WEAR_EQUIP_ACK_V5 with result=1. On a validation
+// failure (sentinel error) it logs and keeps the connection alive — only the
+// success path emits an ack, because the exact rAthena failure-encoding for the
+// V5 ack (which field carries the success/fail byte varies by client era) is
+// uncertain; emitting a wrong failure byte could wedge the client's equip slot.
+// ItemSpriteNumber (the client view sprite) is 0 this milestone: item_db.View
+// resolution is deferred and the field is cosmetic (the WeaponATK combat win is
+// unaffected).
+func (s *MapServer) handleReqWearEquip(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_REQ_WEAR_EQUIP from unauthed conn")
+		return
+	}
+	req, err := ropacket.ParseCZReqWearEquip(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_REQ_WEAR_EQUIP", "err", err)
+		return
+	}
+	if err := s.equip.Equip(context.Background(), auth.accountID, auth.charID, int(req.Index), req.Position); err != nil {
+		s.log.Warn("map: wear equip", "gid", auth.charID, "index", req.Index, "err", err)
+		return
+	}
+	resp := ropacket.ReqWearEquipAckResponse{
+		Index:            req.Index,
+		WearLocation:     req.Position,
+		ItemSpriteNumber: 0, // view sprite resolution deferred (item_db.View)
+		Result:           1, // 1 = success
+	}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode wear-equip ack", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// handleReqTakeoffEquip handles CZ_REQ_TAKEOFF_EQUIP (0x00ab, 4B): the client
+// requests removing the item at inventory Index from its slot. It captures the
+// worn slot, clears the equip bitmask via EquipService, and replies
+// ZC_REQ_TAKEOFF_EQUIP_ACK with flag=0 (success on the wire — the byte is
+// inverted for PACKETVER >= 20110824 so 0 = success). On failure it logs and
+// keeps the connection alive.
+func (s *MapServer) handleReqTakeoffEquip(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_REQ_TAKEOFF_EQUIP from unauthed conn")
+		return
+	}
+	req, err := ropacket.ParseCZReqTakeoffEquip(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_REQ_TAKEOFF_EQUIP", "err", err)
+		return
+	}
+	worn, ok := s.wornSlot(auth, int(req.Index))
+	if !ok {
+		s.log.Warn("map: takeoff index out of range", "gid", auth.charID, "index", req.Index)
+		return
+	}
+	if err := s.equip.Unequip(context.Background(), auth.accountID, auth.charID, int(req.Index)); err != nil {
+		s.log.Warn("map: takeoff equip", "gid", auth.charID, "index", req.Index, "err", err)
+		return
+	}
+	resp := ropacket.ReqTakeoffEquipAckResponse{
+		Index:        req.Index,
+		WearLocation: worn,
+		Flag:         0, // 0 = success on the wire (inverted) for PACKETVER >= 20110824
+	}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode takeoff-equip ack", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// wornSlot resolves the EQP_* bitmask currently worn by the item at the 1-based
+// inventory index, so the takeoff ack can report the slot it freed. It returns
+// ok=false when the index is out of range (the player cannot unequip a slot that
+// has no item). The read is best-effort: between this load and Unequip's
+// internal clear the slot could change for a racy double-unequip, but the only
+// consequence is a stale WearLocation in one ack — cosmetic, not state-corrupting.
+func (s *MapServer) wornSlot(auth *mapAuth, invIndex int) (uint32, bool) {
+	items, err := s.inv.LoadByChar(context.Background(), auth.accountID, auth.charID)
+	if err != nil {
+		s.log.Error("map: load inventory for takeoff", "err", err)
+		return 0, false
+	}
+	if invIndex < 1 || invIndex > len(items) {
+		return 0, false
+	}
+	return items[invIndex-1].Equip, true
 }
 
 // handleActionRequest handles CZ_ACTION_REQUEST (0x0089, 7B): sit/stand/attack.

@@ -70,7 +70,7 @@ func TestMobDeathLoop_DropsDespawnRespawn(t *testing.T) {
 	world := app.NewWorldService(infra.NewMemoryWorldRepository(), slog.Default(), 50)
 	spawn := app.NewSpawnService(world, mobs, items)
 	defer spawn.Stop()
-	combat := app.NewCombatService(world, mobs)
+	combat := app.NewCombatService(world, mobs, nil)
 
 	// Attacker PC (zero-ATK → 1 damage floor) and a 1-HP mob.
 	const pcID, mobID = domain.EntityID(1), domain.EntityID(2)

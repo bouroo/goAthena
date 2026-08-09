@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
@@ -10,23 +11,35 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/statcalc"
 )
 
+// equipmentProfiler resolves a PC attacker's equipped-gear contributions
+// (WeaponATK/ItemDEF/ItemMDEF) for the kernel's statcalc. The production
+// *EquipService satisfies it; a nil profiler (the naked baseline) resolves a
+// zero profile, so tests that do not exercise equipment pass nil.
+type equipmentProfiler interface {
+	EquipmentProfile(ctx context.Context, accountID, charID uint32) (statcalc.Equipment, error)
+}
+
 // CombatService resolves melee attacks against entities. It builds the
 // combat.Attacker/Defender profiles from the WorldService registry — mob
-// defenders resolve their DEF/stats from mob_db — computes damage via the
-// kernel's pre-renewal formula, and applies it to the defender.
+// defenders resolve their DEF/stats from mob_db, PC attackers fold their
+// equipped WeaponATK into the damage base — computes damage via the kernel's
+// pre-renewal formula, and applies it to the defender.
 type CombatService struct {
 	world *WorldService
 	mobs  *mobdb.Registry
+	equip equipmentProfiler
 	fs    statcalc.FormulaSet
 	m     mode.Mode
 }
 
-// NewCombatService builds a combat service backed by the world registry and the
-// mob_db registry. The formula set and mode are fixed at construction
-// (pre-renewal for Thai Classic). mobs may be nil (mob defenders then resolve 0
-// DEF), but the app wiring provisions a non-nil registry.
-func NewCombatService(world *WorldService, mobs *mobdb.Registry) *CombatService {
-	return &CombatService{world: world, mobs: mobs, fs: statcalc.PreRenewalSet, m: mode.PreRenewal}
+// NewCombatService builds a combat service backed by the world registry, the
+// mob_db registry, and (optionally) an equipment profiler. The formula set and
+// mode are fixed at construction (pre-renewal for Thai Classic). mobs may be nil
+// (mob defenders then resolve 0 DEF); equip may be nil (PC attackers then fight
+// with the naked, zero-equipment baseline). The app wiring provisions non-nil
+// registries and the EquipService.
+func NewCombatService(world *WorldService, mobs *mobdb.Registry, equip equipmentProfiler) *CombatService {
+	return &CombatService{world: world, mobs: mobs, equip: equip, fs: statcalc.PreRenewalSet, m: mode.PreRenewal}
 }
 
 // Attack resolves a melee hit from attackerID to defenderID and applies the
@@ -42,14 +55,33 @@ func (c *CombatService) Attack(attackerID, defenderID domain.EntityID) (int32, b
 	if err != nil {
 		return 0, false, fmt.Errorf("defender: %w", err)
 	}
+	equip, err := c.attackerEquipment(attacker)
+	if err != nil {
+		return 0, false, fmt.Errorf("attacker: %w", err)
+	}
 	result := combat.NormalMelee(
-		combat.Attacker{Base: attackerBase(attacker)},
+		combat.Attacker{Base: attackerBase(attacker), Equipment: equip},
 		defenderProfile(c.mobs, defender),
 		c.fs,
 		c.m,
 	)
 	died := c.applyDamage(defenderID, result.Damage)
 	return result.Damage, died, nil
+}
+
+// attackerEquipment resolves a PC attacker's equipped-gear contributions. A mob
+// attacker has no inventory and resolves zero; a nil profiler (the naked
+// baseline) also resolves zero. A load failure is propagated so the caller can
+// surface it rather than silently degrading the hit to a naked swing.
+func (c *CombatService) attackerEquipment(e domain.Entity) (statcalc.Equipment, error) {
+	if c.equip == nil || e.Type != domain.EntityTypePC {
+		return statcalc.Equipment{}, nil
+	}
+	eq, err := c.equip.EquipmentProfile(context.Background(), e.Account, uint32(e.ID))
+	if err != nil {
+		return statcalc.Equipment{}, fmt.Errorf("equipment profile: %w", err)
+	}
+	return eq, nil
 }
 
 // attackerBase maps a world entity's base stats to the kernel's stat base. Mob

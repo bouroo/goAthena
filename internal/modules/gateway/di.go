@@ -78,6 +78,10 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve combat service: %w", err)
 	}
+	equip, err := do.Invoke[*worldapp.EquipService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve equip service: %w", err)
+	}
 	inv, err := do.Invoke[*invapp.InventoryService](inj)
 	if err != nil {
 		return nil, fmt.Errorf("resolve inventory service: %w", err)
@@ -106,7 +110,7 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve trade service: %w", err)
 	}
-	ms, err := app.NewMapServer(world, spawn, combat, inv, content, skills, shops, shopStore, trade, sess, log)
+	ms, err := app.NewMapServer(world, spawn, combat, equip, inv, content, skills, shops, shopStore, trade, sess, log)
 	if err != nil {
 		return nil, fmt.Errorf("map server: %w", err)
 	}

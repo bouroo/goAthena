@@ -56,4 +56,8 @@ type ItemRepository interface {
 	// Remove decrements amount (and deletes the row if it hits zero) or returns
 	// ErrInsufficientAmount / ErrItemNotFound.
 	Remove(ctx context.Context, id ItemID, amount int) error
+	// SetEquip overwrites the equip bitmask of one item row (0 to unequip). The
+	// caller has already resolved the row (e.g. via LoadByChar) and validated the
+	// slot, so a missing row here is a race and returns ErrItemNotFound.
+	SetEquip(ctx context.Context, id ItemID, equip uint32) error
 }

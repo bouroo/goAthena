@@ -11,8 +11,8 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/bouroo/goAthena/internal/config"
-	"github.com/bouroo/goAthena/internal/infrastructure/db"
 	"github.com/bouroo/goAthena/internal/infra/testdb"
+	"github.com/bouroo/goAthena/internal/infrastructure/db"
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
 	"github.com/bouroo/goAthena/internal/modules/character/infra"
 )

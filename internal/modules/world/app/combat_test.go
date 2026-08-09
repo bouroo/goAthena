@@ -59,7 +59,7 @@ func TestCombat_MobDEFReducesDamage(t *testing.T) {
 
 	world := app.NewWorldService(infra.NewMemoryWorldRepository(), slog.Default(), 50)
 	spawn := app.NewSpawnService(world, mobs, nil)
-	combat := app.NewCombatService(world, mobs)
+	combat := app.NewCombatService(world, mobs, nil)
 
 	// Attacker PC: only Str is set, so BaseATK is exactly 75.
 	const attackerID = domain.EntityID(1)
@@ -96,7 +96,7 @@ func TestCombat_MobDEFReducesDamage(t *testing.T) {
 func TestCombat_NilMobDB_ResolvesZeroDEF(t *testing.T) {
 	t.Parallel()
 	world := app.NewWorldService(infra.NewMemoryWorldRepository(), slog.Default(), 50)
-	combat := app.NewCombatService(world, nil) // no mob_db loaded
+	combat := app.NewCombatService(world, nil, nil) // no mob_db loaded
 
 	require.NoError(t, world.AddEntity(domain.Entity{ID: 1, Type: domain.EntityTypePC, Map: "prontera"}))
 	require.NoError(t, world.AddEntity(domain.Entity{

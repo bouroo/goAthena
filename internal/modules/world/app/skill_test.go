@@ -63,7 +63,7 @@ func newSkillTestWorld(t *testing.T) (*app.WorldService, *app.SkillService) {
 	require.NoError(t, err)
 	require.Equal(t, 2, skills.Len())
 	world := app.NewWorldService(infra.NewMemoryWorldRepository(), slog.Default(), 50)
-	combat := app.NewCombatService(world, mobdb.NewRegistry())
+	combat := app.NewCombatService(world, mobdb.NewRegistry(), nil)
 	return world, app.NewSkillService(world, combat, skills)
 }
 

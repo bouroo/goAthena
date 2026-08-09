@@ -51,7 +51,18 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 	do.Provide(inj, func(i do.Injector) (*app.CombatService, error) {
 		world := do.MustInvoke[*app.WorldService](i)
 		mobs := do.MustInvoke[*mobdb.Registry](i)
-		return app.NewCombatService(world, mobs), nil
+		// EquipService registers below but resolves lazily here (inventory +
+		// itemdb both precede world), so PC attackers feed equipped WeaponATK
+		// into melee damage.
+		equip := do.MustInvoke[*app.EquipService](i)
+		return app.NewCombatService(world, mobs, equip), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*app.EquipService, error) {
+		// inventory registers before world (composition.go), so its service
+		// resolves here and satisfies the world EquipService's inventory port.
+		inv := do.MustInvoke[*invapp.InventoryService](i)
+		items := do.MustInvoke[*itemdb.Registry](i)
+		return app.NewEquipService(inv, items), nil
 	})
 	do.Provide(inj, func(i do.Injector) (*skilldb.Registry, error) {
 		log := do.MustInvoke[*slog.Logger](i)

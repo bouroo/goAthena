@@ -44,6 +44,7 @@ type MapServer struct {
 	world   *worldapp.WorldService
 	spawn   *worldapp.SpawnService
 	combat  *worldapp.CombatService
+	equip   *worldapp.EquipService
 	inv     *invapp.InventoryService
 	content *contentapp.Engine
 	skills  *worldapp.SkillService
@@ -56,11 +57,7 @@ type MapServer struct {
 	log       *slog.Logger
 	// openedShops maps charID to the shop the player last opened via
 	// CZ_ACK_SELECT_DEALTYPE, so the following CZ_PC_PURCHASE/SELL_ITEMLIST
-	// (which carry item entries, not the NPC id) can resolve the shop. Guarded
-	// by shopMu because shop handlers run off the reactor goroutine. One entry
-	// per char, overwritten on each open; pruned on disconnect by OnClose →
-	// unregisterConn. Guarded by shopMu because shop handlers run off the
-	// reactor goroutine.
+	// (which carry item entries, not the NPC id) can resolve the shop. One entry
 	// per char, overwritten on each open; pruned on disconnect by OnClose →
 	// unregisterConn. Guarded by shopMu because shop handlers run off the
 	// reactor goroutine.
@@ -79,11 +76,12 @@ type MapServer struct {
 // commerce verb (open/buy/sell); trade wires the player-to-player trade verb.
 // shops/shopStore/trade may be nil in a reduced harness where their packets are
 // never exercised, but production wiring resolves all three.
-func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
+func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, equip *worldapp.EquipService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
 	return &MapServer{
 		world:       world,
 		spawn:       spawn,
 		combat:      combat,
+		equip:       equip,
 		inv:         inv,
 		content:     content,
 		skills:      skills,

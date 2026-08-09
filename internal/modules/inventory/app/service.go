@@ -44,3 +44,12 @@ func (s *InventoryService) Remove(ctx context.Context, id domain.ItemID, amount 
 	}
 	return nil
 }
+
+// SetEquip overwrites the equip bitmask of one item row (0 to unequip). Used by
+// the world EquipService to wear/remove gear.
+func (s *InventoryService) SetEquip(ctx context.Context, id domain.ItemID, equip uint32) error {
+	if err := s.repos.SetEquip(ctx, id, equip); err != nil {
+		return fmt.Errorf("set equip: %w", err)
+	}
+	return nil
+}

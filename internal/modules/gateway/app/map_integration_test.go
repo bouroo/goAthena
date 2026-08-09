@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,8 @@ import (
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	worldinfra "github.com/bouroo/goAthena/internal/modules/world/infra"
+	"github.com/bouroo/goAthena/pkg/ro/equip"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
@@ -74,9 +77,13 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	})
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
 	spawn := worldapp.NewSpawnService(world, nil, nil)
-	combat := worldapp.NewCombatService(world, nil)
 	itemRepo := invinfra.NewMemoryItemRepository()
 	inv := invapp.NewInventoryService(itemRepo)
+	// A tiny item_db with one weapon (Knife 1201, ATK 50, right-hand) backs the
+	// EquipService so combat picks up WeaponATK when the player equips it.
+	items := testItemDB(t)
+	equipSvc := worldapp.NewEquipService(inv, items)
+	combat := worldapp.NewCombatService(world, nil, equipSvc)
 	content := contentapp.NewEngine(nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
 
@@ -88,7 +95,7 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	shopStore := contentinfra.NewMemoryShopStore()
 	shopStore.RegisterShop(shop.DevShopGID, devTestShopName)
 
-	ms, err := gwapp.NewMapServer(world, spawn, combat, inv, content, skills, shops, shopStore, nil, sessions, slog.Default())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, equipSvc, inv, content, skills, shops, shopStore, nil, sessions, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +164,25 @@ func testSkillDB() *skilldb.Registry {
 		Range:      skilldb.Range{IsScalar: true, Value: 1},
 		Requires:   skilldb.Requires{SpCost: skilldb.SpCost{IsScalar: true, Value: 8}},
 	})
+	return reg
+}
+
+// testItemDB seeds a one-entry item registry for integration tests: a Knife
+// (id 1201, ATK 50) wearable in the right hand. The Attack feeds WeaponATK into
+// combat once equipped; Locations maps to equip.HandRight so the wear request's
+// position validates.
+func testItemDB(t *testing.T) *itemdb.Registry {
+	t.Helper()
+	const yaml = "Header:\n  Type: ITEM_DB\n  Version: 3\nBody:\n" +
+		"  - Id: 1201\n    AegisName: Knife\n    Name: Knife\n    Type: Weapon\n" +
+		"    SubType: Dagger\n    Attack: 50\n    Locations:\n      Right_Hand: true\n"
+	reg, err := itemdb.Load(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("load test item_db: %v", err)
+	}
+	if e := reg.Get(1201); e == nil || e.Attack != 50 || e.EquipLocations != equip.HandRight {
+		t.Fatalf("test item_db knife not resolved: %+v", e)
+	}
 	return reg
 }
 
@@ -437,6 +463,100 @@ func TestMap_Dispatch_CastAttackSkill(t *testing.T) {
 	}
 	if dmg := int32(binary.LittleEndian.Uint32(resp[24:28])); dmg <= 0 {
 		t.Fatalf("notify-skill Damage = %d, want > 0 (real combat hit)", dmg)
+	}
+}
+
+// castSkillHit sends a CZ_USE_SKILL2 (skill SM_BASH id 5, level 1) at targetGID
+// and returns the resolved damage from the ZC_NOTIFY_SKILL frame. The conn must
+// be quiescent (no pending frames) so the next 33 bytes are the notify-skill.
+func castSkillHit(t *testing.T, c net.Conn, targetGID uint32) int32 {
+	t.Helper()
+	req := make([]byte, 10)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILL)
+	binary.LittleEndian.PutUint16(req[2:], 1) // skillLv
+	binary.LittleEndian.PutUint16(req[4:], 5) // SM_BASH
+	binary.LittleEndian.PutUint32(req[6:], targetGID)
+	c.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c.Write(req); err != nil {
+		t.Fatalf("send CZ_USE_SKILL2: %v", err)
+	}
+	resp := make([]byte, 33)
+	if _, err := io.ReadFull(c, resp); err != nil {
+		t.Fatalf("read ZC_NOTIFY_SKILL: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCNOTIFYSKILL {
+		t.Fatalf("notify-skill header = 0x%04x, want ZC_NOTIFY_SKILL (0x%04x)", got, ropacket.HeaderZCNOTIFYSKILL)
+	}
+	return int32(binary.LittleEndian.Uint32(resp[24:28])) //nolint:gosec // G115: damage is a bounded game value
+}
+
+// TestMap_Dispatch_EquipIncreasesDamage proves the M10 equipment→combat path
+// end-to-end through the wire. The player casts a melee skill bare-handed
+// (ZC_NOTIFY_SKILL carries the resolved damage), equips a Knife via
+// CZ_REQ_WEAR_EQUIP (asserting the success ack), then casts again. The armed hit
+// must land strictly harder: the weapon's WeaponATK now folds into the damage
+// base. Element/size/crit are deliberately out of scope — the assertion is only
+// that an equipped weapon increases melee damage.
+func TestMap_Dispatch_EquipIncreasesDamage(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	conn, env := startMapListenerWithShopEnv(t, port, sessions)
+	defer conn.Close()
+
+	// Seed one Knife (item_db 1201) at bag slot 1 so the wear request's index 1
+	// resolves to it.
+	if _, err := env.itemRepo.Add(t.Context(), 150001, 1201, 1); err != nil {
+		t.Fatalf("seed knife: %v", err)
+	}
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil { // drain accept-enter
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// High-HP mob on the player's tile so it survives both hits (no death burst
+	// interleaving the reads).
+	const mobGID = 160020
+	if err := env.spawn.SpawnMob(mobGID, 1002, "new_1-1",
+		worlddomain.Position{X: 53, Y: 111}, "Poring", 200, 200, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+
+	// 1. Bare-handed hit.
+	bareDmg := castSkillHit(t, conn, mobGID)
+
+	// 2. Equip the Knife: CZ_REQ_WEAR_EQUIP_V5 (0x0998, index 1, right hand).
+	wear := make([]byte, 8)
+	binary.LittleEndian.PutUint16(wear[0:], ropacket.HeaderCZREQWEAREQUIPV5)
+	binary.LittleEndian.PutUint16(wear[2:], 1)               // inventory index
+	binary.LittleEndian.PutUint32(wear[4:], equip.HandRight) // EQP position
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write(wear); err != nil {
+		t.Fatalf("send CZ_REQ_WEAR_EQUIP: %v", err)
+	}
+	ack := make([]byte, 11)
+	if _, err := io.ReadFull(conn, ack); err != nil {
+		t.Fatalf("read ZC_REQ_WEAR_EQUIP_ACK_V5: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCREQWEAREQUIPACKV5 {
+		t.Fatalf("wear-ack header = 0x%04x, want ZC_REQ_WEAR_EQUIP_ACK_V5 (0x0999)", got)
+	}
+	if got := binary.LittleEndian.Uint32(ack[4:8]); got != equip.HandRight {
+		t.Fatalf("wear-ack WearLocation = 0x%08x, want HandRight", got)
+	}
+	if ack[10] != 1 {
+		t.Fatalf("wear-ack result = %d, want 1 (success)", ack[10])
+	}
+
+	// 3. The armed hit must exceed the bare-handed hit (the weapon's ATK now folds
+	// into the damage base).
+	armedDmg := castSkillHit(t, conn, mobGID)
+	if armedDmg <= bareDmg {
+		t.Fatalf("equipped weapon did not increase damage: bare=%d armed=%d (want armed > bare)", bareDmg, armedDmg)
 	}
 }
 
@@ -886,7 +1006,7 @@ func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*g
 	)
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
 	spawn := worldapp.NewSpawnService(world, nil, nil)
-	combat := worldapp.NewCombatService(world, nil)
+	combat := worldapp.NewCombatService(world, nil, nil)
 	itemRepo := invinfra.NewMemoryItemRepository()
 	inv := invapp.NewInventoryService(itemRepo)
 	content := contentapp.NewEngine(nil, nil, nil, slog.Default())
@@ -895,7 +1015,7 @@ func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*g
 	econ := economyapp.NewEconomyService(charRepo)
 	trade := worldapp.NewTradeService(world, inv, econ)
 
-	ms, err := gwapp.NewMapServer(world, spawn, combat, inv, content, skills, nil, nil, trade, sessions, slog.Default())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, nil, inv, content, skills, nil, nil, trade, sessions, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}

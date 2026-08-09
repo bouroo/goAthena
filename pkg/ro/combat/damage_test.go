@@ -110,6 +110,38 @@ func TestNormalMelee_Renewal(t *testing.T) {
 	}
 }
 
+// TestNormalMelee_WeaponATK pins the M10 equipment→damage contribution: an
+// Attacker with a non-zero Equipment.WeaponATK deals strictly more than the same
+// attacker bare-handed, in both modes. Hand-computed against the "strong
+// attacker vs Poring (def0/vit1)" vector: pre-re batk 83, renewal batk 59.
+//
+//	WeaponATK 50 folds into the base:
+//	  pre-re  naked 83·100/100 − 1 = 82;  armed (83+50) − 1 = 132
+//	  renewal naked 2·59 − 1 = 117;       armed (118+50) − 1 = 167
+func TestNormalMelee_WeaponATK(t *testing.T) {
+	t.Parallel()
+	attacker := statcalc.Base{Level: 1, Str: 50, Agi: 1, Vit: 1, Int: 1, Dex: 30, Luk: 10}
+	defender := combat.Defender{HardDEF: 0, SoftDEF: 1}
+
+	nakedPre := combat.NormalMelee(combat.Attacker{Base: attacker}, defender, statcalc.PreRenewalSet, mode.PreRenewal)
+	armedPre := combat.NormalMelee(
+		combat.Attacker{Base: attacker, Equipment: statcalc.Equipment{WeaponATK: 50}},
+		defender, statcalc.PreRenewalSet, mode.PreRenewal,
+	)
+	assert.Equal(t, int32(82), nakedPre.Damage, "pre-re naked baseline")
+	assert.Equal(t, int32(132), armedPre.Damage, "pre-re armed")
+	assert.Greater(t, armedPre.Damage, nakedPre.Damage, "weapon must raise pre-re damage")
+
+	nakedRe := combat.NormalMelee(combat.Attacker{Base: attacker}, defender, statcalc.RenewalSet, mode.Renewal)
+	armedRe := combat.NormalMelee(
+		combat.Attacker{Base: attacker, Equipment: statcalc.Equipment{WeaponATK: 50}},
+		defender, statcalc.RenewalSet, mode.Renewal,
+	)
+	assert.Equal(t, int32(117), nakedRe.Damage, "renewal naked baseline")
+	assert.Equal(t, int32(167), armedRe.Damage, "renewal armed")
+	assert.Greater(t, armedRe.Damage, nakedRe.Damage, "weapon must raise renewal damage")
+}
+
 func TestInMeleeRange(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
