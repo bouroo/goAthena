@@ -320,7 +320,7 @@ func TestRegenTick_OnStatChangeHook(t *testing.T) {
 		got = append(got, statChange{charID, hp, sp})
 	}
 
-	// 6 s tick: only HP due (spSeconds 6 s < 8 s). HP 500 -> 506, SP unchanged.
+	// 6 s tick: only HP due (SP interval is 8 s). HP 500 -> 506, SP unchanged.
 	w.RegenTick(6 * time.Second)
 	want := []statChange{{charID: 150001, hp: 506, sp: 40}}
 	if !equalNotifs(got, want) {
@@ -329,9 +329,78 @@ func TestRegenTick_OnStatChangeHook(t *testing.T) {
 
 	// Sub-interval: nothing due, no notification.
 	got = nil
-	w.RegenTick(1 * time.Second) // hpSeconds 1 s, spSeconds 7 s; neither due
+	w.RegenTick(1 * time.Second) // HP accumulator 1 s, SP 7 s; neither due
 	if len(got) != 0 {
 		t.Fatalf("sub-interval notifications = %+v, want none", got)
+	}
+}
+
+// TestRegenTick_SittingHalvesInterval proves sitting halves the regen interval:
+// a seated damaged PC regens HP after 3 s, while a standing PC with the same
+// damage does not regen until the full 6 s standing interval. MaxHP 1000, Vit 0
+// -> 5+0+1 = 6 HP per interval; SP is kept full so only HP advances.
+func TestRegenTick_SittingHalvesInterval(t *testing.T) {
+	w := newRegenWorld()
+	base := domain.Entity{Type: domain.EntityTypePC, Map: "prontera", HP: 500, MaxHP: 1000, Vit: 0, SP: 100, MaxSP: 100}
+	sitter := base
+	sitter.ID = 150001
+	stander := base
+	stander.ID = 150002
+	if err := w.AddEntity(sitter); err != nil {
+		t.Fatalf("AddEntity sitter: %v", err)
+	}
+	if err := w.AddEntity(stander); err != nil {
+		t.Fatalf("AddEntity stander: %v", err)
+	}
+	if err := w.SetSitting(150001, true); err != nil {
+		t.Fatalf("SetSitting: %v", err)
+	}
+
+	// 3 s: sitter's halved (3 s) interval elapses -> regen 6; stander's 6 s
+	// interval has not elapsed -> no regen.
+	w.RegenTick(3 * time.Second)
+	if got := hpOf(t, w, 150001); got != 506 {
+		t.Fatalf("sitter HP after 3 s = %d, want 506 (sitting halves interval)", got)
+	}
+	if got := hpOf(t, w, 150002); got != 500 {
+		t.Fatalf("stander HP after 3 s = %d, want 500 (standing interval not yet elapsed)", got)
+	}
+
+	// 3 s more (6 s total): sitter hits its second interval (-> 512); stander
+	// hits its first standing interval (-> 506). Both regen, at different cadences.
+	w.RegenTick(3 * time.Second)
+	if got := hpOf(t, w, 150001); got != 512 {
+		t.Fatalf("sitter HP after 6 s = %d, want 512 (two 3 s intervals)", got)
+	}
+	if got := hpOf(t, w, 150002); got != 506 {
+		t.Fatalf("stander HP after 6 s = %d, want 506 (one 6 s interval)", got)
+	}
+}
+
+// TestSetSitting verifies the sitting flag is set/cleared and that a sit for an
+// entity not in the registry returns ErrEntityNotFound.
+func TestSetSitting(t *testing.T) {
+	w := newRegenWorld()
+	if err := w.AddEntity(domain.Entity{ID: 150001, Type: domain.EntityTypePC, Map: "prontera", HP: 100, MaxHP: 100}); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+
+	if err := w.SetSitting(150001, true); err != nil {
+		t.Fatalf("SetSitting(true): %v", err)
+	}
+	if e, _ := w.Get(150001); !e.Sitting {
+		t.Error("after SetSitting(true), Sitting = false, want true")
+	}
+
+	if err := w.SetSitting(150001, false); err != nil {
+		t.Fatalf("SetSitting(false): %v", err)
+	}
+	if e, _ := w.Get(150001); e.Sitting {
+		t.Error("after SetSitting(false), Sitting = true, want false")
+	}
+
+	if err := w.SetSitting(999999, true); !errors.Is(err, domain.ErrEntityNotFound) {
+		t.Errorf("SetSitting unknown = %v, want ErrEntityNotFound", err)
 	}
 }
 

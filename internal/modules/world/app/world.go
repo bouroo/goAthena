@@ -29,12 +29,12 @@ type WorldService struct {
 	log      *slog.Logger
 	tickRate time.Duration
 	stopCh   chan struct{}
-	// hpSeconds/spSeconds accumulate elapsed time since the last natural regen.
-	// When the standing interval elapses (6 s HP, 8 s SP) RegenTick advances every
-	// living PC's vitals. Written only from the single tick-loop goroutine, so no
-	// lock is required.
-	hpSeconds float64
-	spSeconds float64
+	// regenAcc holds per-entity elapsed time since the last HP/SP regen tick.
+	// Per-entity (not global) so sitters (interval halved) and standers (full
+	// interval) advance on the same 50 Hz tick independently. It is read and
+	// written under w.mu alongside the entity registry; RemoveEntity deletes a
+	// stale entry so a PC that leaves a map and re-enters starts fresh.
+	regenAcc map[domain.EntityID]regenAccum
 	// OnStatChange, when set, is invoked after RegenTick changes a player's HP/SP
 	// so the gateway can emit ZC_PAR_CHANGE to that player's client. charID is the
 	// entity's GID (char_id). nil = regen is silent (server state still advances;
@@ -43,11 +43,18 @@ type WorldService struct {
 }
 
 // Pre-renewal standing natural-regen intervals (rAthena status_natural_heal).
-// Sitting halves them; moving/attacking pauses regen — neither is modeled here.
+// Sitting halves them; moving/attacking pauses regen — moving/attacking is not
+// modeled here (sitting halving is, via Entity.Sitting in RegenTick).
 const (
 	hpRegenInterval = 6 * time.Second
 	spRegenInterval = 8 * time.Second
 )
+
+// regenAccum tracks elapsed time since the last HP/SP regen for one entity.
+// Stored per EntityID in WorldService.regenAcc.
+type regenAccum struct {
+	hp, sp float64
+}
 
 // NewWorldService builds a WorldService. The tick rate is derived from
 // tickRateHz (50 = 20 ms). The tick loop starts on StartTick and stops on Stop.
@@ -59,6 +66,7 @@ func NewWorldService(repo domain.WorldRepository, log *slog.Logger, tickRateHz i
 		entities: make(map[domain.EntityID]*domain.Entity),
 		byMap:    make(map[string]map[domain.EntityID]bool),
 		grids:    make(map[string]*aoi.GridManager),
+		regenAcc: make(map[domain.EntityID]regenAccum),
 		repo:     repo,
 		log:      log,
 		tickRate: time.Second / time.Duration(tickRateHz),
@@ -117,6 +125,7 @@ func (w *WorldService) RemoveEntity(id domain.EntityID) error {
 		return domain.ErrEntityNotFound
 	}
 	delete(w.entities, id)
+	delete(w.regenAcc, id) // drop stale regen timer so a re-entering PC starts fresh
 	mapName := e.Map
 	if set, ok := w.byMap[mapName]; ok {
 		delete(set, id)
@@ -262,30 +271,18 @@ func (w *WorldService) Stop() {
 	}
 }
 
-// RegenTick advances natural HP/SP regen by dt. It accumulates elapsed time and,
-// when the standing interval elapses (6 s HP, 8 s SP), advances every living PC's
-// vitals by the pre-renewal status_natural_heal amount, clamped to the max. Mobs/
-// NPCs and dead PCs (HP <= 0) are skipped. When OnStatChange is set it is invoked
-// per changed PC, off the world mutex. Entity mutation takes the world mutex
-// (combat's applyDamage uses the same lock), so regen is race-free with damage.
+// RegenTick advances natural HP/SP regen by dt for every living PC. Each entity
+// accumulates elapsed time in regenAcc; when its interval elapses (6 s HP / 8 s
+// SP standing, halved to 3 s / 4 s while Entity.Sitting) it advances vitals by
+// the pre-renewal status_natural_heal amount, clamped to the max. Mobs/NPCs and
+// dead PCs (HP <= 0) are skipped. When OnStatChange is set it is invoked per
+// changed PC, off the world mutex. regenAcc is mutated under w.mu (same lock as
+// the entity registry), so regen stays race-free with damage and with SetSitting.
+// Moving/attacking pausing regen (rAthena status_natural_heal) is not modeled.
 func (w *WorldService) RegenTick(dt time.Duration) {
-	w.hpSeconds += dt.Seconds()
-	w.spSeconds += dt.Seconds()
-	hpInt := hpRegenInterval.Seconds()
-	spInt := spRegenInterval.Seconds()
-	// Count elapsed intervals so a large dt (e.g. a stalled tick, a headless
-	// test advancing time) catches up rather than firing a single regen.
-	hpTicks := int(w.hpSeconds / hpInt)
-	spTicks := int(w.spSeconds / spInt)
-	if hpTicks > 0 {
-		w.hpSeconds -= float64(hpTicks) * hpInt
-	}
-	if spTicks > 0 {
-		w.spSeconds -= float64(spTicks) * spInt
-	}
-	if hpTicks == 0 && spTicks == 0 {
-		return
-	}
+	dtSec := dt.Seconds()
+	hpStanding := hpRegenInterval.Seconds()
+	spStanding := spRegenInterval.Seconds()
 
 	type statNotify struct {
 		charID uint32
@@ -297,15 +294,36 @@ func (w *WorldService) RegenTick(dt time.Duration) {
 		if e.Type != domain.EntityTypePC || e.HP <= 0 {
 			continue // only living PCs regen
 		}
+		acc := w.regenAcc[id]
+		acc.hp += dtSec
+		acc.sp += dtSec
+		// Sitting halves the standing interval (status_natural_heal).
+		hpInt := hpStanding
+		spInt := spStanding
+		if e.Sitting {
+			hpInt /= 2
+			spInt /= 2
+		}
+		// Count elapsed intervals so a large dt (a stalled tick, a headless test
+		// advancing time) catches up rather than firing a single regen.
+		hpTicks := int(acc.hp / hpInt) //nolint:gosec // G115: count of 6/3 s intervals; tiny at the 50 Hz tick.
+		spTicks := int(acc.sp / spInt) //nolint:gosec // G115: count of 8/4 s intervals; tiny at the 50 Hz tick.
 		changed := false
-		if hpTicks > 0 && e.HP < e.MaxHP {
-			e.HP = clampRegen(e.HP, e.MaxHP, hpRegenAmount(e.MaxHP, e.Vit)*int32(hpTicks)) //nolint:gosec // G115: hpTicks is a count of 6s intervals; tiny at the 50Hz tick.
-			changed = true
+		if hpTicks > 0 {
+			acc.hp -= float64(hpTicks) * hpInt
+			if e.HP < e.MaxHP {
+				e.HP = clampRegen(e.HP, e.MaxHP, hpRegenAmount(e.MaxHP, e.Vit)*int32(hpTicks)) //nolint:gosec // G115: hpTicks is a count of 6/3 s intervals; tiny at the 50 Hz tick.
+				changed = true
+			}
 		}
-		if spTicks > 0 && e.SP < e.MaxSP {
-			e.SP = clampRegen(e.SP, e.MaxSP, spRegenAmount(e.MaxSP, e.Int)*int32(spTicks)) //nolint:gosec // G115: spTicks is a count of 8s intervals; tiny at the 50Hz tick.
-			changed = true
+		if spTicks > 0 {
+			acc.sp -= float64(spTicks) * spInt
+			if e.SP < e.MaxSP {
+				e.SP = clampRegen(e.SP, e.MaxSP, spRegenAmount(e.MaxSP, e.Int)*int32(spTicks)) //nolint:gosec // G115: spTicks is a count of 8/4 s intervals; tiny at the 50 Hz tick.
+				changed = true
+			}
 		}
+		w.regenAcc[id] = acc
 		if changed {
 			pending = append(pending, statNotify{charID: uint32(id), hp: e.HP, sp: e.SP})
 		}
@@ -342,6 +360,25 @@ func clampRegen(cur, maxV, amt int32) int32 {
 		return maxV
 	}
 	return int32(v) //nolint:gosec // G115: bounded to [cur, maxV] which fits int32.
+}
+
+// SetSitting sets a PC entity's seated state. The gateway calls it on
+// CZ_ACTION_REQUEST sit/stand (DMGSitDown/DMGStandUp); Sitting halves the
+// natural-regen interval in RegenTick. Returns ErrEntityNotFound if the entity is
+// absent — a sit/stand for an entity not on this map is harmless and the caller
+// ignores that sentinel. Thread-safe; the action request normally runs on the
+// reactor goroutine, but the lock is taken for consistency with the other
+// entity mutators (AddVitals, MoveEntity).
+func (w *WorldService) SetSitting(charID uint32, sitting bool) error {
+	w.mu.Lock()
+	e, ok := w.entities[domain.EntityID(charID)]
+	if !ok {
+		w.mu.Unlock()
+		return domain.ErrEntityNotFound
+	}
+	e.Sitting = sitting
+	w.mu.Unlock()
+	return nil
 }
 
 // EnterMap loads a character's enter state from the repo and registers it as a

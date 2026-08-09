@@ -822,10 +822,11 @@ func (s *MapServer) wornSlot(auth *mapAuth, invIndex int) (uint32, bool) {
 }
 
 // handleActionRequest handles CZ_ACTION_REQUEST (0x0089, 7B): sit/stand/attack.
-// Sit/stand just echo back; attack (action 0x07) resolves melee damage via
-// CombatService, echoes the action, and — when the hit kills a mob — drives the
-// death loop: drops + despawn (SpawnService.OnMobDeath) then a ZC_NOTIFY_VANISH
-// + one ZC_ITEM_ENTRY per rolled drop.
+// Sit/stand echo back and set the PC's seated state (Sitting halves natural-regen
+// intervals); attack (action 0x07) resolves melee damage via CombatService,
+// echoes the action, and — when the hit kills a mob — drives the death loop:
+// drops + despawn (SpawnService.OnMobDeath) then a ZC_NOTIFY_VANISH + one
+// ZC_ITEM_ENTRY per rolled drop.
 func (s *MapServer) handleActionRequest(c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ACTION_REQUEST from unauthed conn")
@@ -836,8 +837,20 @@ func (s *MapServer) handleActionRequest(c gnet.Conn, auth *mapAuth, frame []byte
 		s.log.Warn("map: parse CZ_ACTION_REQUEST", "err", err)
 		return
 	}
-	if req.Action != 0x07 { // sit/stand: echo only
+	if req.Action != 0x07 { // sit/stand/pickup: echo only
 		s.sendActionResponse(c, auth.charID, req.Action, req.TargetGID)
+		// Track seated state so RegenTick can halve the regen interval for sitters.
+		// A sit/stand for an entity not on this map is harmless (sentinel ignored).
+		switch req.Action {
+		case ropacket.DMGSitDown:
+			if err := s.world.SetSitting(auth.charID, true); err != nil {
+				s.log.Debug("map: sit for unknown entity", "gid", auth.charID, "err", err)
+			}
+		case ropacket.DMGStandUp:
+			if err := s.world.SetSitting(auth.charID, false); err != nil {
+				s.log.Debug("map: stand for unknown entity", "gid", auth.charID, "err", err)
+			}
+		}
 		return
 	}
 	// attack (0x07)

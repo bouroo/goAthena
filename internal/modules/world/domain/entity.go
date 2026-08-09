@@ -54,7 +54,11 @@ type Entity struct {
 	// mutate them. Mobs leave them zero — only PCs load them from the char table.
 	SP    int32
 	MaxSP int32
-	Level int16
+	// Sitting is runtime-only seated state: true halves natural HP/SP regen
+	// intervals (status_natural_heal). Not persisted — map-enter leaves it
+	// false and a reconnecting PC re-sits. Mutated only via WorldService.SetSitting.
+	Sitting bool
+	Level   int16
 	// Str/Agi/Vit/Int/Dex/Luk are the six base stats the combat service feeds to
 	// the kernel's Attacker/Defender profiles. PCs load them from the char table
 	// at map-enter; mobs leave them zero (mob stats come from mob_db by Class).
