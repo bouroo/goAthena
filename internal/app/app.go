@@ -125,8 +125,9 @@ func (a *App) routes() {
 			"version": Version, "commit": Commit, "build_time": BuildTime,
 		})
 	})
-	// /metrics exposes Prometheus metrics: Go runtime + process + goathena_*
-	// custom counters. Used by the observability stack (OTel Collector → Prometheus).
+	// /metrics exposes the default Prometheus registry (Go runtime + process
+	// metrics). No custom goathena_* counters are registered yet. Used by the
+	// observability stack (OTel Collector → Prometheus).
 	a.echo.GET("/metrics", func(c *echo.Context) error {
 		promhttp.Handler().ServeHTTP(c.Response(), c.Request())
 		return nil
