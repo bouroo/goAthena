@@ -88,7 +88,11 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve content engine: %w", err)
 	}
-	ms, err := app.NewMapServer(world, spawn, combat, inv, content, sess, log)
+	skills, err := do.Invoke[*worldapp.SkillService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve skill service: %w", err)
+	}
+	ms, err := app.NewMapServer(world, spawn, combat, inv, content, skills, sess, log)
 	if err != nil {
 		return nil, fmt.Errorf("map server: %w", err)
 	}

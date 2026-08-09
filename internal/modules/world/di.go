@@ -14,6 +14,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/world/infra"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
 
 // Register provisions the world module. The repo resolves the process-wide
@@ -50,6 +51,16 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		mobs := do.MustInvoke[*mobdb.Registry](i)
 		return app.NewCombatService(world, mobs), nil
 	})
+	do.Provide(inj, func(i do.Injector) (*skilldb.Registry, error) {
+		log := do.MustInvoke[*slog.Logger](i)
+		return loadSkillDB(dbPath, log), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*app.SkillService, error) {
+		world := do.MustInvoke[*app.WorldService](i)
+		combatSvc := do.MustInvoke[*app.CombatService](i)
+		skills := do.MustInvoke[*skilldb.Registry](i)
+		return app.NewSkillService(world, combatSvc, skills), nil
+	})
 }
 
 // loadMobDB loads mob_db.yml from the pre-renewal db root. A load failure is
@@ -77,5 +88,20 @@ func loadItemDB(dbPath string, log *slog.Logger) *itemdb.Registry {
 		return itemdb.NewRegistry()
 	}
 	log.Info("item_db loaded", "path", path, "items", reg.Len())
+	return reg
+}
+
+// loadSkillDB loads skill_db.yml from the pre-renewal db root. A load failure is
+// non-fatal and symmetric with loadMobDB/loadItemDB: the server still boots and
+// skill casts resolve unknown skills until the operator points ZONE_DB_PATH at a
+// rAthena checkout.
+func loadSkillDB(dbPath string, log *slog.Logger) *skilldb.Registry {
+	path := filepath.Join(dbPath, "pre-re", "skill_db.yml")
+	reg, err := skilldb.LoadFile(path)
+	if err != nil {
+		log.Warn("skill_db load failed; skills resolve unknown", "path", path, "err", err)
+		return skilldb.NewRegistry()
+	}
+	log.Info("skill_db loaded", "path", path, "skills", reg.Len())
 	return reg
 }

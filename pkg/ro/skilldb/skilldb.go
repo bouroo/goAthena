@@ -207,6 +207,24 @@ type Registry struct {
 	entries map[int32]*SkillEntry
 }
 
+// NewRegistry returns an empty, non-nil Registry. It is the zero value the app
+// wiring falls back to when skill_db.yml is absent or unreadable: lookups then
+// return nil (every skill casts as unknown) instead of failing boot.
+func NewRegistry() *Registry {
+	return &Registry{entries: make(map[int32]*SkillEntry)}
+}
+
+// Register adds or replaces a skill entry by its ID. It seeds the registry
+// programmatically (tests, fixtures) without parsing a skill_db YAML file;
+// production loading still goes through Load/LoadFile. Like Get/Len it assumes
+// the registry is populated before concurrent reads begin.
+func (reg *Registry) Register(e *SkillEntry) {
+	if reg == nil || e == nil {
+		return
+	}
+	reg.entries[e.ID] = e
+}
+
 // Load parses a rAthena skill_db YAML file from an io.Reader and returns a Registry.
 // It expects the rAthena YAML format with Header.Type=="SKILL_DB" and Header.Version==4.
 // Unknown fields are silently ignored. The document is streamed through

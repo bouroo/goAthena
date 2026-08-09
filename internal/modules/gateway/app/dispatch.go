@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"strconv"
 
 	"github.com/panjf2000/gnet/v2"
 
 	dialogdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
+	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
@@ -62,6 +64,8 @@ func mapHandlers() map[uint16]mapHandler {
 		0x0146: {size: 6, fn: (*MapServer).handleCloseDialog},                          // CZ_CLOSE_DIALOG
 		0x0362: {size: 6, fn: (*MapServer).handleItemPickup},                           // CZ_ITEM_PICKUP @ 20250604
 		0x0363: {size: 6, fn: (*MapServer).handleItemDrop},                             // CZ_ITEM_DROP @ 20250604
+		0x0438: {size: 10, fn: (*MapServer).handleUseSkill2},                           // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
+		0x0af4: {size: 11, fn: (*MapServer).handleUseSkillToPos},                       // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
 	}
 }
 
@@ -414,6 +418,197 @@ func (s *MapServer) handleMobDeath(c gnet.Conn, mobGID uint32) {
 		burst = append(burst, ebuf...)
 	}
 	_ = c.AsyncWrite(burst, nil)
+}
+
+// handleUseSkill2 handles CZ_USE_SKILL2 (0x0438, 10B): cast a single-target
+// skill onto an entity. It validates the cast through SkillService (skill known,
+// level in range, target reachable, SP affordable), then on success emits
+// ZC_NOTIFY_SKILL (0x01de) carrying the resolved damage. The damage is a
+// melee-equivalent hit routed through the existing CombatService path — full
+// skill-damage modeling (element/size/crit/per-skill multipliers) is kernel
+// future work and deliberately not faked here. On failure it emits
+// ZC_ACK_TOUSESKILL only for the verified SP-insufficient cause; other
+// validation failures are logged and the connection is kept alive (their
+// USESKILL_FAIL_* wire codes are not yet defined in the packet layer, a known
+// gap — no wire value is invented). When the hit kills a mob, the same
+// drop/despawn loop as CZ_ACTION_REQUEST runs.
+func (s *MapServer) handleUseSkill2(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_USE_SKILL2 from unauthed conn")
+		return
+	}
+	req, err := ropacket.ParseCZUseSkill(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_USE_SKILL2", "err", err)
+		return
+	}
+	dmg, died, err := s.skills.UseSkillOnTarget(
+		worlddomain.EntityID(auth.charID),
+		int32(req.SkillID),
+		req.SkillLv,
+		worlddomain.EntityID(req.TargetID),
+	)
+	if err != nil {
+		s.log.Warn("map: skill cast", "skill", req.SkillID, "level", req.SkillLv, "err", err)
+		s.sendSkillFail(c, req.SkillID, err)
+		return
+	}
+	resp := ropacket.NotifySkillResponse{
+		SKID:     req.SkillID,
+		AID:      auth.charID,
+		TargetID: req.TargetID,
+		Damage:   dmg,
+		Level:    req.SkillLv,
+		Count:    1,
+		Action:   0, // DMG_NORMAL (clif.cpp damage_type selector)
+	}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode notify-skill", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+	s.log.Debug("map: skill cast", "skill", req.SkillID, "level", req.SkillLv, "target", req.TargetID, "dmg", dmg)
+	if died {
+		s.handleMobDeath(c, req.TargetID)
+	}
+}
+
+// handleUseSkillToPos handles CZ_USE_SKILL_TOPOS (0x0AF4, 11B): a client casts a
+// ground-target skill onto a tile. It always emits ZC_NOTIFY_GROUNDSKILL (0x0117)
+// to place the skill's visual effect on the cast tile, so the client renders the
+// cast even when no mob is in range. As an honest single-target approximation of
+// the ground cast it then resolves the nearest mob to the cast tile and routes
+// one skill hit through SkillService — the same combat path as CZ_USE_SKILL2 —
+// so the cast deals damage when a mob is adjacent. Full ground-AoE damage (every
+// mob within the skill's tile radius, element/size-modified skill-damage) is
+// kernel future work and deliberately not faked here: only the single nearest
+// mob is affected. Validation failures are logged, surface ZC_ACK_TOUSESKILL only
+// for the verified SP-insufficient cause, and never close the connection.
+func (s *MapServer) handleUseSkillToPos(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_USE_SKILL_TOPOS from unauthed conn")
+		return
+	}
+	req, err := ropacket.ParseCZUseSkillToPos(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_USE_SKILL_TOPOS", "err", err)
+		return
+	}
+	// Place the cast visual on the tile. AID is the caster's GID, matching the
+	// rAthena layout documented on GroundSkillPoseEffect.
+	pose := ropacket.GroundSkillPoseEffect{
+		SKID:      req.SkillID,
+		AID:       auth.charID,
+		Level:     req.SkillLv,
+		XPos:      int16(req.X), //nolint:gosec // G115: map coords are non-negative int16.
+		YPos:      int16(req.Y), //nolint:gosec // G115: map coords are non-negative int16.
+		StartTime: 0,            // server tick at cast resolution; 0 acceptable for the local clock.
+	}
+	out := make([]byte, pose.Size())
+	if err := pose.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode notify-groundskill", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+	s.log.Debug("map: ground-skill cast", "skill", req.SkillID, "level", req.SkillLv, "x", req.X, "y", req.Y)
+
+	// Resolve the nearest mob to the cast tile and route one hit through the
+	// existing SkillService path. A true AoE (every mob in the skill radius) is
+	// kernel future work; this single-target approximation keeps the cast honest.
+	caster, err := s.world.Get(worlddomain.EntityID(auth.charID))
+	if err != nil {
+		s.log.Warn("map: ground-skill caster lookup", "err", err)
+		return
+	}
+	mobID := nearestMobID(s.world, caster.Map, int(req.X), int(req.Y))
+	if mobID == 0 {
+		return
+	}
+	dmg, died, err := s.skills.UseSkillOnTarget(
+		worlddomain.EntityID(auth.charID),
+		int32(req.SkillID),
+		req.SkillLv,
+		mobID,
+	)
+	if err != nil {
+		s.log.Warn("map: ground-skill cast", "skill", req.SkillID, "level", req.SkillLv, "err", err)
+		s.sendSkillFail(c, req.SkillID, err)
+		return
+	}
+	// Surface the resolved hit to the client (ZC_NOTIFY_SKILL), mirroring the
+	// CZ_USE_SKILL2 path, so the caster sees the damage applied to the nearest mob
+	// — not just the ground visual. Full AoE (per-mob notifications) is future work.
+	hit := ropacket.NotifySkillResponse{
+		SKID:     req.SkillID,
+		AID:      auth.charID,
+		TargetID: uint32(mobID), //nolint:gosec // G115: EntityID is uint32 by definition.
+		Damage:   dmg,
+		Level:    req.SkillLv,
+		Count:    1,
+		Action:   0, // DMG_NORMAL
+	}
+	out2 := make([]byte, hit.Size())
+	if err := hit.Encode(sliceWriter(out2)); err != nil {
+		s.log.Error("map: encode ground-skill notify-skill", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out2, nil)
+	s.log.Debug("map: ground-skill hit", "skill", req.SkillID, "target", mobID, "dmg", dmg)
+	if died {
+		s.handleMobDeath(c, uint32(mobID)) //nolint:gosec // G115: EntityID is uint32 by definition.
+	}
+}
+
+// nearestMobID returns the EntityID of the mob nearest (Chebyshev cell distance)
+// to tile (x, y) on mapName, or 0 when no mob is visible from that tile. It is
+// the honest single-target approximation of a ground-AoE skill: full per-radius
+// multi-target resolution is kernel future work.
+func nearestMobID(world *worldapp.WorldService, mapName string, x, y int) worlddomain.EntityID {
+	var nearest worlddomain.EntityID
+	bestDist := -1
+	for _, id := range world.QueryVisible(mapName, x, y) {
+		e, err := world.Get(id)
+		if err != nil || e.Type != worlddomain.EntityTypeMob {
+			continue
+		}
+		dx := abs(x - int(e.Pos.X))
+		dy := abs(y - int(e.Pos.Y))
+		d := dx
+		if dy > dx {
+			d = dy
+		}
+		if bestDist < 0 || d < bestDist {
+			bestDist = d
+			nearest = id
+		}
+	}
+	return nearest
+}
+
+// abs returns the absolute value of x.
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// sendSkillFail emits ZC_ACK_TOUSESKILL (0x0110) to reject a cast. Only the
+// SP-insufficient cause (12) is verified in the packet layer; other failure
+// reasons have no defined wire code yet, so they are dropped (logged at the
+// call site) rather than emitting an unverified cause.
+func (s *MapServer) sendSkillFail(c gnet.Conn, skillID uint16, castErr error) {
+	if !errors.Is(castErr, worldapp.ErrInsufficientSP) {
+		return
+	}
+	resp := ropacket.AckUseSkillResponse{SkillID: skillID, Cause: ropacket.UseSkillFailSPInsufficient}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ack-touseskill", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
 }
 
 // authFromConn extracts the cached mapAuth from a gnet connection, or nil if the

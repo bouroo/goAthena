@@ -21,6 +21,7 @@ import (
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	worldinfra "github.com/bouroo/goAthena/internal/modules/world/infra"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
 
 // startMapListener spins a real MapServer (gnet reactor) on a free port,
@@ -33,14 +34,15 @@ func startMapListenerWithSpawn(t *testing.T, port int, sessions *charinfra.Memor
 	wrepo := worldinfra.NewMemoryWorldRepository(worlddomain.Entity{
 		ID: 150001, Account: 2000001, Map: "new_1-1",
 		Pos: worlddomain.Position{X: 53, Y: 111}, Sex: 1, Job: 0, Level: 1,
-		Name: "Hero", HP: 1000, MaxHP: 1000, Speed: 150,
+		Name: "Hero", HP: 1000, MaxHP: 1000, SP: 100, MaxSP: 100, Speed: 150,
 	})
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
 	spawn := worldapp.NewSpawnService(world, nil, nil)
 	combat := worldapp.NewCombatService(world, nil)
 	inv := invapp.NewInventoryService(invinfra.NewMemoryItemRepository())
 	content := contentapp.NewEngine(nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
-	ms, err := gwapp.NewMapServer(world, spawn, combat, inv, content, sessions, slog.Default())
+	skills := worldapp.NewSkillService(world, combat, testSkillDB())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, inv, content, skills, sessions, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +61,23 @@ func startMapListenerWithSpawn(t *testing.T, port int, sessions *charinfra.Memor
 		t.Fatal("map listener never accepted")
 	}
 	return conn, spawn
+}
+
+// testSkillDB seeds a one-skill registry for integration tests: a melee-range
+// offensive skill (TargetType "Enemy") so a cast routes through the real combat
+// path. Skill id 5 mirrors rAthena SM_BASH. SP cost 8 is affordable against the
+// seeded player's SP=100.
+func testSkillDB() *skilldb.Registry {
+	reg := skilldb.NewRegistry()
+	reg.Register(&skilldb.SkillEntry{
+		ID:         5,
+		Name:       "SM_BASH",
+		MaxLevel:   10,
+		TargetType: "Enemy",
+		Range:      skilldb.Range{IsScalar: true, Value: 1},
+		Requires:   skilldb.Requires{SpCost: skilldb.SpCost{IsScalar: true, Value: 8}},
+	})
+	return reg
 }
 
 // startMapListener is the thin wrapper for tests that do not need the spawn
@@ -276,6 +295,151 @@ func TestMap_Dispatch_AttackMob(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint32(resp[7:11]); got != mobGID {
 		t.Fatalf("action-response targetGID = %d, want mob GID %d", got, mobGID)
+	}
+}
+
+// TestMap_Dispatch_CastAttackSkill exercises CZ_USE_SKILL2 (0x0438 @ 20250604):
+// the player casts an enemy-targeted attack skill onto a mob. The cast is
+// validated (skill known, level/range/SP), SP is spent, and the resolved
+// melee-equivalent damage is broadcast as ZC_NOTIFY_SKILL (0x01de). The damage
+// is reusing the proven combat path; full skill-damage modeling is future work.
+func TestMap_Dispatch_CastAttackSkill(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	conn, spawn := startMapListenerWithSpawn(t, port, sessions)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil { // drain accept-enter
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// Spawn a mob on the player's tile (Chebyshev distance 0 <= skill range 1).
+	const mobGID = 160010
+	if err := spawn.SpawnMob(mobGID, 1002, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "Poring", 50, 50, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+
+	// CZ_USE_SKILL2 (0x0438, 10B): cmd + int16 skillLv + uint16 skillID + uint32 targetID.
+	const skillID = 5
+	req := make([]byte, 10)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILL)
+	binary.LittleEndian.PutUint16(req[2:], 1) // skillLv
+	binary.LittleEndian.PutUint16(req[4:], skillID)
+	binary.LittleEndian.PutUint32(req[6:], mobGID)
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send CZ_USE_SKILL2: %v", err)
+	}
+
+	// ZC_NOTIFY_SKILL (0x01de, 33B) is the next frame on a successful cast.
+	resp := make([]byte, 33)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		t.Fatalf("read ZC_NOTIFY_SKILL: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCNOTIFYSKILL {
+		t.Fatalf("notify-skill header = 0x%04x, want ZC_NOTIFY_SKILL (0x%04x)", got, ropacket.HeaderZCNOTIFYSKILL)
+	}
+	if got := binary.LittleEndian.Uint16(resp[2:4]); got != skillID {
+		t.Fatalf("notify-skill SKID = %d, want %d", got, skillID)
+	}
+	if got := binary.LittleEndian.Uint32(resp[4:8]); got != 150001 {
+		t.Fatalf("notify-skill AID = %d, want caster GID 150001", got)
+	}
+	if got := binary.LittleEndian.Uint32(resp[8:12]); got != mobGID {
+		t.Fatalf("notify-skill TargetID = %d, want mob GID %d", got, mobGID)
+	}
+	if got := int16(binary.LittleEndian.Uint16(resp[28:30])); got != 1 {
+		t.Fatalf("notify-skill Level = %d, want 1", got)
+	}
+	if dmg := int32(binary.LittleEndian.Uint32(resp[24:28])); dmg <= 0 {
+		t.Fatalf("notify-skill Damage = %d, want > 0 (real combat hit)", dmg)
+	}
+}
+
+// TestMap_Dispatch_CastGroundSkill exercises CZ_USE_SKILL_TOPOS (0x0AF4 @
+// 20250604): the player casts a ground-target skill onto a tile. The handler
+// must emit ZC_NOTIFY_GROUNDSKILL (0x0117) placing the cast visual on the tile
+// and keep the connection alive (a follow-up CZ_REQUEST_MOVE still gets its
+// ZC_NOTIFY_PLAYERMOVE reply). With no mob on the cast tile the single-target
+// damage path finds nothing to hit — honest: full ground-AoE damage is kernel
+// future work — so the only expected response is the 18-byte visual frame.
+func TestMap_Dispatch_CastGroundSkill(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	conn, _ := startMapListenerWithSpawn(t, port, sessions)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil { // drain accept-enter
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// CZ_USE_SKILL_TOPOS (0x0AF4, 11B): cmd + int16 skillLv + uint16 skillID +
+	// uint16 xPos + uint16 yPos + uint8 moreinfo (server-ignored).
+	const (
+		skillID = 5
+		castX   = 60
+		castY   = 110
+	)
+	req := make([]byte, 11)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILLTOPOS)
+	binary.LittleEndian.PutUint16(req[2:], 1) // skillLv
+	binary.LittleEndian.PutUint16(req[4:], skillID)
+	binary.LittleEndian.PutUint16(req[6:], castX) // xPos
+	binary.LittleEndian.PutUint16(req[8:], castY) // yPos
+	req[10] = 0                                   // moreinfo
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send CZ_USE_SKILL_TOPOS: %v", err)
+	}
+
+	// ZC_NOTIFY_GROUNDSKILL (0x0117, 18B): the cast visual placement on the tile.
+	resp := make([]byte, 18)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		t.Fatalf("read ZC_NOTIFY_GROUNDSKILL: %v (handler did not emit the cast visual, or closed the conn)", err)
+	}
+	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCNOTIFYGROUNDSKILL {
+		t.Fatalf("ground-skill header = 0x%04x, want ZC_NOTIFY_GROUNDSKILL (0x%04x)", got, ropacket.HeaderZCNOTIFYGROUNDSKILL)
+	}
+	if got := binary.LittleEndian.Uint16(resp[2:4]); got != skillID {
+		t.Fatalf("ground-skill SKID = %d, want %d", got, skillID)
+	}
+	if got := binary.LittleEndian.Uint32(resp[4:8]); got != 150001 {
+		t.Fatalf("ground-skill AID = %d, want caster GID 150001", got)
+	}
+	if got := binary.LittleEndian.Uint16(resp[10:12]); got != castX {
+		t.Fatalf("ground-skill XPos = %d, want %d", got, castX)
+	}
+	if got := binary.LittleEndian.Uint16(resp[12:14]); got != castY {
+		t.Fatalf("ground-skill YPos = %d, want %d", got, castY)
+	}
+
+	// Conn stays alive: a follow-up CZ_REQUEST_MOVE still reaches the dispatcher
+	// and gets its ZC_NOTIFY_PLAYERMOVE reply, proving the handler did not close
+	// or desync the connection.
+	moveReq := make([]byte, 5)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	moveReq[2] = 55  // dest x
+	moveReq[3] = 111 // dest y
+	moveReq[4] = 0   // dest dir
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write(moveReq); err != nil {
+		t.Fatalf("send CZ_REQUEST_MOVE after ground-skill: %v", err)
+	}
+	moveReply := make([]byte, 12)
+	if _, err := io.ReadFull(conn, moveReply); err != nil {
+		t.Fatalf("read player-move reply after ground-skill: %v (conn closed by handler?)", err)
+	}
+	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE {
+		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE)
 	}
 }
 

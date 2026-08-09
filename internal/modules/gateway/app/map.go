@@ -43,13 +43,14 @@ type MapServer struct {
 	combat  *worldapp.CombatService
 	inv     *invapp.InventoryService
 	content *contentapp.Engine
+	skills  *worldapp.SkillService
 	sess    chardomain.SessionStore
 	log     *slog.Logger
 }
 
 // NewMapServer builds a map listener.
-func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, content *contentapp.Engine, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
-	return &MapServer{world: world, spawn: spawn, combat: combat, inv: inv, content: content, sess: sess, log: log, handlers: mapHandlers(), db: ropacket.NewMapServerDB()}, nil
+func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
+	return &MapServer{world: world, spawn: spawn, combat: combat, inv: inv, content: content, skills: skills, sess: sess, log: log, handlers: mapHandlers(), db: ropacket.NewMapServerDB()}, nil
 }
 
 // OnBoot captures the engine for shutdown.
