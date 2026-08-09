@@ -164,6 +164,51 @@ func (w *WorldService) QueryVisible(mapName string, x, y int) []domain.EntityID 
 	return out
 }
 
+// PlayersNear returns the IDs of player-character entities within the AOI view
+// range (15 cells) of pos on mapName. These are the recipients a localized map
+// event (a move, a drop, a mob death) must reach so OTHER players see it. Mobs
+// and NPCs are excluded because they own no client connection and never receive
+// packets. The query reuses the AOI grid's broadcast range so a neighbor who
+// could see an event is exactly a neighbor who is told about it.
+//
+// The world mutex is held across the grid query and the type filter so the two
+// reads form one consistent snapshot; the AOI grid's own per-tower locks are
+// acquired underneath (world→tower order, matching AddEntity/MoveEntity).
+func (w *WorldService) PlayersNear(mapName string, pos domain.Position) []domain.EntityID {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	gm := w.grids[mapName]
+	if gm == nil {
+		return nil
+	}
+	visible := gm.QueryVisible(int(pos.X), int(pos.Y))
+	out := make([]domain.EntityID, 0, len(visible))
+	for _, e := range visible {
+		ce, ok := w.entities[domain.EntityID(e.ID)]
+		if ok && ce.Type == domain.EntityTypePC {
+			out = append(out, ce.ID)
+		}
+	}
+	return out
+}
+
+// PlayersOnMap returns the IDs of every player-character entity currently on
+// mapName. It is the map-wide variant of PlayersNear, used when an event has no
+// single cell anchor. PlayersNear is the preferred tight query for ordinary
+// localized events.
+func (w *WorldService) PlayersOnMap(mapName string) []domain.EntityID {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	set := w.byMap[mapName]
+	out := make([]domain.EntityID, 0, len(set))
+	for id := range set {
+		if ce, ok := w.entities[id]; ok && ce.Type == domain.EntityTypePC {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // StartTick runs the periodic game loop. Each tick fires update (the gateway/
 // ingress layer registers its broadcast logic there) and blocks until ctx is
 // cancelled or Stop is called. When update is nil no periodic entity-state work

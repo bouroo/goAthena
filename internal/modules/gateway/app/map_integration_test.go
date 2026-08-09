@@ -946,6 +946,20 @@ func sendRaw(t *testing.T, c net.Conn, frame []byte) {
 	}
 }
 
+// packMoveDest encodes (x, y) into the kRO 3-byte packed position carried by
+// CZ_REQUEST_MOVE (mirrors pkg/ro/packet.encodePos). Raw coordinate bytes decode
+// to a different cell, so the move frame must use this packing to land on an
+// actual on-map cell near the players.
+func packMoveDest(x, y int16) [3]byte {
+	ux := uint16(x)
+	uy := uint16(y)
+	return [3]byte{
+		byte(ux >> 2),                        //nolint:gosec // G115: kRO WBUFPOS bit layout, low byte.
+		byte((ux << 6) | ((uy >> 4) & 0x3f)), //nolint:gosec // ditto
+		byte(uy << 4),                        //nolint:gosec // ditto
+	}
+}
+
 // TestMap_Dispatch_TradeItemSwap drives the full player-to-player trade flow over
 // two real connections: request → both see the open → ack(accept) → stage one item
 // → both OK → atomic conclude. It asserts every state-machine packet header lands
@@ -976,6 +990,10 @@ func TestMap_Dispatch_TradeItemSwap(t *testing.T) {
 	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
 		t.Fatalf("drain p2 accept-enter: %v", err)
 	}
+	// Player 1 also receives player 2's spawn (ZC_SPAWN_UNIT): the enter handler
+	// now broadcasts the newcomer to neighbors. Drain it off conn1 so the
+	// subsequent trade frames read cleanly.
+	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107)
 
 	// 2. Player 1 requests a trade with player 2. Real wire format: the TARGET
 	//    (player 2) gets ZC_REQ_EXCHANGE_ITEM; the requester gets nothing yet.
@@ -1057,4 +1075,70 @@ func itemAmount(items []invdomain.Item, nameID uint32) uint32 {
 		}
 	}
 	return 0
+}
+
+// TestMap_Dispatch_SharedWorld_Visibility is the core shared-world proof: when
+// player A acts, OTHER players on the same map see it — not just A. It seeds two
+// adjacent players, then asserts that B's connection receives A's move broadcast
+// (ZC_UNIT_WALKING carrying A's GID) and A's drop broadcast (ZC_ITEM_FALL_ENTRY),
+// while A's own connection gets its private move-ack (0x0087) — never the walk.
+func TestMap_Dispatch_SharedWorld_Visibility(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	ms, env := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+
+	// Player A (150001 @ {53,111}, conn1) and player B (150002 @ {54,111}, conn2).
+	// Give A a Red Potion stack so the drop verb has something to throw.
+	if _, err := env.itemRepo.Add(t.Context(), 150001, 501, 5); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+
+	// 1. Both enter. Each drains its 13-byte accept-enter; A's conn also receives
+	//    B's spawn (B's enter broadcasts the newcomer to neighbors) and drains it.
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p1 accept-enter: %v", err)
+	}
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p2 accept-enter: %v", err)
+	}
+	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107) // A sees B spawn in.
+
+	// 2. A moves. A's own conn gets the 12-byte self-ack (ZC_NOTIFY_PLAYERMOVE);
+	//    B's conn gets the 114-byte walk broadcast (ZC_UNIT_WALKING) carrying A's
+	//    GID — the core "shared world" win.
+	moveReq := make([]byte, 5)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	dest := packMoveDest(55, 111) // dest adjacent to B at {54,111}
+	copy(moveReq[2:], dest[:])
+	sendRaw(t, conn1, moveReq)
+
+	// A: self-ack only (0x0087), NOT the walk (0x09fd) — A is the excluded mover.
+	readTradeFrame(t, conn1, ropacket.HeaderZCNOTIFYPLAYERMOVE, 12)
+
+	// B: the walk broadcast with A's GID at offset [9:13].
+	walk := readTradeFrame(t, conn2, ropacket.HeaderZCUNITWALKING, 114)
+	if got := binary.LittleEndian.Uint32(walk[9:13]); got != 150001 {
+		t.Fatalf("walk broadcast GID = %d, want mover A's GID 150001", got)
+	}
+
+	// 3. A drops an item. B's conn sees the floor item land (ZC_ITEM_FALL_ENTRY);
+	//    A's own conn gets the throw-ack+fall burst (not asserted here).
+	dropReq := make([]byte, 6)
+	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
+	binary.LittleEndian.PutUint16(dropReq[2:], 1) // inventory index (1-based)
+	binary.LittleEndian.PutUint16(dropReq[4:], 1) // amount
+	sendRaw(t, conn1, dropReq)
+
+	drop := readTradeFrame(t, conn2, ropacket.HeaderZCItemFallEntry, 24)
+	if got := binary.LittleEndian.Uint32(drop[6:10]); got != 501 {
+		t.Fatalf("drop broadcast nameID = %d, want Red Potion 501", got)
+	}
 }

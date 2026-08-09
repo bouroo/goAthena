@@ -464,6 +464,97 @@ func (s *MapServer) handleRequestMove(c gnet.Conn, auth *mapAuth, frame []byte) 
 		return
 	}
 	_ = c.AsyncWrite(out, nil)
+
+	// Broadcast the walk to OTHER nearby clients so they see the mover travel.
+	// ZC_UNIT_WALKING (0x09fd) carries the mover's GID and is distinct from the
+	// self-only ZC_NOTIFY_PLAYERMOVE (0x0087) emitted above — the anchor is the
+	// destination cell, so any player who can see where the mover ends up is told.
+	if wbuf, ok := encodeUnitWalk(s, unitWalkFromEntity(src, req.DestX, req.DestY)); ok {
+		s.broadcast(wbuf, src.Map, worlddomain.Position{X: req.DestX, Y: req.DestY}, auth.charID)
+	}
+}
+
+// objectTypePC is the ZC_SPAWN_UNIT / ZC_UNIT_WALKING object-type byte for a
+// player character (rAthena's clif_bl_type: 0=PC).
+const objectTypePC uint8 = 0
+
+// unitWalkFromEntity builds the ZC_UNIT_WALKING (0x09fd) observer broadcast for
+// a PC moving from src to dest. The mover's own move-ack (ZC_NOTIFY_PLAYERMOVE
+// 0x0087) is a separate packet; this is what OTHER nearby clients receive so
+// they see the sprite travel. Look fields come from the entity captured before
+// the move, whose position is still the move's source cell.
+func unitWalkFromEntity(src worlddomain.Entity, destX, destY int16) ropacket.UnitWalkingResponse {
+	return ropacket.UnitWalkingResponse{
+		ObjectType: objectTypePC,
+		AID:        src.Account,
+		GID:        uint32(src.ID), //nolint:gosec // G115: EntityID wraps a uint32 char_id.
+		Speed:      src.Speed,
+		Job:        src.Job,
+		Head:       src.Head,
+		Weapon:     src.Weapon,
+		Shield:     src.Shield,
+		Sex:        src.Sex,
+		SrcX:       src.Pos.X,
+		SrcY:       src.Pos.Y,
+		DestX:      destX,
+		DestY:      destY,
+		XSize:      5, // rAthena hardcodes 5 for PCs.
+		YSize:      5,
+		CLevel:     src.Level,
+		MaxHP:      src.MaxHP,
+		HP:         src.HP,
+		Body:       src.Job,
+		Name:       src.Name,
+	}
+}
+
+// spawnUnitFromEntity builds the ZC_SPAWN_UNIT (0x09fe) broadcast for a PC that
+// just entered a map, so OTHER nearby clients see the player appear.
+func spawnUnitFromEntity(e worlddomain.Entity) ropacket.SpawnUnitResponse {
+	return ropacket.SpawnUnitResponse{
+		ObjectType: objectTypePC,
+		AID:        e.Account,
+		GID:        uint32(e.ID), //nolint:gosec // G115: EntityID wraps a uint32 char_id.
+		Speed:      e.Speed,
+		Job:        e.Job,
+		Head:       e.Head,
+		Weapon:     e.Weapon,
+		Shield:     e.Shield,
+		Sex:        e.Sex,
+		PosX:       e.Pos.X,
+		PosY:       e.Pos.Y,
+		Dir:        e.Dir,
+		XSize:      5, // rAthena hardcodes 5 for PCs.
+		YSize:      5,
+		CLevel:     e.Level,
+		MaxHP:      e.MaxHP,
+		HP:         e.HP,
+		Body:       e.Job,
+		Name:       e.Name,
+	}
+}
+
+// encodeUnitWalk encodes a UnitWalkingResponse into a fresh buffer, logging and
+// returning ok=false on failure so the caller can skip the broadcast without a
+// wire error.
+func encodeUnitWalk(s *MapServer, r ropacket.UnitWalkingResponse) ([]byte, bool) {
+	buf := make([]byte, r.Size())
+	if err := r.Encode(sliceWriter(buf)); err != nil {
+		s.log.Error("map: encode unit-walking", "err", err)
+		return nil, false
+	}
+	return buf, true
+}
+
+// encodeSpawnUnit encodes a SpawnUnitResponse into a fresh buffer, logging and
+// returning ok=false on failure.
+func encodeSpawnUnit(s *MapServer, r ropacket.SpawnUnitResponse) ([]byte, bool) {
+	buf := make([]byte, r.Size())
+	if err := r.Encode(sliceWriter(buf)); err != nil {
+		s.log.Error("map: encode spawn-unit", "err", err)
+		return nil, false
+	}
+	return buf, true
 }
 
 // handleItemPickup handles CZ_ITEM_PICKUP (0x0362, 6B): parse GroundID, look up
@@ -576,6 +667,10 @@ func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
 	}
 	burst = append(burst, fbuf...)
 	_ = c.AsyncWrite(burst, nil)
+	// Other nearby players see the dropped item land (ZC_ITEM_FALL_ENTRY); the
+	// throw-ack above is dropper-only, so just the fall-entry is fanned out. The
+	// anchor is the dropper's cell, where the item spawns at the player's feet.
+	s.broadcast(fbuf, entity.Map, entity.Pos, auth.charID)
 }
 
 // handleActionRequest handles CZ_ACTION_REQUEST (0x0089, 7B): sit/stand/attack.
@@ -606,7 +701,7 @@ func (s *MapServer) handleActionRequest(c gnet.Conn, auth *mapAuth, frame []byte
 	s.log.Debug("map: attack", "attacker", auth.charID, "target", req.TargetGID, "dmg", dmg)
 	s.sendActionResponse(c, auth.charID, req.Action, req.TargetGID)
 	if died {
-		s.handleMobDeath(c, req.TargetGID)
+		s.handleMobDeath(c, auth.charID, req.TargetGID)
 	}
 }
 
@@ -621,14 +716,14 @@ func (s *MapServer) sendActionResponse(c gnet.Conn, charID uint32, action uint8,
 	_ = c.AsyncWrite(out, nil)
 }
 
-// handleMobDeath despawns a dead mob, rolls its drops, and notifies the client:
-// ZC_NOTIFY_VANISH (mob leaves the map) then one ZC_ITEM_ENTRY per rolled drop.
-// The death/drop state lives in SpawnService.OnMobDeath; this only does the wire
-// side. Only mobs despawn+drop on death (a PC reaching 0 HP is a revive flow).
-// The frames are coalesced into one AsyncWrite. Full AOI-neighbor broadcast
-// lands with a connection registry; today the killing player's connection is
-// notified, matching the per-connection pattern used by move/pickup.
-func (s *MapServer) handleMobDeath(c gnet.Conn, mobGID uint32) {
+// handleMobDeath despawns a dead mob, rolls its drops, and notifies the killing
+// client: ZC_NOTIFY_VANISH (mob leaves the map) then one ZC_ITEM_ENTRY per
+// rolled drop. The same vanish+drop burst is broadcast to every OTHER player
+// near the death cell so the shared world shows the mob dying and its loot
+// landing. The death/drop state lives in SpawnService.OnMobDeath; this only
+// does the wire side. Only mobs despawn+drop on death (a PC reaching 0 HP is a
+// revive flow). The frames are coalesced into one AsyncWrite per recipient.
+func (s *MapServer) handleMobDeath(c gnet.Conn, killerCharID uint32, mobGID uint32) {
 	defender, err := s.world.Get(worlddomain.EntityID(mobGID))
 	if err != nil {
 		return // already removed (concurrent death) — nothing to broadcast
@@ -663,6 +758,10 @@ func (s *MapServer) handleMobDeath(c gnet.Conn, mobGID uint32) {
 		burst = append(burst, ebuf...)
 	}
 	_ = c.AsyncWrite(burst, nil)
+	// Broadcast the mob vanish + loot to OTHER nearby players (not the killer,
+	// who already received burst above). burst is immutable after this point, so
+	// fanning the same buffer to multiple connections is safe.
+	s.broadcast(burst, defender.Map, defender.Pos, killerCharID)
 }
 
 // handleUseSkill2 handles CZ_USE_SKILL2 (0x0438, 10B): cast a single-target
@@ -715,7 +814,7 @@ func (s *MapServer) handleUseSkill2(c gnet.Conn, auth *mapAuth, frame []byte) {
 	_ = c.AsyncWrite(out, nil)
 	s.log.Debug("map: skill cast", "skill", req.SkillID, "level", req.SkillLv, "target", req.TargetID, "dmg", dmg)
 	if died {
-		s.handleMobDeath(c, req.TargetID)
+		s.handleMobDeath(c, auth.charID, req.TargetID)
 	}
 }
 
@@ -801,7 +900,7 @@ func (s *MapServer) handleUseSkillToPos(c gnet.Conn, auth *mapAuth, frame []byte
 	_ = c.AsyncWrite(out2, nil)
 	s.log.Debug("map: ground-skill hit", "skill", req.SkillID, "target", mobID, "dmg", dmg)
 	if died {
-		s.handleMobDeath(c, uint32(mobID)) //nolint:gosec // G115: EntityID is uint32 by definition.
+		s.handleMobDeath(c, auth.charID, uint32(mobID)) //nolint:gosec // G115: EntityID is uint32 by definition.
 	}
 }
 

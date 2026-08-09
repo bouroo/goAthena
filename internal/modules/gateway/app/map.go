@@ -58,16 +58,16 @@ type MapServer struct {
 	// CZ_ACK_SELECT_DEALTYPE, so the following CZ_PC_PURCHASE/SELL_ITEMLIST
 	// (which carry item entries, not the NPC id) can resolve the shop. Guarded
 	// by shopMu because shop handlers run off the reactor goroutine. One entry
-	// per char, overwritten on each open; it is not pruned on disconnect (a
-	// bounded, char-count leak acceptable until a connection-close hook lands).
+	// per char, overwritten on each open; pruned on disconnect by OnClose →
+	// unregisterConn. Guarded by shopMu because shop handlers run off the
+	// reactor goroutine.
 	openedShops map[uint32]string
 	shopMu      sync.RWMutex
 	// conns maps charID to its live gnet connection so player-to-player trade
-	// packets reach the partner (who is on a DIFFERENT connection than the
-	// sender). Registered on CZ_ENTER. This is a pragmatic test-enabling shim for
-	// the known M4b connection-registry gap: it is mutex-guarded (conn-context
-	// race lesson) but not pruned on disconnect, mirroring openedShops. A proper
-	// conn-registry driven by a connection-close hook is the right fix.
+	// and AOI-broadcast packets reach peers (who are on DIFFERENT connections
+	// than the sender). Registered on CZ_ENTER, pruned on disconnect by OnClose
+	// → unregisterConn. Mutex-guarded (conn-context race lesson): broadcast
+	// resolves via connFor + AsyncWrite only, never reading a peer's context.
 	conns  map[uint32]gnet.Conn
 	connMu sync.RWMutex
 }
@@ -129,6 +129,77 @@ func (s *MapServer) connFor(charID uint32) (gnet.Conn, bool) {
 	c, ok := s.conns[charID]
 	s.connMu.RUnlock()
 	return c, ok
+}
+
+// unregisterConn drops a charID's live connection and its last-opened shop from
+// the registries. Called on connection close to prune the per-char entries that
+// CZ_ENTER created, closing the M4b connection-registry leak. Safe off the
+// reactor.
+func (s *MapServer) unregisterConn(charID uint32) {
+	s.connMu.Lock()
+	delete(s.conns, charID)
+	s.connMu.Unlock()
+	s.shopMu.Lock()
+	delete(s.openedShops, charID)
+	s.shopMu.Unlock()
+}
+
+// OnClose prunes the disconnecting connection from the char-indexed registries
+// and removes the player's world entity so a disconnect is visible to others.
+// It runs on the closing connection's own eventloop goroutine, so reading its
+// cached mapAuth context is race-free here (unlike handler goroutines, which
+// must not touch c.Context()).
+func (s *MapServer) OnClose(c gnet.Conn, _ error) gnet.Action {
+	a, ok := c.Context().(mapAuth)
+	if !ok {
+		return gnet.None
+	}
+	s.unregisterConn(a.charID)
+	// Resolve the player's map+pos BEFORE removing the entity (broadcast anchors
+	// on the cell the player occupied), then despawn it from the world so
+	// PlayersNear stops returning the ghost and neighbors see the departure.
+	e, err := s.world.Get(worlddomain.EntityID(a.charID))
+	if err != nil {
+		s.log.Debug("map conn closed, entity already gone", "gid", a.charID)
+		return gnet.None
+	}
+	if err := s.world.RemoveEntity(worlddomain.EntityID(a.charID)); err != nil {
+		s.log.Warn("map conn closed, remove entity", "gid", a.charID, "err", err)
+		return gnet.None
+	}
+	// Broadcast the departure to OTHER nearby players (ZC_NOTIFY_VANISH,
+	// CLR_OUTSIGHT). The disconnecting conn is already closing, so excluding it
+	// from its own goodbye is both correct and a no-op-in-practice.
+	vanish := ropacket.NotifyVanishResponse{GID: a.charID, Type: ropacket.VanishOutsight}
+	vbuf := make([]byte, vanish.Size())
+	if err := vanish.Encode(sliceWriter(vbuf)); err != nil {
+		s.log.Error("map: encode vanish on close", "err", err)
+		return gnet.None
+	}
+	s.broadcast(vbuf, e.Map, e.Pos, a.charID)
+	s.log.Debug("map conn closed, despawned + pruned", "gid", a.charID)
+	return gnet.None
+}
+
+// broadcast delivers a pre-encoded packet to every OTHER player connection near
+// an event's anchor cell (a mover's destination, a dying mob's cell, a drop
+// site, a newly-entered player's spawn cell). excludeCharID is the actor who
+// already received its own leg of the event (the mover/killer/dropper/enterer)
+// and is skipped. Neighbors with no registered connection (offline, or not yet
+// on this map-server) are skipped. Each delivery is a gnet.AsyncWrite on the
+// partner connection only — thread-safe off the reactor — and never reads a
+// partner connection's context. packet is treated as immutable; the same buffer
+// is safe to fan out because gnet copies it into each connection's write buffer.
+func (s *MapServer) broadcast(packet []byte, mapName string, pos worlddomain.Position, excludeCharID uint32) {
+	for _, id := range s.world.PlayersNear(mapName, pos) {
+		cid := uint32(id) //nolint:gosec // G115: EntityID wraps a char_id (uint32).
+		if cid == excludeCharID {
+			continue
+		}
+		if c, ok := s.connFor(cid); ok {
+			_ = c.AsyncWrite(packet, nil)
+		}
+	}
 }
 
 // OnBoot captures the engine for shutdown.
@@ -262,12 +333,19 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 	// re-verifying. AID/GID are sourced from the verified session, never the
 	// client-controlled packet fields.
 	c.SetContext(mapAuth{accountID: req.AccountID, charID: req.CharID})
-	// Index the connection by charID so peer-to-peer trade packets (whose target
-	// is on a different connection) can be delivered. Pragmatic shim for the M4b
-	// conn-registry gap; not pruned on disconnect.
+	// Index the connection by charID so peer-to-peer trade and AOI-broadcast
+	// packets (whose target is on a different connection) can be delivered.
+	// Pruned on disconnect by OnClose → unregisterConn.
 	s.registerConn(req.CharID, c)
 
 	s.writeAcceptEnter(c, entity)
+	// Other players already on the map see the newcomer spawn in (ZC_SPAWN_UNIT).
+	// The entering player's own accept-enter above is unchanged; full AOI spawn of
+	// existing neighbors back to the newcomer is the separate visibility-refresh
+	// flow (not yet wired here).
+	if sbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(entity)); ok {
+		s.broadcast(sbuf, entity.Map, entity.Pos, req.CharID)
+	}
 	s.log.Info("map entered", "aid", req.AccountID, "gid", req.CharID, "map", entity.Map)
 }
 

@@ -79,6 +79,56 @@ func TestQueryVisible_ReturnsNearby(t *testing.T) {
 	}
 }
 
+func TestPlayersNear_ReturnsOnlyNearbyPCs(t *testing.T) {
+	w := newWorld()
+	// Two nearby PCs (within the 15-cell view range of the anchor).
+	_ = w.AddEntity(domain.Entity{ID: 1, Type: domain.EntityTypePC, Map: "prontera", Pos: domain.Position{X: 100, Y: 100}})
+	_ = w.AddEntity(domain.Entity{ID: 2, Type: domain.EntityTypePC, Map: "prontera", Pos: domain.Position{X: 101, Y: 101}})
+	// A nearby mob and NPC: they own no connection, so they must be excluded.
+	_ = w.AddEntity(domain.Entity{ID: 3, Type: domain.EntityTypeMob, Map: "prontera", Pos: domain.Position{X: 102, Y: 102}})
+	_ = w.AddEntity(domain.Entity{ID: 4, Type: domain.EntityTypeNPC, Map: "prontera", Pos: domain.Position{X: 100, Y: 101}})
+	// A PC far outside the view range: must NOT appear.
+	_ = w.AddEntity(domain.Entity{ID: 5, Type: domain.EntityTypePC, Map: "prontera", Pos: domain.Position{X: 200, Y: 200}})
+
+	got := w.PlayersNear("prontera", domain.Position{X: 100, Y: 100})
+	want := map[domain.EntityID]bool{1: true, 2: true}
+	if len(got) != len(want) {
+		t.Fatalf("PlayersNear = %v, want exactly %v", got, want)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("PlayersNear returned %d; mobs/NPCs/far players must be excluded", id)
+		}
+	}
+}
+
+func TestPlayersNear_EmptyMap(t *testing.T) {
+	w := newWorld()
+	if got := w.PlayersNear("geffen", domain.Position{X: 50, Y: 50}); got != nil {
+		t.Errorf("PlayersNear on unknown map = %v, want nil", got)
+	}
+}
+
+func TestPlayersOnMap_ReturnsAllPCsExcludesOthers(t *testing.T) {
+	w := newWorld()
+	_ = w.AddEntity(domain.Entity{ID: 1, Type: domain.EntityTypePC, Map: "prontera", Pos: domain.Position{X: 100, Y: 100}})
+	_ = w.AddEntity(domain.Entity{ID: 2, Type: domain.EntityTypePC, Map: "prontera", Pos: domain.Position{X: 200, Y: 200}})
+	_ = w.AddEntity(domain.Entity{ID: 3, Type: domain.EntityTypeMob, Map: "prontera", Pos: domain.Position{X: 100, Y: 100}})
+	// A PC on a different map must not appear.
+	_ = w.AddEntity(domain.Entity{ID: 4, Type: domain.EntityTypePC, Map: "izlude", Pos: domain.Position{X: 10, Y: 10}})
+
+	got := w.PlayersOnMap("prontera")
+	want := map[domain.EntityID]bool{1: true, 2: true}
+	if len(got) != len(want) {
+		t.Fatalf("PlayersOnMap = %v, want exactly %v", got, want)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("PlayersOnMap returned %d; mobs and off-map players must be excluded", id)
+		}
+	}
+}
+
 func TestEnterMap_LoadsFromRepo(t *testing.T) {
 	w := newWorld()
 	e, err := w.EnterMap(context.Background(), 150001)
