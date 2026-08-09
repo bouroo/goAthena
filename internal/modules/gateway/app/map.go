@@ -1,17 +1,21 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/panjf2000/gnet/v2"
 
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	shopapp "github.com/bouroo/goAthena/internal/modules/commerce/shop/app"
 	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
+	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
@@ -34,18 +38,190 @@ type MapServer struct {
 	engine   gnet.Engine
 	booted   bool
 	handlers map[uint16]mapHandler
-	world    *worldapp.WorldService
-	spawn    *worldapp.SpawnService
-	combat   *worldapp.CombatService
-	inv      *invapp.InventoryService
-	content  *contentapp.Engine
-	sess     chardomain.SessionStore
-	log      *slog.Logger
+	// db is the wire-length oracle for opcodes that have no handler wired into
+	// the dispatch table yet. OnTraffic consults it to skip a DB-registered
+	// frame (drop/trade/skill) instead of disconnecting the client.
+	db      *ropacket.DB
+	world   *worldapp.WorldService
+	spawn   *worldapp.SpawnService
+	combat  *worldapp.CombatService
+	equip   *worldapp.EquipService
+	inv     *invapp.InventoryService
+	content *contentapp.Engine
+	skills  *worldapp.SkillService
+	shops   *shopapp.ShopService
+	trade   *worldapp.TradeService
+	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
+	// DEALTYPE carries an NPC id, not a shop name).
+	shopStore contentdomain.ShopStore
+	sess      chardomain.SessionStore
+	log       *slog.Logger
+	// openedShops maps charID to the shop the player last opened via
+	// CZ_ACK_SELECT_DEALTYPE, so the following CZ_PC_PURCHASE/SELL_ITEMLIST
+	// (which carry item entries, not the NPC id) can resolve the shop. One entry
+	// per char, overwritten on each open; pruned on disconnect by OnClose →
+	// unregisterConn. Guarded by shopMu because shop handlers run off the
+	// reactor goroutine.
+	openedShops map[uint32]string
+	shopMu      sync.RWMutex
+	// conns maps charID to its live gnet connection so player-to-player trade
+	// and AOI-broadcast packets reach peers (who are on DIFFERENT connections
+	// than the sender). Registered on CZ_ENTER, pruned on disconnect by OnClose
+	// → unregisterConn. Mutex-guarded (conn-context race lesson): broadcast
+	// resolves via connFor + AsyncWrite only, never reading a peer's context.
+	conns  map[uint32]gnet.Conn
+	connMu sync.RWMutex
 }
 
-// NewMapServer builds a map listener.
-func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, content *contentapp.Engine, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
-	return &MapServer{world: world, spawn: spawn, combat: combat, inv: inv, content: content, sess: sess, log: log, handlers: mapHandlers()}, nil
+// NewMapServer builds a map listener. shops and shopStore wire the NPC shop
+// commerce verb (open/buy/sell); trade wires the player-to-player trade verb.
+// shops/shopStore/trade may be nil in a reduced harness where their packets are
+// never exercised, but production wiring resolves all three.
+func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, equip *worldapp.EquipService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
+	s := &MapServer{
+		world:       world,
+		spawn:       spawn,
+		combat:      combat,
+		equip:       equip,
+		inv:         inv,
+		content:     content,
+		skills:      skills,
+		shops:       shops,
+		shopStore:   shopStore,
+		trade:       trade,
+		sess:        sess,
+		log:         log,
+		handlers:    mapHandlers(),
+		conns:       make(map[uint32]gnet.Conn),
+		db:          ropacket.NewMapServerDB(),
+		openedShops: make(map[uint32]string),
+	}
+	// Regen advances server-side on the world tick loop; this sink bridges the
+	// changed vitals back to the player's client as ZC_PAR_CHANGE (mirrors the
+	// script percentheal path). A char with no live conn is a no-op.
+	world.OnStatChange = s.notifyStatChange
+	return s, nil
+}
+
+// setOpenedShop records the shop a player opened (threaded from
+// CZ_ACK_SELECT_DEALTYPE to the subsequent CZ_PC_PURCHASE/SELL_ITEMLIST, which
+// do not restate the NPC id). Safe to call from a shop handler goroutine.
+func (s *MapServer) setOpenedShop(charID uint32, shopName string) {
+	s.shopMu.Lock()
+	defer s.shopMu.Unlock()
+	s.openedShops[charID] = shopName
+}
+
+// openedShop returns the shop the player last opened, or false.
+func (s *MapServer) openedShop(charID uint32) (string, bool) {
+	s.shopMu.RLock()
+	defer s.shopMu.RUnlock()
+	name, ok := s.openedShops[charID]
+	return name, ok
+}
+
+// registerConn records a charID's live connection so peer-to-peer packets
+// (trade) can reach a partner on a different connection. Safe off the reactor.
+func (s *MapServer) registerConn(charID uint32, c gnet.Conn) {
+	s.connMu.Lock()
+	s.conns[charID] = c
+	s.connMu.Unlock()
+}
+
+// connFor returns the live connection for a charID, or false if none is
+// registered (the char has not entered this map-server, or its shim entry was
+// never created).
+func (s *MapServer) connFor(charID uint32) (gnet.Conn, bool) {
+	s.connMu.RLock()
+	c, ok := s.conns[charID]
+	s.connMu.RUnlock()
+	return c, ok
+}
+
+// notifyStatChange emits ZC_PAR_CHANGE for HP then SP to the char's client. It is
+// the world regen tick's notification sink (world.OnStatChange); a char with no
+// live connection (offline, or not on this map-server) is skipped. Mirrors the
+// ScriptHost.PercentHeal encoding so clients update vitals identically.
+func (s *MapServer) notifyStatChange(charID uint32, hp, sp int32) {
+	c, ok := s.connFor(charID)
+	if !ok {
+		return
+	}
+	var buf bytes.Buffer
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPHP, Count: hp}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: sp}.Encode(&buf)
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// unregisterConn drops a charID's live connection and its last-opened shop from
+// the registries. Called on connection close to prune the per-char entries that
+// CZ_ENTER created, closing the M4b connection-registry leak. Safe off the
+// reactor.
+func (s *MapServer) unregisterConn(charID uint32) {
+	s.connMu.Lock()
+	delete(s.conns, charID)
+	s.connMu.Unlock()
+	s.shopMu.Lock()
+	delete(s.openedShops, charID)
+	s.shopMu.Unlock()
+}
+
+// OnClose prunes the disconnecting connection from the char-indexed registries
+// and removes the player's world entity so a disconnect is visible to others.
+// It runs on the closing connection's own eventloop goroutine, so reading its
+// cached mapAuth context is race-free here (unlike handler goroutines, which
+// must not touch c.Context()).
+func (s *MapServer) OnClose(c gnet.Conn, _ error) gnet.Action {
+	a, ok := c.Context().(mapAuth)
+	if !ok {
+		return gnet.None
+	}
+	s.unregisterConn(a.charID)
+	// Resolve the player's map+pos BEFORE removing the entity (broadcast anchors
+	// on the cell the player occupied), then despawn it from the world so
+	// PlayersNear stops returning the ghost and neighbors see the departure.
+	e, err := s.world.Get(worlddomain.EntityID(a.charID))
+	if err != nil {
+		s.log.Debug("map conn closed, entity already gone", "gid", a.charID)
+		return gnet.None
+	}
+	if err := s.world.RemoveEntity(worlddomain.EntityID(a.charID)); err != nil {
+		s.log.Warn("map conn closed, remove entity", "gid", a.charID, "err", err)
+		return gnet.None
+	}
+	// Broadcast the departure to OTHER nearby players (ZC_NOTIFY_VANISH,
+	// CLR_OUTSIGHT). The disconnecting conn is already closing, so excluding it
+	// from its own goodbye is both correct and a no-op-in-practice.
+	vanish := ropacket.NotifyVanishResponse{GID: a.charID, Type: ropacket.VanishOutsight}
+	vbuf := make([]byte, vanish.Size())
+	if err := vanish.Encode(sliceWriter(vbuf)); err != nil {
+		s.log.Error("map: encode vanish on close", "err", err)
+		return gnet.None
+	}
+	s.broadcast(vbuf, e.Map, e.Pos, a.charID)
+	s.log.Debug("map conn closed, despawned + pruned", "gid", a.charID)
+	return gnet.None
+}
+
+// broadcast delivers a pre-encoded packet to every OTHER player connection near
+// an event's anchor cell (a mover's destination, a dying mob's cell, a drop
+// site, a newly-entered player's spawn cell). excludeCharID is the actor who
+// already received its own leg of the event (the mover/killer/dropper/enterer)
+// and is skipped. Neighbors with no registered connection (offline, or not yet
+// on this map-server) are skipped. Each delivery is a gnet.AsyncWrite on the
+// partner connection only — thread-safe off the reactor — and never reads a
+// partner connection's context. packet is treated as immutable; the same buffer
+// is safe to fan out because gnet copies it into each connection's write buffer.
+func (s *MapServer) broadcast(packet []byte, mapName string, pos worlddomain.Position, excludeCharID uint32) {
+	for _, id := range s.world.PlayersNear(mapName, pos) {
+		cid := uint32(id) //nolint:gosec // G115: EntityID wraps a char_id (uint32).
+		if cid == excludeCharID {
+			continue
+		}
+		if c, ok := s.connFor(cid); ok {
+			_ = c.AsyncWrite(packet, nil)
+		}
+	}
 }
 
 // OnBoot captures the engine for shutdown.
@@ -58,8 +234,11 @@ func (s *MapServer) OnBoot(e gnet.Engine) gnet.Action {
 
 // OnTraffic is the table-driven dispatcher: peek the 2-byte opcode, look up the
 // handler + frame size, read the full frame, and dispatch on a goroutine so the
-// reactor never blocks. Unknown opcodes close the connection (a variable-length
-// unknown packet can't be safely skipped without its size).
+// reactor never blocks. An opcode without a wired handler is not fatal: the
+// packet DB supplies its on-wire length (or, for an opcode unknown to the DB
+// too, the 2-byte header) so the frame is skipped and the connection stays
+// alive — a client sending a not-yet-wired playable action (drop/trade/skill)
+// must not be booted.
 func (s *MapServer) OnTraffic(c gnet.Conn) gnet.Action {
 	for {
 		if c.InboundBuffered() < 2 {
@@ -70,26 +249,76 @@ func (s *MapServer) OnTraffic(c gnet.Conn) gnet.Action {
 			return gnet.None
 		}
 		opcode := binary.LittleEndian.Uint16(hdr)
-		h, ok := s.handlers[opcode]
-		if !ok {
-			s.log.Warn("map: unknown opcode, closing conn", "cmd", fmt.Sprintf("0x%04x", opcode))
-			return gnet.Close
+		if h, ok := s.handlers[opcode]; ok {
+			n, ready := h.frameLen(c)
+			if !ready {
+				return gnet.None // wait for the full frame (fixed or variable) to arrive
+			}
+			frame, err := c.Next(n)
+			if err != nil {
+				return gnet.None
+			}
+			cp := append([]byte(nil), frame...) // detach from gnet's ring buffer
+			// Resolve auth on the eventloop — the only goroutine that mutates the
+			// conn's context — and pass it in. Handlers must not read c.Context()
+			// off-loop, where gnet's conn.release() races it on close.
+			auth := authFromConn(c)
+			go h.fn(s, c, auth, cp)
+			continue
 		}
-		if c.InboundBuffered() < h.size {
-			return gnet.None // wait for the full frame to arrive
+		// Unwired opcode: skip the frame using the DB's length so the client
+		// stays connected. Never close on a registered (playable) opcode.
+		skip, buffered := s.unhandledSkip(c, opcode)
+		if !buffered {
+			return gnet.None // variable-length frame not fully arrived yet
 		}
-		frame, err := c.Next(h.size)
-		if err != nil {
+		if _, err := c.Discard(skip); err != nil {
 			return gnet.None
 		}
-		cp := append([]byte(nil), frame...) // detach from gnet's ring buffer
-		go h.fn(s, c, cp)
+		s.log.Debug("map: skipping unhandled opcode", "cmd", fmt.Sprintf("0x%04x", opcode), "skip", skip)
 	}
+}
+
+// unhandledSkip returns how many leading bytes to discard for an opcode that has
+// no wired handler, and whether that many bytes are already buffered. A
+// DB-registered opcode skips its definition's fixed length; a variable-length
+// packet reads its on-wire length from the uint16 at offset 2. An opcode absent
+// from the DB skips only the 2-byte header — a truly unknown stream cannot be
+// safely aligned, so we resync one header and keep the connection alive rather
+// than booting the client.
+func (s *MapServer) unhandledSkip(c gnet.Conn, opcode uint16) (skip int, buffered bool) {
+	def, ok := s.db.Lookup(opcode)
+	if !ok {
+		return 2, true
+	}
+	if def.Length != ropacket.VariableLength {
+		if c.InboundBuffered() < def.Length {
+			return def.Length, false // wait for the full fixed frame
+		}
+		return def.Length, true
+	}
+	// Variable-length frame: [cmd:2][len:2][payload...]. The length prefix is
+	// the uint16 at byte offset 2.
+	if c.InboundBuffered() < 4 {
+		return 0, false
+	}
+	prefix, err := c.Peek(4)
+	if err != nil {
+		return 0, false
+	}
+	n := int(binary.LittleEndian.Uint16(prefix[2:4]))
+	if n < 4 {
+		return 2, true // malformed length prefix: resync over the header
+	}
+	if c.InboundBuffered() < n {
+		return n, false // wait for the rest of the frame
+	}
+	return n, true
 }
 
 // handleEnter verifies the CZ_ENTER, admits the player into the world, and sends
 // the map-enter + self-spawn reply.
-func (s *MapServer) handleEnter(c gnet.Conn, frame []byte) {
+func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 	req, err := ropacket.ParseCZEnter(frame)
 	if err != nil {
 		s.log.Warn("map: unparseable CZ_ENTER", "err", err)
@@ -126,8 +355,33 @@ func (s *MapServer) handleEnter(c gnet.Conn, frame []byte) {
 	// re-verifying. AID/GID are sourced from the verified session, never the
 	// client-controlled packet fields.
 	c.SetContext(mapAuth{accountID: req.AccountID, charID: req.CharID})
+	// Index the connection by charID so peer-to-peer trade and AOI-broadcast
+	// packets (whose target is on a different connection) can be delivered.
+	// Pruned on disconnect by OnClose → unregisterConn.
+	s.registerConn(req.CharID, c)
 
 	s.writeAcceptEnter(c, entity)
+	// Other players already on the map see the newcomer spawn in (ZC_SPAWN_UNIT).
+	if sbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(entity)); ok {
+		s.broadcast(sbuf, entity.Map, entity.Pos, req.CharID)
+	}
+	// AOI back-fill: the newcomer also sees every existing nearby PC, one
+	// ZC_SPAWN_UNIT per neighbor written to its own conn (not a broadcast). The
+	// newcomer's own entity is already in the world, so PlayersNear may list it;
+	// self is skipped by charID.
+	for _, nid := range s.world.PlayersNear(entity.Map, entity.Pos) {
+		if nid == worlddomain.EntityID(req.CharID) {
+			continue
+		}
+		neighbor, gerr := s.world.Get(nid)
+		if gerr != nil {
+			s.log.Debug("map: AOI neighbor lookup skipped", "gid", nid, "err", gerr)
+			continue
+		}
+		if nbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(neighbor)); ok {
+			_ = c.AsyncWrite(nbuf, nil)
+		}
+	}
 	s.log.Info("map entered", "aid", req.AccountID, "gid", req.CharID, "map", entity.Map)
 }
 

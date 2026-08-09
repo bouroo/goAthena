@@ -3,7 +3,7 @@
 # the goathena service runs the app (builds from Containerfile).
 services:
   mariadb:
-    image: mariadb:11.4
+    image: mariadb:11.8
     environment:
       MARIADB_ROOT_PASSWORD: ragnarok
       MARIADB_DATABASE: ragnarok

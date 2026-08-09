@@ -68,3 +68,17 @@ func (r *GORMItemRepository) Remove(ctx context.Context, id domain.ItemID, amoun
 	return r.db.WithContext(ctx).Model(&domain.Item{}).Where("id = ?", id).
 		Update("amount", item.Amount).Error
 }
+
+// SetEquip overwrites the equip column of one item row. A zero RowsAffected means
+// the row vanished between LoadByChar and now; surface it as ErrItemNotFound.
+func (r *GORMItemRepository) SetEquip(ctx context.Context, id domain.ItemID, equip uint32) error {
+	res := r.db.WithContext(ctx).Model(&domain.Item{}).Where("id = ?", id).
+		Update("equip", equip)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return domain.ErrItemNotFound
+	}
+	return nil
+}

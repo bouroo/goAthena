@@ -9,7 +9,7 @@ import (
 
 // MemoryCharacterRepository is an in-memory character store for unit tests.
 type MemoryCharacterRepository struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	byID  map[domain.CharID]domain.Character
 	names map[string]bool
 	next  uint32
@@ -26,8 +26,8 @@ func NewMemoryCharacterRepository() *MemoryCharacterRepository {
 
 // ListByAccount returns the account’s characters (in-memory).
 func (r *MemoryCharacterRepository) ListByAccount(_ context.Context, accountID uint32) ([]domain.Character, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]domain.Character, 0)
 	for _, c := range r.byID {
 		if c.AccountID == accountID {
@@ -66,8 +66,8 @@ func (r *MemoryCharacterRepository) Delete(_ context.Context, id domain.CharID, 
 
 // NameExists reports whether a name is in use (in-memory).
 func (r *MemoryCharacterRepository) NameExists(_ context.Context, name string) (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.names[name], nil
 }
 
@@ -86,8 +86,8 @@ func (r *MemoryCharacterRepository) UpdateZeny(_ context.Context, id domain.Char
 
 // FindByID returns the character by char_id (in-memory).
 func (r *MemoryCharacterRepository) FindByID(_ context.Context, id domain.CharID) (domain.Character, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	c, ok := r.byID[id]
 	if !ok {
 		return domain.Character{}, domain.ErrCharacterNotFound
@@ -97,7 +97,7 @@ func (r *MemoryCharacterRepository) FindByID(_ context.Context, id domain.CharID
 
 // MemorySessionStore is an in-memory session store for unit tests.
 type MemorySessionStore struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	sessions map[uint32]domain.Session
 }
 
@@ -116,8 +116,8 @@ func (s *MemorySessionStore) PutSession(_ context.Context, sess domain.Session) 
 
 // GetSession returns the stored session (in-memory).
 func (s *MemorySessionStore) GetSession(_ context.Context, accountID uint32) (domain.Session, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	sess, ok := s.sessions[accountID]
 	if !ok {
 		return domain.Session{}, domain.ErrSessionNotFound

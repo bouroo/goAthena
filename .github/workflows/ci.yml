@@ -18,7 +18,10 @@ on:
         default: "v2.12.2"
       mariadb-version:
         description: "MariaDB image tag"
-        default: "11.4"
+        default: "11.8"
+      postgres-version:
+        description: "PostgreSQL image tag"
+        default: "18"
       valkey-version:
         description: "Valkey image tag"
         default: "9"
@@ -38,7 +41,8 @@ permissions:
 env:
   GO_VERSION: ${{ inputs.go-version || 'stable' }}
   GOLANGCI_LINT_VERSION: ${{ inputs.golangci-lint-version || 'v2.12.2' }}
-  MARIADB_VERSION: ${{ inputs.mariadb-version || '11.4' }}
+  MARIADB_VERSION: ${{ inputs.mariadb-version || '11.8' }}
+  POSTGRES_VERSION: ${{ inputs.postgres-version || '18' }}
   VALKEY_VERSION: ${{ inputs.valkey-version || '9' }}
   NATS_VERSION: ${{ inputs.nats-version || '2-alpine' }}
 
@@ -85,7 +89,7 @@ jobs:
       mariadb:
         # NB: the `env` context is not available in `services.image`; use
         # `inputs` (which is) with coalesce to the latest-stable default.
-        image: mariadb:${{ inputs.mariadb-version || '11.4' }}
+        image: mariadb:${{ inputs.mariadb-version || '11.8' }}
         env:
           MARIADB_ROOT_PASSWORD: ragnarok
           MARIADB_DATABASE: n
@@ -99,7 +103,7 @@ jobs:
           --health-timeout=5s
           --health-retries=10
       valkey:
-        image: valkey/valkey:${{ inputs.valkey-version || '8' }}
+        image: valkey/valkey:${{ inputs.valkey-version || '9' }}
         ports:
           - 16379:6379
         options: >-
@@ -143,6 +147,74 @@ jobs:
             mariadb -h 127.0.0.1 -P 13306 -ur -pr n \
             -e "INSERT IGNORE INTO login (account_id,userid,user_pass,sex,email) VALUES (2000001,'testacc',MD5('s3cret'),'M','t@t');
                 INSERT IGNORE INTO \`char\` (account_id,char_num,name,base_level,job_level,max_hp,hp,max_sp,sp,last_map,save_map) VALUES (2000001,0,'Hero',1,1,1000,1000,50,50,'new_1-1','new_1-1');"
+      - name: integration tests (-race)
+        run: go test -race -tags=integration ./...
+
+  # #11: the per-engine migrations (commit 2807002) added a postgres path, but
+  # only mariadb had CI coverage. This job mirrors the mariadb integration job
+  # against a postgres service so the reserved-word-safe GORM read path
+  # (`int`/`rename` columns) and the postgres migrations are exercised on every
+  # push/PR. Run in parallel with the mariadb job.
+  postgres-integration:
+    name: Integration tests (postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:${{ inputs.postgres-version || '18' }}
+        env:
+          POSTGRES_PASSWORD: ragnarok
+          POSTGRES_DB: n
+          POSTGRES_USER: r
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd="pg_isready -U r -d n"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      valkey:
+        image: valkey/valkey:${{ inputs.valkey-version || '9' }}
+        ports:
+          - 16379:6379
+        options: >-
+          --health-cmd="valkey-cli ping"
+          --health-interval=10s
+          --health-timeout=3s
+          --health-retries=10
+      nats:
+        image: nats:${{ inputs.nats-version || '2-alpine' }}
+        ports:
+          - 4222:4222
+        options: >-
+          --health-cmd="wget -qO- http://127.0.0.1:8222/healthz || exit 1"
+          --health-interval=10s
+          --health-timeout=3s
+          --health-retries=10
+    env:
+      DB_DRIVER: postgres
+      DB_HOST: 127.0.0.1
+      DB_PORT: 15432
+      DB_NAME: n
+      DB_USER: r
+      DB_PASSWORD: ragnarok
+      VALKEY_HOST: 127.0.0.1
+      VALKEY_PORT: 16379
+      NATS_URL: nats://127.0.0.1:4222
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go mod download
+      - name: apply schema (postgres)
+        run: |
+          go build -o /tmp/goathena ./cmd/goathena
+          /tmp/goathena migrate up -config <(printf 'app:\n  environment: test\ndb:\n  driver: postgres\n  host: 127.0.0.1\n  port: 15432\n  name: n\n  user: r\n  password: ragnarok\n  ssl_mode: disable\n')
+      - name: seed test data
+        run: |
+          PGPASSWORD=ragnarok psql -h 127.0.0.1 -p 15432 -U r -d n -c "INSERT INTO login (account_id,userid,user_pass,sex,email,state,unban_time,expiration_time) OVERRIDING SYSTEM VALUE VALUES (2000001,'testacc',md5('s3cret'),'M','t@t',0,0,0) ON CONFLICT DO NOTHING;
+            INSERT INTO \"char\" (char_id,account_id,char_num,name,base_level,job_level,max_hp,hp,max_sp,sp,last_map,save_map) OVERRIDING SYSTEM VALUE VALUES (150001,2000001,0,'Hero',1,1,1000,1000,50,50,'new_1-1','new_1-1') ON CONFLICT DO NOTHING;"
       - name: integration tests (-race)
         run: go test -race -tags=integration ./...
 

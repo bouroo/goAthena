@@ -1,11 +1,15 @@
 package app
 
 import (
+	"context"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 )
 
@@ -15,22 +19,72 @@ import (
 type SpawnService struct {
 	world *WorldService
 	mobs  *mobdb.Registry
+	items *itemdb.Registry
 
 	mu        sync.Mutex
 	floor     map[uint32]*domain.FloorItem // by GroundID
 	groundSeq atomic.Uint32
+
+	// spawns holds respawn templates keyed by mob EntityID, registered when a mob
+	// spawns with a non-zero respawnDelay. OnMobDeath arms a timer from the
+	// template so the mob re-spawns at its origin.
+	spawnMu sync.Mutex
+	spawns  map[domain.EntityID]spawnPoint
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-// NewSpawnService builds a SpawnService. mobs may be nil (no drops in tests).
-func NewSpawnService(world *WorldService, mobs *mobdb.Registry) *SpawnService {
-	return &SpawnService{world: world, mobs: mobs, floor: make(map[uint32]*domain.FloorItem)}
+// spawnPoint captures everything needed to re-spawn a mob after death.
+type spawnPoint struct {
+	class   int32
+	mapName string
+	pos     domain.Position
+	name    string
+	hp      int32
+	maxHp   int32
+	delay   time.Duration
 }
 
-// SpawnMob registers a mob entity in the world at the given position.
-func (s *SpawnService) SpawnMob(mobID domain.EntityID, mapName string, pos domain.Position, name string, hp, maxHp int32) error {
+// NewSpawnService builds a SpawnService. mobs/items may be nil (no drops in
+// tests); a nil item_db means mob drops resolve no items. The service owns a
+// cancellable context for respawn timers; Stop drains them.
+func NewSpawnService(world *WorldService, mobs *mobdb.Registry, items *itemdb.Registry) *SpawnService {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &SpawnService{
+		world:  world,
+		mobs:   mobs,
+		items:  items,
+		floor:  make(map[uint32]*domain.FloorItem),
+		spawns: make(map[domain.EntityID]spawnPoint),
+		ctx:    ctx,
+		cancel: cancel,
+	}
+}
+
+// Stop cancels pending respawn timers. Call on world shutdown so respawn
+// goroutines do not outlive the world.
+func (s *SpawnService) Stop() {
+	s.cancel()
+}
+
+// SpawnMob registers a mob entity in the world at the given position. mobClass
+// is the mob_db id the combat service resolves the mob's DEF/stats by. A
+// non-zero respawnDelay registers a respawn template so the mob re-spawns at
+// this position after death.
+func (s *SpawnService) SpawnMob(mobID domain.EntityID, mobClass int32, mapName string, pos domain.Position, name string, hp, maxHp int32, respawnDelay time.Duration) error {
+	if respawnDelay > 0 {
+		s.spawnMu.Lock()
+		s.spawns[mobID] = spawnPoint{
+			class: mobClass, mapName: mapName, pos: pos, name: name,
+			hp: hp, maxHp: maxHp, delay: respawnDelay,
+		}
+		s.spawnMu.Unlock()
+	}
 	return s.world.AddEntity(domain.Entity{
 		ID:    mobID,
 		Type:  domain.EntityTypeMob,
+		Class: mobClass,
 		Map:   mapName,
 		Pos:   pos,
 		Name:  name,
@@ -39,13 +93,80 @@ func (s *SpawnService) SpawnMob(mobID domain.EntityID, mapName string, pos domai
 	})
 }
 
-// OnMobDeath generates floor-item drops from the mob's drop table. The AegisName
-// → NameID resolution requires item_db; until that wiring lands (M6b), this is
-// a no-op and drops are placed explicitly via DropItem. A nil mobs registry
-// also yields no drops.
-func (s *SpawnService) OnMobDeath(_ int32, _ string, _ domain.Position, _ domain.EntityID) []domain.FloorItem {
-	// TODO(M6b): resolve mob.Drops AegisName→NameID via item_db, apply rate% RNG.
-	return nil
+// OnMobDeath generates floor-item drops from the mob's drop table, despawns the
+// mob (removes it from the world registry + AOI grid), and arms a respawn timer
+// if the mob has a registered spawn point. It returns the floor items it placed
+// so the orchestrator (gateway) can broadcast ZC_ITEM_ENTRY / ZC_NOTIFY_VANISH.
+// A nil mob_db or item_db yields no drops; an AegisName with no item_db match is
+// skipped (the drop does not land).
+func (s *SpawnService) OnMobDeath(mobClass int32, mapName string, pos domain.Position, mobID domain.EntityID) []domain.FloorItem {
+	drops := s.rollDrops(mobClass, mapName, pos, mobID)
+	_ = s.world.RemoveEntity(mobID) // despawn: registry + AOI grid
+	s.scheduleRespawn(mobID)
+	return drops
+}
+
+// rollDrops resolves the mob's drop table to NameIDs via item_db and applies the
+// per-drop rate (rAthena 1/10000) as an RNG gate, placing each successful drop
+// as a floor item at the mob's death position.
+func (s *SpawnService) rollDrops(mobClass int32, mapName string, pos domain.Position, mobID domain.EntityID) []domain.FloorItem {
+	if s.mobs == nil || s.items == nil {
+		return nil
+	}
+	mob := s.mobs.Get(mobClass)
+	if mob == nil {
+		return nil
+	}
+	var drops []domain.FloorItem
+	for _, d := range mob.Drops {
+		if !rollDrop(d.Rate) {
+			continue
+		}
+		item := s.items.ByAegisName(d.Item)
+		if item == nil {
+			continue
+		}
+		drops = append(drops, s.DropItem(uint32(item.Id), 1, mapName, pos, mobID)) //nolint:gosec // G115: item.Id is a positive DB id.
+	}
+	return drops
+}
+
+// rollDrop gates a single drop by its rate. rAthena rates are 1/10000, so 10000
+// is a guaranteed drop and 7000 is 70%.
+func rollDrop(rate int) bool {
+	switch {
+	case rate <= 0:
+		return false
+	case rate >= 10000:
+		return true
+	default:
+		return rand.IntN(10000) < rate //nolint:gosec // G404: drop-rate is a game-mechanic RNG (1/10000), not a secret.
+	}
+}
+
+// scheduleRespawn arms a respawn timer for the mob if it has a registered spawn
+// point. Each death arms one timer; the timer re-spawns the mob at its origin
+// position. Cancellable via the service context (Stop).
+func (s *SpawnService) scheduleRespawn(mobID domain.EntityID) {
+	s.spawnMu.Lock()
+	sp, ok := s.spawns[mobID]
+	s.spawnMu.Unlock()
+	if !ok || sp.delay <= 0 {
+		return
+	}
+	go func() {
+		t := time.NewTimer(sp.delay)
+		defer t.Stop()
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-t.C:
+			_ = s.world.AddEntity(domain.Entity{
+				ID: mobID, Type: domain.EntityTypeMob, Class: sp.class, Map: sp.mapName,
+				Pos: sp.pos, Name: sp.name, HP: sp.hp, MaxHP: sp.maxHp,
+			})
+		}
+	}()
 }
 
 // DropItem places one floor item and returns it. The GroundID is unique.
@@ -75,8 +196,8 @@ func (s *SpawnService) PickupFloorItem(groundID uint32) (domain.FloorItem, error
 	return *fi, nil
 }
 
-// FloorItems returns a snapshot of floor items on a map near a position (for
-// the AOI broadcast of ZC_ITEM_ENTRY on map-enter / spawn).
+// FloorItems returns a snapshot of floor items on a map (for the AOI broadcast
+// of ZC_ITEM_ENTRY on map-enter / spawn).
 func (s *SpawnService) FloorItems(mapName string) []domain.FloorItem {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -88,6 +209,3 @@ func (s *SpawnService) FloorItems(mapName string) []domain.FloorItem {
 	}
 	return out
 }
-
-// (DropEntry alias removed — mob drop-table resolution lands in M6b with item_db wiring.)
-var _ = mobdb.DropEntry{} //nolint:staticcheck // keep mobdb import for future drop resolution

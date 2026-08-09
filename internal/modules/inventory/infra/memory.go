@@ -9,7 +9,7 @@ import (
 
 // MemoryItemRepository is an in-memory inventory store for unit tests.
 type MemoryItemRepository struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	items map[domain.ItemID]domain.Item
 	next  uint32
 }
@@ -21,8 +21,8 @@ func NewMemoryItemRepository() *MemoryItemRepository {
 
 // LoadByChar returns the character's items.
 func (r *MemoryItemRepository) LoadByChar(_ context.Context, _, charID uint32) ([]domain.Item, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]domain.Item, 0)
 	for _, it := range r.items {
 		if it.CharID == charID {
@@ -65,6 +65,19 @@ func (r *MemoryItemRepository) Remove(_ context.Context, id domain.ItemID, amoun
 		return nil
 	}
 	item.Amount -= uint32(amount)
+	r.items[id] = item
+	return nil
+}
+
+// SetEquip overwrites the equip bitmask of one item row (0 to unequip).
+func (r *MemoryItemRepository) SetEquip(_ context.Context, id domain.ItemID, equip uint32) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.items[id]
+	if !ok {
+		return domain.ErrItemNotFound
+	}
+	item.Equip = equip
 	r.items[id] = item
 	return nil
 }

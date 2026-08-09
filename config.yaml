@@ -50,6 +50,7 @@ identity:
 zone:
   tick_rate_hz: 50                  # 20ms game loop (matches rAthena)
   view_range_cells: 20              # AOI visibility radius
+  db_path: third_party/rathenaThailand/db   # load real pre-re mobs/items/skills from the submodule
 
 log:
   level: info                       # debug|info|warn|error

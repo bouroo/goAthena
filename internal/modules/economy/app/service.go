@@ -79,6 +79,17 @@ func (s *EconomyService) CreditZeny(ctx context.Context, charID uint32, amount i
 	return nil
 }
 
+// GetZeny returns the character's current zeny balance by charID. It is the
+// read-only counterpart of DeductZeny/CreditZeny the trade service uses to
+// validate staged zeny without moving the balance.
+func (s *EconomyService) GetZeny(ctx context.Context, charID uint32) (int32, error) {
+	c, err := s.findChar(ctx, charID)
+	if err != nil {
+		return 0, err
+	}
+	return int32(c.Zeny), nil //nolint:gosec // G115: zeny is bounded by the domain Zeny type on every write path.
+}
+
 // findChar loads a character by charID (used when accountID is not available;
 // commerce callers have charID from the conn auth).
 func (s *EconomyService) findChar(ctx context.Context, charID uint32) (chardomain.Character, error) {

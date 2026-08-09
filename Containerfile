@@ -29,7 +29,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static-debian13:nonroot AS runtime
 COPY --from=build /out/goathena /goathena
 COPY --from=build /out/healthcheck /healthcheck
-COPY config.yaml /config.yaml
+# No config file is baked into the image: secrets (DB_PASSWORD, VALKEY_PASSWORD,
+# ...) must never ship in the layer. The binary runs on config defaults +
+# environment-variable overrides (12-factor). Operators mount a config at
+# /config.yaml to override defaults; when absent, config.Load falls back to
+# defaults + env without error.
 EXPOSE 6900 6121 5121 8080
 USER nonroot:nonroot
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

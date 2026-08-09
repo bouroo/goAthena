@@ -169,13 +169,47 @@ func TestRegistry_GetLenSpCost(t *testing.T) {
 	assert.Equal(t, int32(8), reg.SpCostAt(5, 1))
 	assert.Equal(t, int32(15), reg.SpCostAt(5, 6))
 	assert.Equal(t, int32(18), reg.SpCostAt(5, 10))
-	assert.Equal(t, int32(0), reg.SpCostAt(5, 7))
+	// Level 7 is unlisted; rAthena falls back to the highest listed level <= 7 (L6).
+	assert.Equal(t, int32(15), reg.SpCostAt(5, 7))
 	assert.Equal(t, int32(0), reg.SpCostAt(9999, 1))
 	assert.Equal(t, int32(0), reg.SpCostAt(1, 1))
 
 	assert.Nil(t, (*Registry)(nil).Get(5))
 	assert.Equal(t, 0, (*Registry)(nil).Len())
 	assert.Equal(t, int32(0), (*Registry)(nil).SpCostAt(5, 1))
+}
+
+func TestSpCost_At(t *testing.T) {
+	// Scalar cost is constant at every level.
+	scalar := SpCost{IsScalar: true, Value: 7}
+	assert.Equal(t, int32(7), scalar.At(1))
+	assert.Equal(t, int32(7), scalar.At(50))
+
+	// Per-level list matching the SM_BASH fixture shape: L1:8, L6:15, L10:18.
+	perLevel := SpCost{IsScalar: false, Levels: []LevelAmount{
+		{Level: 1, Amount: 8},
+		{Level: 6, Amount: 15},
+		{Level: 10, Amount: 18},
+	}}
+
+	// Exact matches return their own amount.
+	assert.Equal(t, int32(8), perLevel.At(1))
+	assert.Equal(t, int32(15), perLevel.At(6))
+	assert.Equal(t, int32(18), perLevel.At(10))
+
+	// A level between listed entries falls back to the highest listed level
+	// that does not exceed it (rAthena skill_get_sp_cost semantics).
+	assert.Equal(t, int32(8), perLevel.At(3))  // between L1 and L6 -> L1
+	assert.Equal(t, int32(15), perLevel.At(7)) // between L6 and L10 -> L6
+
+	// A level above the highest listed entry returns the highest entry's cost.
+	assert.Equal(t, int32(18), perLevel.At(99))
+
+	// A level below the lowest listed entry is not yet learned -> 0.
+	assert.Equal(t, int32(0), perLevel.At(0))
+
+	// An empty per-level list returns 0.
+	assert.Equal(t, int32(0), SpCost{}.At(5))
 }
 
 func TestLoad_DuplicateIDLastWins(t *testing.T) {

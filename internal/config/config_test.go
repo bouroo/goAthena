@@ -3,6 +3,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,6 +77,9 @@ func TestLoad_EnvOverridesFile(t *testing.T) {
 	t.Setenv("APP_PORT", "7070")
 	t.Setenv("HTTP_PORT", "7071")
 	t.Setenv("DB_DRIVER", "postgres")
+	t.Setenv("DB_HOST", "db.local") // Validate requires db connection fields.
+	t.Setenv("DB_NAME", "ro")
+	t.Setenv("DB_USER", "ro")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte("app:\n  environment: production\n"), 0o600); err != nil {
@@ -98,6 +102,9 @@ func TestLoad_EnvOverridesFile(t *testing.T) {
 
 func TestLoad_EnvParsesDuration(t *testing.T) {
 	t.Setenv("APP_SHUTDOWN_TIMEOUT", "45s")
+	t.Setenv("DB_HOST", "db.local") // Validate requires db connection fields.
+	t.Setenv("DB_NAME", "ro")
+	t.Setenv("DB_USER", "ro")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte("app:\n  environment: development\n"), 0o600); err != nil {
@@ -155,6 +162,70 @@ func TestDSN(t *testing.T) {
 				t.Errorf("dsn = %q, want it to contain %q", dsn, tc.wantSub)
 			}
 		})
+	}
+}
+
+func TestValidate_Valid(t *testing.T) {
+	c := defaults()
+	c.DB.Host = "db.local"
+	c.DB.Name = "ro"
+	c.DB.User = "ro"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid config should pass Validate, got: %v", err)
+	}
+}
+
+func TestValidate_MissingRequired(t *testing.T) {
+	c := defaults() // db.host/name/user left empty
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("Validate should reject config missing required db fields")
+	}
+	if !IsFatal(err) {
+		t.Errorf("missing required field should be fatal; got %v", err)
+	}
+}
+
+func TestLoad_MalformedYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("app:\n  port: [1, 2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load should reject malformed YAML")
+	}
+	if !errors.Is(err, ErrConfigFatal) {
+		t.Errorf("malformed YAML should wrap ErrConfigFatal; got %v", err)
+	}
+}
+
+func TestLoad_MissingFile_UsesDefaultsAndEnv(t *testing.T) {
+	t.Setenv("DB_HOST", "db.local")
+	t.Setenv("DB_NAME", "ro")
+	t.Setenv("DB_USER", "ro")
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatalf("missing file should fall back to defaults+env, got: %v", err)
+	}
+	if cfg.App.Environment != "development" {
+		t.Errorf("environment = %q, want default development", cfg.App.Environment)
+	}
+	if cfg.DB.Host != "db.local" {
+		t.Errorf("db.host = %q, want env override db.local", cfg.DB.Host)
+	}
+}
+
+func TestIsFatal(t *testing.T) {
+	if IsFatal(nil) {
+		t.Error("IsFatal(nil) = true, want false")
+	}
+	if IsFatal(errors.New("transient outage")) {
+		t.Error("plain error should not be classified fatal")
+	}
+	if !IsFatal(fatal(errors.New("bad config"))) {
+		t.Error("ErrConfigFatal-wrapped error should be classified fatal")
 	}
 }
 

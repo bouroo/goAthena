@@ -6,8 +6,9 @@
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
 
 A Go re-implementation of the **Ragnarok Online** server, built as a modular
-monolith on domain-driven / clean-architecture principles and designed to scale
-from a hobbyist Podman node to an enterprise Kubernetes + Agones fleet.
+monolith on domain-driven / clean-architecture principles and designed to be
+split-ready for scale-out from a hobbyist Podman node toward a Kubernetes +
+Agones fleet (the scale-out tiers themselves are planned, not yet built).
 
 ## What is this?
 
@@ -18,22 +19,33 @@ login, characters, and the game world in tightly coupled daemons.
 
 **goAthena** is a from-scratch Go re-engineering of that game logic (not a line-
 for-line port) that preserves **wire and data compatibility** with rAthena, so
-existing clients (the **ClientROThailand** TCP client and the **roBrowser**
-WebSocket client) and the rAthena database schema and game-data YAMLs work as-is.
-It targets `PACKETVER 20250604` (Thai Classic). The process model is a single
-deployable **modular monolith** — one binary, supervised listeners — whose
-bounded-context modules are split-ready (every seam is a Go interface; the first
-real scale-out extracts a module into its own binary over the NATS bus).
+the **ClientROThailand** TCP client and the rAthena database schema and game-data
+YAMLs work as-is (a **roBrowser** WebSocket client is on the roadmap, not yet
+wired). It targets `PACKETVER 20250604` (Thai Classic). The process model is a
+single deployable **modular monolith** — one binary, supervised listeners —
+designed so each bounded-context module *could* later extract into its own
+binary over an event bus; that scale-out (NATS + Agones) is **planned, not
+implemented**.
 
-> **Project status — greenfield rebuild in progress.** The application layer is
-> being rebuilt as a modular monolith on a **verified, tested foundation**:
-> the `pkg/ro` protocol/data kernel, the infrastructure adapters, and the 11-wave
-> SQL schema (all carried verbatim). **Milestones M0–M7** (scaffold, login,
-> character, world core, gateway, inventory, spawn/drops, combat) are **done and
-> proven**; the active frontier is **M8–M12** (economy, commerce, the script VM,
-> social, transit). goAthena is **not yet a drop-in replacement**; it is a
-> usable, tested foundation under active rebuild. See **[docs/roadmap.md](docs/roadmap.md)**
-> for the full plan, milestone status, and phase-by-phase implementation.
+> **Project status — greenfield rebuild in progress (not production-ready).**
+> The application layer is being rebuilt as a modular monolith on a **verified,
+> tested foundation**: the `pkg/ro` protocol/data kernel, the infrastructure
+> adapters, and the 11-wave SQL schema (all carried verbatim). The working spine
+> — **login → char → map-enter → move / sit / attack / pickup / warp / heal**,
+> with **mob death + respawn** and graceful handling of unwired opcodes — is
+> **done and tested** (M0–M7). First slices of **M8 economy, M9 commerce, and
+> M10 content** have landed; **M11 social** is a scaffold and **M13/M14
+> scale-out + hardening are planned, not started**.
+>
+> goAthena is **not yet a drop-in rAthena replacement, and not
+> production-hardened.** "Production-ready" is taken to mean: all gameplay verbs
+> (trade, skill, vending, storage), an AOI connection registry, full script-VM
+> coverage, OpenTelemetry tracing, a PostgreSQL CI lane, a load test, and a
+> security review — none of which are complete. NATS, Agones, the roBrowser
+> WebSocket listener, and OTel tracing are **design seams only** today (config
+> fields and interfaces, no dial/serve wiring). See
+> **[docs/roadmap.md](docs/roadmap.md)** for the full plan, milestone status, and
+> phase-by-phase implementation.
 
 ## Who is this for?
 
@@ -49,28 +61,28 @@ real scale-out extracts a module into its own binary over the NATS bus).
 | Layer | Choice | Why |
 |---|---|---|
 | Language | **Go 1.26+** | Concurrency, single-static-binary deploy, GC fit for a game loop |
-| Primary DB | **PostgreSQL** (MariaDB as compatibility fallback) | PG for production durability; MariaDB preserves rAthena schema read/write compat |
+| Primary DB | **MariaDB 11.4** (PostgreSQL supported, not yet on CI) | MariaDB is the rAthena-compatible, CI-tested default; both engines run the same embedded migrations |
 | Cache / sessions | **Valkey** (Redis-fork) | Session keys, hot state, rate-limit counters |
-| Inter-service eventing | **NATS** | The scale-out bus when modules extract into separate binaries |
-| Game-server orchestration | **Agones** | Per-zone `GameServer` allocation on Kubernetes |
-| Network | **gnet v2** (TCP) + **coder/websocket** (roBrowser) | Zero-copy event loop for the map protocol; WS for browser clients |
+| Inter-service eventing | **NATS** *(planned)* | Configured (`config.yaml`, compose sidecar); no `nats.Connect` in the binary yet. The scale-out bus when modules extract into separate binaries |
+| Game-server orchestration | **Agones** *(planned)* | A design seam (per-zone `GameServer` allocation on Kubernetes); no adapter is wired yet |
+| Network | **gnet v2** (TCP) | Zero-copy event loop for login/char/map. A `coder/websocket` listener for roBrowser is planned, not yet wired |
 | Migrations | **golang-migrate** (embedded `go:embed`) | Self-contained, idempotent, 11-wave schema |
 | DI | **samber/do v2** | Auditable, line-by-line wiring; infra singletons, plain-ctor use cases |
-| Observability | **OpenTelemetry** + Prometheus + Grafana | Traces/metrics across the tick loop and cross-module calls |
+| Observability | Prometheus `/metrics` | Live today. OpenTelemetry tracing + Grafana dashboards are planned |
 
 ## Prerequisites
 
 - **Go 1.26+**
 - **Docker** (or Podman)
 - **[Task](https://taskfile.dev/installation/)** — the build runner used throughout
-- A running **MariaDB 11.4+**, **Valkey 9+**, and **NATS 2.x** — easiest via `docker compose`
+- A running **MariaDB 11.4+** and **Valkey 9+** — easiest via `docker compose`. (A **NATS 2.x** container is in `compose.yml` for the planned event bus; the binary does not yet require it.)
 - **PostgreSQL** is also supported as an alternative database driver
 
 ## Quick start
 
 ```bash
 cp .env.example .env                       # local config defaults
-docker compose up -d mariadb valkey nats   # start the backing services
+docker compose up -d mariadb valkey        # start the backing services
 task migrate-up                            # goathena migrate up — apply schema
 task serve                                 # build + run `goathena serve`
 ```
@@ -79,7 +91,7 @@ task serve                                 # build + run `goathena serve`
 
 | Command | What it does |
 |---|---|
-| `serve` | Run the modular-monolith server: HTTP health/gRPC now; login/char/map TCP + WebSocket game listeners arrive in M1+. Blocks until SIGINT/SIGTERM. |
+| `serve` | Run the modular-monolith server: HTTP `/healthz`+`/readyz`+`/metrics` now; login/char/map TCP listeners are live (M1+). A WebSocket listener for roBrowser is planned, not yet wired. Blocks until SIGINT/SIGTERM. |
 | `migrate up \| down [N] \| force VERSION \| version` | Apply/roll back the embedded SQL schema. Self-contained (`go:embed`), idempotent. |
 | `version` | Print build metadata (`main.Version`/`CommitSHA`/`BuildTime`, injected at release time). |
 
@@ -125,7 +137,7 @@ use-case services are plain constructors so wiring is auditable line-by-line.
 |---|---|
 | `account` | Authentication + the login/char-select session |
 | `character` | Character CRUD + progression (stats, skill points) |
-| `world` | Entity, AOI, tick, spawn, combat authority, Agones adapter |
+| `world` | Entity, AOI, tick, spawn, combat authority (an Agones adapter is planned, not wired) |
 | `inventory` | Item-container aggregate per char/warehouse/storage |
 | `economy` | Zeny-ledger aggregate |
 | `commerce/{shop,trade,vending,storage}` | Use-case services over the economy + inventory ports |
@@ -163,24 +175,23 @@ pre-renewal stat formulas are authoritative; the client declares
 ```
 cmd/
   goathena/          # single binary: serve + migrate + version subcommands
-  genpacket/         # dev tool: regenerate packet tables from clif_packetdb
-  import-conf/       # dev tool: import rAthena conf into data/
   healthcheck/       # minimal HTTP probe for distroless container healthchecks
 internal/
   app/               # composition root (composition.go) + boundary arch_test.go
   config/            # config.yaml + env loader, validation
   modules/           # bounded contexts (see table above)
   shared/            # cross-module value types, errors, middleware, server, telemetry
-  infrastructure/    # db (+ embedded migrations), messaging/{nats,valkey}, agones, assets, net
+  infrastructure/    # db (+ embedded migrations), messaging/valkey
   testutil/          # shared test helpers
 pkg/ro/              # RO protocol & data libraries (the kernel)
-api/                 # per-BC NATS event contracts — rebuilt alongside the modules
-deployments/         # agones, docker, kustomize, observability manifests
-data/                # game data: mob_db, mob_spawns, npc
 docs/                # project plan & roadmap (docs/roadmap.md)
 config.yaml          # default configuration (overridable per-env)
-compose.yml          # mariadb + valkey + nats + goathena (+ observability profile)
+compose.yml          # mariadb + valkey + nats + goathena
 ```
+
+> The `deployments/`, `data/`, and `api/` trees and the `genpacket`/`import-conf`
+> dev tools cited in earlier drafts are **planned, not present** in the tree
+> today.
 
 ## Deployment — hobbyist to enterprise
 
@@ -199,14 +210,11 @@ differs.
   NATS** as load demands (e.g. a sharded `economy` zeny-ledger); PostgreSQL
   primary+replicas, Valkey cluster, OTel Collector → Prometheus/Grafana.
 
-Deployment assets:
-
-- `deployments/docker/` — the `Containerfile` builds the single `goathena`
-  image (`serve` by default; override `command: ["migrate", "up"]` for the init
-  container).
-- `deployments/kustomize/` — Kubernetes manifests (base + dev/prod overlays).
-- `deployments/agones/` — Agones `Fleet` / `GameServer` CRDs for the game world.
-- `deployments/observability/` — OpenTelemetry Collector + Prometheus configs.
+Deployment assets today are minimal: the repo-root `Containerfile` builds the
+single `goathena` image (`serve` by default; override
+`command: ["migrate", "up"]` for the init container) and `compose.yml` brings up
+mariadb + valkey + nats + goathena. Kubernetes/kustomize, Agones `Fleet`, and
+observability manifests are **planned** (Tier 3) and not yet in the tree.
 
 ## Reference: testing, schema, codegen, lint
 

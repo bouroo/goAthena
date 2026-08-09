@@ -1908,6 +1908,12 @@ type PurchaseItemListResponse struct {
 	Items []ShopBuyItem
 }
 
+// Size returns the on-wire byte length that Encode will write:
+// 4 (header + length) + 19 per item.
+func (r PurchaseItemListResponse) Size() int {
+	return 4 + len(r.Items)*sizeShopBuyItem
+}
+
 // Encode writes the ZC_PC_PURCHASE_ITEMLIST packet to w. The wire
 // length is 4 + 19 * len(Items); the encoder computes packetLength
 // from the entry count so the caller cannot accidentally emit a frame

@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -20,9 +21,21 @@ import (
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "goathena:", err)
+		reportError(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// reportError writes the exit diagnostic for err to w. A non-recoverable
+// configuration error (config.IsFatal) is labelled distinctly so operators can
+// tell misconfiguration apart from a transient load failure; the underlying
+// detail is always printed. The caller owns the exit code.
+func reportError(w io.Writer, err error) {
+	prefix := "goathena:"
+	if config.IsFatal(err) {
+		prefix = "goathena: fatal configuration error:"
+	}
+	fmt.Fprintln(w, prefix, err)
 }
 
 func run(args []string) error {

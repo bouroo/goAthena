@@ -13,7 +13,9 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/account/domain"
 	charapp "github.com/bouroo/goAthena/internal/modules/character/app"
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	shopapp "github.com/bouroo/goAthena/internal/modules/commerce/shop/app"
 	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
+	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	"github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
@@ -76,6 +78,10 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve combat service: %w", err)
 	}
+	equip, err := do.Invoke[*worldapp.EquipService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve equip service: %w", err)
+	}
 	inv, err := do.Invoke[*invapp.InventoryService](inj)
 	if err != nil {
 		return nil, fmt.Errorf("resolve inventory service: %w", err)
@@ -88,7 +94,23 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve content engine: %w", err)
 	}
-	ms, err := app.NewMapServer(world, spawn, combat, inv, content, sess, log)
+	skills, err := do.Invoke[*worldapp.SkillService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve skill service: %w", err)
+	}
+	shops, err := do.Invoke[*shopapp.ShopService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve shop service: %w", err)
+	}
+	shopStore, err := do.Invoke[contentdomain.ShopStore](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve shop store: %w", err)
+	}
+	trade, err := do.Invoke[*worldapp.TradeService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve trade service: %w", err)
+	}
+	ms, err := app.NewMapServer(world, spawn, combat, equip, inv, content, skills, shops, shopStore, trade, sess, log)
 	if err != nil {
 		return nil, fmt.Errorf("map server: %w", err)
 	}

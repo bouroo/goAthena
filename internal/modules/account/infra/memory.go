@@ -11,7 +11,7 @@ import (
 // MemoryAccountRepository is an in-memory account store for unit tests and the
 // local dev profile. It is safe for concurrent use.
 type MemoryAccountRepository struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	byID  map[domain.AccountID]domain.Account
 	byUID map[string]domain.AccountID
 }
@@ -31,8 +31,8 @@ func NewMemoryAccountRepository(accounts ...domain.Account) *MemoryAccountReposi
 
 // FindByUserID returns the account for the login name or domain.ErrAccountNotFound.
 func (r *MemoryAccountRepository) FindByUserID(_ context.Context, userID string) (domain.Account, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	id, ok := r.byUID[userID]
 	if !ok {
 		return domain.Account{}, domain.ErrAccountNotFound

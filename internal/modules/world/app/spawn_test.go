@@ -15,7 +15,7 @@ import (
 func newSpawn() (*app.SpawnService, *app.WorldService) {
 	repo := infra.NewMemoryWorldRepository()
 	world := app.NewWorldService(repo, slog.Default(), 50)
-	return app.NewSpawnService(world, nil), world
+	return app.NewSpawnService(world, nil, nil), world
 }
 
 func TestDropItem_PlacesFloorItem(t *testing.T) {
@@ -60,7 +60,7 @@ func TestFloorItems_FilteredByMap(t *testing.T) {
 
 func TestSpawnMob_Registers(t *testing.T) {
 	s, world := newSpawn()
-	err := s.SpawnMob(domain.EntityID(1001), "prontera", domain.Position{X: 50, Y: 50}, "Poring", 50, 50)
+	err := s.SpawnMob(domain.EntityID(1001), 1002, "prontera", domain.Position{X: 50, Y: 50}, "Poring", 50, 50, 0)
 	if err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}

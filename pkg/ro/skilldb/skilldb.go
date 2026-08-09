@@ -164,18 +164,26 @@ func (s *SpCost) UnmarshalYAML(value *yaml.Node) error {
 }
 
 // At returns the SpCost amount at the given (1-based) skill level.
-// For scalar cost the value is constant; for per-level lists it returns the
-// matching entry or 0 if the level is not listed.
+// For scalar cost the value is constant. For per-level lists the exact entry
+// wins when present; otherwise it falls back to the amount of the highest
+// listed level not exceeding the requested level, matching rAthena's
+// skill_get_sp_cost. A level below the lowest listed entry (or an empty list)
+// returns 0 — the skill is unlearned there.
 func (s SpCost) At(level int) int32 {
 	if s.IsScalar {
 		return s.Value
 	}
+	// bestLevel and amount stay 0 when no listed level is <= the requested
+	// level, i.e. the skill is not yet learned at that level.
+	var amount int32
+	var bestLevel int
 	for _, l := range s.Levels {
-		if int(l.Level) == level {
-			return l.Amount
+		if lv := int(l.Level); lv <= level && lv > bestLevel {
+			bestLevel = lv
+			amount = l.Amount
 		}
 	}
-	return 0
+	return amount
 }
 
 // Requires groups the cast-cost fields of skill_db.yml. Only SpCost is exposed
@@ -197,6 +205,24 @@ type fileFormat struct {
 // Registry provides thread-safe lookup of skill entries by ID.
 type Registry struct {
 	entries map[int32]*SkillEntry
+}
+
+// NewRegistry returns an empty, non-nil Registry. It is the zero value the app
+// wiring falls back to when skill_db.yml is absent or unreadable: lookups then
+// return nil (every skill casts as unknown) instead of failing boot.
+func NewRegistry() *Registry {
+	return &Registry{entries: make(map[int32]*SkillEntry)}
+}
+
+// Register adds or replaces a skill entry by its ID. It seeds the registry
+// programmatically (tests, fixtures) without parsing a skill_db YAML file;
+// production loading still goes through Load/LoadFile. Like Get/Len it assumes
+// the registry is populated before concurrent reads begin.
+func (reg *Registry) Register(e *SkillEntry) {
+	if reg == nil || e == nil {
+		return
+	}
+	reg.entries[e.ID] = e
 }
 
 // Load parses a rAthena skill_db YAML file from an io.Reader and returns a Registry.
@@ -267,11 +293,8 @@ func (reg *Registry) All() map[int32]*SkillEntry {
 }
 
 // SpCostAt returns the SP cost for the given skill at the given (1-based)
-//
-// TODO: rAthena falls back to the highest level <= requested level when the
-// exact level is not listed in Requires.SpCost (skill.cpp::skill_get_sp_cost).
-// Phase 13 uses exact match only via SpCost.At; switch to the rAthena fallback
-// when wiring the skill feature.
+// level, delegating per-level resolution to SpCost.At. It returns 0 when the
+// skill or its SpCost is absent.
 func (reg *Registry) SpCostAt(id int32, level int) int32 {
 	if reg == nil {
 		return 0
