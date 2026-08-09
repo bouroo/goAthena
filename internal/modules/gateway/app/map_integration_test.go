@@ -994,6 +994,9 @@ func TestMap_Dispatch_TradeItemSwap(t *testing.T) {
 	// now broadcasts the newcomer to neighbors. Drain it off conn1 so the
 	// subsequent trade frames read cleanly.
 	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107)
+	// Player 2 (the newcomer) also receives player 1's spawn via the Phase-11
+	// enter-sight back-fill. Drain it off conn2.
+	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT, 107)
 
 	// 2. Player 1 requests a trade with player 2. Real wire format: the TARGET
 	//    (player 2) gets ZC_REQ_EXCHANGE_ITEM; the requester gets nothing yet.
@@ -1110,6 +1113,10 @@ func TestMap_Dispatch_SharedWorld_Visibility(t *testing.T) {
 		t.Fatalf("drain p2 accept-enter: %v", err)
 	}
 	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107) // A sees B spawn in.
+	// B also sees A: the Phase-11 enter-sight back-fill sends one ZC_SPAWN_UNIT
+	// per existing nearby PC to the newcomer's own conn on enter. Drain it before
+	// the move-broadcast read below.
+	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT, 107) // B sees A on enter.
 
 	// 2. A moves. A's own conn gets the 12-byte self-ack (ZC_NOTIFY_PLAYERMOVE);
 	//    B's conn gets the 114-byte walk broadcast (ZC_UNIT_WALKING) carrying A's

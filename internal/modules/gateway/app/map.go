@@ -61,6 +61,9 @@ type MapServer struct {
 	// per char, overwritten on each open; pruned on disconnect by OnClose →
 	// unregisterConn. Guarded by shopMu because shop handlers run off the
 	// reactor goroutine.
+	// per char, overwritten on each open; pruned on disconnect by OnClose →
+	// unregisterConn. Guarded by shopMu because shop handlers run off the
+	// reactor goroutine.
 	openedShops map[uint32]string
 	shopMu      sync.RWMutex
 	// conns maps charID to its live gnet connection so player-to-player trade
@@ -340,11 +343,25 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 
 	s.writeAcceptEnter(c, entity)
 	// Other players already on the map see the newcomer spawn in (ZC_SPAWN_UNIT).
-	// The entering player's own accept-enter above is unchanged; full AOI spawn of
-	// existing neighbors back to the newcomer is the separate visibility-refresh
-	// flow (not yet wired here).
 	if sbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(entity)); ok {
 		s.broadcast(sbuf, entity.Map, entity.Pos, req.CharID)
+	}
+	// AOI back-fill: the newcomer also sees every existing nearby PC, one
+	// ZC_SPAWN_UNIT per neighbor written to its own conn (not a broadcast). The
+	// newcomer's own entity is already in the world, so PlayersNear may list it;
+	// self is skipped by charID.
+	for _, nid := range s.world.PlayersNear(entity.Map, entity.Pos) {
+		if nid == worlddomain.EntityID(req.CharID) {
+			continue
+		}
+		neighbor, gerr := s.world.Get(nid)
+		if gerr != nil {
+			s.log.Debug("map: AOI neighbor lookup skipped", "gid", nid, "err", gerr)
+			continue
+		}
+		if nbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(neighbor)); ok {
+			_ = c.AsyncWrite(nbuf, nil)
+		}
 	}
 	s.log.Info("map entered", "aid", req.AccountID, "gid", req.CharID, "map", entity.Map)
 }

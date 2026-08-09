@@ -159,10 +159,10 @@ type LogConfig struct {
 	Format string `yaml:"format" env:"LOG_FORMAT"`
 }
 
-// OTelConfig carries the OpenTelemetry export settings. The fields are parsed
-// and validated, but the OTel SDK is NOT initialized at boot (see
-// app.otelStatus): setting exporter=otlp currently only logs a "not wired"
-// warning rather than exporting telemetry. Wiring the SDK is tracked separately.
+// OTelConfig carries the OpenTelemetry export settings. When Exporter is "otlp"
+// and Endpoint is set, app.initOTel initializes a trace TracerProvider + OTLP
+// gRPC exporter at boot (see internal/app/otel.go). Exporter "none" (default)
+// leaves tracing disabled. Metrics (meter provider) are not yet exported.
 type OTelConfig struct {
 	Exporter    string  `yaml:"exporter"     env:"OTEL_EXPORTER" validate:"oneof=none otlp"`
 	Endpoint    string  `yaml:"endpoint"     env:"OTEL_EXPORTER_OTLP_ENDPOINT"`

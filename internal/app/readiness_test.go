@@ -64,33 +64,25 @@ func TestReady_DBNil(t *testing.T) {
 // TestOTelStatus covers the #10 honest-gap decision: a default/none exporter is
 // not a gap (nothing requested), but otlp is reported as not-wired so the boot
 // path logs that telemetry is being dropped rather than silently consuming it.
-func TestOTelStatus(t *testing.T) {
+// TestOTelEnabled covers the pure decision predicate for OTel trace wiring —
+// it does not need a live collector. exporter=otlp + a non-empty endpoint means
+// initOTel will register a TracerProvider; anything else leaves tracing off.
+func TestOTelEnabled(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		exporter string
-		wired    bool
-		wantMsg  bool
+		endpoint string
+		want     bool
 	}{
-		{"none", "none", true, false},
-		{"empty default", "", true, false},
-		{"otlp requested", "otlp", false, true},
+		{"none", "none", "", false},
+		{"empty default", "", "", false},
+		{"otlp no endpoint", "otlp", "", false},
+		{"otlp with endpoint", "otlp", "collector:4317", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			wired, msg := otelStatus(config.OTelConfig{Exporter: tc.exporter})
-			if wired != tc.wired {
-				t.Fatalf("wired = %v, want %v", wired, tc.wired)
-			}
-			if tc.wantMsg {
-				if msg == "" {
-					t.Fatal("want non-empty warning message, got empty")
-				}
-				if !strings.Contains(msg, "not wired") {
-					t.Fatalf("msg = %q, want 'not wired'", msg)
-				}
-				return
-			}
-			if msg != "" {
-				t.Fatalf("want empty message, got %q", msg)
+			got := otelEnabled(config.OTelConfig{Exporter: tc.exporter, Endpoint: tc.endpoint})
+			if got != tc.want {
+				t.Fatalf("otelEnabled = %v, want %v", got, tc.want)
 			}
 		})
 	}

@@ -75,15 +75,13 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	do.ProvideValue(inj, cfg)
 	do.ProvideValue(inj, log)
 
-	// OTel (#10): the exporter config is parsed/validated but the OTel SDK is
-	// not initialized at boot. Surface the gap so an operator who sets
-	// OTEL_EXPORTER=otlp sees telemetry is being dropped, not silently
-	// consumed. Wiring the full SDK (tracer/meter provider) is tracked separately.
-	if wired, msg := otelStatus(cfg.OTel); !wired {
-		log.Warn(msg,
-			"endpoint", cfg.OTel.Endpoint,
-			"service_name", cfg.OTel.ServiceName,
-			"sampling", cfg.OTel.Sampling)
+	// OTel (#10): initialize the trace SDK when exporter=otlp + an endpoint.
+	// Best-effort — a refused exporter is logged and the server stays up.
+	if shutdown, wired := initOTel(ctx, cfg.OTel, log); wired {
+		closers = append([]func(){shutdown}, closers...) // shut down OTel first
+	} else {
+		log.Info("otel: trace export disabled (exporter=none or no endpoint)",
+			"exporter", cfg.OTel.Exporter, "endpoint", cfg.OTel.Endpoint)
 	}
 
 	if gdb, err := db.New(cfg.DB); err != nil {
@@ -265,14 +263,4 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// otelStatus reports whether the OTel SDK is wired for the given config. The SDK
-// is not initialized at boot (option b of #10): a non-none exporter is parsed
-// but not forwarded, so this returns wired=false with a message the boot path
-// logs. Kept pure so the decision is unit-testable without a live exporter.
-func otelStatus(cfg config.OTelConfig) (wired bool, msg string) {
-	if cfg.Exporter == "" || cfg.Exporter == "none" {
-		return true, ""
-	}
-	return false, "otel not wired: exporter " + cfg.Exporter +
-		" requested but SDK not initialized; telemetry will not be exported"
-}
+// otelStatus removed: the trace SDK is now wired by initOTel (internal/app/otel.go).
