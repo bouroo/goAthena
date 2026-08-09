@@ -30,6 +30,7 @@ import (
 	worldinfra "github.com/bouroo/goAthena/internal/modules/world/infra"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
+	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
@@ -62,7 +63,29 @@ type mapTestEnv struct {
 	charRepo *charinfra.MemoryCharacterRepository
 	itemRepo *invinfra.MemoryItemRepository
 	world    *worldapp.WorldService
+	mobAI    *worldapp.MobAIService
 }
+
+// testMobAIFixture is a one-mob mob_db.yml with a single aggressive monster
+// (Ai=4 ≥ aggressive threshold 3). It backs the gateway's combat + mob AI so a
+// spawned monster resolves real stats and the aggro loop swings at the player.
+const testMobAIFixture = `Header:
+  Type: MOB_DB
+  Version: 5
+Body:
+  - Id: 8001
+    Name: AggroMob
+    Ai: 04
+    Level: 10
+    Attack: 50
+    Attack2: 10
+    Str: 20
+    Dex: 20
+    Defense: 0
+    Vit: 0
+    AttackRange: 2
+    ChaseRange: 12
+`
 
 // buildTestMapDeps constructs the MapServer's collaborators against in-memory
 // repos, wiring the shop commerce verb: a real EconomyService over a memory
@@ -78,6 +101,14 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	})
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
 	spawn := worldapp.NewSpawnService(world, nil, nil)
+	// A tiny mob_db with one aggressive mob (8001, Ai=4) backs combat + mob AI so a
+	// spawned monster resolves real stats and the aggro loop can swing at the
+	// player. Existing tests spawn mob 1002 (not in this fixture), which mob_db
+	// resolves to nil → 0 DEF, preserving their damage behaviour.
+	mobs, err := mobdb.Load(strings.NewReader(testMobAIFixture))
+	if err != nil {
+		t.Fatalf("load mob_db: %v", err)
+	}
 	itemRepo := invinfra.NewMemoryItemRepository()
 	inv := invapp.NewInventoryService(itemRepo)
 	// A tiny item_db with one weapon (Knife 1201, ATK 50, right-hand) backs the
@@ -85,7 +116,8 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	items := testItemDB(t)
 	equipSvc := worldapp.NewEquipService(inv, items)
 	itemUse := worldapp.NewItemUseService(inv, items, world)
-	combat := worldapp.NewCombatService(world, nil, equipSvc)
+	combat := worldapp.NewCombatService(world, mobs, equipSvc)
+	mobAI := worldapp.NewMobAIService(world, mobs, combat, slog.Default())
 	content := contentapp.NewEngine(nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
 
@@ -97,11 +129,11 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	shopStore := contentinfra.NewMemoryShopStore()
 	shopStore.RegisterShop(shop.DevShopGID, devTestShopName)
 
-	ms, err := gwapp.NewMapServer(world, spawn, combat, equipSvc, itemUse, inv, content, skills, shops, shopStore, nil, sessions, slog.Default())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, mobAI, equipSvc, itemUse, inv, content, skills, shops, shopStore, nil, sessions, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ms, mapTestEnv{spawn: spawn, charRepo: charRepo, itemRepo: itemRepo, world: world}
+	return ms, mapTestEnv{spawn: spawn, charRepo: charRepo, itemRepo: itemRepo, world: world, mobAI: mobAI}
 }
 
 // startAndDial starts the map listener on port and dials it, failing the test if
@@ -436,6 +468,80 @@ func TestMap_Dispatch_SitStandActionEcho(t *testing.T) {
 	}
 	if resp[6] != sitAction {
 		t.Fatalf("action-response action = %d, want %d", resp[6], sitAction)
+	}
+}
+
+// TestMap_MobAttacksPlayer proves the full mob→player→notify path through the
+// real gnet reactor: an aggressive mob (Ai=4) within AttackRange of the player
+// swings on MonsterTick, and the NewMapServer-wired OnMobAttack sink delivers
+// ZC_NOTIFY_ACT to the player (showing the mob's hit + damage) followed by a
+// ZC_PAR_CHANGE whose HP matches the damage dealt. MonsterTick is driven directly
+// (no real ticker) so the assertion is deterministic, not timing-fragile.
+func TestMap_MobAttacksPlayer(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	// CZ_ENTER -> ZC_ACCEPT_ENTER; draining the 13-byte reply registers the conn
+	// for charID 150001 (the PC, full HP 1000 at new_1-1 (53,111)).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// Spawn the aggressive mob one cell east of the player (Chebyshev dist 1 ≤ its
+	// AttackRange 2) so the cadence-accumulated swing lands.
+	const mobGID = 160000
+	if err := env.spawn.SpawnMob(mobGID, 8001, "new_1-1", worlddomain.Position{X: 54, Y: 111}, "AggroMob", 1000, 1000, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+
+	// One cadence interval (2 s) elapsed ⇒ exactly one swing. Driving MonsterTick
+	// directly keeps this deterministic.
+	env.mobAI.MonsterTick(t.Context(), 2*time.Second)
+
+	// ZC_NOTIFY_ACT (34 B) is broadcast first, then ZC_PAR_CHANGE HP + SP (8 B
+	// each) refresh the target's own vitals.
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	act := make([]byte, (ropacket.NotifyActResponse{}).Size())
+	if _, err := io.ReadFull(conn, act); err != nil {
+		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT {
+		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT)
+	}
+	if got := binary.LittleEndian.Uint32(act[2:6]); got != mobGID {
+		t.Fatalf("ZC_NOTIFY_ACT srcID = %d, want mob GID %d", got, mobGID)
+	}
+	if got := binary.LittleEndian.Uint32(act[6:10]); got != 150001 {
+		t.Fatalf("ZC_NOTIFY_ACT targetID = %d, want player GID 150001", got)
+	}
+	dmg := int32(binary.LittleEndian.Uint32(act[22:26]))
+	if dmg <= 0 {
+		t.Fatalf("ZC_NOTIFY_ACT damage = %d, want > 0", dmg)
+	}
+
+	// The player's own HP/SP refresh follows: two 8-byte ZC_PAR_CHANGE frames. HP
+	// must equal 1000 − damage (applyDamage ran before the hook fired).
+	par := make([]byte, 16)
+	if _, err := io.ReadFull(conn, par); err != nil {
+		t.Fatalf("read ZC_PAR_CHANGE frames: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(par[0:2]); got != ropacket.HeaderZCPARCHANGE {
+		t.Fatalf("frame 0 header = 0x%04x, want ZC_PAR_CHANGE", got)
+	}
+	if got := binary.LittleEndian.Uint16(par[2:4]); got != ropacket.SPHP {
+		t.Fatalf("frame 0 varID = %d, want SPHP (%d)", got, ropacket.SPHP)
+	}
+	hpAfter := int32(binary.LittleEndian.Uint32(par[4:8]))
+	if want := int32(1000) - dmg; hpAfter != want {
+		t.Fatalf("player HP after mob hit = %d, want %d (1000 − %d damage)", hpAfter, want, dmg)
 	}
 }
 
@@ -1211,7 +1317,7 @@ func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*g
 	econ := economyapp.NewEconomyService(charRepo)
 	trade := worldapp.NewTradeService(world, inv, econ)
 
-	ms, err := gwapp.NewMapServer(world, spawn, combat, nil, nil, inv, content, skills, nil, nil, trade, sessions, slog.Default())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, nil, nil, nil, inv, content, skills, nil, nil, trade, sessions, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -114,7 +114,16 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve trade service: %w", err)
 	}
-	ms, err := app.NewMapServer(world, spawn, combat, equip, itemUse, inv, content, skills, shops, shopStore, trade, sess, log)
+	// Mob AI is best-effort: a resolve failure (no MobAIService provided) leaves
+	// mobs passive — the map server still boots, only the aggro/attack loop is
+	// inert. Matches the tick-loop's own nil-tolerant resolve of MobAIService.
+	var mobAI *worldapp.MobAIService
+	if svc, mobErr := do.Invoke[*worldapp.MobAIService](inj); mobErr != nil {
+		log.Error("mob AI service resolve failed; mobs will stay passive", "err", mobErr)
+	} else {
+		mobAI = svc
+	}
+	ms, err := app.NewMapServer(world, spawn, combat, mobAI, equip, itemUse, inv, content, skills, shops, shopStore, trade, sess, log)
 	if err != nil {
 		return nil, fmt.Errorf("map server: %w", err)
 	}

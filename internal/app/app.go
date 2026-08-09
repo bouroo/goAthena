@@ -70,11 +70,17 @@ func (a *App) Run(ctx context.Context) error {
 		mapAddr := fmt.Sprintf("tcp://%s:%d", a.cfg.Gateway.LoginHost, a.cfg.Gateway.MapPort)
 		a.deps.mapSrv.Start(mapAddr)
 	}
-	// The world tick loop drives natural HP/SP regen at the configured rate.
+	// The world tick loop drives natural HP/SP regen at the configured rate and
+	// advances mob AI (aggro + attack) on the same cadence, chained as a second
+	// update call so mobs and regen share one consistent snapshot per tick.
 	if a.deps.tick != nil {
 		tick := a.deps.tick
-		go tick.StartTick(ctx, func(_ context.Context, dt time.Duration) { //nolint:contextcheck // lifecycle tied to ctx via select
+		mobAI := a.deps.mobAI
+		go tick.StartTick(ctx, func(ctx context.Context, dt time.Duration) { //nolint:contextcheck // lifecycle tied to ctx via select
 			tick.RegenTick(dt)
+			if mobAI != nil {
+				mobAI.MonsterTick(ctx, dt)
+			}
 		})
 	}
 

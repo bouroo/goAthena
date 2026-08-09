@@ -110,6 +110,13 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		econ := do.MustInvoke[*economyapp.EconomyService](i)
 		return app.NewTradeService(world, inv, econ), nil
 	})
+	do.Provide(inj, func(i do.Injector) (*app.MobAIService, error) {
+		world := do.MustInvoke[*app.WorldService](i)
+		mobs := do.MustInvoke[*mobdb.Registry](i)
+		combatSvc := do.MustInvoke[*app.CombatService](i)
+		log := do.MustInvoke[*slog.Logger](i)
+		return app.NewMobAIService(world, mobs, combatSvc, log), nil
+	})
 }
 
 // loadMobDB loads mob_db.yml from the pre-renewal db root. A load failure is

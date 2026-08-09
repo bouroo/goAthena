@@ -45,6 +45,7 @@ type MapServer struct {
 	world   *worldapp.WorldService
 	spawn   *worldapp.SpawnService
 	combat  *worldapp.CombatService
+	mobAI   *worldapp.MobAIService
 	equip   *worldapp.EquipService
 	itemUse *worldapp.ItemUseService
 	inv     *invapp.InventoryService
@@ -78,11 +79,12 @@ type MapServer struct {
 // commerce verb (open/buy/sell); trade wires the player-to-player trade verb.
 // shops/shopStore/trade may be nil in a reduced harness where their packets are
 // never exercised, but production wiring resolves all three.
-func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, equip *worldapp.EquipService, itemUse *worldapp.ItemUseService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
+func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, mobAI *worldapp.MobAIService, equip *worldapp.EquipService, itemUse *worldapp.ItemUseService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
 	s := &MapServer{
 		world:       world,
 		spawn:       spawn,
 		combat:      combat,
+		mobAI:       mobAI,
 		equip:       equip,
 		itemUse:     itemUse,
 		inv:         inv,
@@ -102,6 +104,12 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 	// changed vitals back to the player's client as ZC_PAR_CHANGE (mirrors the
 	// script percentheal path). A char with no live conn is a no-op.
 	world.OnStatChange = s.notifyStatChange
+	// Mob AI runs on the same world tick; this sink bridges a mob's landed hit
+	// back to the player as ZC_NOTIFY_ACT so the swing is visible and the target's
+	// HP bar drops. A headless harness (no mob AI) leaves mobs passive.
+	if mobAI != nil {
+		mobAI.OnMobAttack = s.notifyMobAttack
+	}
 	return s, nil
 }
 
@@ -153,6 +161,43 @@ func (s *MapServer) notifyStatChange(charID uint32, hp, sp int32) {
 	_ = ropacket.ParChangeResponse{VarID: ropacket.SPHP, Count: hp}.Encode(&buf)
 	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: sp}.Encode(&buf)
 	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// notifyMobAttack is the MobAIService.OnMobAttack sink (mirrors notifyStatChange
+// for the inverse, mob→player direction). It emits ZC_NOTIFY_ACT — the damage /
+// action broadcast rAthena's clif_damage sends — to the target player and their
+// AOI neighbors so the mob's swing is visible, then refreshes the target's own
+// HP/SP bar via notifyStatChange (applyDamage mutates HP directly without firing
+// OnStatChange). dmg may be 0 (miss/block) and is still broadcast so the client
+// renders the swing. The hook's died flag is part of the OnMobAttack contract
+// (MobAIService uses it to drop a killed target); this sink does not yet branch
+// on it — a killing blow already lands as ZC_NOTIFY_ACT + a 0-HP ZC_PAR_CHANGE,
+// and player vanish/respawn is a separate, deferred feature — so it is accepted
+// unnamed. ServerTick/Speed fields are left zero: mob_db carries no amotion, so
+// the per-hit cadence (mobAttackInterval) is the only timing a first cut needs.
+// A target that left the world is a no-op.
+func (s *MapServer) notifyMobAttack(mobID, targetID worlddomain.EntityID, dmg int32, _ bool) {
+	target, err := s.world.Get(targetID)
+	if err != nil {
+		return // disconnected/despawned between swing and notify: nothing to show
+	}
+	resp := ropacket.NotifyActResponse{
+		SrcID:    uint32(mobID),    //nolint:gosec // G115: EntityID wraps a uint32 GID
+		TargetID: uint32(targetID), //nolint:gosec // G115: EntityID wraps a uint32 GID
+		Damage:   dmg,
+		Div:      1,
+		Type:     ropacket.DMGNormal,
+	}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode mob-attack notify", "err", err)
+		return
+	}
+	// Exclude 0 (no charID is 0): the target player is in the neighbor set and
+	// must see the hit land on them, alongside every AOI neighbor.
+	s.broadcast(out, target.Map, target.Pos, 0)
+	// Refresh the target's own vitals so their HP bar drops by the damage dealt.
+	s.notifyStatChange(uint32(targetID), target.HP, target.SP) //nolint:gosec // G115: EntityID wraps a uint32 GID
 }
 
 // unregisterConn drops a charID's live connection and its last-opened shop from

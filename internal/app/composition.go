@@ -45,6 +45,7 @@ type deps struct {
 	char   protoListener
 	mapSrv protoListener
 	tick   tickStarter
+	mobAI  *worldapp.MobAIService
 }
 
 // tickStarter is the lifecycle surface for the world tick loop.
@@ -127,6 +128,15 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 		log.Error("world service resolve failed; tick loop will not run", "err", err)
 	} else {
 		d.tick = ws
+	}
+
+	// Resolve the mob AI service so the tick loop can chain MonsterTick after
+	// RegenTick. Best-effort: a resolve failure leaves d.mobAI nil and mobs stay
+	// passive, but the server still boots (regen runs).
+	if mobAI, err := do.Invoke[*worldapp.MobAIService](inj); err != nil {
+		log.Error("mob AI service resolve failed; mobs will stay passive", "err", err)
+	} else {
+		d.mobAI = mobAI
 	}
 
 	// Listeners resolve their ports from the injector. Best-effort: a build
