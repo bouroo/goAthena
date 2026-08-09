@@ -48,9 +48,11 @@ type deps struct {
 	mobAI  *worldapp.MobAIService
 }
 
-// tickStarter is the lifecycle surface for the world tick loop.
+// tickStarter is the lifecycle surface for the world tick loop and the periodic
+// vital-checkpoint loop.
 type tickStarter interface {
 	StartTick(ctx context.Context, update func(ctx context.Context, dt time.Duration))
+	StartCheckpoint(ctx context.Context, interval time.Duration)
 	RegenTick(dt time.Duration)
 	Stop()
 }

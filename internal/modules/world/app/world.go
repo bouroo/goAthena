@@ -515,6 +515,83 @@ func (w *WorldService) SaveAll(ctx context.Context) {
 	}
 }
 
+// Checkpoint persists every online PC's vitals + EXP + position WITHOUT marking
+// it offline, so a hard crash between disconnects (SIGKILL/panic/power loss)
+// loses at most one checkpoint interval of in-session HP/SP/EXP change instead
+// of the whole session. It is the periodic durability snapshot driven by
+// StartCheckpoint; SaveAll is the shutdown/logout flush that additionally flips
+// the online flag to false — reusing SaveAll for a periodic checkpoint would
+// mass-disconnect every connected char, so Checkpoint is a separate method.
+// Best-effort and off-lock, mirroring SaveAll: the snapshot is taken under w.mu
+// (RLock) and released before the DB writes, so a slow write does not block the
+// 50 Hz tick loop. Each char's failure is logged and skipped so one bad row
+// never aborts the checkpoint.
+func (w *WorldService) Checkpoint(ctx context.Context) {
+	w.mu.RLock()
+	type vitalSnap struct {
+		charID  uint32
+		pos     domain.Position
+		hp, sp  int32
+		baseExp uint64
+		jobExp  uint64
+	}
+	snaps := make([]vitalSnap, 0, len(w.entities))
+	for id, e := range w.entities {
+		if e.Type != domain.EntityTypePC {
+			continue
+		}
+		snaps = append(snaps, vitalSnap{
+			charID:  uint32(id), //nolint:gosec // G115: EntityID wraps a char_id (uint32).
+			pos:     e.Pos,
+			hp:      e.HP,
+			sp:      e.SP,
+			baseExp: e.BaseExp,
+			jobExp:  e.JobExp,
+		})
+	}
+	w.mu.RUnlock()
+	for _, s := range snaps {
+		if err := w.repo.SaveState(ctx, s.charID, s.hp, s.sp, s.baseExp, s.jobExp); err != nil {
+			w.log.Warn("checkpoint state", "char_id", s.charID, "err", err)
+			continue
+		}
+		// SetOnline with online=true re-persists position without flipping the
+		// online flag, so a connected PC stays online after the snapshot.
+		if err := w.repo.SetOnline(ctx, s.charID, true, s.pos); err != nil {
+			w.log.Warn("checkpoint position", "char_id", s.charID, "err", err)
+		}
+	}
+}
+
+// StartCheckpoint spawns a slow ticker that periodically calls Checkpoint so a
+// hard crash (SIGKILL/panic/power loss) between disconnects loses at most one
+// interval of in-session HP/SP/EXP change. It is separate from the 50 Hz tick
+// loop (StartTick): checkpointing is an infrequent durability snapshot (default
+// 5 m), not per-frame work. The goroutine drains on ctx cancellation (graceful
+// shutdown) or Stop, mirroring StartTick's lifecycle. Each checkpoint runs under
+// its own timeout derived from ctx so a slow DB on one tick does not block the
+// next; on shutdown the already-cancelled ctx makes the racing checkpoint
+// no-op fast, leaving the final flush to SaveAll.
+func (w *WorldService) StartCheckpoint(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		w.log.Info("world checkpoint loop started", "interval", interval)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-w.stopCh:
+				return
+			case <-ticker.C:
+				cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				w.Checkpoint(cctx)
+				cancel()
+			}
+		}
+	}()
+}
+
 // SetPosition persists a char's destination map + position (warp/transit). The
 // caller sends MapMoveResponse so the client reconnects and EnterMap loads this.
 func (w *WorldService) SetPosition(ctx context.Context, charID uint32, mapName string, pos domain.Position) error {

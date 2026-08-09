@@ -82,6 +82,11 @@ func (a *App) Run(ctx context.Context) error {
 				mobAI.MonsterTick(ctx, dt)
 			}
 		})
+		// Periodic vital checkpoint: bounds hard-crash loss (SIGKILL/panic/power
+		// loss between disconnects) to one interval of in-session HP/SP/EXP
+		// change. StartCheckpoint spawns its own goroutine and drains on ctx
+		// cancellation (graceful shutdown); SaveAll remains the final flush.
+		tick.StartCheckpoint(ctx, a.cfg.Zone.CheckpointInterval) //nolint:contextcheck // lifecycle tied to ctx via select
 	}
 
 	errCh := make(chan error, 1)

@@ -839,6 +839,115 @@ func TestGrantExp_LeaveMapIdempotent(t *testing.T) {
 	}
 }
 
+// countRepo wraps the in-memory repo and records SaveState/SetOnline call counts
+// plus the last online flag passed, so checkpoint tests can assert frequency and
+// that a periodic snapshot does NOT flip the online flag (the #1 correctness
+// point: a connected char stays online after a checkpoint).
+type countRepo struct {
+	*infra.MemoryWorldRepository
+	saveState  atomic.Int64
+	setOnline  atomic.Int64
+	lastOnline atomic.Bool
+}
+
+func (c *countRepo) SetOnline(ctx context.Context, charID uint32, online bool, pos domain.Position) error {
+	c.setOnline.Add(1)
+	c.lastOnline.Store(online)
+	return c.MemoryWorldRepository.SetOnline(ctx, charID, online, pos)
+}
+
+func (c *countRepo) SaveState(ctx context.Context, charID uint32, hp, sp int32, baseExp, jobExp uint64) error {
+	c.saveState.Add(1)
+	return c.MemoryWorldRepository.SaveState(ctx, charID, hp, sp, baseExp, jobExp)
+}
+
+// TestCheckpoint_KeepsOnlineAndPersists proves a periodic checkpoint persists
+// vitals + EXP + position WITHOUT flipping the online flag, and contrasts it
+// with SaveAll (the shutdown flush) which DOES mark the char offline. This is
+// the #1 correctness point: reusing SaveAll for a periodic checkpoint would
+// mass-disconnect every connected char.
+func TestCheckpoint_KeepsOnlineAndPersists(t *testing.T) {
+	pc := domain.Entity{
+		ID: 150001, Type: domain.EntityTypePC, Map: "prontera",
+		Pos: domain.Position{X: 50, Y: 50}, HP: 750, SP: 30,
+		MaxHP: 1000, MaxSP: 500, BaseExp: 1234, JobExp: 567,
+	}
+	repo := &countRepo{MemoryWorldRepository: infra.NewMemoryWorldRepository(pc)}
+	w := app.NewWorldService(repo, slog.Default(), 1000)
+	if err := w.AddEntity(pc); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+
+	w.Checkpoint(context.Background())
+
+	if got := repo.setOnline.Load(); got != 1 {
+		t.Fatalf("SetOnline calls = %d, want 1", got)
+	}
+	if got := repo.saveState.Load(); got != 1 {
+		t.Errorf("SaveState calls = %d, want 1", got)
+	}
+	if online := repo.lastOnline.Load(); !online {
+		t.Error("Checkpoint marked char offline (SetOnline false); periodic snapshot must keep connected chars online")
+	}
+	got, err := repo.LoadEnterState(context.Background(), 150001)
+	if err != nil {
+		t.Fatalf("LoadEnterState: %v", err)
+	}
+	if got.HP != 750 || got.SP != 30 || got.BaseExp != 1234 || got.JobExp != 567 {
+		t.Errorf("persisted state = hp %d sp %d exp %d/%d, want 750/30/1234/567", got.HP, got.SP, got.BaseExp, got.JobExp)
+	}
+	// Contrast: SaveAll (shutdown flush) flips online to false, proving
+	// Checkpoint is a genuinely separate path, not a SaveAll alias.
+	w.SaveAll(context.Background())
+	if online := repo.lastOnline.Load(); online {
+		t.Error("SaveAll did not mark char offline; expected online=false on shutdown flush")
+	}
+}
+
+// TestStartCheckpoint_FiresAndDrains proves the checkpoint ticker fires on its
+// interval (bounded by a deadline), keeps connected chars online on every fire,
+// and drains its goroutine on ctx cancellation (no leak / no further fires).
+func TestStartCheckpoint_FiresAndDrains(t *testing.T) {
+	pc := domain.Entity{
+		ID: 150002, Type: domain.EntityTypePC, Map: "geffen",
+		Pos: domain.Position{X: 10, Y: 10}, HP: 500, SP: 100,
+		MaxHP: 1000, MaxSP: 500, BaseExp: 99, JobExp: 1,
+	}
+	repo := &countRepo{MemoryWorldRepository: infra.NewMemoryWorldRepository(pc)}
+	w := app.NewWorldService(repo, slog.Default(), 1000)
+	if err := w.AddEntity(pc); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.StartCheckpoint(ctx, 20*time.Millisecond)
+
+	// (a) The ticker fires Checkpoint within a deadline.
+	deadline := time.After(500 * time.Millisecond)
+	for repo.setOnline.Load() < 1 {
+		select {
+		case <-deadline:
+			t.Fatalf("checkpoint never fired: setOnline=%d", repo.setOnline.Load())
+		default:
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	// (c) Every checkpoint fire keeps the connected char online.
+	if online := repo.lastOnline.Load(); !online {
+		t.Error("periodic checkpoint marked char offline; connected chars must stay online")
+	}
+
+	// (b) ctx cancellation drains the goroutine: after cancel, the counter stops
+	// incrementing (deterministic leak check — no further fires).
+	cancel()
+	before := repo.setOnline.Load()
+	time.Sleep(80 * time.Millisecond)
+	if after := repo.setOnline.Load(); after > before {
+		t.Errorf("checkpoint fired after ctx cancel: before=%d after=%d (goroutine did not drain)", before, after)
+	}
+	w.Stop()
+}
+
 type expNotif struct {
 	charID          uint32
 	baseExp, jobExp uint64
