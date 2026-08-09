@@ -62,9 +62,10 @@ func (r *MemoryWorldRepository) SetPosition(_ context.Context, charID uint32, ma
 	return nil
 }
 
-// SaveVitals stores the char's hp/sp so the memory repo (used by unit tests)
-// reflects a persisted vital write the same way the GORM repo does.
-func (r *MemoryWorldRepository) SaveVitals(_ context.Context, charID uint32, hp, sp int32) error {
+// SaveState stores the char's hp/sp plus the accumulated base_exp/job_exp so
+// the memory repo (used by unit tests) reflects a persisted state write the
+// same way the GORM repo does.
+func (r *MemoryWorldRepository) SaveState(_ context.Context, charID uint32, hp, sp int32, baseExp, jobExp uint64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	id := domain.EntityID(charID)
@@ -74,6 +75,8 @@ func (r *MemoryWorldRepository) SaveVitals(_ context.Context, charID uint32, hp,
 	}
 	e.HP = hp
 	e.SP = sp
+	e.BaseExp = baseExp
+	e.JobExp = jobExp
 	r.data[id] = e
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -58,6 +59,14 @@ type WorldService struct {
 	// advances; useful for tests and headless operation). Invoked off the world
 	// mutex, after OnStatChange, so the HP/SP bar settles before the appear burst.
 	OnRespawn func(charID uint32)
+	// OnExpChange, when set, is invoked after GrantExp accrues EXP to a player so
+	// the gateway can emit the two ZC_LONGLONGPAR_CHANGE frames (SP_BASEEXP then
+	// SP_JOBEXP) to that player's client and its EXP bar rises. charID is the
+	// entity's GID (char_id); baseExp/jobExp are the new totals. nil = EXP accrual
+	// is silent (server state still advances; useful for tests and headless
+	// operation). Invoked off the world mutex. Leveling is deferred — this hook
+	// fires on every grant regardless of whether a level threshold was crossed.
+	OnExpChange func(charID uint32, baseExp, jobExp uint64)
 }
 
 // Pre-renewal standing natural-regen intervals (rAthena status_natural_heal).
@@ -457,25 +466,28 @@ func (w *WorldService) LeaveMap(ctx context.Context, charID uint32) error {
 	if err := w.repo.SetOnline(ctx, charID, false, e.Pos); err != nil {
 		return fmt.Errorf("set offline: %w", err)
 	}
-	if err := w.repo.SaveVitals(ctx, charID, e.HP, e.SP); err != nil {
-		return fmt.Errorf("save vitals: %w", err)
+	if err := w.repo.SaveState(ctx, charID, e.HP, e.SP, e.BaseExp, e.JobExp); err != nil {
+		return fmt.Errorf("save state: %w", err)
 	}
 	return nil
 }
 
-// SaveAll persists every online PC's vitals and marks it offline, so a graceful
-// shutdown/restart does not lose in-session HP/SP changes (combat/regen/heal/
-// respawn) nor leave stale-online rows. Best-effort: each char's failure is
-// logged and skipped so one bad row never aborts the save-all. Vitals+position
-// are snapshotted under w.mu (the normal shutdown path has already stopped the
-// tick loop, so regen is not mutating concurrently); the DB writes run after the
-// lock is released so the snapshot does not block the tick loop on other paths.
+// SaveAll persists every online PC's vitals + EXP and marks it offline, so a
+// graceful shutdown/restart does not lose in-session HP/SP and EXP-from-kill
+// changes (combat/regen/heal/respawn) nor leave stale-online rows. Best-effort:
+// each char's failure is logged and skipped so one bad row never aborts the
+// save-all. State+position are snapshotted under w.mu (the normal shutdown path
+// has already stopped the tick loop, so regen is not mutating concurrently); the
+// DB writes run after the lock is released so the snapshot does not block the
+// tick loop on other paths.
 func (w *WorldService) SaveAll(ctx context.Context) {
 	w.mu.RLock()
 	type vitalSnap struct {
-		charID uint32
-		pos    domain.Position
-		hp, sp int32
+		charID  uint32
+		pos     domain.Position
+		hp, sp  int32
+		baseExp uint64
+		jobExp  uint64
 	}
 	snaps := make([]vitalSnap, 0, len(w.entities))
 	for id, e := range w.entities {
@@ -483,16 +495,18 @@ func (w *WorldService) SaveAll(ctx context.Context) {
 			continue
 		}
 		snaps = append(snaps, vitalSnap{
-			charID: uint32(id), //nolint:gosec // G115: EntityID wraps a char_id (uint32).
-			pos:    e.Pos,
-			hp:     e.HP,
-			sp:     e.SP,
+			charID:  uint32(id), //nolint:gosec // G115: EntityID wraps a char_id (uint32).
+			pos:     e.Pos,
+			hp:      e.HP,
+			sp:      e.SP,
+			baseExp: e.BaseExp,
+			jobExp:  e.JobExp,
 		})
 	}
 	w.mu.RUnlock()
 	for _, s := range snaps {
-		if err := w.repo.SaveVitals(ctx, s.charID, s.hp, s.sp); err != nil {
-			w.log.Warn("save-all vitals", "char_id", s.charID, "err", err)
+		if err := w.repo.SaveState(ctx, s.charID, s.hp, s.sp, s.baseExp, s.jobExp); err != nil {
+			w.log.Warn("save-all state", "char_id", s.charID, "err", err)
 			continue
 		}
 		if err := w.repo.SetOnline(ctx, s.charID, false, s.pos); err != nil {
@@ -714,6 +728,44 @@ func (w *WorldService) AddVitals(charID uint32, hp, sp int32) (hpAfter, spAfter 
 		w.OnStatChange(charID, hpAfter, spAfter)
 	}
 	return hpAfter, spAfter, nil
+}
+
+// GrantExp accrues a mob-kill EXP reward to a player: it adds baseExp/jobExp to
+// the entity's runtime EXP totals (clamped at math.MaxUint64 so the uint64 add
+// can never overflow or panic) and returns the new totals. It is the EXP-on-kill
+// use case's world capability: a dead mob's mob_db BaseExp/JobExp flows through
+// here. EXP is runtime state mirrored to the char table by LeaveMap/SaveAll (via
+// SaveState), so disconnect/shutdown/warp persist it from the same path as
+// HP/SP. Leveling is deliberately deferred — GrantExp only accrues EXP; the
+// level-up track (job_stats EXP curve, HP/SP recalc, status-point accrual) is a
+// separate subsystem not modeled here. Thread-safe: mutated under w.mu; the
+// OnExpChange notify fires off the lock (mirrors AddVitals/OnStatChange).
+func (w *WorldService) GrantExp(charID uint32, baseExp, jobExp uint64) (newBase, newJob uint64, err error) {
+	w.mu.Lock()
+	e, ok := w.entities[domain.EntityID(charID)]
+	if !ok {
+		w.mu.Unlock()
+		return 0, 0, domain.ErrEntityNotFound
+	}
+	e.BaseExp = clampExpAdd(e.BaseExp, baseExp)
+	e.JobExp = clampExpAdd(e.JobExp, jobExp)
+	newBase, newJob = e.BaseExp, e.JobExp
+	w.mu.Unlock()
+	if w.OnExpChange != nil {
+		w.OnExpChange(charID, newBase, newJob)
+	}
+	return newBase, newJob, nil
+}
+
+// clampExpAdd returns cur+delta saturated at math.MaxUint64. EXP is an
+// accumulating uint64; without the cap a grant near the ceiling would overflow
+// (wrapping toward 0). math.MaxUint64 is a documented sane cap — no realistic
+// EXP total approaches it, so saturation is a defensive bound, not gameplay.
+func clampExpAdd(cur, delta uint64) uint64 {
+	if delta > math.MaxUint64-cur {
+		return math.MaxUint64
+	}
+	return cur + delta
 }
 
 // applyPctHeal adds rate percent of max to cur, clamped to [0, max]. A non-positive

@@ -106,6 +106,29 @@ func (s *SpawnService) OnMobDeath(mobClass int32, mapName string, pos domain.Pos
 	return drops
 }
 
+// MobExp returns the mob_db BaseExp/JobExp awarded for killing a mob of the
+// given class — the EXP source WorldService.GrantExp accrues to the killer on
+// death. A nil mob_db or an unknown class yields (0, 0): best-effort, the killer
+// simply earns no EXP (no error). mob_db stores EXP as int32 reward counts,
+// clamped to ≥0 before widening to uint64. Party EXP split is deferred — the
+// full reward goes to the single killer.
+func (s *SpawnService) MobExp(mobClass int32) (base, job uint64) {
+	if s.mobs == nil {
+		return 0, 0
+	}
+	mob := s.mobs.Get(mobClass)
+	if mob == nil {
+		return 0, 0
+	}
+	if mob.BaseExp > 0 {
+		base = uint64(mob.BaseExp) //nolint:gosec // G115: non-negative int32 reward count.
+	}
+	if mob.JobExp > 0 {
+		job = uint64(mob.JobExp) //nolint:gosec // G115: non-negative int32 reward count.
+	}
+	return base, job
+}
+
 // rollDrops resolves the mob's drop table to NameIDs via item_db and applies the
 // per-drop rate (rAthena 1/10000) as an RNG gate, placing each successful drop
 // as a floor item at the mob's death position.

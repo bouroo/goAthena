@@ -90,6 +90,21 @@ Body:
     AttackRange: 2
     ChaseRange: 12
     WalkSpeed: 400
+  - Id: 8002
+    Name: ExpMob
+    Ai: 00
+    Level: 1
+    Attack: 0
+    Attack2: 0
+    Str: 0
+    Dex: 0
+    Defense: 0
+    Vit: 0
+    BaseExp: 150
+    JobExp: 75
+    AttackRange: 1
+    ChaseRange: 0
+    WalkSpeed: 400
 `
 
 // buildTestMapDeps constructs the MapServer's collaborators against in-memory
@@ -108,15 +123,18 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 		SaveMap: "new_1-1", SavePos: worlddomain.Position{X: 1, Y: 1},
 	})
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
-	spawn := worldapp.NewSpawnService(world, nil, nil)
-	// A tiny mob_db with one aggressive mob (8001, Ai=4) backs combat + mob AI so a
-	// spawned monster resolves real stats and the aggro loop can swing at the
-	// player. Existing tests spawn mob 1002 (not in this fixture), which mob_db
+	// A tiny mob_db with one aggressive mob (8001, Ai=4) and one passive mob
+	// (8002, carries BaseExp/JobExp for the kill-reward test) backs combat + mob
+	// AI so a spawned monster resolves real stats and the aggro loop can swing at
+	// the player. The spawn service shares this registry so a mob's EXP is
+	// resolvable on death; drops stay inert (item_db is nil → rollDrops returns
+	// nil). Existing tests spawn mob 1002 (not in this fixture), which mob_db
 	// resolves to nil → 0 DEF, preserving their damage behaviour.
 	mobs, err := mobdb.Load(strings.NewReader(testMobAIFixture))
 	if err != nil {
 		t.Fatalf("load mob_db: %v", err)
 	}
+	spawn := worldapp.NewSpawnService(world, mobs, nil)
 	itemRepo := invinfra.NewMemoryItemRepository()
 	inv := invapp.NewInventoryService(itemRepo)
 	// A tiny item_db with one weapon (Knife 1201, ATK 50, right-hand) backs the
@@ -999,6 +1017,115 @@ func TestMap_Dispatch_AttackMob(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint32(resp[7:11]); got != mobGID {
 		t.Fatalf("action-response targetGID = %d, want mob GID %d", got, mobGID)
+	}
+}
+
+// TestMap_KillMobGrantsEXP proves the mob-kill reward flow end-to-end: when a
+// player kills a mob, the mob's mob_db BaseExp/JobExp accrue to the player
+// (WorldService.GrantExp via SpawnService.MobExp in handleMobDeath), the killer's
+// client receives two ZC_LONGLONGPAR_CHANGE frames (SP_BASEEXP then SP_JOBEXP)
+// so its EXP bar rises, and the accrued EXP persists across a LeaveMap/reload
+// (the disconnect path). The mob is spawned at 1 HP on the player's tile; a
+// connecting melee hit floors at 1 damage (combat kernel's battle_min_damage),
+// so a single CZ_ACTION_REQUEST kills it deterministically — no combat RNG (the
+// harness CombatService has no Dice → every hit connects). Leveling (threshold
+// crossing, stat recalc) is out of scope: only EXP accrual + notify + persist.
+func TestMap_KillMobGrantsEXP(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil { // drain accept-enter
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// Spawn a 1-HP passive mob on the player's tile. A connecting hit floors at 1
+	// damage, so the first attack kills it deterministically. mob 8002 carries the
+	// known EXP the kill grants.
+	const (
+		mobGID  = 160020
+		mobClas = 8002
+		baseExp = uint64(150)
+		jobExp  = uint64(75)
+	)
+	if err := env.spawn.SpawnMob(mobGID, mobClas, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "ExpMob", 1, 1, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+
+	// CZ_ACTION_REQUEST action=0x07 (attack) targeting the mob.
+	req := make([]byte, 7)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint32(req[2:], mobGID)
+	req[6] = 0x07
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send CZ_ACTION_REQUEST: %v", err)
+	}
+
+	// ZC_ACTION_RESPONSE (11B): the attack echo.
+	if _, err := io.ReadFull(conn, make([]byte, 11)); err != nil {
+		t.Fatalf("read ZC_ACTION_RESPONSE: %v", err)
+	}
+	// ZC_NOTIFY_VANISH (7B): the dead mob leaves the map.
+	if _, err := io.ReadFull(conn, make([]byte, 7)); err != nil {
+		t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
+	}
+	// Two ZC_LONGLONGPAR_CHANGE frames (12B each): SP_BASEEXP then SP_JOBEXP.
+	exp := make([]byte, 24)
+	if _, err := io.ReadFull(conn, exp); err != nil {
+		t.Fatalf("read EXP frames: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(exp[0:2]); got != ropacket.HeaderZCLONGLONGPARCHANGE {
+		t.Errorf("base-exp frame header = 0x%04x, want ZC_LONGLONGPAR_CHANGE (0x0acb)", got)
+	}
+	if got := binary.LittleEndian.Uint16(exp[2:4]); got != ropacket.SPBaseExp {
+		t.Errorf("base-exp varID = %d, want SPBaseExp (%d)", got, ropacket.SPBaseExp)
+	}
+	if got := binary.LittleEndian.Uint64(exp[4:12]); got != baseExp {
+		t.Errorf("base-exp amount = %d, want %d", got, baseExp)
+	}
+	if got := binary.LittleEndian.Uint16(exp[12:14]); got != ropacket.HeaderZCLONGLONGPARCHANGE {
+		t.Errorf("job-exp frame header = 0x%04x, want ZC_LONGLONGPAR_CHANGE (0x0acb)", got)
+	}
+	if got := binary.LittleEndian.Uint16(exp[14:16]); got != ropacket.SPJobExp {
+		t.Errorf("job-exp varID = %d, want SPJobExp (%d)", got, ropacket.SPJobExp)
+	}
+	if got := binary.LittleEndian.Uint64(exp[16:24]); got != jobExp {
+		t.Errorf("job-exp amount = %d, want %d", got, jobExp)
+	}
+
+	// EXP accrued in the world registry.
+	pc, err := env.world.Get(150001)
+	if err != nil {
+		t.Fatalf("get killer: %v", err)
+	}
+	if pc.BaseExp != baseExp {
+		t.Errorf("killer BaseExp = %d, want %d", pc.BaseExp, baseExp)
+	}
+	if pc.JobExp != jobExp {
+		t.Errorf("killer JobExp = %d, want %d", pc.JobExp, jobExp)
+	}
+
+	// Persist proof: LeaveMap (disconnect path) writes base_exp/job_exp via
+	// SaveState; re-entering reloads via LoadEnterState. The accrued EXP survives.
+	if err := env.world.LeaveMap(t.Context(), 150001); err != nil {
+		t.Fatalf("leave map: %v", err)
+	}
+	reloaded, err := env.world.EnterMap(t.Context(), 150001)
+	if err != nil {
+		t.Fatalf("re-enter map: %v", err)
+	}
+	if reloaded.BaseExp != baseExp {
+		t.Errorf("reloaded BaseExp = %d, want %d (not persisted)", reloaded.BaseExp, baseExp)
+	}
+	if reloaded.JobExp != jobExp {
+		t.Errorf("reloaded JobExp = %d, want %d (not persisted)", reloaded.JobExp, jobExp)
 	}
 }
 

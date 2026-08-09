@@ -229,19 +229,19 @@ func TestWorld_GORMSetOnline(t *testing.T) {
 	}
 }
 
-// TestWorld_GORMSaveVitals proves the hp/sp write path persists into the char
-// table's int-unsigned hp/sp columns and survives a reload via LoadEnterState —
-// the durability guarantee that in-session combat/regen/heal changes survive a
-// disconnect/restart.
-func TestWorld_GORMSaveVitals(t *testing.T) {
+// TestWorld_GORMSaveState proves the full state write path — hp/sp plus the
+// accumulated base_exp/job_exp — persists into the char table's columns and
+// survives a reload via LoadEnterState: the durability guarantee that in-session
+// combat/regen/heal and EXP-from-kill changes survive a disconnect/restart.
+func TestWorld_GORMSaveState(t *testing.T) {
 	worldRepo := worldinfra.NewGORMWorldRepository(dbForTest(t))
 	ctx := context.Background()
 
 	// seedChar inserts HP=800/MaxHP=1000, SP=40/MaxSP=50.
 	charID := seedChar(t, dbForTest(t), "WorldVitals", worlddomain.Position{X: 53, Y: 111})
 
-	if err := worldRepo.SaveVitals(ctx, charID, 750, 25); err != nil {
-		t.Fatalf("save vitals: %v", err)
+	if err := worldRepo.SaveState(ctx, charID, 750, 25, 1234, 5678); err != nil {
+		t.Fatalf("save state: %v", err)
 	}
 	got, err := worldRepo.LoadEnterState(ctx, charID)
 	if err != nil {
@@ -249,6 +249,9 @@ func TestWorld_GORMSaveVitals(t *testing.T) {
 	}
 	if got.HP != 750 || got.SP != 25 {
 		t.Errorf("vitals after save = hp %d sp %d, want hp 750 sp 25", got.HP, got.SP)
+	}
+	if got.BaseExp != 1234 || got.JobExp != 5678 {
+		t.Errorf("exp after save = base %d job %d, want base 1234 job 5678", got.BaseExp, got.JobExp)
 	}
 }
 

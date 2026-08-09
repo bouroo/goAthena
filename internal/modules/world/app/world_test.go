@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -685,6 +686,174 @@ func TestArmRespawn_StopCancels(t *testing.T) {
 	if got := hpOf(t, w, 150001); got != 0 {
 		t.Fatalf("HP = %d after Stop, want 0 (timer should have been cancelled)", got)
 	}
+}
+
+// TestGrantExp_AddsAccrues proves a mob-kill reward accrues to the entity's
+// runtime EXP totals and the new totals are returned.
+func TestGrantExp_AddsAccrues(t *testing.T) {
+	w := newWorld()
+	// EnterMap loads the seeded PC into the in-memory registry (BaseExp/JobExp=0).
+	if _, err := w.EnterMap(context.Background(), 150001); err != nil {
+		t.Fatalf("EnterMap: %v", err)
+	}
+	newBase, newJob, err := w.GrantExp(150001, 1000, 250)
+	if err != nil {
+		t.Fatalf("GrantExp: %v", err)
+	}
+	if newBase != 1000 || newJob != 250 {
+		t.Errorf("GrantExp = base %d job %d, want base 1000 job 250", newBase, newJob)
+	}
+	e, _ := w.Get(150001)
+	if e.BaseExp != 1000 || e.JobExp != 250 {
+		t.Errorf("entity exp = base %d job %d, want base 1000 job 250", e.BaseExp, e.JobExp)
+	}
+	// Second grant stacks on the first (accumulating total, not absolute).
+	newBase, newJob, err = w.GrantExp(150001, 500, 50)
+	if err != nil {
+		t.Fatalf("GrantExp #2: %v", err)
+	}
+	if newBase != 1500 || newJob != 300 {
+		t.Errorf("GrantExp #2 = base %d job %d, want base 1500 job 300", newBase, newJob)
+	}
+}
+
+// TestGrantExp_ClampSaturatesAtMax proves the uint64 add never overflows: a
+// grant that would exceed math.MaxUint64 saturates at the cap instead of
+// wrapping toward 0 (the defensive bound documented on clampExpAdd).
+func TestGrantExp_ClampSaturatesAtMax(t *testing.T) {
+	w := newRegenWorld()
+	if err := w.AddEntity(domain.Entity{
+		ID: 150001, Type: domain.EntityTypePC, Map: "prontera",
+		BaseExp: math.MaxUint64 - 100, JobExp: math.MaxUint64 - 100,
+	}); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+	// 200 added to (MaxUint64-100) overflows uint64 without the clamp.
+	newBase, newJob, err := w.GrantExp(150001, 200, 200)
+	if err != nil {
+		t.Fatalf("GrantExp: %v", err)
+	}
+	if newBase != math.MaxUint64 {
+		t.Errorf("base exp = %d, want saturated MaxUint64", newBase)
+	}
+	if newJob != math.MaxUint64 {
+		t.Errorf("job exp = %d, want saturated MaxUint64", newJob)
+	}
+}
+
+// TestGrantExp_OnExpChangeHook proves the notify hook fires once per grant with
+// the new totals, off the world mutex (the gateway uses it to emit the EXP
+// ZC_LONGLONGPAR_CHANGE frames).
+func TestGrantExp_OnExpChangeHook(t *testing.T) {
+	w := newWorld()
+	if _, err := w.EnterMap(context.Background(), 150001); err != nil {
+		t.Fatalf("EnterMap: %v", err)
+	}
+	var fired []expNotif
+	w.OnExpChange = func(charID uint32, baseExp, jobExp uint64) {
+		fired = append(fired, expNotif{charID, baseExp, jobExp})
+	}
+	if _, _, err := w.GrantExp(150001, 1000, 250); err != nil {
+		t.Fatalf("GrantExp #1: %v", err)
+	}
+	if _, _, err := w.GrantExp(150001, 500, 50); err != nil {
+		t.Fatalf("GrantExp #2: %v", err)
+	}
+	want := []expNotif{{150001, 1000, 250}, {150001, 1500, 300}}
+	if !equalExpNotifs(fired, want) {
+		t.Errorf("OnExpChange fired %v, want %v", fired, want)
+	}
+}
+
+// TestGrantExp_UnknownChar proves a grant on an entity that is not on the map
+// returns ErrEntityNotFound and accrues nothing.
+func TestGrantExp_UnknownChar(t *testing.T) {
+	w := newWorld()
+	_, _, err := w.GrantExp(999999, 1000, 250)
+	if !errors.Is(err, domain.ErrEntityNotFound) {
+		t.Errorf("GrantExp unknown = %v, want ErrEntityNotFound", err)
+	}
+}
+
+// TestGrantExp_LeaveMapPersists proves the EXP reward survives a LeaveMap: the
+// world's persist path (SaveState) carries base_exp/job_exp into the repo, so a
+// fresh map-enter reloads the accrued totals — the disconnect/restart durability
+// guarantee for the EXP-on-kill flow.
+func TestGrantExp_LeaveMapPersists(t *testing.T) {
+	repo := infra.NewMemoryWorldRepository(domain.Entity{
+		ID: 150001, Account: 2000001, Type: domain.EntityTypePC,
+		Map: "new_1-1", Pos: domain.Position{X: 53, Y: 111},
+		Name: "Hero", HP: 1000, MaxHP: 1000, Speed: 150,
+	})
+	w := app.NewWorldService(repo, slog.Default(), 50)
+	if _, err := w.EnterMap(context.Background(), 150001); err != nil {
+		t.Fatalf("EnterMap: %v", err)
+	}
+
+	if _, _, err := w.GrantExp(150001, 1234, 5678); err != nil {
+		t.Fatalf("GrantExp: %v", err)
+	}
+	if err := w.LeaveMap(context.Background(), 150001); err != nil {
+		t.Fatalf("LeaveMap: %v", err)
+	}
+	got, err := repo.LoadEnterState(context.Background(), 150001)
+	if err != nil {
+		t.Fatalf("LoadEnterState after leave: %v", err)
+	}
+	if got.BaseExp != 1234 || got.JobExp != 5678 {
+		t.Errorf("reloaded exp = base %d job %d, want base 1234 job 5678", got.BaseExp, got.JobExp)
+	}
+}
+
+// TestGrantExp_LeaveMapIdempotent proves a double LeaveMap (char-select logout
+// then conn-close) is a clean no-op for EXP persist — the idempotency guarantee
+// from Phase-23 must hold once EXP folds into the persist path.
+func TestGrantExp_LeaveMapIdempotent(t *testing.T) {
+	repo := infra.NewMemoryWorldRepository(domain.Entity{
+		ID: 150001, Account: 2000001, Type: domain.EntityTypePC,
+		Map: "new_1-1", Pos: domain.Position{X: 53, Y: 111},
+		Name: "Hero", HP: 1000, MaxHP: 1000, Speed: 150,
+	})
+	w := app.NewWorldService(repo, slog.Default(), 50)
+	if _, err := w.EnterMap(context.Background(), 150001); err != nil {
+		t.Fatalf("EnterMap: %v", err)
+	}
+
+	if _, _, err := w.GrantExp(150001, 100, 50); err != nil {
+		t.Fatalf("GrantExp: %v", err)
+	}
+	ctx := context.Background()
+	if err := w.LeaveMap(ctx, 150001); err != nil {
+		t.Fatalf("LeaveMap #1: %v", err)
+	}
+	// Second LeaveMap (OnClose re-entry) is a no-op: ErrEntityNotFound -> nil.
+	if err := w.LeaveMap(ctx, 150001); err != nil {
+		t.Fatalf("LeaveMap #2 (idempotent): %v", err)
+	}
+	got, err := repo.LoadEnterState(ctx, 150001)
+	if err != nil {
+		t.Fatalf("LoadEnterState after double leave: %v", err)
+	}
+	if got.BaseExp != 100 || got.JobExp != 50 {
+		t.Errorf("reloaded exp = base %d job %d, want base 100 job 50", got.BaseExp, got.JobExp)
+	}
+}
+
+type expNotif struct {
+	charID          uint32
+	baseExp, jobExp uint64
+}
+
+func equalExpNotifs(a, b []expNotif) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func equalNotifs(a, b []statChange) bool {

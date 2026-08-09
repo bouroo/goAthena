@@ -65,6 +65,16 @@ type Entity struct {
 	// false and a reconnecting PC re-sits. Mutated only via WorldService.SetSitting.
 	Sitting bool
 	Level   int16
+	// BaseExp/JobExp are a runtime cache of the character's accumulated EXP,
+	// populated at map-enter from the char table (base_exp/job_exp) and mutated
+	// by WorldService.GrantExp on a mob kill. They are NOT authoritative — the
+	// char table is — but GrantExp/LeaveMap/SaveAll read them so EXP accrues and
+	// persists without a DB round-trip per kill. uint64 matches the char-table
+	// column type and avoids overflow for the large, accumulating EXP total.
+	// Leveling (threshold-crossing, HP/SP/stat recalc) is deferred: GrantExp only
+	// accrues EXP here; a future track consumes these for level-up.
+	BaseExp uint64
+	JobExp  uint64
 	// Str/Agi/Vit/Int/Dex/Luk are the six base stats the combat service feeds to
 	// the kernel's Attacker/Defender profiles. PCs load them from the char table
 	// at map-enter; mobs leave them zero (mob stats come from mob_db by Class).
@@ -93,10 +103,14 @@ type WorldRepository interface {
 	// SetPosition persists the char's destination map + position (used by warp/
 	// transit before the client reconnects to re-enter the new map).
 	SetPosition(ctx context.Context, charID uint32, mapName string, pos Position) error
-	// SaveVitals persists the char's current hp/sp so in-session combat/regen/
-	// heal/respawn changes survive disconnect and restart. hp/sp are the runtime
-	// int32 vitals (clamped >= 0 by AddVitals/clampVitals).
-	SaveVitals(ctx context.Context, charID uint32, hp, sp int32) error
+	// SaveState persists the char's full runtime snapshot — hp/sp plus the
+	// accumulated base_exp/job_exp — so in-session combat/regen/heal/respawn and
+	// EXP-from-kill changes survive disconnect and restart. hp/sp are the runtime
+	// int32 vitals (clamped >= 0 by AddVitals/clampVitals); baseExp/jobExp are the
+	// uint64 EXP totals (clamped at math.MaxUint64 by GrantExp/clampExpAdd).
+	// Folding EXP into the same persist path means disconnect (LeaveMap),
+	// shutdown (SaveAll) and warp all persist EXP from one primitive.
+	SaveState(ctx context.Context, charID uint32, hp, sp int32, baseExp, jobExp uint64) error
 }
 
 // errors  for the world domain.

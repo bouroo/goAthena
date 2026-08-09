@@ -998,6 +998,19 @@ func (s *MapServer) handleMobDeath(c gnet.Conn, killerCharID uint32, mobGID uint
 	// who already received burst above). burst is immutable after this point, so
 	// fanning the same buffer to multiple connections is safe.
 	s.broadcast(burst, defender.Map, defender.Pos, killerCharID)
+	// EXP reward: grant the mob's mob_db BaseExp/JobExp to the killer. Best-effort
+	// — a mob with no mob_db entry (MobExp returns 0,0) earns nothing, and a killer
+	// that left between the hit and the grant surfaces ErrEntityNotFound, logged
+	// not fatal (the vanish/drop broadcast already completed). Party EXP split is
+	// deferred; the full reward goes to the solo killer. GrantExp fires
+	// OnExpChange, which emits the killer's two ZC_LONGLONGPAR_CHANGE frames.
+	base, job := s.spawn.MobExp(defender.Class)
+	if base == 0 && job == 0 {
+		return
+	}
+	if _, _, err := s.world.GrantExp(killerCharID, base, job); err != nil {
+		s.log.Warn("map: grant exp on mob death", "killer", killerCharID, "class", defender.Class, "err", err)
+	}
 }
 
 // handleUseSkill2 handles CZ_USE_SKILL2 (0x0438, 10B): cast a single-target

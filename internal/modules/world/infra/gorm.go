@@ -36,6 +36,8 @@ type charRow struct {
 	Sex       int8   `gorm:"column:sex"`
 	Class     uint16 `gorm:"column:class"`
 	BaseLevel uint16 `gorm:"column:base_level"`
+	BaseExp   uint64 `gorm:"column:base_exp"`
+	JobExp    uint64 `gorm:"column:job_exp"`
 	Hair      uint8  `gorm:"column:hair"`
 	Weapon    uint16 `gorm:"column:weapon"`
 	Shield    uint16 `gorm:"column:shield"`
@@ -79,6 +81,8 @@ func (r *GORMWorldRepository) LoadEnterState(ctx context.Context, charID uint32)
 		Sex:     uint8(cr.Sex),
 		Job:     int16(cr.Class),
 		Level:   int16(cr.BaseLevel),
+		BaseExp: cr.BaseExp,
+		JobExp:  cr.JobExp,
 		Head:    cr.HeadTop,
 		Weapon:  uint32(cr.Weapon),
 		Shield:  uint32(cr.Shield),
@@ -126,14 +130,17 @@ func (r *GORMWorldRepository) SetPosition(ctx context.Context, charID uint32, ma
 		}).Error
 }
 
-// SaveVitals persists the char's current hp/sp. Mirrors SetOnline's
-// map[string]any Updates (GORM auto-quotes hp/sp); hp/sp are clamped >= 0 so
-// the int-unsigned char column is never fed a negative.
-func (r *GORMWorldRepository) SaveVitals(ctx context.Context, charID uint32, hp, sp int32) error {
+// SaveState persists the char's full runtime snapshot: hp/sp plus the
+// accumulated base_exp/job_exp. Mirrors SetOnline's map[string]any Updates
+// (GORM auto-quotes hp/sp; base_exp/job_exp are plain columns); hp/sp are
+// clamped >= 0 so the int-unsigned char column is never fed a negative.
+func (r *GORMWorldRepository) SaveState(ctx context.Context, charID uint32, hp, sp int32, baseExp, jobExp uint64) error {
 	return r.db.WithContext(ctx).Table("char").
 		Where("char_id = ?", charID).
 		Updates(map[string]any{
-			"hp": hp,
-			"sp": sp,
+			"hp":       hp,
+			"sp":       sp,
+			"base_exp": baseExp,
+			"job_exp":  jobExp,
 		}).Error
 }
