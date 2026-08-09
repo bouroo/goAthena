@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/labstack/echo/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -69,9 +70,12 @@ func (a *App) Run(ctx context.Context) error {
 		mapAddr := fmt.Sprintf("tcp://%s:%d", a.cfg.Gateway.LoginHost, a.cfg.Gateway.MapPort)
 		a.deps.mapSrv.Start(mapAddr)
 	}
-	// The world tick loop drives entity/AOI updates at the configured rate.
+	// The world tick loop drives natural HP/SP regen at the configured rate.
 	if a.deps.tick != nil {
-		go a.deps.tick.StartTick(ctx, nil) //nolint:contextcheck // lifecycle tied to ctx via select
+		tick := a.deps.tick
+		go tick.StartTick(ctx, func(_ context.Context, dt time.Duration) { //nolint:contextcheck // lifecycle tied to ctx via select
+			tick.RegenTick(dt)
+		})
 	}
 
 	errCh := make(chan error, 1)

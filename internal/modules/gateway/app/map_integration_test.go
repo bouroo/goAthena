@@ -61,6 +61,7 @@ type mapTestEnv struct {
 	spawn    *worldapp.SpawnService
 	charRepo *charinfra.MemoryCharacterRepository
 	itemRepo *invinfra.MemoryItemRepository
+	world    *worldapp.WorldService
 }
 
 // buildTestMapDeps constructs the MapServer's collaborators against in-memory
@@ -99,7 +100,7 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ms, mapTestEnv{spawn: spawn, charRepo: charRepo, itemRepo: itemRepo}
+	return ms, mapTestEnv{spawn: spawn, charRepo: charRepo, itemRepo: itemRepo, world: world}
 }
 
 // startAndDial starts the map listener on port and dials it, failing the test if
@@ -312,6 +313,75 @@ func TestMap_Dispatch_MovementAfterEnter(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE {
 		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE)
+	}
+}
+
+// TestMap_RegenEmitsParChange verifies the production regen wiring end-to-end
+// through the real gnet reactor: RegenTick advances a living PC's HP and the
+// NewMapServer-wired OnStatChange sink delivers ZC_PAR_CHANGE to that player's
+// connection. RegenTick is driven directly (no real ticker) so the assertion is
+// deterministic, not timing-fragile.
+func TestMap_RegenEmitsParChange(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	// 1. CZ_ENTER -> ZC_ACCEPT_ENTER; draining the 13-byte reply guarantees the
+	//    reactor has registered the conn for charID 150001 before we proceed.
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	enterReply := make([]byte, 13)
+	if _, err := io.ReadFull(conn, enterReply); err != nil {
+		t.Fatalf("read accept-enter: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
+		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	}
+
+	// 2. Damage the PC (entered at full HP) by re-seeding it in the world; the
+	//    conn stays registered (RemoveEntity does not touch ms.conns).
+	if err := env.world.RemoveEntity(150001); err != nil {
+		t.Fatalf("RemoveEntity: %v", err)
+	}
+	// MaxHP 1000, Vit 0 -> HP regen = 5 + 0 + 1 = 6 per 6 s interval.
+	if err := env.world.AddEntity(worlddomain.Entity{
+		ID: 150001, Type: worlddomain.EntityTypePC, Map: "new_1-1",
+		Pos: worlddomain.Position{X: 53, Y: 111}, HP: 500, MaxHP: 1000, Vit: 0,
+		SP: 40, MaxSP: 100, Int: 0, Speed: 150,
+	}); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+
+	// 3. Advance one HP interval (6 s). HP 500 -> 506; SP not yet due (6 s < 8 s),
+	//    so it is echoed unchanged. Expect two 8-byte ZC_PAR_CHANGE frames.
+	env.world.RegenTick(6 * time.Second)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	frames := make([]byte, 16) // two ParChangeResponse (8 bytes each)
+	if _, err := io.ReadFull(conn, frames); err != nil {
+		t.Fatalf("read regen frames: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(frames[0:2]); got != ropacket.HeaderZCPARCHANGE {
+		t.Fatalf("frame 0 header = 0x%04x, want ZC_PAR_CHANGE", got)
+	}
+	if got := binary.LittleEndian.Uint16(frames[2:4]); got != ropacket.SPHP {
+		t.Fatalf("frame 0 varID = %d, want SPHP (%d)", got, ropacket.SPHP)
+	}
+	if got := binary.LittleEndian.Uint32(frames[4:8]); got != 506 {
+		t.Fatalf("HP after regen = %d, want 506", got)
+	}
+	if got := binary.LittleEndian.Uint16(frames[8:10]); got != ropacket.HeaderZCPARCHANGE {
+		t.Fatalf("frame 1 header = 0x%04x, want ZC_PAR_CHANGE", got)
+	}
+	if got := binary.LittleEndian.Uint16(frames[10:12]); got != ropacket.SPSP {
+		t.Fatalf("frame 1 varID = %d, want SPSP (%d)", got, ropacket.SPSP)
+	}
+	if got := binary.LittleEndian.Uint32(frames[12:16]); got != 40 {
+		t.Fatalf("SP echoed = %d, want 40 (not yet regen)", got)
 	}
 }
 
@@ -1019,7 +1089,7 @@ func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*g
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ms, mapTestEnv{spawn: spawn, charRepo: charRepo, itemRepo: itemRepo}
+	return ms, mapTestEnv{spawn: spawn, charRepo: charRepo, itemRepo: itemRepo, world: world}
 }
 
 // startAndDialTwo starts one map listener and dials two independent connections

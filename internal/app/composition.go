@@ -50,6 +50,7 @@ type deps struct {
 // tickStarter is the lifecycle surface for the world tick loop.
 type tickStarter interface {
 	StartTick(ctx context.Context, update func(ctx context.Context, dt time.Duration))
+	RegenTick(dt time.Duration)
 	Stop()
 }
 

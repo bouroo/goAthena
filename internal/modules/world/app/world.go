@@ -29,7 +29,25 @@ type WorldService struct {
 	log      *slog.Logger
 	tickRate time.Duration
 	stopCh   chan struct{}
+	// hpSeconds/spSeconds accumulate elapsed time since the last natural regen.
+	// When the standing interval elapses (6 s HP, 8 s SP) RegenTick advances every
+	// living PC's vitals. Written only from the single tick-loop goroutine, so no
+	// lock is required.
+	hpSeconds float64
+	spSeconds float64
+	// OnStatChange, when set, is invoked after RegenTick changes a player's HP/SP
+	// so the gateway can emit ZC_PAR_CHANGE to that player's client. charID is the
+	// entity's GID (char_id). nil = regen is silent (server state still advances;
+	// useful for tests and headless operation). Invoked off the world mutex.
+	OnStatChange func(charID uint32, hp, sp int32)
 }
+
+// Pre-renewal standing natural-regen intervals (rAthena status_natural_heal).
+// Sitting halves them; moving/attacking pauses regen — neither is modeled here.
+const (
+	hpRegenInterval = 6 * time.Second
+	spRegenInterval = 8 * time.Second
+)
 
 // NewWorldService builds a WorldService. The tick rate is derived from
 // tickRateHz (50 = 20 ms). The tick loop starts on StartTick and stops on Stop.
@@ -209,12 +227,11 @@ func (w *WorldService) PlayersOnMap(mapName string) []domain.EntityID {
 	return out
 }
 
-// StartTick runs the periodic game loop. Each tick fires update (the gateway/
-// ingress layer registers its broadcast logic there) and blocks until ctx is
-// cancelled or Stop is called. When update is nil no periodic entity-state work
-// is established yet -- respawn runs on SpawnService's own timers and combat is
-// event-driven -- so StartTick logs a single boot warning and returns instead of
-// spinning the ticker at the configured rate for nothing.
+// StartTick runs the periodic game loop. Each tick fires update and blocks until
+// ctx is cancelled or Stop is called. The composition root passes a regen
+// callback (RegenTick); spawn runs on SpawnService's own timers and combat is
+// event-driven. When update is nil (tests only) StartTick logs a single boot
+// warning and returns instead of spinning the ticker for nothing.
 func (w *WorldService) StartTick(ctx context.Context, update func(ctx context.Context, dt time.Duration)) {
 	rateHz := int(time.Second / w.tickRate)
 	if update == nil {
@@ -243,6 +260,88 @@ func (w *WorldService) Stop() {
 	default:
 		close(w.stopCh)
 	}
+}
+
+// RegenTick advances natural HP/SP regen by dt. It accumulates elapsed time and,
+// when the standing interval elapses (6 s HP, 8 s SP), advances every living PC's
+// vitals by the pre-renewal status_natural_heal amount, clamped to the max. Mobs/
+// NPCs and dead PCs (HP <= 0) are skipped. When OnStatChange is set it is invoked
+// per changed PC, off the world mutex. Entity mutation takes the world mutex
+// (combat's applyDamage uses the same lock), so regen is race-free with damage.
+func (w *WorldService) RegenTick(dt time.Duration) {
+	w.hpSeconds += dt.Seconds()
+	w.spSeconds += dt.Seconds()
+	hpInt := hpRegenInterval.Seconds()
+	spInt := spRegenInterval.Seconds()
+	// Count elapsed intervals so a large dt (e.g. a stalled tick, a headless
+	// test advancing time) catches up rather than firing a single regen.
+	hpTicks := int(w.hpSeconds / hpInt)
+	spTicks := int(w.spSeconds / spInt)
+	if hpTicks > 0 {
+		w.hpSeconds -= float64(hpTicks) * hpInt
+	}
+	if spTicks > 0 {
+		w.spSeconds -= float64(spTicks) * spInt
+	}
+	if hpTicks == 0 && spTicks == 0 {
+		return
+	}
+
+	type statNotify struct {
+		charID uint32
+		hp, sp int32
+	}
+	var pending []statNotify
+	w.mu.Lock()
+	for id, e := range w.entities {
+		if e.Type != domain.EntityTypePC || e.HP <= 0 {
+			continue // only living PCs regen
+		}
+		changed := false
+		if hpTicks > 0 && e.HP < e.MaxHP {
+			e.HP = clampRegen(e.HP, e.MaxHP, hpRegenAmount(e.MaxHP, e.Vit)*int32(hpTicks)) //nolint:gosec // G115: hpTicks is a count of 6s intervals; tiny at the 50Hz tick.
+			changed = true
+		}
+		if spTicks > 0 && e.SP < e.MaxSP {
+			e.SP = clampRegen(e.SP, e.MaxSP, spRegenAmount(e.MaxSP, e.Int)*int32(spTicks)) //nolint:gosec // G115: spTicks is a count of 8s intervals; tiny at the 50Hz tick.
+			changed = true
+		}
+		if changed {
+			pending = append(pending, statNotify{charID: uint32(id), hp: e.HP, sp: e.SP})
+		}
+	}
+	w.mu.Unlock()
+
+	if w.OnStatChange == nil {
+		return
+	}
+	for _, n := range pending {
+		w.OnStatChange(n.charID, n.hp, n.sp)
+	}
+}
+
+// hpRegenAmount is the standing HP regen per 6 s interval: floor(MaxHP/200) +
+// floor(Vit/2) + 1. The divisor and +1 follow the goAthena spec; rAthena's exact
+// status_natural_heal constants are not verified against source (off-limits to
+// read here) — adjust here if a domain check diverges.
+func hpRegenAmount(maxHP int32, vit uint16) int32 {
+	return maxHP/200 + int32(vit)/2 + 1
+}
+
+// spRegenAmount is the standing SP regen per 8 s interval: floor(MaxSP/100) +
+// floor(Int/2) + 1. Same spec-source caveat as hpRegenAmount.
+func spRegenAmount(maxSP int32, intStat uint16) int32 {
+	return maxSP/100 + int32(intStat)/2 + 1
+}
+
+// clampRegen adds amt to cur and clamps at maxV. The int64 intermediate avoids
+// overflow when cur+amt would exceed int32.
+func clampRegen(cur, maxV, amt int32) int32 {
+	v := int64(cur) + int64(amt)
+	if v > int64(maxV) {
+		return maxV
+	}
+	return int32(v) //nolint:gosec // G115: bounded to [cur, maxV] which fits int32.
 }
 
 // EnterMap loads a character's enter state from the repo and registers it as a

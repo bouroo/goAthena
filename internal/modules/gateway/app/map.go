@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -77,7 +78,7 @@ type MapServer struct {
 // shops/shopStore/trade may be nil in a reduced harness where their packets are
 // never exercised, but production wiring resolves all three.
 func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, equip *worldapp.EquipService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
-	return &MapServer{
+	s := &MapServer{
 		world:       world,
 		spawn:       spawn,
 		combat:      combat,
@@ -94,7 +95,12 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 		conns:       make(map[uint32]gnet.Conn),
 		db:          ropacket.NewMapServerDB(),
 		openedShops: make(map[uint32]string),
-	}, nil
+	}
+	// Regen advances server-side on the world tick loop; this sink bridges the
+	// changed vitals back to the player's client as ZC_PAR_CHANGE (mirrors the
+	// script percentheal path). A char with no live conn is a no-op.
+	world.OnStatChange = s.notifyStatChange
+	return s, nil
 }
 
 // setOpenedShop records the shop a player opened (threaded from
@@ -130,6 +136,21 @@ func (s *MapServer) connFor(charID uint32) (gnet.Conn, bool) {
 	c, ok := s.conns[charID]
 	s.connMu.RUnlock()
 	return c, ok
+}
+
+// notifyStatChange emits ZC_PAR_CHANGE for HP then SP to the char's client. It is
+// the world regen tick's notification sink (world.OnStatChange); a char with no
+// live connection (offline, or not on this map-server) is skipped. Mirrors the
+// ScriptHost.PercentHeal encoding so clients update vitals identically.
+func (s *MapServer) notifyStatChange(charID uint32, hp, sp int32) {
+	c, ok := s.connFor(charID)
+	if !ok {
+		return
+	}
+	var buf bytes.Buffer
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPHP, Count: hp}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: sp}.Encode(&buf)
+	_ = c.AsyncWrite(buf.Bytes(), nil)
 }
 
 // unregisterConn drops a charID's live connection and its last-opened shop from
