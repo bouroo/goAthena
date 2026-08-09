@@ -58,10 +58,19 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The scan must reference the exact image the publish job pushed. Two
+      # gotchas: (1) docker/metadata-action lowercases github.repository for the
+      # build, so the image lives at ghcr.io/bouroo/goathena — trivy rejects the
+      # mixed-case ref github.repository expands to; (2) the :latest tag is gated
+      # to the default branch, but cd.yml only fires on version tags, so latest is
+      # never published here — scan the semver tag the tag-push actually built.
+      - name: Resolve image ref
+        id: img
+        run: echo "ref=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}:latest
+          image-ref: ${{ steps.img.outputs.ref }}
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
