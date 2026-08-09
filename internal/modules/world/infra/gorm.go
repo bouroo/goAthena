@@ -125,3 +125,15 @@ func (r *GORMWorldRepository) SetPosition(ctx context.Context, charID uint32, ma
 			"last_y":   pos.Y,
 		}).Error
 }
+
+// SaveVitals persists the char's current hp/sp. Mirrors SetOnline's
+// map[string]any Updates (GORM auto-quotes hp/sp); hp/sp are clamped >= 0 so
+// the int-unsigned char column is never fed a negative.
+func (r *GORMWorldRepository) SaveVitals(ctx context.Context, charID uint32, hp, sp int32) error {
+	return r.db.WithContext(ctx).Table("char").
+		Where("char_id = ?", charID).
+		Updates(map[string]any{
+			"hp": hp,
+			"sp": sp,
+		}).Error
+}

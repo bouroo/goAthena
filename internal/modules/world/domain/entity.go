@@ -93,6 +93,10 @@ type WorldRepository interface {
 	// SetPosition persists the char's destination map + position (used by warp/
 	// transit before the client reconnects to re-enter the new map).
 	SetPosition(ctx context.Context, charID uint32, mapName string, pos Position) error
+	// SaveVitals persists the char's current hp/sp so in-session combat/regen/
+	// heal/respawn changes survive disconnect and restart. hp/sp are the runtime
+	// int32 vitals (clamped >= 0 by AddVitals/clampVitals).
+	SaveVitals(ctx context.Context, charID uint32, hp, sp int32) error
 }
 
 // errors  for the world domain.

@@ -128,6 +128,16 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 		log.Error("world service resolve failed; tick loop will not run", "err", err)
 	} else {
 		d.tick = ws
+		// Graceful-shutdown save-all: appended before the listeners so the reverse
+		// close order stops the listeners first (their OnClose handlers persist
+		// per-conn), then this flushes any remaining online PCs (vitals + offline)
+		// before the DB connection is closed. Best-effort and bounded; a slow DB
+		// cannot hang shutdown beyond the timeout.
+		closers = append(closers, func() {
+			sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			ws.SaveAll(sctx)
+		})
 	}
 
 	// Resolve the mob AI service so the tick loop can chain MonsterTick after

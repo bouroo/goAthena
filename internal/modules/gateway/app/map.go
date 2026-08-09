@@ -262,28 +262,36 @@ func (s *MapServer) unregisterConn(charID uint32) {
 }
 
 // OnClose prunes the disconnecting connection from the char-indexed registries
-// and removes the player's world entity so a disconnect is visible to others.
-// It runs on the closing connection's own eventloop goroutine, so reading its
-// cached mapAuth context is race-free here (unlike handler goroutines, which
-// must not touch c.Context()).
+// and persists the disconnect (offline flag + last position + hp/sp via
+// LeaveMap) so the player's in-session state survives a restart, then removes
+// the player's world entity so a disconnect is visible to others. It runs on
+// the closing connection's own eventloop goroutine, so reading its cached
+// mapAuth context is race-free here (unlike handler goroutines, which must not
+// touch c.Context()).
 func (s *MapServer) OnClose(c gnet.Conn, _ error) gnet.Action {
 	a, ok := c.Context().(mapAuth)
 	if !ok {
 		return gnet.None
 	}
 	s.unregisterConn(a.charID)
-	// Resolve the player's map+pos BEFORE removing the entity (broadcast anchors
-	// on the cell the player occupied), then despawn it from the world so
-	// PlayersNear stops returning the ghost and neighbors see the departure.
+	// Snapshot the player's map+pos BEFORE removing the entity: the vanish
+	// broadcast anchors on the cell the player occupied.
 	e, err := s.world.Get(worlddomain.EntityID(a.charID))
 	if err != nil {
 		s.log.Debug("map conn closed, entity already gone", "gid", a.charID)
 		return gnet.None
 	}
-	if err := s.world.RemoveEntity(worlddomain.EntityID(a.charID)); err != nil {
-		s.log.Warn("map conn closed, remove entity", "gid", a.charID, "err", err)
-		return gnet.None
+	// Persist the disconnect through LeaveMap — the single-source persist
+	// primitive (warp + disconnect funnel here): it removes the entity from the
+	// registry + AOI grid and writes the offline flag + last position + hp/sp, so
+	// a disconnect neither leaves a stale-online row nor loses in-session vitals.
+	// Best-effort: a failure is logged, not fatal — the vanish broadcast still
+	// runs. The bounded ctx keeps a slow DB from stalling the reactor eventloop.
+	leaveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := s.world.LeaveMap(leaveCtx, a.charID); err != nil {
+		s.log.Warn("map conn closed, leave world", "gid", a.charID, "err", err)
 	}
+	cancel()
 	// Broadcast the departure to OTHER nearby players (ZC_NOTIFY_VANISH,
 	// CLR_OUTSIGHT). The disconnecting conn is already closing, so excluding it
 	// from its own goodbye is both correct and a no-op-in-practice.

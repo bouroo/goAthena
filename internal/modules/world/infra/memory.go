@@ -61,3 +61,19 @@ func (r *MemoryWorldRepository) SetPosition(_ context.Context, charID uint32, ma
 	r.data[id] = e
 	return nil
 }
+
+// SaveVitals stores the char's hp/sp so the memory repo (used by unit tests)
+// reflects a persisted vital write the same way the GORM repo does.
+func (r *MemoryWorldRepository) SaveVitals(_ context.Context, charID uint32, hp, sp int32) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id := domain.EntityID(charID)
+	e, ok := r.data[id]
+	if !ok {
+		return domain.ErrEntityNotFound
+	}
+	e.HP = hp
+	e.SP = sp
+	r.data[id] = e
+	return nil
+}

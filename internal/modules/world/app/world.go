@@ -427,7 +427,12 @@ func (w *WorldService) EnterMap(ctx context.Context, charID uint32) (domain.Enti
 	return e, nil
 }
 
-// LeaveMap removes a character from the world and marks it offline.
+// LeaveMap removes a character from the world and marks it offline. Both the
+// warp path (transit.Warp) and the disconnect path (gateway OnClose) funnel
+// through here so position + offline flag + vitals are persisted from a single
+// primitive. e is a value snapshot taken under w.mu by Get, so e.HP/e.SP are a
+// consistent point-in-time read (combat/regen mutate HP concurrently on the
+// tick/attack goroutines) — the DB writes run after the snapshot, off the lock.
 func (w *WorldService) LeaveMap(ctx context.Context, charID uint32) error {
 	e, err := w.Get(domain.EntityID(charID))
 	if err != nil {
@@ -439,7 +444,48 @@ func (w *WorldService) LeaveMap(ctx context.Context, charID uint32) error {
 	if err := w.repo.SetOnline(ctx, charID, false, e.Pos); err != nil {
 		return fmt.Errorf("set offline: %w", err)
 	}
+	if err := w.repo.SaveVitals(ctx, charID, e.HP, e.SP); err != nil {
+		return fmt.Errorf("save vitals: %w", err)
+	}
 	return nil
+}
+
+// SaveAll persists every online PC's vitals and marks it offline, so a graceful
+// shutdown/restart does not lose in-session HP/SP changes (combat/regen/heal/
+// respawn) nor leave stale-online rows. Best-effort: each char's failure is
+// logged and skipped so one bad row never aborts the save-all. Vitals+position
+// are snapshotted under w.mu (the normal shutdown path has already stopped the
+// tick loop, so regen is not mutating concurrently); the DB writes run after the
+// lock is released so the snapshot does not block the tick loop on other paths.
+func (w *WorldService) SaveAll(ctx context.Context) {
+	w.mu.RLock()
+	type vitalSnap struct {
+		charID uint32
+		pos    domain.Position
+		hp, sp int32
+	}
+	snaps := make([]vitalSnap, 0, len(w.entities))
+	for id, e := range w.entities {
+		if e.Type != domain.EntityTypePC {
+			continue
+		}
+		snaps = append(snaps, vitalSnap{
+			charID: uint32(id), //nolint:gosec // G115: EntityID wraps a char_id (uint32).
+			pos:    e.Pos,
+			hp:     e.HP,
+			sp:     e.SP,
+		})
+	}
+	w.mu.RUnlock()
+	for _, s := range snaps {
+		if err := w.repo.SaveVitals(ctx, s.charID, s.hp, s.sp); err != nil {
+			w.log.Warn("save-all vitals", "char_id", s.charID, "err", err)
+			continue
+		}
+		if err := w.repo.SetOnline(ctx, s.charID, false, s.pos); err != nil {
+			w.log.Warn("save-all offline", "char_id", s.charID, "err", err)
+		}
+	}
 }
 
 // SetPosition persists a char's destination map + position (warp/transit). The
