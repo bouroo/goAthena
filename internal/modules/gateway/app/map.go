@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/panjf2000/gnet/v2"
 
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	shopapp "github.com/bouroo/goAthena/internal/modules/commerce/shop/app"
 	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
+	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
@@ -44,13 +47,58 @@ type MapServer struct {
 	inv     *invapp.InventoryService
 	content *contentapp.Engine
 	skills  *worldapp.SkillService
-	sess    chardomain.SessionStore
-	log     *slog.Logger
+	shops   *shopapp.ShopService
+	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
+	// DEALTYPE carries an NPC id, not a shop name).
+	shopStore contentdomain.ShopStore
+	sess      chardomain.SessionStore
+	log       *slog.Logger
+	// openedShops maps charID to the shop the player last opened via
+	// CZ_ACK_SELECT_DEALTYPE, so the following CZ_PC_PURCHASE/SELL_ITEMLIST
+	// (which carry item entries, not the NPC id) can resolve the shop. Guarded
+	// by shopMu because shop handlers run off the reactor goroutine. One entry
+	// per char, overwritten on each open; it is not pruned on disconnect (a
+	// bounded, char-count leak acceptable until a connection-close hook lands).
+	openedShops map[uint32]string
+	shopMu      sync.RWMutex
 }
 
-// NewMapServer builds a map listener.
-func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
-	return &MapServer{world: world, spawn: spawn, combat: combat, inv: inv, content: content, skills: skills, sess: sess, log: log, handlers: mapHandlers(), db: ropacket.NewMapServerDB()}, nil
+// NewMapServer builds a map listener. shops and shopStore wire the NPC shop
+// commerce verb (open/buy/sell); they may be nil in a reduced harness where
+// shop packets are never exercised, but production wiring resolves both.
+func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
+	return &MapServer{
+		world:       world,
+		spawn:       spawn,
+		combat:      combat,
+		inv:         inv,
+		content:     content,
+		skills:      skills,
+		shops:       shops,
+		shopStore:   shopStore,
+		sess:        sess,
+		log:         log,
+		handlers:    mapHandlers(),
+		db:          ropacket.NewMapServerDB(),
+		openedShops: make(map[uint32]string),
+	}, nil
+}
+
+// setOpenedShop records the shop a player opened (threaded from
+// CZ_ACK_SELECT_DEALTYPE to the subsequent CZ_PC_PURCHASE/SELL_ITEMLIST, which
+// do not restate the NPC id). Safe to call from a shop handler goroutine.
+func (s *MapServer) setOpenedShop(charID uint32, shopName string) {
+	s.shopMu.Lock()
+	defer s.shopMu.Unlock()
+	s.openedShops[charID] = shopName
+}
+
+// openedShop returns the shop the player last opened, or false.
+func (s *MapServer) openedShop(charID uint32) (string, bool) {
+	s.shopMu.RLock()
+	defer s.shopMu.RUnlock()
+	name, ok := s.openedShops[charID]
+	return name, ok
 }
 
 // OnBoot captures the engine for shutdown.

@@ -3,6 +3,7 @@
 package app_test
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 	"log/slog"
@@ -13,7 +14,12 @@ import (
 
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
 	charinfra "github.com/bouroo/goAthena/internal/modules/character/infra"
+	shop "github.com/bouroo/goAthena/internal/modules/commerce/shop"
+	shopapp "github.com/bouroo/goAthena/internal/modules/commerce/shop/app"
+	shopdomain "github.com/bouroo/goAthena/internal/modules/commerce/shop/domain"
 	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
+	contentinfra "github.com/bouroo/goAthena/internal/modules/content/infra"
+	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
 	gwapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	invinfra "github.com/bouroo/goAthena/internal/modules/inventory/infra"
@@ -31,6 +37,35 @@ import (
 // attack, drop a floor item to pick up) before driving the client packets.
 func startMapListenerWithSpawn(t *testing.T, port int, sessions *charinfra.MemorySessionStore) (net.Conn, *worldapp.SpawnService) {
 	t.Helper()
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	return conn, env.spawn
+}
+
+// startMapListenerWithShopEnv is like startMapListenerWithSpawn but returns the
+// full env (character repo + shared item repo) so the shop test can seed a
+// character's zeny before a buy and assert the item add + zeny deduction after.
+func startMapListenerWithShopEnv(t *testing.T, port int, sessions *charinfra.MemorySessionStore) (net.Conn, mapTestEnv) {
+	t.Helper()
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	return conn, env
+}
+
+// mapTestEnv bundles the wired deps a shop test can seed/assert against.
+type mapTestEnv struct {
+	spawn    *worldapp.SpawnService
+	charRepo *charinfra.MemoryCharacterRepository
+	itemRepo *invinfra.MemoryItemRepository
+}
+
+// buildTestMapDeps constructs the MapServer's collaborators against in-memory
+// repos, wiring the shop commerce verb: a real EconomyService over a memory
+// character repo (so buy/sell move real zeny), the dev "Tool Shop" catalog bound
+// to its NPC GID, and the shared item repository the inventory and shop services
+// both use. Returns the server + env.
+func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gwapp.MapServer, mapTestEnv) {
+	t.Helper()
 	wrepo := worldinfra.NewMemoryWorldRepository(worlddomain.Entity{
 		ID: 150001, Account: 2000001, Map: "new_1-1",
 		Pos: worlddomain.Position{X: 53, Y: 111}, Sex: 1, Job: 0, Level: 1,
@@ -39,16 +74,32 @@ func startMapListenerWithSpawn(t *testing.T, port int, sessions *charinfra.Memor
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
 	spawn := worldapp.NewSpawnService(world, nil, nil)
 	combat := worldapp.NewCombatService(world, nil)
-	inv := invapp.NewInventoryService(invinfra.NewMemoryItemRepository())
+	itemRepo := invinfra.NewMemoryItemRepository()
+	inv := invapp.NewInventoryService(itemRepo)
 	content := contentapp.NewEngine(nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
-	ms, err := gwapp.NewMapServer(world, spawn, combat, inv, content, skills, sessions, slog.Default())
+
+	// Shop commerce: a real economy over a memory character repo + the dev shop
+	// catalog, bound to its NPC GID so a CZ_ACK_SELECT_DEALTYPE on that GID opens it.
+	charRepo := charinfra.NewMemoryCharacterRepository()
+	shops := shopapp.NewShopService(devTestCatalog(), itemRepo,
+		testEconPort{svc: economyapp.NewEconomyService(charRepo)})
+	shopStore := contentinfra.NewMemoryShopStore()
+	shopStore.RegisterShop(shop.DevShopGID, devTestShopName)
+
+	ms, err := gwapp.NewMapServer(world, spawn, combat, inv, content, skills, shops, shopStore, sessions, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
+	return ms, mapTestEnv{spawn: spawn, charRepo: charRepo, itemRepo: itemRepo}
+}
+
+// startAndDial starts the map listener on port and dials it, failing the test if
+// it never accepts within the deadline. The server is cleaned up on test end.
+func startAndDial(t *testing.T, ms *gwapp.MapServer, port int) net.Conn {
+	t.Helper()
 	ms.Start("tcp://127.0.0.1:" + strconv.Itoa(port))
 	t.Cleanup(ms.Stop)
-
 	var conn net.Conn
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -60,7 +111,35 @@ func startMapListenerWithSpawn(t *testing.T, port int, sessions *charinfra.Memor
 	if conn == nil {
 		t.Fatal("map listener never accepted")
 	}
-	return conn, spawn
+	return conn
+}
+
+// devTestShopName is the catalog name the test shop and its NPC-GID binding share.
+const devTestShopName = "Tool Shop"
+
+// devTestCatalog mirrors the dev seed (commerce/shop/seed.go): a "Tool Shop"
+// selling a Red Potion (501) at 50z and a Knife (1201) at 25z with half-price
+// sell-back. Duplicated here because the seed builder is unexported; kept in sync.
+func devTestCatalog() *shopdomain.CatalogRegistry {
+	return shopdomain.NewCatalogRegistry(shopdomain.Shop{
+		Name: devTestShopName,
+		Items: []shopdomain.ShopItem{
+			{NameID: 501, Price: 50, SellPrice: 25},
+			{NameID: 1201, Price: 25, SellPrice: 12},
+		},
+	})
+}
+
+// testEconPort adapts the real economy service to the shop EconomyPort so the
+// integration test exercises real zeny movement (production di.go uses the same
+// adapter shape; it is unexported there, so the test re-implements it).
+type testEconPort struct{ svc *economyapp.EconomyService }
+
+func (e testEconPort) DeductZeny(ctx context.Context, charID uint32, amount int32) error {
+	return e.svc.DeductZeny(ctx, charID, amount)
+}
+func (e testEconPort) CreditZeny(ctx context.Context, charID uint32, amount int32) error {
+	return e.svc.CreditZeny(ctx, charID, amount)
 }
 
 // testSkillDB seeds a one-skill registry for integration tests: a melee-range
@@ -673,5 +752,119 @@ func TestMap_Dispatch_InputEditDlgStrVariableFrameKeepsConnection(t *testing.T) 
 	}
 	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE {
 		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x) (variable frame mis-lengthed?)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE)
+	}
+}
+
+// TestMap_Dispatch_ShopBuyRoundTrip exercises the NPC shop commerce verb (#15):
+// CZ_ACK_SELECT_DEALTYPE (Buy) opens the shop and the server replies with
+// ZC_PC_PURCHASE_ITEMLIST carrying the catalog; then CZ_PC_PURCHASE_ITEMLIST buys
+// one Red Potion and the server replies ZC_PC_PURCHASE_RESULT(success). The
+// transaction is real — zeny is deducted (1000 → 950) and the item lands in
+// inventory — proving the full buy round-trip through ShopService.
+func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	conn, env := startMapListenerWithShopEnv(t, port, sessions)
+	defer conn.Close()
+
+	// Seed the economy character. The first create in a fresh repo gets id
+	// 150001, matching the pre-seeded world entity and the CZ_ENTER gid.
+	const gid uint32 = 150001
+	hero, err := env.charRepo.Create(t.Context(), chardomain.Character{
+		AccountID: 2000001, Name: "Hero", Zeny: 1000,
+	})
+	if err != nil {
+		t.Fatalf("seed character: %v", err)
+	}
+	if uint32(hero.ID) != gid {
+		t.Fatalf("seeded character id = %d, want %d (world entity)", hero.ID, gid)
+	}
+
+	// 1. CZ_ENTER → ZC_ACCEPT_ENTER (13B): drain the full reply.
+	sendCZEnter(t, conn, 2000001, gid, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	enterReply := make([]byte, 13)
+	if _, err := io.ReadFull(conn, enterReply); err != nil {
+		t.Fatalf("read accept-enter: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
+		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	}
+
+	// 2. CZ_ACK_SELECT_DEALTYPE (Buy) on the dev shop NPC → ZC_PC_PURCHASE_ITEMLIST.
+	ack := make([]byte, 7)
+	binary.LittleEndian.PutUint16(ack[0:], ropacket.HeaderCZACKSELECTDEALTYPE)
+	binary.LittleEndian.PutUint32(ack[2:], shop.DevShopGID)
+	ack[6] = 0 // type = Buy
+	if _, err := conn.Write(ack); err != nil {
+		t.Fatalf("send CZ_ACK_SELECT_DEALTYPE: %v", err)
+	}
+	hdr := make([]byte, 4) // cmd + packetLength
+	if _, err := io.ReadFull(conn, hdr); err != nil {
+		t.Fatalf("read purchase-list header: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(hdr[0:2]); got != ropacket.HeaderZCPCPURCHASEITEMLIST {
+		t.Fatalf("purchase-list header = 0x%04x, want ZC_PC_PURCHASE_ITEMLIST (0x%04x)", got, ropacket.HeaderZCPCPURCHASEITEMLIST)
+	}
+	listLen := int(binary.LittleEndian.Uint16(hdr[2:4]))
+	if listLen < 4 {
+		t.Fatalf("purchase-list length = %d, want >= 4", listLen)
+	}
+	body := make([]byte, listLen-4)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		t.Fatalf("read purchase-list body: %v", err)
+	}
+	if len(body) < 4 {
+		t.Fatalf("purchase-list body too short for one item: %d bytes", len(body))
+	}
+	// First ShopBuyItem: uint32 itemId at offset 0. The dev shop lists Red
+	// Potion (501) first.
+	if got := binary.LittleEndian.Uint32(body[0:4]); got != 501 {
+		t.Fatalf("first buy item = %d, want Red Potion (501)", got)
+	}
+
+	// 3. CZ_PC_PURCHASE_ITEMLIST: buy 1 Red Potion (variable: cmd + len + entry).
+	pur := make([]byte, 10) // 4 header + 6 (itemId uint32 + amount uint16)
+	binary.LittleEndian.PutUint16(pur[0:], ropacket.HeaderCZPCPURCHASEITEMLIST)
+	binary.LittleEndian.PutUint16(pur[2:], 10)  // packet length
+	binary.LittleEndian.PutUint32(pur[4:], 501) // itemId
+	binary.LittleEndian.PutUint16(pur[8:], 1)   // amount
+	if _, err := conn.Write(pur); err != nil {
+		t.Fatalf("send CZ_PC_PURCHASE_ITEMLIST: %v", err)
+	}
+	res := make([]byte, 3) // ZC_PC_PURCHASE_RESULT: cmd + result byte
+	if _, err := io.ReadFull(conn, res); err != nil {
+		t.Fatalf("read purchase-result: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(res[0:2]); got != ropacket.HeaderZCPCPURCHASERESULT {
+		t.Fatalf("purchase-result header = 0x%04x, want ZC_PC_PURCHASE_RESULT (0x%04x)", got, ropacket.HeaderZCPCPURCHASERESULT)
+	}
+	if res[2] != 0 {
+		t.Fatalf("purchase-result = %d, want 0 (success)", res[2])
+	}
+
+	// 4. Real transaction: zeny deducted (1000 - 50 = 950) and the potion added.
+	after, err := env.charRepo.FindByID(t.Context(), hero.ID)
+	if err != nil {
+		t.Fatalf("reload character: %v", err)
+	}
+	if after.Zeny != 950 {
+		t.Fatalf("zeny after buy = %d, want 950", after.Zeny)
+	}
+	items, err := env.itemRepo.LoadByChar(t.Context(), 2000001, gid)
+	if err != nil {
+		t.Fatalf("load inventory after buy: %v", err)
+	}
+	var potionAmount uint32
+	for _, it := range items {
+		if it.NameID == 501 {
+			potionAmount = it.Amount
+		}
+	}
+	if potionAmount != 1 {
+		t.Fatalf("potion amount after buy = %d, want 1", potionAmount)
 	}
 }

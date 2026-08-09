@@ -52,20 +52,23 @@ func (h mapHandler) frameLen(c gnet.Conn) (n int, ready bool) {
 // trust gate); the rest are only valid post-auth.
 func mapHandlers() map[uint16]mapHandler {
 	return map[uint16]mapHandler{
-		0x0072: {size: czEnterSize, fn: (*MapServer).handleEnterFrame},
-		0x007d: {size: 2, fn: (*MapServer).handleLoadEndAck},
-		0x0085: {size: 5, fn: (*MapServer).handleRequestMove},
-		0x0089: {size: 7, fn: (*MapServer).handleActionRequest},                        // CZ_ACTION_REQUEST
-		0x0090: {size: 7, fn: (*MapServer).handleContactNPC},                           // CZ_CONTACT_NPC (NPC click)
-		0x00b8: {size: 7, fn: (*MapServer).handleChooseMenu},                           // CZ_CHOOSE_MENU
-		0x00b9: {size: 6, fn: (*MapServer).handleReqNextScript},                        // CZ_REQ_NEXT_SCRIPT
-		0x0143: {size: 10, fn: (*MapServer).handleInputEditDlg},                        // CZ_INPUT_EDITDLG
-		0x01d5: {frameSize: variableFrameSize, fn: (*MapServer).handleInputEditDlgStr}, // CZ_INPUT_EDITDLGSTR (variable length)
-		0x0146: {size: 6, fn: (*MapServer).handleCloseDialog},                          // CZ_CLOSE_DIALOG
-		0x0362: {size: 6, fn: (*MapServer).handleItemPickup},                           // CZ_ITEM_PICKUP @ 20250604
-		0x0363: {size: 6, fn: (*MapServer).handleItemDrop},                             // CZ_ITEM_DROP @ 20250604
-		0x0438: {size: 10, fn: (*MapServer).handleUseSkill2},                           // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
-		0x0af4: {size: 11, fn: (*MapServer).handleUseSkillToPos},                       // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
+		0x0072:                              {size: czEnterSize, fn: (*MapServer).handleEnterFrame},
+		0x007d:                              {size: 2, fn: (*MapServer).handleLoadEndAck},
+		0x0085:                              {size: 5, fn: (*MapServer).handleRequestMove},
+		0x0089:                              {size: 7, fn: (*MapServer).handleActionRequest},                         // CZ_ACTION_REQUEST
+		0x0090:                              {size: 7, fn: (*MapServer).handleContactNPC},                            // CZ_CONTACT_NPC (NPC click)
+		0x00b8:                              {size: 7, fn: (*MapServer).handleChooseMenu},                            // CZ_CHOOSE_MENU
+		0x00b9:                              {size: 6, fn: (*MapServer).handleReqNextScript},                         // CZ_REQ_NEXT_SCRIPT
+		0x0143:                              {size: 10, fn: (*MapServer).handleInputEditDlg},                         // CZ_INPUT_EDITDLG
+		0x01d5:                              {frameSize: variableFrameSize, fn: (*MapServer).handleInputEditDlgStr},  // CZ_INPUT_EDITDLGSTR (variable length)
+		0x0146:                              {size: 6, fn: (*MapServer).handleCloseDialog},                           // CZ_CLOSE_DIALOG
+		ropacket.HeaderCZACKSELECTDEALTYPE:  {size: 7, fn: (*MapServer).handleAckSelectDealtype},                     // CZ_ACK_SELECT_DEALTYPE (NPC shop open)
+		ropacket.HeaderCZPCPURCHASEITEMLIST: {frameSize: variableFrameSize, fn: (*MapServer).handlePurchaseItemList}, // CZ_PC_PURCHASE_ITEMLIST (variable)
+		ropacket.HeaderCZPCSELLITEMLIST:     {frameSize: variableFrameSize, fn: (*MapServer).handleSellItemList},     // CZ_PC_SELL_ITEMLIST (variable)
+		0x0362:                              {size: 6, fn: (*MapServer).handleItemPickup},                            // CZ_ITEM_PICKUP @ 20250604
+		0x0363:                              {size: 6, fn: (*MapServer).handleItemDrop},                              // CZ_ITEM_DROP @ 20250604
+		0x0438:                              {size: 10, fn: (*MapServer).handleUseSkill2},                            // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
+		0x0af4:                              {size: 11, fn: (*MapServer).handleUseSkillToPos},                        // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
 	}
 }
 
@@ -155,6 +158,243 @@ func (s *MapServer) handleCloseDialog(_ gnet.Conn, auth *mapAuth, _ []byte) {
 		return
 	}
 	s.content.Signal(auth.accountID, dialogdomain.DialogSignal{Cancel: true})
+}
+
+// CZ_ACK_SELECT_DEALTYPE type byte (rAthena clif_parse_NpcSelectDealType) and the
+// ZC_PC_PURCHASE/SELL_RESULT result byte. The wire carries raw bytes, so they are
+// defined here at the dispatch layer rather than in the packet encoder.
+const (
+	dealTypeBuy    uint8 = 0
+	dealTypeSell   uint8 = 1
+	dealTypeCancel uint8 = 2
+
+	shopResultSuccess uint8 = 0
+	shopResultFailed  uint8 = 1
+)
+
+// handleAckSelectDealtype handles CZ_ACK_SELECT_DEALTYPE (0x00c5, 7B): the client
+// picked Buy/Sell/Cancel on a shop NPC. It resolves the NPC GID to a shop name,
+// threads that name for the following purchase/sell frames (which carry item
+// entries, not the NPC id), and emits the priced buy list (Buy) or sell list
+// (Sell). Cancel and unknown NPCs are no-ops that keep the connection alive.
+func (s *MapServer) handleAckSelectDealtype(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_ACK_SELECT_DEALTYPE from unauthed conn")
+		return
+	}
+	if s.shops == nil || s.shopStore == nil {
+		s.log.Debug("map: shop not wired, ignoring CZ_ACK_SELECT_DEALTYPE")
+		return
+	}
+	req, err := ropacket.ParseCZAckSelectDealType(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_ACK_SELECT_DEALTYPE", "err", err)
+		return
+	}
+	shopName, ok := s.shopStore.ShopForNPC(context.Background(), req.NpcID)
+	if !ok {
+		s.log.Debug("map: CZ_ACK_SELECT_DEALTYPE for non-shop NPC", "npc", req.NpcID)
+		return
+	}
+	s.setOpenedShop(auth.charID, shopName)
+
+	switch req.Type {
+	case dealTypeBuy:
+		s.writePurchaseItemList(c, shopName)
+	case dealTypeSell:
+		s.writeSellItemList(context.Background(), c, shopName, auth.accountID, auth.charID)
+	default:
+		// dealTypeCancel (2) and any unknown value: close the deal window, no list.
+	}
+}
+
+// handlePurchaseItemList handles CZ_PC_PURCHASE_ITEMLIST (0x00c8, variable): the
+// player's buy request against the last-opened shop. Each entry is one
+// (itemId, amount); ShopService charges zeny and grants the item. On any entry
+// error it emits ZC_PC_PURCHASE_RESULT(failed) and keeps the connection alive.
+// Partial success is not rolled back (documented simplification: earlier entries
+// in the same request that succeeded stay bought).
+func (s *MapServer) handlePurchaseItemList(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_PC_PURCHASE_ITEMLIST from unauthed conn")
+		return
+	}
+	if s.shops == nil {
+		s.log.Debug("map: shop not wired, ignoring CZ_PC_PURCHASE_ITEMLIST")
+		return
+	}
+	shopName, ok := s.openedShop(auth.charID)
+	if !ok {
+		s.log.Debug("map: CZ_PC_PURCHASE_ITEMLIST with no opened shop", "gid", auth.charID)
+		s.writePurchaseResult(c, shopResultFailed)
+		return
+	}
+	req, err := ropacket.ParseCZPCPurchaseItemList(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_PC_PURCHASE_ITEMLIST", "err", err)
+		s.writePurchaseResult(c, shopResultFailed)
+		return
+	}
+	ctx := context.Background()
+	result := shopResultSuccess
+	for _, e := range req.Entries {
+		if err := s.shops.Buy(ctx, auth.charID, shopName, e.ItemID, int(e.Amount)); err != nil {
+			s.log.Warn("map: shop buy", "shop", shopName, "item", e.ItemID, "amount", e.Amount, "err", err)
+			result = shopResultFailed
+			break
+		}
+	}
+	s.writePurchaseResult(c, result)
+}
+
+// handleSellItemList handles CZ_PC_SELL_ITEMLIST (0x00c9, variable): the player's
+// sell request. Each entry is (index, amount) where index is the client inventory
+// slot. Two simplifications are documented honestly rather than faked:
+//
+//   - index resolution: the client slot is assumed to match LoadByChar's list
+//     order (rAthena assigns client indices during the init burst and they are
+//     not guaranteed equal to DB row order). The same assumption backs the sell
+//     list emitted on open, so index ↔ item stays consistent within a session.
+//   - pricing: the shop pays its catalog SellPrice (real rAthena uses the
+//     item_db sell price + overcharge, not just the shop catalog).
+//
+// On any error it emits ZC_PC_SELL_RESULT(failed) and keeps the connection alive.
+func (s *MapServer) handleSellItemList(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_PC_SELL_ITEMLIST from unauthed conn")
+		return
+	}
+	if s.shops == nil {
+		s.log.Debug("map: shop not wired, ignoring CZ_PC_SELL_ITEMLIST")
+		return
+	}
+	shopName, ok := s.openedShop(auth.charID)
+	if !ok {
+		s.log.Debug("map: CZ_PC_SELL_ITEMLIST with no opened shop", "gid", auth.charID)
+		s.writeSellResult(c, shopResultFailed)
+		return
+	}
+	req, err := ropacket.ParseCZPCSellItemList(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_PC_SELL_ITEMLIST", "err", err)
+		s.writeSellResult(c, shopResultFailed)
+		return
+	}
+	ctx := context.Background()
+	items, err := s.inv.LoadByChar(ctx, auth.accountID, auth.charID)
+	if err != nil {
+		s.log.Error("map: load inventory for sell", "err", err)
+		s.writeSellResult(c, shopResultFailed)
+		return
+	}
+	result := shopResultSuccess
+	for _, e := range req.Entries {
+		idx := int(e.Index)
+		if idx >= len(items) {
+			result = shopResultFailed
+			break
+		}
+		it := items[idx]
+		if it.IsEquipped() {
+			result = shopResultFailed
+			break
+		}
+		price, ok := s.shops.SellPriceFor(shopName, it.NameID)
+		if !ok {
+			result = shopResultFailed
+			break
+		}
+		if err := s.shops.Sell(ctx, auth.charID, it.ID, it.NameID, int(e.Amount), price); err != nil {
+			s.log.Warn("map: shop sell", "shop", shopName, "item", it.NameID, "amount", e.Amount, "err", err)
+			result = shopResultFailed
+			break
+		}
+	}
+	s.writeSellResult(c, result)
+}
+
+// writePurchaseItemList emits ZC_PC_PURCHASE_ITEMLIST: the shop's priced buy
+// catalog. ItemType/ViewSprite/Location come from item_db, not the shop catalog,
+// so they are zero until the item_db loader resolves them (M5b); Price ==
+// DiscountPrice (no discount model yet).
+func (s *MapServer) writePurchaseItemList(c gnet.Conn, shopName string) {
+	items, ok := s.shops.CatalogItems(shopName)
+	if !ok {
+		return // shop vanished between open and list; nothing to send
+	}
+	buy := make([]ropacket.ShopBuyItem, 0, len(items))
+	for _, it := range items {
+		price := uint32(it.Price) //nolint:gosec // G115: catalog prices are non-negative zeny; int32 is the domain's zeny type.
+		buy = append(buy, ropacket.ShopBuyItem{
+			ItemID:        it.NameID,
+			Price:         price,
+			DiscountPrice: price,
+		})
+	}
+	resp := ropacket.PurchaseItemListResponse{Items: buy}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_PC_PURCHASE_ITEMLIST", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// writeSellItemList emits ZC_PC_SELL_ITEMLIST: the player's inventory priced for
+// resale. Index is the LoadByChar list position (matches the sell handler's
+// resolution); Price == Overcharge (no overcharge model yet). Only items the shop
+// trades appear (pricing simplification, see handleSellItemList).
+func (s *MapServer) writeSellItemList(ctx context.Context, c gnet.Conn, shopName string, accountID, charID uint32) {
+	items, err := s.inv.LoadByChar(ctx, accountID, charID)
+	if err != nil {
+		s.log.Error("map: load inventory for sell list", "err", err)
+		return
+	}
+	sell := make([]ropacket.ShopSellItem, 0, len(items))
+	for i, it := range items {
+		if it.IsEquipped() {
+			continue
+		}
+		sellPrice, ok := s.shops.SellPriceFor(shopName, it.NameID)
+		if !ok {
+			continue
+		}
+		price := uint32(sellPrice) //nolint:gosec // G115: catalog sell prices are non-negative zeny; int32 is the domain's zeny type.
+		sell = append(sell, ropacket.ShopSellItem{
+			Index:      uint16(i), //nolint:gosec // G115: list position, bounded by MAX_INVENTORY
+			Price:      price,
+			Overcharge: price,
+		})
+	}
+	resp := ropacket.SellItemListResponse{Items: sell}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_PC_SELL_ITEMLIST", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// writePurchaseResult emits ZC_PC_PURCHASE_RESULT (0=success, 1=failed).
+func (s *MapServer) writePurchaseResult(c gnet.Conn, result uint8) {
+	resp := ropacket.PurchaseResultResponse{Result: result}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_PC_PURCHASE_RESULT", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// writeSellResult emits ZC_PC_SELL_RESULT (0=success, 1=failed).
+func (s *MapServer) writeSellResult(c gnet.Conn, result uint8) {
+	resp := ropacket.SellResultResponse{Result: result}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_PC_SELL_RESULT", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
 }
 
 // handleEnterFrame wraps handleEnter to satisfy the dispatch signature (the

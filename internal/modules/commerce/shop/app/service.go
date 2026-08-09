@@ -62,3 +62,29 @@ func (s *ShopService) Sell(ctx context.Context, charID uint32, itemID invdomain.
 	}
 	return nil
 }
+
+// CatalogItems returns the named shop's priced buy catalog (the stock list the
+// gateway renders as ZC_PC_PURCHASE_ITEMLIST) or false when the shop is not
+// registered. It is a pure read over the catalog, with no side effects.
+func (s *ShopService) CatalogItems(shopName string) ([]domain.ShopItem, bool) {
+	shop, ok := s.catalog.Get(shopName)
+	if !ok {
+		return nil, false
+	}
+	return shop.Items, true
+}
+
+// SellPriceFor returns the shop's sell price for nameID (what the shop pays the
+// player when they sell it back), or false when the shop does not trade that
+// item. The gateway uses it to price the sell list and the sell transaction.
+func (s *ShopService) SellPriceFor(shopName string, nameID uint32) (int32, bool) {
+	shop, ok := s.catalog.Get(shopName)
+	if !ok {
+		return 0, false
+	}
+	item, ok := shop.FindBuy(nameID)
+	if !ok {
+		return 0, false
+	}
+	return item.SellPrice, true
+}
