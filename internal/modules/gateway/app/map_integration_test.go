@@ -147,6 +147,7 @@ type testEconPort struct{ svc *economyapp.EconomyService }
 func (e testEconPort) DeductZeny(ctx context.Context, charID uint32, amount int32) error {
 	return e.svc.DeductZeny(ctx, charID, amount)
 }
+
 func (e testEconPort) CreditZeny(ctx context.Context, charID uint32, amount int32) error {
 	return e.svc.CreditZeny(ctx, charID, amount)
 }
@@ -1067,12 +1068,16 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gwapp.MapServer, mapTestEnv) {
 	t.Helper()
 	wrepo := worldinfra.NewMemoryWorldRepository(
-		worlddomain.Entity{ID: 150001, Account: 2000001, Map: "new_1-1",
+		worlddomain.Entity{
+			ID: 150001, Account: 2000001, Map: "new_1-1",
 			Pos: worlddomain.Position{X: 53, Y: 111}, Sex: 1, Job: 0, Level: 1,
-			Name: "Hero", HP: 1000, MaxHP: 1000, SP: 100, MaxSP: 100, Speed: 150},
-		worlddomain.Entity{ID: 150002, Account: 2000002, Map: "new_1-1",
+			Name: "Hero", HP: 1000, MaxHP: 1000, SP: 100, MaxSP: 100, Speed: 150,
+		},
+		worlddomain.Entity{
+			ID: 150002, Account: 2000002, Map: "new_1-1",
 			Pos: worlddomain.Position{X: 54, Y: 111}, Sex: 1, Job: 0, Level: 1,
-			Name: "Partner", HP: 1000, MaxHP: 1000, SP: 100, MaxSP: 100, Speed: 150},
+			Name: "Partner", HP: 1000, MaxHP: 1000, SP: 100, MaxSP: 100, Speed: 150,
+		},
 	)
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
 	spawn := worldapp.NewSpawnService(world, nil, nil)

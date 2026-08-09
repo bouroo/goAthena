@@ -213,8 +213,8 @@ jobs:
           /tmp/goathena migrate up -config <(printf 'app:\n  environment: test\ndb:\n  driver: postgres\n  host: 127.0.0.1\n  port: 15432\n  name: n\n  user: r\n  password: ragnarok\n  ssl_mode: disable\n')
       - name: seed test data
         run: |
-          PGPASSWORD=ragnarok psql -h 127.0.0.1 -p 15432 -U r -d n -c "INSERT INTO login (account_id,userid,user_pass,sex,email) VALUES (2000001,'testacc',MD5('s3cret'),'M','t@t') ON CONFLICT DO NOTHING;
-            INSERT INTO \"char\" (account_id,char_num,name,base_level,job_level,max_hp,hp,max_sp,sp,last_map,save_map) VALUES (2000001,0,'Hero',1,1,1000,1000,50,50,'new_1-1','new_1-1') ON CONFLICT DO NOTHING;"
+          PGPASSWORD=ragnarok psql -h 127.0.0.1 -p 15432 -U r -d n -c "INSERT INTO login (account_id,userid,user_pass,sex,email,state,unban_time,expiration_time) OVERRIDING SYSTEM VALUE VALUES (2000001,'testacc',md5('s3cret'),'M','t@t',0,0,0) ON CONFLICT DO NOTHING;
+            INSERT INTO \"char\" (char_id,account_id,char_num,name,base_level,job_level,max_hp,hp,max_sp,sp,last_map,save_map) OVERRIDING SYSTEM VALUE VALUES (150001,2000001,0,'Hero',1,1,1000,1000,50,50,'new_1-1','new_1-1') ON CONFLICT DO NOTHING;"
       - name: integration tests (-race)
         run: go test -race -tags=integration ./...
 
