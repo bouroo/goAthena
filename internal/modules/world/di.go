@@ -14,8 +14,10 @@ import (
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	"github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/internal/modules/world/infra"
+	"github.com/bouroo/goAthena/pkg/ro/attrfix"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
+	"github.com/bouroo/goAthena/pkg/ro/sizefix"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
 
@@ -55,7 +57,16 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		// itemdb both precede world), so PC attackers feed equipped WeaponATK
 		// into melee damage.
 		equip := do.MustInvoke[*app.EquipService](i)
-		return app.NewCombatService(world, mobs, equip), nil
+		// attr_fix/size_fix drive the post-DEF element/size modifiers; both
+		// register above and degrade to the identity table on a load failure.
+		attrs := do.MustInvoke[*attrfix.RateTable](i)
+		sizes := do.MustInvoke[*sizefix.SizeTable](i)
+		return app.NewCombatService(
+			world, mobs, equip,
+			app.WithAttributeFix(attrs),
+			app.WithSizeFix(sizes),
+			app.WithDice(app.NewGlobalDice()),
+		), nil
 	})
 	do.Provide(inj, func(i do.Injector) (*app.EquipService, error) {
 		// inventory registers before world (composition.go), so its service
@@ -67,6 +78,14 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 	do.Provide(inj, func(i do.Injector) (*skilldb.Registry, error) {
 		log := do.MustInvoke[*slog.Logger](i)
 		return loadSkillDB(dbPath, log), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*attrfix.RateTable, error) {
+		log := do.MustInvoke[*slog.Logger](i)
+		return loadAttrFix(dbPath, log), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*sizefix.SizeTable, error) {
+		log := do.MustInvoke[*slog.Logger](i)
+		return loadSizeFix(dbPath, log), nil
 	})
 	do.Provide(inj, func(i do.Injector) (*app.SkillService, error) {
 		world := do.MustInvoke[*app.WorldService](i)
@@ -139,4 +158,33 @@ func loadSkillDB(dbPath string, log *slog.Logger) *skilldb.Registry {
 	}
 	log.Info("skill_db loaded", "path", path, "skills", reg.Len())
 	return reg
+}
+
+// loadAttrFix loads attr_fix.yml from the pre-renewal db root. A load failure is
+// non-fatal and symmetric with loadMobDB/loadItemDB: the server still boots and
+// melee hits resolve the identity elemental rate (no adjustment) until the
+// operator points ZONE_DB_PATH at a rAthena checkout.
+func loadAttrFix(dbPath string, log *slog.Logger) *attrfix.RateTable {
+	path := filepath.Join(dbPath, "pre-re", "attr_fix.yml")
+	t, err := attrfix.LoadFile(path)
+	if err != nil {
+		log.Warn("attr_fix load failed; melee resolves identity element rate", "path", path, "err", err)
+		return attrfix.NewRateTable()
+	}
+	log.Info("attr_fix loaded", "path", path, "max_level", t.MaxLevel())
+	return t
+}
+
+// loadSizeFix loads size_fix.yml from the pre-renewal db root. A load failure is
+// non-fatal and symmetric with the other loaders: the server still boots and
+// melee hits resolve the identity size rate (no adjustment).
+func loadSizeFix(dbPath string, log *slog.Logger) *sizefix.SizeTable {
+	path := filepath.Join(dbPath, "pre-re", "size_fix.yml")
+	t, err := sizefix.LoadFile(path)
+	if err != nil {
+		log.Warn("size_fix load failed; melee resolves identity size rate", "path", path, "err", err)
+		return sizefix.NewSizeTable()
+	}
+	log.Info("size_fix loaded", "path", path, "weapons", t.Len())
+	return t
 }

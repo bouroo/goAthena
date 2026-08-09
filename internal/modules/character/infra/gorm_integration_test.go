@@ -130,6 +130,7 @@ func TestChar_GORMReservedWordRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	t.Cleanup(func() { _ = repo.Delete(ctx, created.ID, 2000001) })
 
 	got, err := repo.FindByID(ctx, created.ID)
 	if err != nil {

@@ -134,6 +134,13 @@ func (s *EquipService) EquipmentProfile(ctx context.Context, accountID, charID u
 		}
 		if it.Equip&equip.Arms != 0 {
 			eq.WeaponATK += entry.Attack
+			// The first equipped weapon's type feeds the size_fix lookup; a
+			// second weapon (dual wield) leaves the first in place so the roll
+			// stays deterministic. WeaponElement stays Neutral (0): item_db has
+			// no per-item element column this milestone.
+			if eq.WeaponSubType == "" {
+				eq.WeaponSubType = entry.SubType
+			}
 		}
 		eq.ItemDEF += entry.Defense
 	}

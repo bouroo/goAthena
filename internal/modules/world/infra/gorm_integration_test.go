@@ -125,6 +125,7 @@ func seedChar(t *testing.T, gdb *gorm.DB, name string, pos worlddomain.Position)
 	if err != nil {
 		t.Fatalf("seed char %q: %v", name, err)
 	}
+	t.Cleanup(func() { _ = repo.Delete(context.Background(), c.ID, 2000001) })
 	return uint32(c.ID)
 }
 

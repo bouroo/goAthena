@@ -42,8 +42,17 @@ type Base struct {
 // builds from the zero value.
 type Equipment struct {
 	WeaponATK int32 // right-side ATK (weapon damage); 0 unequipped
-	ItemDEF   int32 // left-side DEF (armor); 0 unequipped
-	ItemMDEF  int32 // left-side MDEF (armor); 0 unequipped
+	// WeaponSubType is the equipped weapon's type name (e.g. "Knuckle",
+	// "Dagger") the combat kernel keys the size_fix lookup on. Empty when no
+	// weapon is equipped; the kernel then resolves the identity (100%) size rate.
+	WeaponSubType string
+	// WeaponElement is the equipped weapon's attack element, an attrfix.Ele*
+	// index (0 = Neutral). item_db carries no per-item element column yet, so
+	// every production weapon is Neutral here; the field is the wiring point for
+	// forged/elemental weapons and lets combat tests inject a known element.
+	WeaponElement int
+	ItemDEF       int32 // left-side DEF (armor); 0 unequipped
+	ItemMDEF      int32 // left-side MDEF (armor); 0 unequipped
 }
 
 // StatusInputs is everything clif_initialstatus needs to build ZC_STATUS: the
