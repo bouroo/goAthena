@@ -6,6 +6,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -34,6 +35,11 @@ type WorldService struct {
 	// shutdown). Mirrors SpawnService's ctx/cancel respawn-timer pattern.
 	respawnCtx    context.Context
 	respawnCancel context.CancelFunc
+	// respawnTimers maps a char to its in-flight respawn timer so the gateway can
+	// cancel a pending auto-respawn when the player drives a type=0 respawn
+	// (CZ_RESTART) before the timer fires. A char has at most one pending timer;
+	// ArmRespawn cancels any prior. Guarded by mu.
+	respawnTimers map[uint32]*respawnTimer
 	// regenAcc holds per-entity elapsed time since the last HP/SP regen tick.
 	// Per-entity (not global) so sitters (interval halved) and standers (full
 	// interval) advance on the same 50 Hz tick independently. It is read and
@@ -91,6 +97,7 @@ func NewWorldService(repo domain.WorldRepository, log *slog.Logger, tickRateHz i
 		stopCh:        make(chan struct{}),
 		respawnCtx:    respawnCtx,
 		respawnCancel: respawnCancel,
+		respawnTimers: make(map[uint32]*respawnTimer),
 	}
 }
 
@@ -436,6 +443,12 @@ func (w *WorldService) EnterMap(ctx context.Context, charID uint32) (domain.Enti
 func (w *WorldService) LeaveMap(ctx context.Context, charID uint32) error {
 	e, err := w.Get(domain.EntityID(charID))
 	if err != nil {
+		// Idempotent: a char-select logout (CZ_RESTART type=1) persists + despawns,
+		// then closing the conn re-enters LeaveMap via OnClose. A second call on an
+		// already-removed entity is a clean no-op, not an error that floods logs.
+		if errors.Is(err, domain.ErrEntityNotFound) {
+			return nil
+		}
 		return err
 	}
 	if err := w.RemoveEntity(domain.EntityID(charID)); err != nil {
@@ -595,25 +608,72 @@ func (w *WorldService) RespawnPlayer(charID uint32) error {
 	return nil
 }
 
-// ArmRespawn arms a cancellable timer that fires RespawnPlayer(charID) after
-// delay. Each death arms one timer; Stop cancels in-flight timers via the service
-// context so a pending respawn never fires after shutdown. Mirrors SpawnService's
-// NewTimer+goroutine respawn pattern. The gateway calls this when a mob kills a
-// PC (after broadcasting the death-cell vanish); the timer callback performs the
-// respawn + save-point appear (the gateway STEP wires the appear broadcast).
+// respawnTimer is the per-char identity token for an in-flight respawn timer: the
+// heap-allocated pointer lets ArmRespawn's goroutine tell its own slot from a
+// later re-arm's (pointers are comparable; func values are not).
+type respawnTimer struct {
+	cancel context.CancelFunc
+}
+
+// ArmRespawn arms a per-char cancellable timer that fires RespawnPlayer(charID)
+// after delay. Each death arms one timer (a re-arm cancels any prior pending one
+// for that char); Stop cancels in-flight timers via the service context so a
+// pending respawn never fires after shutdown. The gateway calls this when a mob
+// kills a PC (after broadcasting the death-cell vanish); the timer callback
+// performs the respawn + save-point appear (the gateway STEP wires the appear
+// broadcast). CancelRespawn lets the player-driven respawn button (CZ_RESTART
+// type=0) cancel a still-pending timer so the button and the timer never both
+// fire RespawnPlayer.
 func (w *WorldService) ArmRespawn(charID uint32, delay time.Duration) {
+	ctx, cancel := context.WithCancel(w.respawnCtx)
+	rt := &respawnTimer{cancel: cancel}
+	w.mu.Lock()
+	if prev, ok := w.respawnTimers[charID]; ok {
+		prev.cancel() // cancel a prior pending timer (defensive; death arms once)
+	}
+	w.respawnTimers[charID] = rt
+	w.mu.Unlock()
+
 	go func() {
 		t := time.NewTimer(delay)
 		defer t.Stop()
+		defer cancel()
+		fired := false
 		select {
-		case <-w.respawnCtx.Done():
-			return
+		case <-ctx.Done():
 		case <-t.C:
-			if err := w.RespawnPlayer(charID); err != nil {
-				w.log.Warn("respawn failed", "char_id", charID, "err", err)
-			}
+			fired = true
+		}
+		w.mu.Lock()
+		// Clear our slot only if no later re-arm replaced it (pointer identity).
+		if cur, ok := w.respawnTimers[charID]; ok && cur == rt {
+			delete(w.respawnTimers, charID)
+		}
+		w.mu.Unlock()
+		if !fired {
+			return
+		}
+		if err := w.RespawnPlayer(charID); err != nil {
+			w.log.Warn("respawn failed", "char_id", charID, "err", err)
 		}
 	}()
+}
+
+// CancelRespawn cancels a pending auto-respawn timer for charID (a no-op if none
+// is armed). The gateway calls this on a player-driven respawn (CZ_RESTART
+// type=0) so the death timer and the respawn button do not both fire
+// RespawnPlayer; RespawnPlayer is idempotent regardless, but cancelling avoids a
+// redundant revive + appear burst.
+func (w *WorldService) CancelRespawn(charID uint32) {
+	w.mu.Lock()
+	rt, ok := w.respawnTimers[charID]
+	if ok {
+		delete(w.respawnTimers, charID)
+	}
+	w.mu.Unlock()
+	if ok {
+		rt.cancel()
+	}
 }
 
 // HealPlayer restores a player's HP and SP by hpPct/spPct percent of their

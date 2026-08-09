@@ -456,6 +456,72 @@ func TestRespawnPlayer_SavePointAndGridReseat(t *testing.T) {
 	}
 }
 
+// TestArmRespawn_CancelRespawn proves CancelRespawn cancels a pending death-respawn
+// timer so it never fires RespawnPlayer — the property the gateway's CZ_RESTART
+// type=0 (player-driven respawn button) relies on to avoid the button and the
+// auto-timer both reviving the PC.
+func TestArmRespawn_CancelRespawn(t *testing.T) {
+	w := newRegenWorld()
+	dead := domain.Entity{
+		ID: 150001, Type: domain.EntityTypePC,
+		Map: "prontera", Pos: domain.Position{X: 50, Y: 50},
+		SaveMap: "prontera", SavePos: domain.Position{X: 100, Y: 100},
+		HP: 0, MaxHP: 1000, SP: 0, MaxSP: 500,
+	}
+	if err := w.AddEntity(dead); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+	w.ArmRespawn(150001, 30*time.Millisecond)
+	w.CancelRespawn(150001)
+	// Cancelling a timer with nothing armed is also a clean no-op.
+	w.CancelRespawn(999999)
+
+	time.Sleep(120 * time.Millisecond) // past the armed delay; a live timer would have fired
+
+	got, err := w.Get(150001)
+	if err != nil {
+		t.Fatalf("Get after cancel: %v", err)
+	}
+	if got.HP != 0 {
+		t.Errorf("HP = %d, want 0 (cancelled timer must not fire RespawnPlayer)", got.HP)
+	}
+	if got.Pos != (domain.Position{X: 50, Y: 50}) {
+		t.Errorf("pos = %+v, want death cell (cancelled timer must not relocate)", got.Pos)
+	}
+}
+
+// TestArmRespawn_FiresRespawn proves an uncancelled death-respawn timer fires
+// RespawnPlayer, reviving the PC at its save point.
+func TestArmRespawn_FiresRespawn(t *testing.T) {
+	w := newRegenWorld()
+	dead := domain.Entity{
+		ID: 150001, Type: domain.EntityTypePC,
+		Map: "prontera", Pos: domain.Position{X: 50, Y: 50},
+		SaveMap: "prontera", SavePos: domain.Position{X: 100, Y: 100},
+		HP: 0, MaxHP: 1000, SP: 0, MaxSP: 500,
+	}
+	if err := w.AddEntity(dead); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+	w.ArmRespawn(150001, 30*time.Millisecond)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		got, err := w.Get(150001)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.HP == 1000 {
+			if got.Pos != (domain.Position{X: 100, Y: 100}) {
+				t.Errorf("pos = %+v, want save cell", got.Pos)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("auto-respawn timer did not fire within deadline")
+}
+
 // TestRespawnPlayer_CrossMap verifies a PC that dies on one map respawns on its
 // save map: it leaves the death map's player set and joins the save map's set.
 func TestRespawnPlayer_CrossMap(t *testing.T) {

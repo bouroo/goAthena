@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"strconv"
+	"time"
 
 	"github.com/panjf2000/gnet/v2"
 
@@ -57,6 +58,7 @@ func mapHandlers() map[uint16]mapHandler {
 		0x0085:                              {size: 5, fn: (*MapServer).handleRequestMove},
 		0x0089:                              {size: 7, fn: (*MapServer).handleActionRequest},                         // CZ_ACTION_REQUEST
 		0x0090:                              {size: 7, fn: (*MapServer).handleContactNPC},                            // CZ_CONTACT_NPC (NPC click)
+		ropacket.HeaderCZRESTART:            {size: 3, fn: (*MapServer).handleRestart},                               // CZ_RESTART (respawn / return to char-select)
 		0x00b8:                              {size: 7, fn: (*MapServer).handleChooseMenu},                            // CZ_CHOOSE_MENU
 		0x00b9:                              {size: 6, fn: (*MapServer).handleReqNextScript},                         // CZ_REQ_NEXT_SCRIPT
 		0x0143:                              {size: 10, fn: (*MapServer).handleInputEditDlg},                         // CZ_INPUT_EDITDLG
@@ -178,6 +180,14 @@ const (
 
 	shopResultSuccess uint8 = 0
 	shopResultFailed  uint8 = 1
+
+	// CZ_RESTART (0x00b2) selector byte (pkg/ro/packet/map_parse.go):
+	// 0x00 respawn at the save point, 0x01 return to the character-select screen.
+	czRestartRespawn        uint8 = 0x00
+	czRestartReturnToSelect uint8 = 0x01
+	// ZC_RESTART_ACK (0x00b3) type byte (pkg/ro/packet/map_encode.go): 0 refuse,
+	// 1 leave-for-char-select. Only the char-select branch sends the ack.
+	zcRestartAckLeaveForSelect uint8 = 1
 )
 
 // handleAckSelectDealtype handles CZ_ACK_SELECT_DEALTYPE (0x00c5, 7B): the client
@@ -430,6 +440,67 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	burst = append(burst, ropacket.EncodeInventoryEnd()...)
 	_ = c.AsyncWrite(burst, nil)
 	s.log.Debug("map: client load complete (inventory init sent)", "aid", auth.accountID, "gid", auth.charID)
+}
+
+// handleRestart processes CZ_RESTART (0x00b2, 3B): the client's respawn-or-return-
+// to-character-select request.
+//
+// Type 0x00 (respawn): cancel any pending death-respawn timer (so the button and
+// the ArmRespawn timer never both fire) and respawn at the save point.
+// RespawnPlayer's OnRespawn/OnStatChange hooks relocate the client
+// (ZC_ACCEPT_ENTER to the requester) and restore its HP/SP bar (ZC_PAR_CHANGE);
+// no ZC_RESTART_ACK is sent — that packet is char-select-only. The connection
+// stays alive: the player relocates within the map-server.
+//
+// Type 0x01 (return to character select): persist + despawn via LeaveMap, send
+// ZC_RESTART_ACK type=1 so the client leaves for the char-server, then close the
+// conn. OnClose fires on the close and is a clean no-op: LeaveMap is idempotent on
+// an already-removed entity. Best-effort on the leave path — a LeaveMap failure is
+// logged, the ack is still sent, and the conn still closes.
+func (s *MapServer) handleRestart(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		return
+	}
+	req, err := ropacket.ParseCZRestart(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_RESTART", "err", err)
+		return
+	}
+	switch req.Type {
+	case czRestartRespawn:
+		s.world.CancelRespawn(auth.charID)
+		if err := s.world.RespawnPlayer(auth.charID); err != nil {
+			s.log.Warn("map: respawn on CZ_RESTART", "gid", auth.charID, "err", err)
+			return
+		}
+	case czRestartReturnToSelect:
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.world.LeaveMap(ctx, auth.charID); err != nil {
+			s.log.Error("map: leave world on CZ_RESTART", "gid", auth.charID, "err", err)
+		}
+		s.writeRestartAck(c, zcRestartAckLeaveForSelect)
+		if err := c.Close(); err != nil {
+			s.log.Warn("map: close conn on CZ_RESTART", "gid", auth.charID, "err", err)
+		}
+	default:
+		s.log.Warn("map: unknown CZ_RESTART type", "type", req.Type, "gid", auth.charID)
+	}
+}
+
+// writeRestartAck emits ZC_RESTART_ACK (0x00b3): Type=1 lets the client leave for
+// the character-select screen, Type=0 would refuse (kept configurable for the
+// future refuse path). Only the char-select branch of CZ_RESTART sends it; the
+// respawn branch relies on RespawnPlayer's notifications. On an encode error it
+// logs — the caller closes the conn regardless.
+func (s *MapServer) writeRestartAck(c gnet.Conn, ackType uint8) {
+	resp := ropacket.RestartAckResponse{Type: ackType}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_RESTART_ACK", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
 }
 
 // handleRequestMove handles CZ_REQUEST_MOVE (0x0085, 5B): parse the 3-byte

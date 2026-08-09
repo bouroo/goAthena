@@ -5,9 +5,11 @@ package app_test
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -807,6 +809,151 @@ func TestMap_MobKillsPlayerRespawns(t *testing.T) {
 	}
 	if pc.Pos != (worlddomain.Position{X: 1, Y: 1}) {
 		t.Errorf("respawned PC pos = %+v, want {1,1}", pc.Pos)
+	}
+}
+
+// TestMap_Restart_Respawn drives the player-driven respawn button (CZ_RESTART
+// type=0): a dead PC (HP 0) requests respawn and is revived at its save point
+// with vitals restored and the client relocated (ZC_PAR_CHANGE + ZC_ACCEPT_ENTER).
+// No ZC_RESTART_ACK is sent — that packet is char-select-only.
+func TestMap_Restart_Respawn(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+
+	// CZ_ENTER → ZC_ACCEPT_ENTER (drain 13 B so the reactor registers the conn).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// Re-seed the PC dead (HP 0) at the death cell; the save point stays (1,1) so
+	// respawn is observable. The conn stays registered (RemoveEntity never touches it).
+	if err := env.world.RemoveEntity(150001); err != nil {
+		t.Fatalf("RemoveEntity: %v", err)
+	}
+	if err := env.world.AddEntity(worlddomain.Entity{
+		ID: 150001, Type: worlddomain.EntityTypePC, Account: 2000001, Map: "new_1-1",
+		Pos: worlddomain.Position{X: 53, Y: 111}, Sex: 1, Job: 0, Level: 1,
+		Name: "Hero", HP: 0, MaxHP: 1000, SP: 0, MaxSP: 100, Speed: 150,
+		SaveMap: "new_1-1", SavePos: worlddomain.Position{X: 1, Y: 1},
+	}); err != nil {
+		t.Fatalf("AddEntity dead: %v", err)
+	}
+
+	// CZ_RESTART type=0 (respawn): cmd 0x00b2 + type byte.
+	restart := make([]byte, 3)
+	binary.LittleEndian.PutUint16(restart[0:], ropacket.HeaderCZRESTART)
+	restart[2] = 0 // czRestartRespawn
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write(restart); err != nil {
+		t.Fatalf("send CZ_RESTART respawn: %v", err)
+	}
+
+	// ZC_PAR_CHANGE HP+SP (16 B): vitals restored to full (0 → 1000).
+	par := make([]byte, 16)
+	if _, err := io.ReadFull(conn, par); err != nil {
+		t.Fatalf("read ZC_PAR_CHANGE after restart-respawn: %v", err)
+	}
+	if hp := int32(binary.LittleEndian.Uint32(par[4:8])); hp != 1000 {
+		t.Fatalf("player HP after restart-respawn = %d, want 1000", hp)
+	}
+
+	// ZC_ACCEPT_ENTER (13 B): the client relocates to the save point (1,1).
+	enter := make([]byte, 13)
+	if _, err := io.ReadFull(conn, enter); err != nil {
+		t.Fatalf("read ZC_ACCEPT_ENTER relocate: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(enter[0:2]); got != ropacket.HeaderZCACCEPTENTER {
+		t.Fatalf("ZC_ACCEPT_ENTER header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	}
+	x := int16((uint16(enter[6]) << 2) | (uint16(enter[7]) >> 6))      //nolint:gosec // G115: wire bit layout; coords are non-negative.
+	y := int16((uint16(enter[7]&0x3f) << 4) | (uint16(enter[8]) >> 4)) //nolint:gosec // G115: wire bit layout; coords are non-negative.
+	if x != 1 || y != 1 {
+		t.Fatalf("relocate cell = (%d,%d), want save point (1,1)", x, y)
+	}
+
+	// No ZC_RESTART_ACK: the conn stays alive and readable without a pending frame.
+	conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	if _, err := conn.Read(make([]byte, 3)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("after restart-respawn, read = %v, want deadline-exceeded (no RestartAck, conn alive)", err)
+	}
+	conn.SetReadDeadline(time.Time{})
+
+	// The world is the source of truth: the PC is alive at its save point.
+	pc, err := env.world.Get(150001)
+	if err != nil {
+		t.Fatalf("Get respawned PC: %v", err)
+	}
+	if pc.HP != 1000 {
+		t.Errorf("respawned PC HP = %d, want 1000", pc.HP)
+	}
+	if pc.Pos != (worlddomain.Position{X: 1, Y: 1}) {
+		t.Errorf("respawned PC pos = %+v, want {1,1}", pc.Pos)
+	}
+}
+
+// TestMap_Restart_ReturnToCharSelect drives the graceful return-to-char-select
+// (CZ_RESTART type=1): the live PC is persisted + despawned (LeaveMap), the server
+// sends ZC_RESTART_ACK type=1 so the client leaves for the char-server, and the
+// conn closes. OnClose re-enters LeaveMap — a clean no-op (idempotent).
+func TestMap_Restart_ReturnToCharSelect(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+
+	// CZ_ENTER → ZC_ACCEPT_ENTER (drain 13 B so the reactor registers the conn).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// CZ_RESTART type=1 (return to char-select).
+	restart := make([]byte, 3)
+	binary.LittleEndian.PutUint16(restart[0:], ropacket.HeaderCZRESTART)
+	restart[2] = 1 // czRestartReturnToSelect
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write(restart); err != nil {
+		t.Fatalf("send CZ_RESTART return: %v", err)
+	}
+
+	// ZC_RESTART_ACK (3 B): type=1 (leave-for-char-select).
+	ack := make([]byte, 3)
+	if _, err := io.ReadFull(conn, ack); err != nil {
+		t.Fatalf("read ZC_RESTART_ACK: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCRESTARTACK {
+		t.Fatalf("ZC_RESTART_ACK header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCRESTARTACK)
+	}
+	if ack[2] != 1 {
+		t.Fatalf("ZC_RESTART_ACK type = %d, want 1 (leave-for-char-select)", ack[2])
+	}
+
+	// The conn is closed server-side: a follow-up read returns EOF within a deadline.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("follow-up read succeeded, want EOF (conn should be closed)")
+	}
+	conn.SetReadDeadline(time.Time{})
+
+	// LeaveMap despawned the PC: it is gone from the in-memory registry.
+	if _, err := env.world.Get(150001); !errors.Is(err, worlddomain.ErrEntityNotFound) {
+		t.Errorf("after restart-return, Get err = %v, want ErrEntityNotFound", err)
+	}
+
+	// OnClose re-enters LeaveMap on the already-removed entity: a clean no-op.
+	if err := env.world.LeaveMap(t.Context(), 150001); err != nil {
+		t.Errorf("second LeaveMap (OnClose path) = %v, want nil (idempotent)", err)
 	}
 }
 
