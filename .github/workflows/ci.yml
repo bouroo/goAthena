@@ -18,10 +18,10 @@ on:
         default: "v2.12.2"
       mariadb-version:
         description: "MariaDB image tag"
-        default: "11.4"
+        default: "11.8"
       postgres-version:
         description: "PostgreSQL image tag"
-        default: "16"
+        default: "18"
       valkey-version:
         description: "Valkey image tag"
         default: "9"
@@ -41,8 +41,8 @@ permissions:
 env:
   GO_VERSION: ${{ inputs.go-version || 'stable' }}
   GOLANGCI_LINT_VERSION: ${{ inputs.golangci-lint-version || 'v2.12.2' }}
-  MARIADB_VERSION: ${{ inputs.mariadb-version || '11.4' }}
-  POSTGRES_VERSION: ${{ inputs.postgres-version || '16' }}
+  MARIADB_VERSION: ${{ inputs.mariadb-version || '11.8' }}
+  POSTGRES_VERSION: ${{ inputs.postgres-version || '18' }}
   VALKEY_VERSION: ${{ inputs.valkey-version || '9' }}
   NATS_VERSION: ${{ inputs.nats-version || '2-alpine' }}
 
@@ -89,7 +89,7 @@ jobs:
       mariadb:
         # NB: the `env` context is not available in `services.image`; use
         # `inputs` (which is) with coalesce to the latest-stable default.
-        image: mariadb:${{ inputs.mariadb-version || '11.4' }}
+        image: mariadb:${{ inputs.mariadb-version || '11.8' }}
         env:
           MARIADB_ROOT_PASSWORD: ragnarok
           MARIADB_DATABASE: n
@@ -103,7 +103,7 @@ jobs:
           --health-timeout=5s
           --health-retries=10
       valkey:
-        image: valkey/valkey:${{ inputs.valkey-version || '8' }}
+        image: valkey/valkey:${{ inputs.valkey-version || '9' }}
         ports:
           - 16379:6379
         options: >-
@@ -160,7 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:${{ inputs.postgres-version || '16' }}
+        image: postgres:${{ inputs.postgres-version || '18' }}
         env:
           POSTGRES_PASSWORD: ragnarok
           POSTGRES_DB: n
@@ -173,7 +173,7 @@ jobs:
           --health-timeout=5s
           --health-retries=10
       valkey:
-        image: valkey/valkey:${{ inputs.valkey-version || '8' }}
+        image: valkey/valkey:${{ inputs.valkey-version || '9' }}
         ports:
           - 16379:6379
         options: >-

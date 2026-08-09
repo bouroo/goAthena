@@ -55,7 +55,7 @@ func specFor(driver string) (engineSpec, error) {
 	switch normalize(driver) {
 	case "mariadb":
 		return engineSpec{
-			image: "mariadb:11.4",
+			image: "mariadb:11.8",
 			env: map[string]string{
 				"MARIADB_ROOT_PASSWORD": dbPassword,
 				"MARIADB_DATABASE":      dbName,
@@ -67,7 +67,7 @@ func specFor(driver string) (engineSpec, error) {
 		}, nil
 	case "postgres":
 		return engineSpec{
-			image: "postgres:16",
+			image: "postgres:18",
 			env: map[string]string{
 				"POSTGRES_PASSWORD": dbPassword,
 				"POSTGRES_DB":       dbName,
