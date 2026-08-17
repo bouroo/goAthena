@@ -158,12 +158,16 @@ func (r *GORMWorldRepository) SaveState(ctx context.Context, charID uint32, base
 		}).Error
 }
 
-// skillRow is the GORM row type for the skill table.
+// skillRow is the GORM row type for the skill table. TableName pins the
+// singular name so GORM's default pluralization (skill_rows) cannot drift
+// from migration 000004's CREATE TABLE "skill".
 type skillRow struct {
 	CharID  uint32 `gorm:"column:char_id"`
 	SkillID int32  `gorm:"column:skill_id"`
 	Level   int16  `gorm:"column:level"`
 }
+
+func (skillRow) TableName() string { return "skill" }
 
 // LoadSkills returns every learned skill (skillID → level) for charID, or an
 // empty slice when the char has no learned skills yet.
