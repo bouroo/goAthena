@@ -31,6 +31,8 @@ type WorldService struct {
 	log      *slog.Logger
 	tickRate time.Duration
 	stopCh   chan struct{}
+	// leveling handles the conversion of EXP to levels.
+	leveling *LevelingService
 	// respawnCtx cancels timers armed by ArmRespawn so in-flight respawn timers
 	// drain on Stop (a dead PC that has not yet respawned does not fire after
 	// shutdown). Mirrors SpawnService's ctx/cancel respawn-timer pattern.
@@ -52,6 +54,10 @@ type WorldService struct {
 	// entity's GID (char_id). nil = regen is silent (server state still advances;
 	// useful for tests and headless operation). Invoked off the world mutex.
 	OnStatChange func(charID uint32, hp, sp int32)
+	// OnExpChange, when set, is invoked after GrantExp changes a player's EXP
+	// so the gateway can emit ZC_EXP_CHANGE to that player's client. charID is the
+	// entity's GID (char_id). nil = grant is silent. Invoked off the world mutex.
+	OnExpChange func(charID uint32, baseExp, jobExp uint64)
 	// OnRespawn, when set, is invoked after RespawnPlayer revives a PC at its save
 	// point so the gateway can broadcast the save-point appear (ZC_SPAWN_UNIT to
 	// neighbors) and relocate the player's own client (ZC_ACCEPT_ENTER). charID is
@@ -59,14 +65,10 @@ type WorldService struct {
 	// advances; useful for tests and headless operation). Invoked off the world
 	// mutex, after OnStatChange, so the HP/SP bar settles before the appear burst.
 	OnRespawn func(charID uint32)
-	// OnExpChange, when set, is invoked after GrantExp accrues EXP to a player so
-	// the gateway can emit the two ZC_LONGLONGPAR_CHANGE frames (SP_BASEEXP then
-	// SP_JOBEXP) to that player's client and its EXP bar rises. charID is the
-	// entity's GID (char_id); baseExp/jobExp are the new totals. nil = EXP accrual
-	// is silent (server state still advances; useful for tests and headless
-	// operation). Invoked off the world mutex. Leveling is deferred — this hook
-	// fires on every grant regardless of whether a level threshold was crossed.
-	OnExpChange func(charID uint32, baseExp, jobExp uint64)
+	// OnLevelUp, when set, is invoked after a PC levels up.
+	// It provides the new level and the recalculated MaxHP/MaxSP.
+	// nil = leveling is silent. Invoked off the world mutex.
+	OnLevelUp func(charID uint32, newLevel int16, maxHP, maxSP int32)
 }
 
 // Pre-renewal standing natural-regen intervals (rAthena status_natural_heal).
@@ -306,8 +308,17 @@ func (w *WorldService) StartTick(ctx context.Context, update func(ctx context.Co
 	}
 }
 
-// Stop signals the tick loop to drain and cancels in-flight respawn timers so a
-// pending respawn does not fire after shutdown.
+// SetLeveling attaches the EXP→level converter after construction so the DI
+// root (which loads job_exp.yml/job_basepoints.yml) can wire it without
+// churning NewWorldService's many call sites. nil (the zero value) keeps
+// leveling disabled — EXP accrues but thresholds are never consumed.
+func (w *WorldService) SetLeveling(svc *LevelingService) {
+	w.leveling = svc
+}
+
+// Stop drains the world's background work: the respawn timers (so a dead PC's
+// pending auto-respawn never fires into a torn-down world) and the tick/checkpoint
+// loops' stop channel. Idempotent — closing stopCh twice must not panic.
 func (w *WorldService) Stop() {
 	w.respawnCancel()
 	select {
@@ -466,7 +477,7 @@ func (w *WorldService) LeaveMap(ctx context.Context, charID uint32) error {
 	if err := w.repo.SetOnline(ctx, charID, false, e.Pos); err != nil {
 		return fmt.Errorf("set offline: %w", err)
 	}
-	if err := w.repo.SaveState(ctx, charID, e.HP, e.SP, e.BaseExp, e.JobExp); err != nil {
+	if err := w.repo.SaveState(ctx, charID, e.Level, e.MaxHP, e.MaxSP, e.HP, e.SP, e.BaseExp, e.JobExp); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
 	return nil
@@ -483,11 +494,13 @@ func (w *WorldService) LeaveMap(ctx context.Context, charID uint32) error {
 func (w *WorldService) SaveAll(ctx context.Context) {
 	w.mu.RLock()
 	type vitalSnap struct {
-		charID  uint32
-		pos     domain.Position
-		hp, sp  int32
-		baseExp uint64
-		jobExp  uint64
+		charID       uint32
+		pos          domain.Position
+		hp, sp       int32
+		maxHP, maxSP int32
+		level        int16
+		baseExp      uint64
+		jobExp       uint64
 	}
 	snaps := make([]vitalSnap, 0, len(w.entities))
 	for id, e := range w.entities {
@@ -499,13 +512,14 @@ func (w *WorldService) SaveAll(ctx context.Context) {
 			pos:     e.Pos,
 			hp:      e.HP,
 			sp:      e.SP,
+			level:   e.Level,
 			baseExp: e.BaseExp,
 			jobExp:  e.JobExp,
 		})
 	}
 	w.mu.RUnlock()
 	for _, s := range snaps {
-		if err := w.repo.SaveState(ctx, s.charID, s.hp, s.sp, s.baseExp, s.jobExp); err != nil {
+		if err := w.repo.SaveState(ctx, s.charID, s.level, s.maxHP, s.maxSP, s.hp, s.sp, s.baseExp, s.jobExp); err != nil {
 			w.log.Warn("save-all state", "char_id", s.charID, "err", err)
 			continue
 		}
@@ -529,11 +543,13 @@ func (w *WorldService) SaveAll(ctx context.Context) {
 func (w *WorldService) Checkpoint(ctx context.Context) {
 	w.mu.RLock()
 	type vitalSnap struct {
-		charID  uint32
-		pos     domain.Position
-		hp, sp  int32
-		baseExp uint64
-		jobExp  uint64
+		charID       uint32
+		pos          domain.Position
+		hp, sp       int32
+		maxHP, maxSP int32
+		level        int16
+		baseExp      uint64
+		jobExp       uint64
 	}
 	snaps := make([]vitalSnap, 0, len(w.entities))
 	for id, e := range w.entities {
@@ -545,13 +561,14 @@ func (w *WorldService) Checkpoint(ctx context.Context) {
 			pos:     e.Pos,
 			hp:      e.HP,
 			sp:      e.SP,
+			level:   e.Level,
 			baseExp: e.BaseExp,
 			jobExp:  e.JobExp,
 		})
 	}
 	w.mu.RUnlock()
 	for _, s := range snaps {
-		if err := w.repo.SaveState(ctx, s.charID, s.hp, s.sp, s.baseExp, s.jobExp); err != nil {
+		if err := w.repo.SaveState(ctx, s.charID, s.level, s.maxHP, s.maxSP, s.hp, s.sp, s.baseExp, s.jobExp); err != nil {
 			w.log.Warn("checkpoint state", "char_id", s.charID, "err", err)
 			continue
 		}
@@ -817,7 +834,7 @@ func (w *WorldService) AddVitals(charID uint32, hp, sp int32) (hpAfter, spAfter 
 // level-up track (job_stats EXP curve, HP/SP recalc, status-point accrual) is a
 // separate subsystem not modeled here. Thread-safe: mutated under w.mu; the
 // OnExpChange notify fires off the lock (mirrors AddVitals/OnStatChange).
-func (w *WorldService) GrantExp(charID uint32, baseExp, jobExp uint64) (newBase, newJob uint64, err error) {
+func (w *WorldService) GrantExp(ctx context.Context, charID uint32, baseExp, jobExp uint64) (newBase, newJob uint64, err error) {
 	w.mu.Lock()
 	e, ok := w.entities[domain.EntityID(charID)]
 	if !ok {
@@ -828,6 +845,18 @@ func (w *WorldService) GrantExp(charID uint32, baseExp, jobExp uint64) (newBase,
 	e.JobExp = clampExpAdd(e.JobExp, jobExp)
 	newBase, newJob = e.BaseExp, e.JobExp
 	w.mu.Unlock()
+	// Level-up check FIRST (off-lock — it manages its own locking), so the
+	// thresholds consumed by leveling are reflected in the totals the client is
+	// told about. Firing OnExpChange before the consumption would report the
+	// pre-leveling EXP and leave the client's bar drifting ahead of the server.
+	if w.leveling != nil {
+		_, _ = w.leveling.CheckLevelUp(ctx, charID)
+	}
+	w.mu.RLock()
+	if e, ok := w.entities[domain.EntityID(charID)]; ok {
+		newBase, newJob = e.BaseExp, e.JobExp
+	}
+	w.mu.RUnlock()
 	if w.OnExpChange != nil {
 		w.OnExpChange(charID, newBase, newJob)
 	}

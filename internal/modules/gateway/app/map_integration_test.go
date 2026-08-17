@@ -32,6 +32,8 @@ import (
 	worldinfra "github.com/bouroo/goAthena/internal/modules/world/infra"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
+	"github.com/bouroo/goAthena/pkg/ro/jobbasepoints"
+	"github.com/bouroo/goAthena/pkg/ro/jobexp"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
@@ -123,6 +125,13 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 		SaveMap: "new_1-1", SavePos: worlddomain.Position{X: 1, Y: 1},
 	})
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
+	// Leveling over a tiny Novice curve (L1→2 costs 9, L2→3 costs 16, max 3)
+	// and per-level HP/SP table (L1 100/10 … L3 220/20): a kill whose BaseExp
+	// crosses a threshold drives a level-up observable on the wire. The seeded
+	// char enters at Level 1 with MaxHP/MaxSP 1000/100 (the L1 table row is
+	// deliberately larger so a level-up SHRINKS the bars only if the table is
+	// misapplied — instead the table values apply once leveling consumes EXP).
+	world.SetLeveling(worldapp.NewLevelingService(world, mustJobExp(t), mustJobStats(t), slog.Default()))
 	// A tiny mob_db with one aggressive mob (8001, Ai=4) and one passive mob
 	// (8002, carries BaseExp/JobExp for the kill-reward test) backs combat + mob
 	// AI so a spawned monster resolves real stats and the aggro loop can swing at
@@ -1049,11 +1058,17 @@ func TestMap_KillMobGrantsEXP(t *testing.T) {
 	// Spawn a 1-HP passive mob on the player's tile. A connecting hit floors at 1
 	// damage, so the first attack kills it deterministically. mob 8002 carries the
 	// known EXP the kill grants.
+	// The harness wires leveling (Novice curve: 1→2 costs 9, 2→3 costs 16), so
+	// the 150-EXP kill levels the char twice and consumes 25 — the granted EXP
+	// the client sees and the world holds is the NET 125, sent after the
+	// level-up consumption (GrantExp fires OnExpChange post-leveling).
 	const (
 		mobGID  = 160020
 		mobClas = 8002
-		baseExp = uint64(150)
+		baseExp = uint64(125) // 150 granted − 25 consumed by 2 level-ups
 		jobExp  = uint64(75)
+		expRaw  = uint64(150)
+		_       = expRaw
 	)
 	if err := env.spawn.SpawnMob(mobGID, mobClas, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "ExpMob", 1, 1, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
@@ -1076,7 +1091,17 @@ func TestMap_KillMobGrantsEXP(t *testing.T) {
 	if _, err := io.ReadFull(conn, make([]byte, 7)); err != nil {
 		t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
 	}
-	// Two ZC_LONGLONGPAR_CHANGE frames (12B each): SP_BASEEXP then SP_JOBEXP.
+	// With leveling wired, the level-up ZC_PAR_CHANGE burst (5×8B) lands FIRST —
+	// GrantExp consumes the thresholds before reporting the net EXP — followed
+	// by the two ZC_LONGLONGPAR_CHANGE frames (12B each): SP_BASEEXP, SP_JOBEXP.
+	const parFrame = 8
+	burst := make([]byte, 5*parFrame)
+	if _, err := io.ReadFull(conn, burst); err != nil {
+		t.Fatalf("read level-up burst: %v", err)
+	}
+	if varID := binary.LittleEndian.Uint16(burst[2:4]); varID != ropacket.SPBaseLevel {
+		t.Errorf("level-up frame0 varID = %d, want SPBaseLevel", varID)
+	}
 	exp := make([]byte, 24)
 	if _, err := io.ReadFull(conn, exp); err != nil {
 		t.Fatalf("read EXP frames: %v", err)
@@ -2108,5 +2133,149 @@ func TestMap_Dispatch_SharedWorld_Visibility(t *testing.T) {
 	drop := readTradeFrame(t, conn2, ropacket.HeaderZCItemFallEntry, 24)
 	if got := binary.LittleEndian.Uint32(drop[6:10]); got != 501 {
 		t.Fatalf("drop broadcast nameID = %d, want Red Potion 501", got)
+	}
+}
+
+// levelingCurveYAML and levelingStatsYAML back the harness's LevelingService:
+// a Novice curve where 1→2 costs 9 EXP, 2→3 costs 16, max 3; and a per-level
+// maxima table. The kill-reward mob 8002 carries BaseExp 150 — far past the
+// first threshold — so one kill takes the level-1 seed char to max.
+const levelingCurveYAML = `
+Header:
+  Type: JOB_STATS
+  Version: 4
+Body:
+  - Jobs:
+      Novice: true
+    MaxBaseLevel: 3
+    BaseExp:
+      - Level: 1
+        Exp: 9
+      - Level: 2
+        Exp: 16
+`
+
+const levelingStatsYAML = `
+Header:
+  Type: JOB_STATS
+  Version: 4
+Body:
+  - Jobs:
+      Novice: true
+    BaseHp:
+      - Level: 1
+        Hp: 1200
+      - Level: 2
+        Hp: 1300
+      - Level: 3
+        Hp: 1400
+    BaseSp:
+      - Level: 1
+        Sp: 120
+      - Level: 2
+        Sp: 130
+      - Level: 3
+        Sp: 140
+`
+
+func mustJobExp(t *testing.T) *jobexp.Registry {
+	t.Helper()
+	reg, err := jobexp.Load(strings.NewReader(levelingCurveYAML))
+	if err != nil {
+		t.Fatalf("load leveling curve: %v", err)
+	}
+	return reg
+}
+
+func mustJobStats(t *testing.T) *jobbasepoints.Registry {
+	t.Helper()
+	reg, err := jobbasepoints.Load(strings.NewReader(levelingStatsYAML))
+	if err != nil {
+		t.Fatalf("load leveling stats: %v", err)
+	}
+	return reg
+}
+
+// TestMap_KillMobLevelsUp proves the full reward-to-power loop end-to-end over
+// real gnet: killing the EXP mob crosses the level threshold, the char levels
+// up with recalculated maxima + full heal, and the conn receives the level-up
+// ZC_PAR_CHANGE burst (base level, maxima, healed vitals) after the EXP frames.
+func TestMap_KillMobLevelsUp(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	const (
+		mobGID  = 160030
+		mobClas = 8002 // BaseExp 150 ≥ the whole curve (9+16)
+	)
+	if err := env.spawn.SpawnMob(mobGID, mobClas, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "LvlMob", 1, 1, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+
+	req := make([]byte, 7)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint32(req[2:], mobGID)
+	req[6] = 0x07
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send attack: %v", err)
+	}
+
+	// Drain in order: attack echo, vanish, the level-up burst (5×8B ZC_PAR_CHANGE
+	// — GrantExp consumes thresholds before reporting EXP), then the two EXP
+	// frames (12B each).
+	if _, err := io.ReadFull(conn, make([]byte, 11)); err != nil {
+		t.Fatalf("read ZC_ACTION_RESPONSE: %v", err)
+	}
+	if _, err := io.ReadFull(conn, make([]byte, 7)); err != nil {
+		t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
+	}
+	const parFrame = 8
+	burst := make([]byte, 5*parFrame)
+	if _, err := io.ReadFull(conn, burst); err != nil {
+		t.Fatalf("read level-up burst: %v", err)
+	}
+	if _, err := io.ReadFull(conn, make([]byte, 24)); err != nil {
+		t.Fatalf("read EXP frames: %v", err)
+	}
+	readPar := func(i int) (uint16, int32) {
+		base := i * parFrame
+		return binary.LittleEndian.Uint16(burst[base+2 : base+4]), int32(binary.LittleEndian.Uint32(burst[base+4 : base+8]))
+	}
+	if varID, v := readPar(0); varID != ropacket.SPBaseLevel || v != 3 {
+		t.Errorf("frame0 = SPBaseLevel %d, want level 3 (curve max; 150 EXP crosses 9+16)", v)
+	}
+	if varID, v := readPar(1); varID != ropacket.SPMaxHP || v != 1400 {
+		t.Errorf("frame1 = SPMaxHP %d, want 1400 (table L3)", v)
+	}
+	if varID, v := readPar(2); varID != ropacket.SPMaxSP || v != 140 {
+		t.Errorf("frame2 = SPMaxSP %d, want 140 (table L3)", v)
+	}
+	if varID, v := readPar(3); varID != ropacket.SPHP || v != 1400 {
+		t.Errorf("frame3 = SPHP %d, want 1400 (full heal)", v)
+	}
+	if varID, v := readPar(4); varID != ropacket.SPSP || v != 140 {
+		t.Errorf("frame4 = SPSP %d, want 140 (full heal)", v)
+	}
+
+	// World state agrees: max level, recalculated maxima, full heal.
+	pc, err := env.world.Get(150001)
+	if err != nil {
+		t.Fatalf("get killer: %v", err)
+	}
+	if pc.Level != 3 || pc.MaxHP != 1400 || pc.MaxSP != 140 || pc.HP != 1400 || pc.SP != 140 {
+		t.Errorf("post-kill pc = level %d max %d/%d vitals %d/%d, want 3 1400/140 1400/140",
+			pc.Level, pc.MaxHP, pc.MaxSP, pc.HP, pc.SP)
 	}
 }

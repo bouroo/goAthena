@@ -103,14 +103,15 @@ type WorldRepository interface {
 	// SetPosition persists the char's destination map + position (used by warp/
 	// transit before the client reconnects to re-enter the new map).
 	SetPosition(ctx context.Context, charID uint32, mapName string, pos Position) error
-	// SaveState persists the char's full runtime snapshot — hp/sp plus the
+	// SaveState persists the char's full runtime snapshot — vitals plus the
 	// accumulated base_exp/job_exp — so in-session combat/regen/heal/respawn and
 	// EXP-from-kill changes survive disconnect and restart. hp/sp are the runtime
 	// int32 vitals (clamped >= 0 by AddVitals/clampVitals); baseExp/jobExp are the
-	// uint64 EXP totals (clamped at math.MaxUint64 by GrantExp/clampExpAdd).
-	// Folding EXP into the same persist path means disconnect (LeaveMap),
-	// shutdown (SaveAll) and warp all persist EXP from one primitive.
-	SaveState(ctx context.Context, charID uint32, hp, sp int32, baseExp, jobExp uint64) error
+	// uint64 EXP totals (clamped at math.MaxUint64 by GrantExp/clampExpAdd);
+	// maxHP/maxSP ride along because a level-up recalculates them. Folding all of
+	// it into the same persist path means disconnect (LeaveMap), shutdown
+	// (SaveAll) and warp persist from one primitive.
+	SaveState(ctx context.Context, charID uint32, baseLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64) error
 }
 
 // errors  for the world domain.

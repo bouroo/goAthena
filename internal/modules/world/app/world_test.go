@@ -696,7 +696,7 @@ func TestGrantExp_AddsAccrues(t *testing.T) {
 	if _, err := w.EnterMap(context.Background(), 150001); err != nil {
 		t.Fatalf("EnterMap: %v", err)
 	}
-	newBase, newJob, err := w.GrantExp(150001, 1000, 250)
+	newBase, newJob, err := w.GrantExp(context.Background(), 150001, 1000, 250)
 	if err != nil {
 		t.Fatalf("GrantExp: %v", err)
 	}
@@ -708,7 +708,7 @@ func TestGrantExp_AddsAccrues(t *testing.T) {
 		t.Errorf("entity exp = base %d job %d, want base 1000 job 250", e.BaseExp, e.JobExp)
 	}
 	// Second grant stacks on the first (accumulating total, not absolute).
-	newBase, newJob, err = w.GrantExp(150001, 500, 50)
+	newBase, newJob, err = w.GrantExp(context.Background(), 150001, 500, 50)
 	if err != nil {
 		t.Fatalf("GrantExp #2: %v", err)
 	}
@@ -729,7 +729,7 @@ func TestGrantExp_ClampSaturatesAtMax(t *testing.T) {
 		t.Fatalf("AddEntity: %v", err)
 	}
 	// 200 added to (MaxUint64-100) overflows uint64 without the clamp.
-	newBase, newJob, err := w.GrantExp(150001, 200, 200)
+	newBase, newJob, err := w.GrantExp(context.Background(), 150001, 200, 200)
 	if err != nil {
 		t.Fatalf("GrantExp: %v", err)
 	}
@@ -753,10 +753,10 @@ func TestGrantExp_OnExpChangeHook(t *testing.T) {
 	w.OnExpChange = func(charID uint32, baseExp, jobExp uint64) {
 		fired = append(fired, expNotif{charID, baseExp, jobExp})
 	}
-	if _, _, err := w.GrantExp(150001, 1000, 250); err != nil {
+	if _, _, err := w.GrantExp(context.Background(), 150001, 1000, 250); err != nil {
 		t.Fatalf("GrantExp #1: %v", err)
 	}
-	if _, _, err := w.GrantExp(150001, 500, 50); err != nil {
+	if _, _, err := w.GrantExp(context.Background(), 150001, 500, 50); err != nil {
 		t.Fatalf("GrantExp #2: %v", err)
 	}
 	want := []expNotif{{150001, 1000, 250}, {150001, 1500, 300}}
@@ -769,7 +769,7 @@ func TestGrantExp_OnExpChangeHook(t *testing.T) {
 // returns ErrEntityNotFound and accrues nothing.
 func TestGrantExp_UnknownChar(t *testing.T) {
 	w := newWorld()
-	_, _, err := w.GrantExp(999999, 1000, 250)
+	_, _, err := w.GrantExp(context.Background(), 999999, 1000, 250)
 	if !errors.Is(err, domain.ErrEntityNotFound) {
 		t.Errorf("GrantExp unknown = %v, want ErrEntityNotFound", err)
 	}
@@ -790,7 +790,7 @@ func TestGrantExp_LeaveMapPersists(t *testing.T) {
 		t.Fatalf("EnterMap: %v", err)
 	}
 
-	if _, _, err := w.GrantExp(150001, 1234, 5678); err != nil {
+	if _, _, err := w.GrantExp(context.Background(), 150001, 1234, 5678); err != nil {
 		t.Fatalf("GrantExp: %v", err)
 	}
 	if err := w.LeaveMap(context.Background(), 150001); err != nil {
@@ -819,7 +819,7 @@ func TestGrantExp_LeaveMapIdempotent(t *testing.T) {
 		t.Fatalf("EnterMap: %v", err)
 	}
 
-	if _, _, err := w.GrantExp(150001, 100, 50); err != nil {
+	if _, _, err := w.GrantExp(context.Background(), 150001, 100, 50); err != nil {
 		t.Fatalf("GrantExp: %v", err)
 	}
 	ctx := context.Background()
@@ -856,9 +856,9 @@ func (c *countRepo) SetOnline(ctx context.Context, charID uint32, online bool, p
 	return c.MemoryWorldRepository.SetOnline(ctx, charID, online, pos)
 }
 
-func (c *countRepo) SaveState(ctx context.Context, charID uint32, hp, sp int32, baseExp, jobExp uint64) error {
+func (c *countRepo) SaveState(ctx context.Context, charID uint32, baseLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64) error {
 	c.saveState.Add(1)
-	return c.MemoryWorldRepository.SaveState(ctx, charID, hp, sp, baseExp, jobExp)
+	return c.MemoryWorldRepository.SaveState(ctx, charID, baseLevel, maxHP, maxSP, hp, sp, baseExp, jobExp)
 }
 
 // TestCheckpoint_KeepsOnlineAndPersists proves a periodic checkpoint persists

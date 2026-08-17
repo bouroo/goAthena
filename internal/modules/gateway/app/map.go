@@ -120,6 +120,12 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 	// EXP grants) is a no-op. Leveling (threshold crossing, stat recalc) is
 	// deferred — this only relays the new EXP totals.
 	world.OnExpChange = s.notifyExpChange
+	// LevelingService converts accrued EXP to levels; this sink bridges a
+	// level-up back to the client as one ZC_PAR_CHANGE burst (base level, the
+	// recalculated maxima, and the full heal that rides a pre-re level-up) so
+	// the client's level display and bars update together. A headless harness
+	// (no leveling) is a no-op.
+	world.OnLevelUp = s.notifyLevelUp
 	// Mob AI runs on the same world tick; this sink bridges a mob's landed hit
 	// back to the player as ZC_NOTIFY_ACT so the swing is visible and the target's
 	// HP bar drops. A headless harness (no mob AI) leaves mobs passive.
@@ -195,6 +201,25 @@ func (s *MapServer) notifyExpChange(charID uint32, baseExp, jobExp uint64) {
 	var buf bytes.Buffer
 	_ = ropacket.LongLongParChangeResponse{VarID: ropacket.SPBaseExp, Amount: int64(baseExp)}.Encode(&buf) //nolint:gosec // G115: positive EXP fits int64.
 	_ = ropacket.LongLongParChangeResponse{VarID: ropacket.SPJobExp, Amount: int64(jobExp)}.Encode(&buf)   //nolint:gosec // G115: positive EXP fits int64.
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// notifyLevelUp emits the level-up burst for charID as ZC_PAR_CHANGE frames:
+// the new base level, the recalculated maxima, and the vitals healed to full
+// (pre-re convention — a level-up restores HP/SP). It is the LevelingService's
+// notification sink (world.OnLevelUp); a char with no live connection is a
+// no-op. One buffered write so the client applies the frames atomically.
+func (s *MapServer) notifyLevelUp(charID uint32, newLevel int16, maxHP, maxSP int32) {
+	c, ok := s.connFor(charID)
+	if !ok {
+		return
+	}
+	var buf bytes.Buffer
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPBaseLevel, Count: int32(newLevel)}.Encode(&buf) //nolint:gosec // G115: level bounded by game values.
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPMaxHP, Count: maxHP}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPMaxSP, Count: maxSP}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPHP, Count: maxHP}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: maxSP}.Encode(&buf)
 	_ = c.AsyncWrite(buf.Bytes(), nil)
 }
 

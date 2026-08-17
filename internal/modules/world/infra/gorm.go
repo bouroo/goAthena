@@ -134,13 +134,16 @@ func (r *GORMWorldRepository) SetPosition(ctx context.Context, charID uint32, ma
 // accumulated base_exp/job_exp. Mirrors SetOnline's map[string]any Updates
 // (GORM auto-quotes hp/sp; base_exp/job_exp are plain columns); hp/sp are
 // clamped >= 0 so the int-unsigned char column is never fed a negative.
-func (r *GORMWorldRepository) SaveState(ctx context.Context, charID uint32, hp, sp int32, baseExp, jobExp uint64) error {
+func (r *GORMWorldRepository) SaveState(ctx context.Context, charID uint32, baseLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64) error {
 	return r.db.WithContext(ctx).Table("char").
 		Where("char_id = ?", charID).
 		Updates(map[string]any{
-			"hp":       hp,
-			"sp":       sp,
-			"base_exp": baseExp,
-			"job_exp":  jobExp,
+			"base_level": baseLevel,
+			"max_hp":     maxHP,
+			"max_sp":     maxSP,
+			"hp":         hp,
+			"sp":         sp,
+			"base_exp":   baseExp,
+			"job_exp":    jobExp,
 		}).Error
 }

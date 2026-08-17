@@ -1008,7 +1008,7 @@ func (s *MapServer) handleMobDeath(c gnet.Conn, killerCharID uint32, mobGID uint
 	if base == 0 && job == 0 {
 		return
 	}
-	if _, _, err := s.world.GrantExp(killerCharID, base, job); err != nil {
+	if _, _, err := s.world.GrantExp(context.Background(), killerCharID, base, job); err != nil {
 		s.log.Warn("map: grant exp on mob death", "killer", killerCharID, "class", defender.Class, "err", err)
 	}
 }

@@ -302,3 +302,10 @@ func (reg *Registry) MaxWeight(jobName string) uint32 {
 	}
 	return entry.MaxWeight
 }
+
+// NewRegistry returns an empty registry — the fallback when job_basepoints.yml
+// cannot be read, so leveling degrades to disabled rather than failing boot
+// (mirrors itemdb/mobdb NewRegistry). Get on it returns nil (no stats rows).
+func NewRegistry() *Registry {
+	return &Registry{jobs: map[string]*JobEntry{}}
+}

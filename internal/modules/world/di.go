@@ -16,6 +16,8 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/world/infra"
 	"github.com/bouroo/goAthena/pkg/ro/attrfix"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
+	"github.com/bouroo/goAthena/pkg/ro/jobbasepoints"
+	"github.com/bouroo/goAthena/pkg/ro/jobexp"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/sizefix"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
@@ -35,6 +37,23 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		repo := do.MustInvoke[*infra.GORMWorldRepository](i)
 		log := do.MustInvoke[*slog.Logger](i)
 		return app.NewWorldService(repo, log, tickRateHz), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*jobexp.Registry, error) {
+		log := do.MustInvoke[*slog.Logger](i)
+		return loadJobExp(dbPath, log), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*jobbasepoints.Registry, error) {
+		log := do.MustInvoke[*slog.Logger](i)
+		return loadJobBasePoints(dbPath, log), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*app.LevelingService, error) {
+		world := do.MustInvoke[*app.WorldService](i)
+		curve := do.MustInvoke[*jobexp.Registry](i)
+		stats := do.MustInvoke[*jobbasepoints.Registry](i)
+		log := do.MustInvoke[*slog.Logger](i)
+		svc := app.NewLevelingService(world, curve, stats, log)
+		world.SetLeveling(svc)
+		return svc, nil
 	})
 	do.Provide(inj, func(i do.Injector) (*mobdb.Registry, error) {
 		log := do.MustInvoke[*slog.Logger](i)
@@ -117,6 +136,30 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		log := do.MustInvoke[*slog.Logger](i)
 		return app.NewMobAIService(world, mobs, combatSvc, log), nil
 	})
+}
+
+func loadJobExp(dbPath string, log *slog.Logger) *jobexp.Registry {
+	path := filepath.Join(dbPath, "pre-re", "job_exp.yml")
+	reg, err := jobexp.LoadFile(path)
+	if err != nil {
+		log.Warn("job_exp load failed; leveling disabled", "path", path, "err", err)
+		return jobexp.NewRegistry()
+	}
+	log.Info("job_exp loaded", "path", path)
+	return reg
+}
+
+func loadJobBasePoints(dbPath string, log *slog.Logger) *jobbasepoints.Registry {
+	// jobbasepoints parses job_stats-shaped files; the pre-re tree's copy is
+	// job_basepoints.yml.
+	path := filepath.Join(dbPath, "pre-re", "job_basepoints.yml")
+	reg, err := jobbasepoints.LoadFile(path)
+	if err != nil {
+		log.Warn("job_basepoints load failed; leveling disabled", "path", path, "err", err)
+		return jobbasepoints.NewRegistry()
+	}
+	log.Info("job_basepoints loaded", "path", path)
+	return reg
 }
 
 // loadMobDB loads mob_db.yml from the pre-renewal db root. A load failure is
