@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -73,6 +74,7 @@ func mapHandlers() map[uint16]mapHandler {
 		0x0439:                              {size: 8, fn: (*MapServer).handleUseItem},                               // CZ_USE_ITEM2 @ 20250604 (cmd+index+AID)
 		0x0438:                              {size: 10, fn: (*MapServer).handleUseSkill2},                            // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
 		0x0af4:                              {size: 11, fn: (*MapServer).handleUseSkillToPos},                        // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
+		ropacket.HeaderCZSKILLUP:            {size: 4, fn: (*MapServer).handleSkillUp},                               // CZ_SKILLUP (skill learn)
 		ropacket.HeaderCZTRADEREQUEST:       {size: 6, fn: (*MapServer).handleTradeRequest},                          // CZ_TRADE_REQUEST 0x00e4 (cmd+targetGID)
 		ropacket.HeaderCZTRADEACK:           {size: 3, fn: (*MapServer).handleTradeAck},                              // CZ_TRADE_ACK 0x00e6 (cmd+type)
 		ropacket.HeaderCZADDEXCHANGEITEM:    {size: 8, fn: (*MapServer).handleAddExchangeItem},                       // CZ_ADD_EXCHANGE_ITEM 0x00e8 (cmd+index+amount)
@@ -490,6 +492,42 @@ func (s *MapServer) handleRestart(c gnet.Conn, auth *mapAuth, frame []byte) {
 	default:
 		s.log.Warn("map: unknown CZ_RESTART type", "type", req.Type, "gid", auth.charID)
 	}
+}
+
+// handleSkillUp handles CZ_SKILLUP (0x0112): the client spends one skill point to
+// raise one learned-skill level, gated by the job's skill tree. On success it sends
+// ZC_SKILLINFO_UPDATE (11B) plus a ParChange(SPSkillPoint). On failure it drops
+// silently — no reply packet, connection stays open — per rAthena convention.
+func (s *MapServer) handleSkillUp(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		return
+	}
+	req, err := ropacket.ParseCZSkillUp(frame)
+	if err != nil {
+		s.log.Debug("map: parse CZ_SKILLUP", "err", err)
+		return
+	}
+	newLevel, spCost, rng, upgradable, err := s.skills.LearnSkill(context.Background(), auth.charID, req.SkillID)
+	if err != nil {
+		s.log.Debug("map: LearnSkill", "gid", auth.charID, "skillID", req.SkillID, "err", err)
+		return
+	}
+	// Build buffered write: ZC_SKILLINFO_UPDATE + ParChange(SPSkillPoint).
+	spU16 := int16(spCost) //nolint:gosec // spCost bounded by skill_db (per-level SP table)
+	var buf bytes.Buffer
+	_ = ropacket.SkillInfoUpdateResponse{
+		SkillID:        req.SkillID,
+		Level:          newLevel,
+		SP:             spU16,
+		Range2:         rng,
+		UpgradableFlag: upgradable,
+	}.Encode(&buf)
+	e, err := s.world.Get(worlddomain.EntityID(auth.charID))
+	if err == nil {
+		points := int32(e.SkillPoint) //nolint:gosec // points is small; ParChange count is int32
+		_ = ropacket.ParChangeResponse{VarID: ropacket.SPSkillPoint, Count: points}.Encode(&buf)
+	}
+	_ = c.AsyncWrite(buf.Bytes(), nil)
 }
 
 // writeRestartAck emits ZC_RESTART_ACK (0x00b3): Type=1 lets the client leave for

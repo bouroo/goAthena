@@ -202,16 +202,21 @@ type fileFormat struct {
 	Body []*SkillEntry `yaml:"Body"`
 }
 
-// Registry provides thread-safe lookup of skill entries by ID.
+// Registry provides thread-safe lookup of skill entries by ID and by Name.
+// The byName index supports joining with skill_tree which keys on skill Name.
 type Registry struct {
 	entries map[int32]*SkillEntry
+	byName  map[string]int32 // name → ID
 }
 
 // NewRegistry returns an empty, non-nil Registry. It is the zero value the app
 // wiring falls back to when skill_db.yml is absent or unreadable: lookups then
 // return nil (every skill casts as unknown) instead of failing boot.
 func NewRegistry() *Registry {
-	return &Registry{entries: make(map[int32]*SkillEntry)}
+	return &Registry{
+		entries: make(map[int32]*SkillEntry),
+		byName:  make(map[string]int32),
+	}
 }
 
 // Register adds or replaces a skill entry by its ID. It seeds the registry
@@ -223,6 +228,7 @@ func (reg *Registry) Register(e *SkillEntry) {
 		return
 	}
 	reg.entries[e.ID] = e
+	reg.byName[e.Name] = e.ID
 }
 
 // Load parses a rAthena skill_db YAML file from an io.Reader and returns a Registry.
@@ -280,6 +286,16 @@ func (reg *Registry) Len() int {
 		return 0
 	}
 	return len(reg.entries)
+}
+
+// IDByName returns the skill ID for skill name, or (0, false) if not found.
+// Thread-safe. Supports joining with skill_tree which keys on skill Name.
+func (reg *Registry) IDByName(name string) (int32, bool) {
+	if reg == nil {
+		return 0, false
+	}
+	id, ok := reg.byName[name]
+	return id, ok
 }
 
 // All returns all loaded skill entries keyed by their rAthena ID.

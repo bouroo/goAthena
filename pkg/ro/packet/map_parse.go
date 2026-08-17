@@ -597,6 +597,46 @@ func (r CZRestartRequest) Encode(w io.Writer) error {
 	return nil
 }
 
+// CZSkillUpRequest is the decoded form of a client → map-server CZ_SKILLUP
+// packet (header 0x0112, 4 bytes on the wire). Source:
+// rathena/src/map/clif_packetdb.hpp:110
+// (`parseable_packet(0x0112,4,clif_parse_SkillUp,2,4)`).
+//
+// The on-wire shape is `<skillID>.W` — the client sends the skill name-id
+// it wants to level up.
+type CZSkillUpRequest struct {
+	// SkillID is the skill's name-id (NAMED_SKILL id, not the list-id).
+	SkillID int32
+}
+
+// ParseCZSkillUp decodes a CZ_SKILLUP frame. The frame must be exactly
+// SizeCZSkillUp (4) bytes. The opcode is NOT validated here because
+// dispatch has already selected this parser by opcode.
+func ParseCZSkillUp(frame []byte) (CZSkillUpRequest, error) {
+	if len(frame) != SizeCZSkillUp {
+		return CZSkillUpRequest{}, fmt.Errorf(
+			"packet: parse CZ_SKILLUP: want %d bytes, got %d",
+			SizeCZSkillUp, len(frame),
+		)
+	}
+	return CZSkillUpRequest{
+		SkillID: int32(binary.LittleEndian.Uint16(frame[2:4])),
+	}, nil
+}
+
+// Encode writes the CZ_SKILLUP packet to w. Mirrors the on-wire
+// layout: [2:cmd=0x0112][4:skillID uint16 LE].
+func (r CZSkillUpRequest) Encode(w io.Writer) error {
+	skillID := uint16(r.SkillID) //nolint:gosec // skill ids fit uint16 (bounded by skill_db)
+	var buf [SizeCZSkillUp]byte
+	binary.LittleEndian.PutUint16(buf[0:2], HeaderCZSKILLUP)
+	binary.LittleEndian.PutUint16(buf[2:4], skillID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_SKILLUP: %w", err)
+	}
+	return nil
+}
+
 // CZContactNPCRequest is the decoded form of a client → map-server
 // CZ_CONTACTNPC packet (header 0x0090, 7 bytes on the wire). Source:
 // rathena/src/map/clif_packetdb.hpp:42

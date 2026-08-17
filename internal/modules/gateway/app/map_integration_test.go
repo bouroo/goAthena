@@ -37,6 +37,7 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
+	"github.com/bouroo/goAthena/pkg/ro/skilltree"
 )
 
 // startMapListener spins a real MapServer (gnet reactor) on a free port,
@@ -129,6 +130,9 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 		// Pre-seed one learned skill (id 5 = SM_BASH) at level 1 so the skill-list
 		// and cast tests have a known learned skill to exercise.
 		LearnedSkills: map[int32]int16{5: 1},
+		// Spendable skill points so the CZ_SKILLUP learn verb works without a
+		// job level-up first.
+		SkillPoint: 2,
 	})
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
 	// Leveling over a tiny Novice curve (L1→2 costs 9, L2→3 costs 16, max 3)
@@ -161,6 +165,7 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	mobAI := worldapp.NewMobAIService(world, mobs, combat, slog.Default())
 	content := contentapp.NewEngine(nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
+	skills.SetTree(testSkillTree())
 
 	// Shop commerce: a real economy over a memory character repo + the dev shop
 	// catalog, bound to its NPC GID so a CZ_ACK_SELECT_DEALTYPE on that GID opens it.
@@ -241,6 +246,25 @@ func testSkillDB() *skilldb.Registry {
 		Requires:   skilldb.Requires{SpCost: skilldb.SpCost{IsScalar: true, Value: 8}},
 	})
 	return reg
+}
+
+// testSkillTree mirrors the harness skill_db: SM_BASH learnable by Novice at
+// MaxLevel 10 so CZ_SKILLUP can raise it.
+func testSkillTree() *skilltree.Registry {
+	treeYAML := `Header:
+  Type: SKILL_TREE_DB
+  Version: 1
+Body:
+  - Job: Novice
+    Tree:
+      - Name: SM_BASH
+        MaxLevel: 10
+`
+	tree, err := skilltree.Load(strings.NewReader(treeYAML))
+	if err != nil {
+		panic("test skill tree: " + err.Error())
+	}
+	return tree
 }
 
 // testItemDB seeds a tiny item registry for integration tests: a Knife (id 1201,
@@ -457,6 +481,60 @@ func TestMap_CastLearnedAndUnlearnedSkill(t *testing.T) {
 	ln, lerr := conn.Read(liveness)
 	if lerr != nil || ln == 0 {
 		t.Fatalf("conn appears dead after unlearned cast: read %d bytes, err=%v", ln, lerr)
+	}
+}
+
+// TestMap_SkillUpLearns proves the CZ_SKILLUP (0x0112) learn verb on the wire:
+// the harness player (skill 5 learned at 1, 2 skill points, SM_BASH in the
+// Novice tree at MaxLevel 10) raises SM_BASH to 2 and receives
+// ZC_SKILLINFO_UPDATE (0x010e, 11B) followed by ParChange SPSkillPoint=1.
+func TestMap_SkillUpLearns(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	conn := startMapListener(t, port, sessions)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain ZC_ACCEPT_ENTER: %v", err)
+	}
+
+	// CZ_SKILLUP (4B): cmd 0x0112 + uint16 skillID 5.
+	req := make([]byte, 4)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZSKILLUP)
+	binary.LittleEndian.PutUint16(req[2:], 5)
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send CZ_SKILLUP: %v", err)
+	}
+
+	// ZC_SKILLINFO_UPDATE (11B): cmd + skillId + level + sp + range + upFlag.
+	upd := make([]byte, 11)
+	if _, err := io.ReadFull(conn, upd); err != nil {
+		t.Fatalf("read ZC_SKILLINFO_UPDATE: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(upd[0:2]); got != ropacket.HeaderZCSKILLINFOUPDATE {
+		t.Fatalf("update cmd = 0x%04x, want 0x010e", got)
+	}
+	if got := binary.LittleEndian.Uint16(upd[2:4]); got != 5 {
+		t.Errorf("update skillId = %d, want 5", got)
+	}
+	if got := binary.LittleEndian.Uint16(upd[4:6]); got != 2 {
+		t.Errorf("update level = %d, want 2 (5:1 -> +1)", got)
+	}
+	// ParChange (8B): varID SPSkillPoint(12), count 1.
+	par := make([]byte, 8)
+	if _, err := io.ReadFull(conn, par); err != nil {
+		t.Fatalf("read ParChange: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(par[2:4]); got != ropacket.SPSkillPoint {
+		t.Errorf("ParChange varID = %d, want SPSkillPoint", got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(par[4:8])); got != 1 {
+		t.Errorf("ParChange count = %d, want 1 (2 points - 1)", got)
 	}
 }
 
@@ -2038,6 +2116,7 @@ func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*g
 	inv := invapp.NewInventoryService(itemRepo)
 	content := contentapp.NewEngine(nil, nil, nil, slog.Default())
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
+	skills.SetTree(testSkillTree())
 	charRepo := charinfra.NewMemoryCharacterRepository()
 	econ := economyapp.NewEconomyService(charRepo)
 	trade := worldapp.NewTradeService(world, inv, econ)

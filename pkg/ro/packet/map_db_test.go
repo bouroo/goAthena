@@ -160,8 +160,8 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// ZC_ACK_EXCHANGE_ITEM 0x01f5, ZC_CANCEL_EXCHANGE_ITEM 0x00ee) → 93. S2 adds
 	// the staging family (CZ_ADD_EXCHANGE_ITEM 0x00e8, CZ_TRADE_OK 0x00eb,
 	// ZC_ADD_EXCHANGE_ITEM 0x0b42, ZC_ACK_ADD_EXCHANGE_ITEM 0x00ea,
-	// ZC_CONCLUDE_EXCHANGE_ITEM 0x00ec) → 98.
-	const want = 98
+	// ZC_CONCLUDE_EXCHANGE_ITEM 0x00ec) → 98. S3 adds CZ_SKILLUP (0x0112) → 99.
+	const want = 99
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

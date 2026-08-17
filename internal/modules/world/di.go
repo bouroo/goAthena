@@ -21,6 +21,7 @@ import (
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/sizefix"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
+	"github.com/bouroo/goAthena/pkg/ro/skilltree"
 )
 
 // Register provisions the world module. The repo resolves the process-wide
@@ -119,7 +120,12 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		world := do.MustInvoke[*app.WorldService](i)
 		combatSvc := do.MustInvoke[*app.CombatService](i)
 		skills := do.MustInvoke[*skilldb.Registry](i)
-		return app.NewSkillService(world, combatSvc, skills), nil
+		dbPath := do.MustInvoke[string](i)
+		log := do.MustInvoke[*slog.Logger](i)
+		tree := loadSkillTree(dbPath, log)
+		svc := app.NewSkillService(world, combatSvc, skills)
+		svc.SetTree(tree)
+		return svc, nil
 	})
 	do.Provide(inj, func(i do.Injector) (*app.TradeService, error) {
 		// inventory and economy register before world (composition.go), so their
@@ -216,6 +222,20 @@ func loadSkillDB(dbPath string, log *slog.Logger) *skilldb.Registry {
 		return skilldb.NewRegistry()
 	}
 	log.Info("skill_db loaded", "path", path, "skills", reg.Len())
+	return reg
+}
+
+// loadSkillTree loads skill_tree.yml from the pre-renewal db root. A load
+// failure is warn-not-fatal: skill learning silently fails for unknown trees
+// until the operator provisions the file.
+func loadSkillTree(dbPath string, log *slog.Logger) *skilltree.Registry {
+	path := filepath.Join(dbPath, "pre-re", "skill_tree.yml")
+	reg, err := skilltree.LoadFile(path)
+	if err != nil {
+		log.Warn("skill_tree load failed; skill learning may silently fail", "path", path, "err", err)
+		return nil
+	}
+	log.Info("skill_tree loaded", "path", path, "jobs", reg.Len())
 	return reg
 }
 

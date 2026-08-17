@@ -122,3 +122,54 @@ func writeFixedName(dst []byte, src string) {
 		dst[i] = 0
 	}
 }
+
+// SkillInfoUpdateResponse encodes a ZC_SKILLINFO_UPDATE packet (command
+// 0x010e, 11 bytes on the wire). The server sends this in response to a
+// successful CZ_SKILLUP to update the single skill row in the client's
+// skill pane. Source:
+//
+//	rathena/src/map/packets_struct.hpp:489-497 (ZC_SKILLINFO_UPDATE)
+//	rathena/src/map/clif.cpp:5757-5780 (clif->skillinfonotify).
+//
+// Wire layout (offsets are cumulative bytes):
+//
+//	off  bytes  field            type
+//	 0     2    packetType       uint16  (0x010e)
+//	 2     2    skillId          uint16
+//	 4     2    level            uint16
+//	 6     2    sp               uint16
+//	 8     2    range2           uint16
+//	10     1    upgradableFlag  uint8   (1 = can level further)
+//
+// Total: 11 bytes = SizeZCSkillInfoUpdate.
+type SkillInfoUpdateResponse struct {
+	SkillID        int32
+	Level          int16
+	SP             int16
+	Range2         int16
+	UpgradableFlag bool
+}
+
+// Encode writes the ZC_SKILLINFO_UPDATE packet to w. The wire layout
+// uses uint16 LE for all numeric fields, matching the rAthena struct.
+func (r SkillInfoUpdateResponse) Encode(w io.Writer) error {
+	// All fields fit uint16 on the wire (skill ids < ~5k, levels <= 10, SP
+	// costs and ranges small); the int32 domain fields are bounded by skill_db.
+	skillID := uint16(r.SkillID) //nolint:gosec // bounded by skill_db
+	level := uint16(r.Level)     //nolint:gosec // levels cap at 10
+	sp := uint16(r.SP)           //nolint:gosec // per-level SP table values
+	rng := uint16(r.Range2)      //nolint:gosec // ranges fit uint16
+	buf := make([]byte, SizeZCSkillInfoUpdate)
+	binary.LittleEndian.PutUint16(buf[0:2], HeaderZCSKILLINFOUPDATE)
+	binary.LittleEndian.PutUint16(buf[2:4], skillID)
+	binary.LittleEndian.PutUint16(buf[4:6], level)
+	binary.LittleEndian.PutUint16(buf[6:8], sp)
+	binary.LittleEndian.PutUint16(buf[8:10], rng)
+	if r.UpgradableFlag {
+		buf[10] = 1
+	}
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_SKILLINFO_UPDATE: %w", err)
+	}
+	return nil
+}

@@ -303,9 +303,11 @@ const (
 	// (the older "to pos" 0x0438 variant is for earlier PACKETVERs and
 	// shares the same opcode+length but parses 4 fields). Layouts are
 	// pinned to rathena/src/map/packets_struct.hpp.
-	HeaderCZUSESKILL      uint16 = 0x0438 // CZ_USE_SKILL2 — clif_parse_UseSkillToId (clif_shuffle.hpp:4750)
-	HeaderZCNOTIFYSKILL   uint16 = 0x01de // ZC_NOTIFY_SKILL — packets_struct.hpp:4671 (PACKETVER >= 3)
-	HeaderZCACKTOUSESKILL uint16 = 0x0110 // ZC_ACK_TOUSESKILL — packets_struct.hpp:2461
+	HeaderCZSKILLUP         uint16 = 0x0112 // CZ_SKILLUP — clif_packetdb.hpp:110 (no PACKETVER guard)
+	HeaderZCSKILLINFOUPDATE uint16 = 0x010e // ZC_SKILLINFO_UPDATE — packets.hpp:489-497
+	HeaderCZUSESKILL        uint16 = 0x0438 // CZ_USE_SKILL2 — clif_parse_UseSkillToId (clif_shuffle.hpp:4750)
+	HeaderZCNOTIFYSKILL     uint16 = 0x01de // ZC_NOTIFY_SKILL — packets_struct.hpp:4671 (PACKETVER >= 3)
+	HeaderZCACKTOUSESKILL   uint16 = 0x0110 // ZC_ACK_TOUSESKILL — packets_struct.hpp:2461
 	// CZ_USE_SKILL_TOPOS (0x0AF4) — client casts a ground-target skill.
 	// rathena/src/map/clif_packetdb.hpp:1905
 	// (`#if PACKETVER >= 20180207 parseable_packet(0x0AF4,11,clif_parse_UseSkillToPos,2,4,6,8,10)`),
@@ -652,6 +654,14 @@ const (
 	// sizeZCNotifyVanish = int16 packetType + uint32 gid + uint8 type = 2+4+1 = 7
 	// (rathena/src/map/packets.hpp:604-608).
 	sizeZCNotifyVanish = 7
+	// sizeCZSkillUp = int16 packetType + uint16 skillID = 2+2 = 4
+	// (rathena/src/map/clif_packetdb.hpp:110, no PACKETVER guard).
+	SizeCZSkillUp = 4
+	// sizeZC_SKILLINFO_UPDATE = int16 packetType + uint16 skillId + uint16 level +
+	// uint16 sp + uint16 range2 + uint8 upgradableFlag = 2+2+2+2+2+1 = 11
+	// (rathena/src/map/packets.hpp:489-497).
+	SizeZCSkillInfoUpdate = 11
+
 	// sizeCZUseSkill2 = int16 packetType + int16 skillLv + uint16 skillID +
 	// uint32 targetID = 2+2+2+4 = 10 (clif_shuffle.hpp:4750 binds
 	// opcode 0x0438 to length 10 for PACKETVER_RE_NUM >= 20190904).
@@ -821,6 +831,12 @@ func NewMapServerDB() *DB {
 		ID:        HeaderCZRESTART,
 		Name:      "CZ_RESTART",
 		Length:    sizeCZRestart,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZSKILLUP,
+		Name:      "CZ_SKILLUP",
+		Length:    SizeCZSkillUp,
 		Direction: DirectionClientToServer,
 	})
 
