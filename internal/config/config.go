@@ -151,6 +151,7 @@ type ZoneConfig struct {
 	TickRateHz         int           `yaml:"tick_rate_hz"        env:"ZONE_TICK_RATE_HZ"        validate:"min=1,max=200"`
 	ViewRangeCells     int           `yaml:"view_range_cells"    env:"ZONE_VIEW_RANGE_CELLS"    validate:"min=1"`
 	DBPath             string        `yaml:"db_path"             env:"ZONE_DB_PATH"`
+	ScriptPath         string        `yaml:"script_path"         env:"ZONE_SCRIPT_PATH"` // NPC .txt files (single file or directory); empty = dev catalog only
 	CheckpointInterval time.Duration `yaml:"checkpoint_interval" env:"ZONE_CHECKPOINT_INTERVAL" validate:"min_duration"`
 }
 

@@ -121,7 +121,7 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	economy.Register(inj)
 	shopmod.Register(inj)
 	social.Register(inj)
-	content.Register(inj)
+	content.Register(inj, cfg)
 	transit.Register(inj)
 	world.Register(inj, cfg.Zone.TickRateHz, cfg.Zone.DBPath)
 

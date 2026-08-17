@@ -6,14 +6,18 @@ package script
 // a way to build nodes. These constructors are the single sanctioned
 // build path.
 
-// NewFile builds a File with the given header and body. Header may be
-// nil for floating function-script definitions.
-func NewFile(header *NPCHeader, body []Stmt) *File {
-	return &File{header: header, Body: body}
+// NewFile builds a File with the given header, body, and optional shop items.
+// Header may be nil for floating function-script definitions.
+// ShopItems are used by `shop` NPCs (which have no dialog body).
+func NewFile(header *NPCHeader, body []Stmt, shopItems ...ShopItem) *File {
+	return &File{header: header, Body: body, ShopItems: shopItems}
 }
 
-// Header returns the file's NPC header (or nil if floating).
+// Header returns the file's NPC header (or nil for floating).
 func (f *File) Header() *NPCHeader { return f.header }
+
+// ShopItems returns the NPC's shop item table (empty for non-shop NPCs).
+func (f *File) Items() []ShopItem { return f.ShopItems }
 
 // ----- Statement constructors -----
 

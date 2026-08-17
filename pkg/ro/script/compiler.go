@@ -10,18 +10,25 @@ import (
 // Floating `function script` blocks land in Funcs; placed/floating NPC blocks
 // land in Scripts under the NPC name.
 func Compile(src []byte) (*CompiledScriptSet, error) {
+	set := NewCompiledScriptSet()
+	return set, CompileInto(src, set)
+}
+
+// CompileInto parses src and appends every compiled block into the accumulator
+// set. Callers that need to compile multiple files into one set (e.g. a directory
+// of .txt files) should use this rather than Compile, which allocates a fresh set.
+func CompileInto(src []byte, set *CompiledScriptSet) error {
 	files, err := Parse(src)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	set := NewCompiledScriptSet()
 	c := newCompiler()
 	for _, f := range files {
 		if err := c.compileFile(f, set); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return set, nil
+	return nil
 }
 
 // compiler holds per-compilation state: the CompiledScript being built, a
@@ -41,7 +48,8 @@ func newCompiler() *compiler { return &compiler{} }
 
 // compileFile compiles one *File into the set. function-script headers route
 // into Funcs; warp headers extract a WarpDef (warp NPCs have no dialog body);
-// everything else (placed/floating NPCs) becomes an executable script.
+// shop headers extract a ShopDef (no dialog body); everything else
+// (placed/floating NPCs) becomes an executable script.
 func (c *compiler) compileFile(f *File, set *CompiledScriptSet) error {
 	hdr := f.Header()
 	if hdr == nil {
@@ -61,6 +69,16 @@ func (c *compiler) compileFile(f *File, set *CompiledScriptSet) error {
 		}
 		c.emitOp(OpEOF, hdr.pos)
 		set.Funcs[hdr.Name] = c.cs
+		return nil
+	}
+	if hdr.Type == "shop" {
+		set.Shops = append(set.Shops, ShopDef{
+			Name:    hdr.Name,
+			MapName: hdr.MapName,
+			X:       hdr.X,
+			Y:       hdr.Y,
+			Items:   f.Items(),
+		})
 		return nil
 	}
 	c.cs = NewCompiledScript(hdr.Name)

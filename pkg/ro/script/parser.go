@@ -134,7 +134,8 @@ func parseFiles(p *parser) ([]*File, error) {
 
 // parseFile parses one top-level NPC block. It distinguishes the three
 // header shapes (placed / floating / function) by lookahead, then parses the
-// `{ ... }` body they all share.
+// `{ ... }` body they all share. For `shop` NPCs the body is empty and the
+// item table follows directly after the header's trailing comma.
 func parseFile(p *parser) (*File, error) {
 	if p.atKeyword("function") {
 		return parseFunctionScript(p)
@@ -143,11 +144,51 @@ func parseFile(p *parser) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+	// `shop` NPCs have no dialog body — the header's trailing comma is followed
+	// by the item table instead of `{`. Route to the item parser and return.
+	if hdr.Type == "shop" {
+		items, err := parseShopItemTable(p)
+		if err != nil {
+			return nil, err
+		}
+		return NewFile(hdr, nil, items...), nil
+	}
 	body, err := parseBlock(p)
 	if err != nil {
 		return nil, err
 	}
 	return NewFile(hdr, body), nil
+}
+
+// parseShopItemTable parses the comma-separated item table that follows a
+// `shop` NPC header. The header's trailing comma is the first token here.
+// Each entry is `itemID : price` where price < 0 means "use item_db default
+// buy price" (resolved at load time, not here).
+func parseShopItemTable(p *parser) ([]ShopItem, error) {
+	var items []ShopItem
+	// Consume the item-table separator (header's trailing comma).
+	if _, err := p.expect(TokenDelim, ","); err != nil {
+		return nil, err
+	}
+	for {
+		itemID, err := p.expectIntVal()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(TokenDelim, ":"); err != nil {
+			return nil, err
+		}
+		price, err := p.parseSignedInt()
+		if err != nil {
+			return nil, err
+		}
+		id, price32 := int32(itemID), int32(price) //nolint:gosec // item ids and zeny prices fit int32
+		items = append(items, ShopItem{ItemID: id, Price: price32})
+		if !p.accept(TokenDelim, ",") {
+			break
+		}
+	}
+	return items, nil
 }
 
 // parseFunctionScript parses `function script Name { ... }`. Function scripts
@@ -205,8 +246,12 @@ func parseFloatingHeader(p *parser, start Position) (*NPCHeader, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := p.expectCommaBeforeBody(); err != nil {
-		return nil, err
+	// When triggers were parsed, parseOptionalTriggers already consumed the
+	// trailing comma; skip expectCommaBeforeBody or it will fail on `{`.
+	if tx == 0 && ty == 0 {
+		if err := p.expectCommaBeforeBody(); err != nil {
+			return nil, err
+		}
 	}
 	return NewNPCHeader("", 0, 0, 0, name, "", sprite, tx, ty, "float", start), nil
 }
@@ -247,8 +292,18 @@ func parsePlacedHeader(p *parser, start Position) (*NPCHeader, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := p.expectCommaBeforeBody(); err != nil {
-		return nil, err
+	// For `shop` NPCs the header comma is the item-table separator, not a
+	// header/body delimiter. Do NOT consume it here; parseFile handles it by
+	// routing to parseShopItemTable instead of parseBlock.
+	if typ == "shop" {
+		return NewNPCHeader(mapName, x, y, facing, name, "", sprite, tx, ty, typ, start), nil
+	}
+	// When triggers were parsed, parseOptionalTriggers already consumed the
+	// trailing comma; skip expectCommaBeforeBody or it will fail on `{`.
+	if tx == 0 && ty == 0 {
+		if err := p.expectCommaBeforeBody(); err != nil {
+			return nil, err
+		}
 	}
 	return NewNPCHeader(mapName, x, y, facing, name, "", sprite, tx, ty, typ, start), nil
 }
@@ -278,10 +333,18 @@ func (p *parser) parseOptionalTriggers() (int, int, error) {
 	if !p.at(TokenDelim, ",") {
 		return 0, 0, nil
 	}
-	// Distinguish the warp's `, tx , ty ,` from the single `,` that precedes
-	// the body brace: a trigger pair is `, int , int ,` (three commas total),
-	// while the body separator is just `, {`.
+	// Distinguish warp's `, tx , ty , EOF` from a script's optional-trigger
+	// region `, tx , ty , {`. Guards check BEFORE consuming the comma:
+	//   warp:       peekN(1)=INT, peekN(2)=,, peekN(3)=INT, peekN(4)=, → EOF (past end)
+	//   script opt: peekN(1)=INT, peekN(2)=,, peekN(3)=INT, peekN(4)={ (DELIM)
+	//   bare:       peekN(1)={ (not INT) → handled by first guard
+	//   shop item:  peekN(1)=INT, peekN(2)=: (not ,) → handled by warp-path check
+	// After the guards pass, peekN(4)==EOF means this is warp. Otherwise skip.
 	if p.peekN(1).Kind != TokenInt {
+		return 0, 0, nil
+	}
+	// `, itemID :` is shop syntax — the colon at peekN(2) is not a comma.
+	if p.peekN(2).Kind == TokenDelim && p.peekN(2).Value == ":" {
 		return 0, 0, nil
 	}
 	p.next() // consume leading `,`
@@ -294,6 +357,14 @@ func (p *parser) parseOptionalTriggers() (int, int, error) {
 	}
 	ty, err := p.expectIntVal()
 	if err != nil {
+		return 0, 0, err
+	}
+	// Split: warp ends at `, tx , ty` (peekN(1) is EOF). Script continues to `{`.
+	if p.peekN(1).Kind == TokenEOF {
+		return tx, ty, nil
+	}
+	// Script: consume the trailing comma and return triggers.
+	if _, err := p.expect(TokenDelim, ","); err != nil {
 		return 0, 0, err
 	}
 	return tx, ty, nil

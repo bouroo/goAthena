@@ -25,10 +25,12 @@ type Expr interface {
 
 // File represents a parsed script file: a tab-separated NPC header
 // (possibly nil for floating `function script` definitions) followed
-// by a list of body statements.
+// by a list of body statements. For `shop` NPCs the body is empty and
+// ShopItems carries the comma-separated item table instead.
 type File struct {
-	header *NPCHeader
-	Body   []Stmt
+	header    *NPCHeader
+	Body      []Stmt
+	ShopItems []ShopItem
 }
 
 // Pos returns the position of the first body statement, or the header

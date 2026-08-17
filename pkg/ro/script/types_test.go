@@ -101,6 +101,40 @@ func TestCompiledScriptSetConstruction(t *testing.T) {
 	}
 }
 
+func TestCompileShopNPC(t *testing.T) {
+	// Compile a shop NPC and verify the ShopDef lands in the set.
+	// Note: NPC name is a single token (no # suffix in this test).
+	src := "cave,76,39,5\tshop\tCaveGirl\t62,712:-1,502:50\n"
+	set, err := Compile([]byte(src))
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	if len(set.Shops) != 1 {
+		t.Fatalf("got %d shops, want 1", len(set.Shops))
+	}
+	shop := set.Shops[0]
+	if shop.Name != "CaveGirl" {
+		t.Errorf("Name = %q, want CaveGirl", shop.Name)
+	}
+	if shop.MapName != "cave" {
+		t.Errorf("MapName = %q, want cave", shop.MapName)
+	}
+	if shop.X != 76 || shop.Y != 39 {
+		t.Errorf("pos = (%d,%d), want (76,39)", shop.X, shop.Y)
+	}
+	if len(shop.Items) != 2 {
+		t.Fatalf("got %d items, want 2", len(shop.Items))
+	}
+	// 712:-1  →  price -1 (use item_db default, resolved at load time)
+	if shop.Items[0].ItemID != 712 || shop.Items[0].Price != -1 {
+		t.Errorf("item[0] = (%d, %d), want (712, -1)", shop.Items[0].ItemID, shop.Items[0].Price)
+	}
+	// 502:50
+	if shop.Items[1].ItemID != 502 || shop.Items[1].Price != 50 {
+		t.Errorf("item[1] = (%d, %d), want (502, 50)", shop.Items[1].ItemID, shop.Items[1].Price)
+	}
+}
+
 func TestWarpDefKey(t *testing.T) {
 	w := WarpDef{
 		MapName: "prontera", X: 100, Y: 200, TriggerX: 100, TriggerY: 200,
