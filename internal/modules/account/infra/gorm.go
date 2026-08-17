@@ -39,6 +39,21 @@ func (r *GORMAccountRepository) FindByUserID(ctx context.Context, userID string)
 	return acc, nil
 }
 
+// FindByAccountID loads the account row by account_id.
+func (r *GORMAccountRepository) FindByAccountID(ctx context.Context, id domain.AccountID) (domain.Account, error) {
+	var acc domain.Account
+	err := r.db.WithContext(ctx).
+		Where("account_id = ?", id).
+		First(&acc).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return domain.Account{}, domain.ErrAccountNotFound
+		}
+		return domain.Account{}, err
+	}
+	return acc, nil
+}
+
 // RecordLogin increments logincount and stamps lastlogin/last_ip.
 func (r *GORMAccountRepository) RecordLogin(ctx context.Context, id domain.AccountID, ip string) error {
 	now := time.Now()

@@ -50,8 +50,8 @@ func TestNewCharServerDB_Size(t *testing.T) {
 	t.Parallel()
 
 	db := NewCharServerDB()
-	// 3 C→S + 5 S→C = 8.
-	const want = 8
+	// 3 C→S + 8 S→C = 11.
+	const want = 11
 	if db.Size() != want {
 		t.Errorf("NewCharServerDB Size() = %d, want %d", db.Size(), want)
 	}

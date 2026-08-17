@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/bouroo/goAthena/internal/modules/character/domain"
 )
@@ -98,4 +99,88 @@ func (s *CharService) Delete(ctx context.Context, id domain.CharID, accountID ui
 		return fmt.Errorf("delete character: %w", err)
 	}
 	return nil
+}
+
+// FindByID returns a character by char_id, without checking ownership.
+// Used by the char server to inspect character state before deletion.
+func (s *CharService) FindByID(ctx context.Context, id domain.CharID) (domain.Character, error) {
+	c, err := s.repos.FindByID(ctx, id)
+	if err != nil {
+		return domain.Character{}, fmt.Errorf("find character: %w", err)
+	}
+	return c, nil
+}
+
+// ReserveDeleteResult holds the outcome of a deletion-slot reservation.
+// DeleteDate is the remaining seconds until deletion; 0 means the character
+// is already queued (result=0) or there was no delay to enforce.
+type ReserveDeleteResult struct {
+	Result     int32 // 0 = already queued, 1 = OK, 3 = not found
+	DeleteDate uint32
+}
+
+// ReserveDelete places a character into the deletion queue. The caller (char
+// server handler) must verify the character belongs to the account before
+// calling. result semantics mirror rAthena char_clif.cpp: result 0 = already
+// queued (date=0), 1 = OK (date = char_del_delay seconds from now), 3 = not
+// found. char_del_delay is taken from the server config; when 0 the delay is
+// bypassed (we use 0 as "no delay" here — a later milestone injects it).
+func (s *CharService) ReserveDelete(ctx context.Context, id domain.CharID, accountID uint32) (ReserveDeleteResult, error) {
+	c, err := s.repos.FindByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, domain.ErrCharacterNotFound) {
+			return ReserveDeleteResult{Result: 3}, nil
+		}
+		return ReserveDeleteResult{}, fmt.Errorf("find character: %w", err)
+	}
+	if c.AccountID != accountID {
+		return ReserveDeleteResult{Result: 3}, nil
+	}
+	if c.DeleteDate != 0 {
+		// Already queued — date=0 on wire signals this.
+		return ReserveDeleteResult{Result: 0, DeleteDate: 0}, nil
+	}
+	// char_del_delay seconds from now; 0 = immediate (config-driven, default 0 here).
+	// TODO(milestone): read char_del_delay from config; use 0 for now (no delay).
+	const charDelDelay = 0
+	delDate := uint32(time.Now().Unix()) + charDelDelay //nolint:gosec // epoch seconds fit uint32 until 2106
+	if err := s.repos.SetDeleteDate(ctx, id, accountID, delDate); err != nil {
+		return ReserveDeleteResult{}, fmt.Errorf("set delete date: %w", err)
+	}
+	// PACKETVER ≥20150513 carries REMAINING seconds (delete_date − now) in the
+	// date field, not the absolute epoch (rAthena chclif_char_delete2_ack).
+	remaining := uint32(0)
+	if rem := int64(delDate) - time.Now().Unix(); rem > 0 {
+		remaining = uint32(rem) //nolint:gosec // bounded by charDelDelay
+	}
+	return ReserveDeleteResult{Result: 1, DeleteDate: remaining}, nil
+}
+
+// CancelDeleteResult mirrors rAthena char_clif.cpp: result 1 = cancelled,
+// 2 = character not found.
+type CancelDeleteResult struct {
+	Result int32
+}
+
+// CancelDelete clears the pending deletion slot for a character, returning
+// 1 on success or 2 if the character was not found or not owned by accountID.
+func (s *CharService) CancelDelete(ctx context.Context, id domain.CharID, accountID uint32) (CancelDeleteResult, error) {
+	c, err := s.repos.FindByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, domain.ErrCharacterNotFound) {
+			return CancelDeleteResult{Result: 2}, nil
+		}
+		return CancelDeleteResult{}, fmt.Errorf("find character: %w", err)
+	}
+	if c.AccountID != accountID {
+		return CancelDeleteResult{Result: 2}, nil
+	}
+	if c.DeleteDate == 0 {
+		// Not queued — cancel is a no-op, still success.
+		return CancelDeleteResult{Result: 1}, nil
+	}
+	if err := s.repos.SetDeleteDate(ctx, id, accountID, 0); err != nil {
+		return CancelDeleteResult{}, fmt.Errorf("clear delete date: %w", err)
+	}
+	return CancelDeleteResult{Result: 1}, nil
 }

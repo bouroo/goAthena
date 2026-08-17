@@ -55,6 +55,10 @@ func (f *fakeCharRepo) UpdateZeny(_ context.Context, id chardomain.CharID, zeny 
 	return nil
 }
 
+func (f *fakeCharRepo) SetDeleteDate(_ context.Context, id chardomain.CharID, _ uint32, _ uint32) error {
+	return nil
+}
+
 func (f *fakeCharRepo) FindByID(_ context.Context, id chardomain.CharID) (chardomain.Character, error) {
 	c, ok := f.chars[id]
 	if !ok {

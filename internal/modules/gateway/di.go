@@ -47,14 +47,19 @@ func NewLoginServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.
 	return ls, nil
 }
 
-// NewCharServer resolves the CharService and builds the char-select listener.
+// NewCharServer resolves the CharService + AccountRepo and builds the char-select listener.
 func NewCharServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.CharServer, error) {
 	chars, err := do.Invoke[*charapp.CharService](inj)
 	if err != nil {
 		return nil, fmt.Errorf("resolve char service: %w", err)
 	}
+	accRepo, err := do.Invoke[domain.AccountRepository](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve account repository: %w", err)
+	}
 	cs, err := app.NewCharServer(
 		chars,
+		accRepo,
 		log,
 		cfg.Gateway.MapHost,
 		uint16(cfg.Gateway.MapPort), //nolint:gosec // G115: MapPort operator-set (default 5121).

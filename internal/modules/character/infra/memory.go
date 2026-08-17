@@ -51,6 +51,19 @@ func (r *MemoryCharacterRepository) Create(_ context.Context, c domain.Character
 	return c, nil
 }
 
+// CreateWithID inserts a character with a forced ID, bypassing auto-increment.
+// Intended for integration tests that need predictable character IDs.
+func (r *MemoryCharacterRepository) CreateWithID(_ context.Context, c domain.Character) (domain.Character, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.names[c.Name] {
+		return domain.Character{}, domain.ErrNameTaken
+	}
+	r.byID[c.ID] = c
+	r.names[c.Name] = true
+	return c, nil
+}
+
 // Delete removes a character owned by accountID (in-memory).
 func (r *MemoryCharacterRepository) Delete(_ context.Context, id domain.CharID, accountID uint32) error {
 	r.mu.Lock()
@@ -93,6 +106,19 @@ func (r *MemoryCharacterRepository) FindByID(_ context.Context, id domain.CharID
 		return domain.Character{}, domain.ErrCharacterNotFound
 	}
 	return c, nil
+}
+
+// SetDeleteDate sets delete_date for character id, ownership-checked.
+func (r *MemoryCharacterRepository) SetDeleteDate(_ context.Context, id domain.CharID, accountID uint32, deleteDate uint32) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.byID[id]
+	if !ok || c.AccountID != accountID {
+		return domain.ErrCharacterNotFound
+	}
+	c.DeleteDate = deleteDate
+	r.byID[id] = c
+	return nil
 }
 
 // MemorySessionStore is an in-memory session store for unit tests.

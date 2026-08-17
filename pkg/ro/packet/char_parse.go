@@ -194,3 +194,82 @@ func (r CHMakeCharRequest) validate() error {
 	}
 	return nil
 }
+
+// CHDeleteChar3ReservedRequest is decoded form of client → char-server
+// CH_DELETE_CHAR3_RESERVED packet (header 0x0827, 6 bytes on wire).
+// Source: rathena/src/common/packets.hpp:471-476, char_clif.cpp:530-610.
+//
+// The client sends this when the user clicks "delete" on a character slot.
+// result semantics: 0 = already queued (date=0), 1 = OK, 3 = not found,
+// 2/4/5 = restrictions (we do not emit these — no party/guild).
+type CHDeleteChar3ReservedRequest struct {
+	// CID is the character ID the client wants to delete.
+	CID uint32
+}
+
+// ParseCHDeleteChar3Reserved parses a full 6-byte CH_DELETE_CHAR3_RESERVED
+// frame (including the 2-byte cmd header). Returns wrapped error if frame
+// is not exactly 6 bytes or cmd header is not HeaderCHDELETECHAR3RESERVED.
+func ParseCHDeleteChar3Reserved(frame []byte) (CHDeleteChar3ReservedRequest, error) {
+	if len(frame) != 6 { //nolint:gosec // G115: constant 6 fits in int.
+		return CHDeleteChar3ReservedRequest{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3_RESERVED: want 6 bytes, got %d", len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHDELETECHAR3RESERVED {
+		return CHDeleteChar3ReservedRequest{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3_RESERVED: unexpected cmd 0x%04x", cmd)
+	}
+	return CHDeleteChar3ReservedRequest{
+		CID: binary.LittleEndian.Uint32(frame[2:6]),
+	}, nil
+}
+
+// CHDeleteChar3Request is decoded form of client → char-server CH_DELETE_CHAR3
+// packet (header 0x0829, 12 bytes on wire). Source:
+// rathena/src/common/packets.hpp:481-486, char_clif.cpp:650-700.
+//
+// The client sends this after the user types a birthdate (YYMMDD, 6 raw bytes)
+// to confirm final deletion.
+type CHDeleteChar3Request struct {
+	// CID is the character ID to delete.
+	CID uint32
+	// Birthdate is the 6-byte raw "YYMMDD" birthdate sent by the client.
+	Birthdate [6]byte
+}
+
+// ParseCHDeleteChar3 parses a full 12-byte CH_DELETE_CHAR3 frame
+// (including the 2-byte cmd header). Returns wrapped error if frame
+// is not exactly 12 bytes or cmd header is not HeaderCHDELETECHAR3.
+func ParseCHDeleteChar3(frame []byte) (CHDeleteChar3Request, error) {
+	if len(frame) != 12 { //nolint:gosec // G115: constant 12 fits in int.
+		return CHDeleteChar3Request{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3: want 12 bytes, got %d", len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHDELETECHAR3 {
+		return CHDeleteChar3Request{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3: unexpected cmd 0x%04x", cmd)
+	}
+	return CHDeleteChar3Request{
+		CID:       binary.LittleEndian.Uint32(frame[2:6]),
+		Birthdate: [6]byte(frame[6:12]),
+	}, nil
+}
+
+// CHDeleteChar3CancelRequest is decoded form of client → char-server
+// CH_DELETE_CHAR3_CANCEL packet (header 0x082b, 6 bytes on wire).
+// Source: rathena/src/common/packets.hpp:491-496, char_clif.cpp:750-790.
+type CHDeleteChar3CancelRequest struct {
+	// CID is the character ID whose pending deletion to cancel.
+	CID uint32
+}
+
+// ParseCHDeleteChar3Cancel parses a full 6-byte CH_DELETE_CHAR3_CANCEL
+// frame (including the 2-byte cmd header). Returns wrapped error if frame
+// is not exactly 6 bytes or cmd header is not HeaderCHDELETECHAR3CANCEL.
+func ParseCHDeleteChar3Cancel(frame []byte) (CHDeleteChar3CancelRequest, error) {
+	if len(frame) != 6 { //nolint:gosec // G115: constant 6 fits in int.
+		return CHDeleteChar3CancelRequest{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3_CANCEL: want 6 bytes, got %d", len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHDELETECHAR3CANCEL {
+		return CHDeleteChar3CancelRequest{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3_CANCEL: unexpected cmd 0x%04x", cmd)
+	}
+	return CHDeleteChar3CancelRequest{
+		CID: binary.LittleEndian.Uint32(frame[2:6]),
+	}, nil
+}
