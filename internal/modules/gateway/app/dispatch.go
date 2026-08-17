@@ -59,6 +59,7 @@ func mapHandlers() map[uint16]mapHandler {
 		0x0089:                              {size: 7, fn: (*MapServer).handleActionRequest},                         // CZ_ACTION_REQUEST
 		0x0090:                              {size: 7, fn: (*MapServer).handleContactNPC},                            // CZ_CONTACT_NPC (NPC click)
 		ropacket.HeaderCZRESTART:            {size: 3, fn: (*MapServer).handleRestart},                               // CZ_RESTART (respawn / return to char-select)
+		ropacket.HeaderCZSTATUSCHANGE:       {size: 5, fn: (*MapServer).handleStatusChange},                          // CZ_STATUS_CHANGE (stat allocation)
 		0x00b8:                              {size: 7, fn: (*MapServer).handleChooseMenu},                            // CZ_CHOOSE_MENU
 		0x00b9:                              {size: 6, fn: (*MapServer).handleReqNextScript},                         // CZ_REQ_NEXT_SCRIPT
 		0x0143:                              {size: 10, fn: (*MapServer).handleInputEditDlg},                         // CZ_INPUT_EDITDLG

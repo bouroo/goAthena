@@ -209,7 +209,7 @@ func (s *MapServer) notifyExpChange(charID uint32, baseExp, jobExp uint64) {
 // (pre-re convention — a level-up restores HP/SP). It is the LevelingService's
 // notification sink (world.OnLevelUp); a char with no live connection is a
 // no-op. One buffered write so the client applies the frames atomically.
-func (s *MapServer) notifyLevelUp(charID uint32, newLevel int16, maxHP, maxSP int32) {
+func (s *MapServer) notifyLevelUp(charID uint32, newLevel int16, maxHP, maxSP int32, statusPoint uint32) {
 	c, ok := s.connFor(charID)
 	if !ok {
 		return
@@ -220,6 +220,7 @@ func (s *MapServer) notifyLevelUp(charID uint32, newLevel int16, maxHP, maxSP in
 	_ = ropacket.ParChangeResponse{VarID: ropacket.SPMaxSP, Count: maxSP}.Encode(&buf)
 	_ = ropacket.ParChangeResponse{VarID: ropacket.SPHP, Count: maxHP}.Encode(&buf)
 	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: maxSP}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPStatusPoint, Count: int32(statusPoint)}.Encode(&buf) //nolint:gosec // G115: points bounded by level count, far below int32.
 	_ = c.AsyncWrite(buf.Bytes(), nil)
 }
 
@@ -577,6 +578,73 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 type mapAuth struct {
 	accountID uint32
 	charID    uint32
+}
+
+// handleStatusChange processes CZ_STATUS_CHANGE (0x00bb) — the client's request to
+// spend status points on a base stat. It delegates to the world service and sends
+// ZC_STATUS_CHANGE_ACK and ZC_PAR_CHANGE back to the client.
+func (s *MapServer) handleStatusChange(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_STATUS_CHANGE from unauthed conn")
+		return
+	}
+	czReq, err := ropacket.ParseCZStatusChange(frame)
+	if err != nil {
+		s.log.Debug("map: parse CZ_STATUS_CHANGE", "err", err)
+		return
+	}
+
+	// Resolve the stat BEFORE spending so an unknown id is refused (ack result
+	// 1) rather than silently dropped — the client knows the click failed.
+	statName, ok := statusIDToStat[czReq.StatusID]
+	if !ok {
+		s.log.Debug("map: unknown StatusID in CZ_STATUS_CHANGE", "id", czReq.StatusID)
+		s.writeStatusChangeAck(c, ropacket.ZCStatusChangeAck{StatusID: czReq.StatusID, Result: 1})
+		return
+	}
+
+	newVal, _, _, err := s.world.AllocateStat(auth.charID, statName)
+	if err != nil {
+		// result 0x01 = insufficient points (also used for cap/unknown-stat —
+		// rAthena's clif_status_change_ack result codes).
+		s.writeStatusChangeAck(c, ropacket.ZCStatusChangeAck{StatusID: czReq.StatusID, Result: 1})
+		return
+	}
+	s.writeStatusChangeAck(c, ropacket.ZCStatusChangeAck{StatusID: czReq.StatusID, Result: 0, Value: uint8(newVal)}) //nolint:gosec // G115: stat capped at 99.
+
+	// ZC_PAR_CHANGE burst: the raised stat (so the client's stat window updates),
+	// the remaining points, and current vitals — one buffered write.
+	var buf bytes.Buffer
+	_ = ropacket.ParChangeResponse{VarID: czReq.StatusID, Count: int32(newVal)}.Encode(&buf) //nolint:gosec // G115: stat capped at 99.
+	e, err := s.world.Get(worlddomain.EntityID(auth.charID))
+	if err != nil {
+		_ = c.AsyncWrite(buf.Bytes(), nil)
+		return
+	}
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPStatusPoint, Count: int32(e.StatusPoint)}.Encode(&buf) //nolint:gosec // G115: points bounded by game values.
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPHP, Count: e.HP}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: e.SP}.Encode(&buf)
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// writeStatusChangeAck sends ZC_STATUS_CHANGE_ACK to the client.
+func (s *MapServer) writeStatusChangeAck(c gnet.Conn, ack ropacket.ZCStatusChangeAck) {
+	out := make([]byte, 6) // ZC_STATUS_CHANGE_ACK = 2(cmd) + 2(statusID) + 1(result) + 1(value)
+	if err := ack.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_STATUS_CHANGE_ACK", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// statusIDToStat maps the ropacket SP_* constants to world stat field names.
+var statusIDToStat = map[uint16]string{
+	ropacket.SPStr: "Str",
+	ropacket.SPAgi: "Agi",
+	ropacket.SPVit: "Vit",
+	ropacket.SPInt: "Int",
+	ropacket.SPDex: "Dex",
+	ropacket.SPLuk: "Luk",
 }
 
 // writeAcceptEnter sends ZC_ACCEPT_ENTER (the self spawn follows in M4 via the

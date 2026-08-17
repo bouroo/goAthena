@@ -242,7 +242,7 @@ func TestWorld_GORMSaveState(t *testing.T) {
 
 	// SaveState with a leveling-recalculated snapshot: level 2, maxima grown to
 	// 1200/60, current vitals 750/25, EXP totals 1234/5678.
-	if err := worldRepo.SaveState(ctx, charID, 2, 1200, 60, 750, 25, 1234, 5678); err != nil {
+	if err := worldRepo.SaveState(ctx, charID, 2, 1200, 60, 750, 25, 1234, 5678, 6); err != nil {
 		t.Fatalf("save state: %v", err)
 	}
 	got, err := worldRepo.LoadEnterState(ctx, charID)
@@ -260,6 +260,9 @@ func TestWorld_GORMSaveState(t *testing.T) {
 	}
 	if got.MaxHP != 1200 || got.MaxSP != 60 {
 		t.Errorf("max vitals after save = %d/%d, want 1200/60 (level-up recalc persists)", got.MaxHP, got.MaxSP)
+	}
+	if got.StatusPoint != 6 {
+		t.Errorf("status points after save = %d, want 6 (points persist)", got.StatusPoint)
 	}
 }
 

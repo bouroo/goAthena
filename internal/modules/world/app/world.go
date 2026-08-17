@@ -15,6 +15,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
+	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
 // WorldService owns the in-memory entity registry and per-map AOI grids. It is
@@ -66,9 +67,9 @@ type WorldService struct {
 	// mutex, after OnStatChange, so the HP/SP bar settles before the appear burst.
 	OnRespawn func(charID uint32)
 	// OnLevelUp, when set, is invoked after a PC levels up.
-	// It provides the new level and the recalculated MaxHP/MaxSP.
+	// It provides the new level, recalculated MaxHP/MaxSP, and remaining status points.
 	// nil = leveling is silent. Invoked off the world mutex.
-	OnLevelUp func(charID uint32, newLevel int16, maxHP, maxSP int32)
+	OnLevelUp func(charID uint32, newLevel int16, maxHP, maxSP int32, statusPoint uint32)
 }
 
 // Pre-renewal standing natural-regen intervals (rAthena status_natural_heal).
@@ -477,7 +478,7 @@ func (w *WorldService) LeaveMap(ctx context.Context, charID uint32) error {
 	if err := w.repo.SetOnline(ctx, charID, false, e.Pos); err != nil {
 		return fmt.Errorf("set offline: %w", err)
 	}
-	if err := w.repo.SaveState(ctx, charID, e.Level, e.MaxHP, e.MaxSP, e.HP, e.SP, e.BaseExp, e.JobExp); err != nil {
+	if err := w.repo.SaveState(ctx, charID, e.Level, e.MaxHP, e.MaxSP, e.HP, e.SP, e.BaseExp, e.JobExp, e.StatusPoint); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
 	return nil
@@ -501,6 +502,7 @@ func (w *WorldService) SaveAll(ctx context.Context) {
 		level        int16
 		baseExp      uint64
 		jobExp       uint64
+		statusPoint  uint32
 	}
 	snaps := make([]vitalSnap, 0, len(w.entities))
 	for id, e := range w.entities {
@@ -508,18 +510,19 @@ func (w *WorldService) SaveAll(ctx context.Context) {
 			continue
 		}
 		snaps = append(snaps, vitalSnap{
-			charID:  uint32(id), //nolint:gosec // G115: EntityID wraps a char_id (uint32).
-			pos:     e.Pos,
-			hp:      e.HP,
-			sp:      e.SP,
-			level:   e.Level,
-			baseExp: e.BaseExp,
-			jobExp:  e.JobExp,
+			charID:      uint32(id), //nolint:gosec // G115: EntityID wraps a char_id (uint32).
+			pos:         e.Pos,
+			hp:          e.HP,
+			sp:          e.SP,
+			level:       e.Level,
+			baseExp:     e.BaseExp,
+			jobExp:      e.JobExp,
+			statusPoint: e.StatusPoint,
 		})
 	}
 	w.mu.RUnlock()
 	for _, s := range snaps {
-		if err := w.repo.SaveState(ctx, s.charID, s.level, s.maxHP, s.maxSP, s.hp, s.sp, s.baseExp, s.jobExp); err != nil {
+		if err := w.repo.SaveState(ctx, s.charID, s.level, s.maxHP, s.maxSP, s.hp, s.sp, s.baseExp, s.jobExp, s.statusPoint); err != nil {
 			w.log.Warn("save-all state", "char_id", s.charID, "err", err)
 			continue
 		}
@@ -550,6 +553,7 @@ func (w *WorldService) Checkpoint(ctx context.Context) {
 		level        int16
 		baseExp      uint64
 		jobExp       uint64
+		statusPoint  uint32
 	}
 	snaps := make([]vitalSnap, 0, len(w.entities))
 	for id, e := range w.entities {
@@ -557,18 +561,19 @@ func (w *WorldService) Checkpoint(ctx context.Context) {
 			continue
 		}
 		snaps = append(snaps, vitalSnap{
-			charID:  uint32(id), //nolint:gosec // G115: EntityID wraps a char_id (uint32).
-			pos:     e.Pos,
-			hp:      e.HP,
-			sp:      e.SP,
-			level:   e.Level,
-			baseExp: e.BaseExp,
-			jobExp:  e.JobExp,
+			charID:      uint32(id), //nolint:gosec // G115: EntityID wraps a char_id (uint32).
+			pos:         e.Pos,
+			hp:          e.HP,
+			sp:          e.SP,
+			level:       e.Level,
+			baseExp:     e.BaseExp,
+			jobExp:      e.JobExp,
+			statusPoint: e.StatusPoint,
 		})
 	}
 	w.mu.RUnlock()
 	for _, s := range snaps {
-		if err := w.repo.SaveState(ctx, s.charID, s.level, s.maxHP, s.maxSP, s.hp, s.sp, s.baseExp, s.jobExp); err != nil {
+		if err := w.repo.SaveState(ctx, s.charID, s.level, s.maxHP, s.maxSP, s.hp, s.sp, s.baseExp, s.jobExp, s.statusPoint); err != nil {
 			w.log.Warn("checkpoint state", "char_id", s.charID, "err", err)
 			continue
 		}
@@ -861,6 +866,55 @@ func (w *WorldService) GrantExp(ctx context.Context, charID uint32, baseExp, job
 		w.OnExpChange(charID, newBase, newJob)
 	}
 	return newBase, newJob, nil
+}
+
+// AllocateStat raises one base stat by one step, spending status points at the
+// kernel's StatusPointCost rate (the packet package's pc_need_status_point
+// table — 1 + (cur+9)/10 pre-renewal; keeping it in one place avoids drift).
+// Stats cap at 99 (documented pre-re convention). Returns the new stat value,
+// remaining points, and the cost consumed. Typed errors: ErrEntityNotFound,
+// ErrUnknownStat, ErrStatCapped, ErrNoStatusPoints.
+func (w *WorldService) AllocateStat(charID uint32, stat string) (newVal uint32, remaining uint32, cost uint32, err error) {
+	const maxStat = 99
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	e, ok := w.entities[domain.EntityID(charID)]
+	if !ok {
+		return 0, 0, 0, domain.ErrEntityNotFound
+	}
+
+	var cur *uint16
+	switch stat {
+	case "Str":
+		cur = &e.Str
+	case "Agi":
+		cur = &e.Agi
+	case "Vit":
+		cur = &e.Vit
+	case "Int":
+		cur = &e.Int
+	case "Dex":
+		cur = &e.Dex
+	case "Luk":
+		cur = &e.Luk
+	default:
+		return 0, 0, 0, fmt.Errorf("%w: %s", domain.ErrUnknownStat, stat)
+	}
+
+	if *cur >= maxStat {
+		return 0, 0, 0, fmt.Errorf("%w: %s at %d", domain.ErrStatCapped, stat, maxStat)
+	}
+	cost = uint32(ropacket.StatusPointCost(uint8(*cur))) //nolint:gosec // G115: cur is capped at 98 here, fits uint8.
+	if cost > e.StatusPoint {
+		return 0, 0, 0, fmt.Errorf("%w: have %d, need %d", domain.ErrNoStatusPoints, e.StatusPoint, cost)
+	}
+
+	e.StatusPoint -= cost
+	*cur++
+	newVal = uint32(*cur)
+	remaining = e.StatusPoint
+	return newVal, remaining, cost, nil
 }
 
 // clampExpAdd returns cur+delta saturated at math.MaxUint64. EXP is an

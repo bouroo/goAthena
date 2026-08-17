@@ -30,30 +30,31 @@ type charRow struct {
 	LastY   uint16 `gorm:"column:last_y"`
 	// SaveMap/SaveX/SaveY back the runtime save-point cache (Entity.SaveMap/SavePos)
 	// used by respawn. Read-only here — the world repo never writes the save point.
-	SaveMap   string `gorm:"column:save_map"`
-	SaveX     uint16 `gorm:"column:save_x"`
-	SaveY     uint16 `gorm:"column:save_y"`
-	Sex       int8   `gorm:"column:sex"`
-	Class     uint16 `gorm:"column:class"`
-	BaseLevel uint16 `gorm:"column:base_level"`
-	BaseExp   uint64 `gorm:"column:base_exp"`
-	JobExp    uint64 `gorm:"column:job_exp"`
-	Hair      uint8  `gorm:"column:hair"`
-	Weapon    uint16 `gorm:"column:weapon"`
-	Shield    uint16 `gorm:"column:shield"`
-	HeadTop   uint16 `gorm:"column:head_top"`
-	HP        uint32 `gorm:"column:hp"`
-	MaxHP     uint32 `gorm:"column:max_hp"`
-	SP        uint32 `gorm:"column:sp"`
-	MaxSP     uint32 `gorm:"column:max_sp"`
-	Name      string `gorm:"column:name"`
-	AccountID uint32 `gorm:"column:account_id"`
-	Str       uint16 `gorm:"column:str"`
-	Agi       uint16 `gorm:"column:agi"`
-	Vit       uint16 `gorm:"column:vit"`
-	Int       uint16 `gorm:"column:int"` // reserved word; GORM auto-SELECT quotes it
-	Dex       uint16 `gorm:"column:dex"`
-	Luk       uint16 `gorm:"column:luk"`
+	SaveMap     string `gorm:"column:save_map"`
+	SaveX       uint16 `gorm:"column:save_x"`
+	SaveY       uint16 `gorm:"column:save_y"`
+	Sex         int8   `gorm:"column:sex"`
+	Class       uint16 `gorm:"column:class"`
+	BaseLevel   uint16 `gorm:"column:base_level"`
+	BaseExp     uint64 `gorm:"column:base_exp"`
+	JobExp      uint64 `gorm:"column:job_exp"`
+	Hair        uint8  `gorm:"column:hair"`
+	Weapon      uint16 `gorm:"column:weapon"`
+	Shield      uint16 `gorm:"column:shield"`
+	HeadTop     uint16 `gorm:"column:head_top"`
+	HP          uint32 `gorm:"column:hp"`
+	MaxHP       uint32 `gorm:"column:max_hp"`
+	SP          uint32 `gorm:"column:sp"`
+	MaxSP       uint32 `gorm:"column:max_sp"`
+	Name        string `gorm:"column:name"`
+	AccountID   uint32 `gorm:"column:account_id"`
+	Str         uint16 `gorm:"column:str"`
+	Agi         uint16 `gorm:"column:agi"`
+	Vit         uint16 `gorm:"column:vit"`
+	Int         uint16 `gorm:"column:int"` // reserved word; GORM auto-SELECT quotes it
+	Dex         uint16 `gorm:"column:dex"`
+	Luk         uint16 `gorm:"column:luk"`
+	StatusPoint uint32 `gorm:"column:status_point"`
 }
 
 func (charRow) TableName() string { return "char" }
@@ -73,31 +74,32 @@ func (r *GORMWorldRepository) LoadEnterState(ctx context.Context, charID uint32)
 		return domain.Entity{}, err
 	}
 	return domain.Entity{
-		Account: cr.AccountID,
-		Map:     cr.LastMap,
-		Pos:     domain.Position{X: int16(cr.LastX), Y: int16(cr.LastY)},
-		SaveMap: cr.SaveMap,
-		SavePos: domain.Position{X: int16(cr.SaveX), Y: int16(cr.SaveY)},
-		Sex:     uint8(cr.Sex),
-		Job:     int16(cr.Class),
-		Level:   int16(cr.BaseLevel),
-		BaseExp: cr.BaseExp,
-		JobExp:  cr.JobExp,
-		Head:    cr.HeadTop,
-		Weapon:  uint32(cr.Weapon),
-		Shield:  uint32(cr.Shield),
-		HP:      int32(cr.HP),
-		MaxHP:   int32(cr.MaxHP),
-		SP:      int32(cr.SP),
-		MaxSP:   int32(cr.MaxSP),
-		Name:    cr.Name,
-		Speed:   150, // rAthena default walk speed (150 ms per cell)
-		Str:     cr.Str,
-		Agi:     cr.Agi,
-		Vit:     cr.Vit,
-		Int:     cr.Int,
-		Dex:     cr.Dex,
-		Luk:     cr.Luk,
+		Account:     cr.AccountID,
+		Map:         cr.LastMap,
+		Pos:         domain.Position{X: int16(cr.LastX), Y: int16(cr.LastY)},
+		SaveMap:     cr.SaveMap,
+		SavePos:     domain.Position{X: int16(cr.SaveX), Y: int16(cr.SaveY)},
+		Sex:         uint8(cr.Sex),
+		Job:         int16(cr.Class),
+		Level:       int16(cr.BaseLevel),
+		BaseExp:     cr.BaseExp,
+		JobExp:      cr.JobExp,
+		Head:        cr.HeadTop,
+		Weapon:      uint32(cr.Weapon),
+		Shield:      uint32(cr.Shield),
+		HP:          int32(cr.HP),
+		MaxHP:       int32(cr.MaxHP),
+		SP:          int32(cr.SP),
+		MaxSP:       int32(cr.MaxSP),
+		Name:        cr.Name,
+		Speed:       150, // rAthena default walk speed (150 ms per cell)
+		Str:         cr.Str,
+		Agi:         cr.Agi,
+		Vit:         cr.Vit,
+		Int:         cr.Int,
+		Dex:         cr.Dex,
+		Luk:         cr.Luk,
+		StatusPoint: cr.StatusPoint,
 	}, nil
 }
 
@@ -130,20 +132,21 @@ func (r *GORMWorldRepository) SetPosition(ctx context.Context, charID uint32, ma
 		}).Error
 }
 
-// SaveState persists the char's full runtime snapshot: hp/sp plus the
-// accumulated base_exp/job_exp. Mirrors SetOnline's map[string]any Updates
-// (GORM auto-quotes hp/sp; base_exp/job_exp are plain columns); hp/sp are
+// SaveState persists the char's full runtime snapshot: hp/sp, accumulated
+// base_exp/job_exp, and status_point. Mirrors SetOnline's map[string]any Updates
+// (GORM auto-quotes; base_exp/job_exp/status_point are plain columns); hp/sp are
 // clamped >= 0 so the int-unsigned char column is never fed a negative.
-func (r *GORMWorldRepository) SaveState(ctx context.Context, charID uint32, baseLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64) error {
+func (r *GORMWorldRepository) SaveState(ctx context.Context, charID uint32, baseLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64, statusPoint uint32) error {
 	return r.db.WithContext(ctx).Table("char").
 		Where("char_id = ?", charID).
 		Updates(map[string]any{
-			"base_level": baseLevel,
-			"max_hp":     maxHP,
-			"max_sp":     maxSP,
-			"hp":         hp,
-			"sp":         sp,
-			"base_exp":   baseExp,
-			"job_exp":    jobExp,
+			"base_level":   baseLevel,
+			"max_hp":       maxHP,
+			"max_sp":       maxSP,
+			"hp":           hp,
+			"sp":           sp,
+			"base_exp":     baseExp,
+			"job_exp":      jobExp,
+			"status_point": statusPoint,
 		}).Error
 }

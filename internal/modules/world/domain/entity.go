@@ -78,12 +78,13 @@ type Entity struct {
 	// Str/Agi/Vit/Int/Dex/Luk are the six base stats the combat service feeds to
 	// the kernel's Attacker/Defender profiles. PCs load them from the char table
 	// at map-enter; mobs leave them zero (mob stats come from mob_db by Class).
-	Str uint16
-	Agi uint16
-	Vit uint16
-	Int uint16
-	Dex uint16
-	Luk uint16
+	Str         uint16
+	Agi         uint16
+	Vit         uint16
+	Int         uint16
+	Dex         uint16
+	Luk         uint16
+	StatusPoint uint32
 }
 
 // PlayerEntity wraps a PC entity with its connection session for the map server.
@@ -111,7 +112,7 @@ type WorldRepository interface {
 	// maxHP/maxSP ride along because a level-up recalculates them. Folding all of
 	// it into the same persist path means disconnect (LeaveMap), shutdown
 	// (SaveAll) and warp persist from one primitive.
-	SaveState(ctx context.Context, charID uint32, baseLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64) error
+	SaveState(ctx context.Context, charID uint32, baseLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64, statusPoint uint32) error
 }
 
 // errors  for the world domain.
@@ -122,4 +123,10 @@ var (
 	ErrEntityAlreadyExists = errors.New("entity already exists")
 	// ErrMapFull is returned when an entity cannot be placed (map at capacity).
 	ErrMapFull = errors.New("map full")
+	// ErrUnknownStat is returned by AllocateStat for a stat name it cannot map.
+	ErrUnknownStat = errors.New("unknown stat")
+	// ErrStatCapped is returned when the requested stat is already at 99.
+	ErrStatCapped = errors.New("stat at cap")
+	// ErrNoStatusPoints is returned when the cost exceeds the char's points.
+	ErrNoStatusPoints = errors.New("insufficient status points")
 )

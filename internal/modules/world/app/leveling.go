@@ -66,6 +66,7 @@ func (s *LevelingService) CheckLevelUp(_ context.Context, charID uint32) (int, e
 		// Level up!
 		e.BaseExp -= nextExp
 		e.Level++
+		e.StatusPoint += 3 // Pre-renewal: +3 status points per level-up
 		levelsGained++
 
 		// Recalc MaxHP/MaxSP from jobbasepoints table for the new level.
@@ -93,7 +94,7 @@ func (s *LevelingService) CheckLevelUp(_ context.Context, charID uint32) (int, e
 
 	if levelsGained > 0 {
 		if s.world.OnLevelUp != nil {
-			s.world.OnLevelUp(charID, newLevel, newMaxHP, newMaxSP)
+			s.world.OnLevelUp(charID, newLevel, newMaxHP, newMaxSP, e.StatusPoint)
 		}
 	}
 

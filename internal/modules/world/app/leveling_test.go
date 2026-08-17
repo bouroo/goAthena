@@ -4,6 +4,7 @@ package app_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -110,7 +111,7 @@ func TestLeveling_ExpCrossesThreshold(t *testing.T) {
 	w, _ := newLevelingWorld(t)
 	var hookLevel int16
 	var hookMaxHP, hookMaxSP int32
-	w.OnLevelUp = func(_ uint32, newLevel int16, maxHP, maxSP int32) {
+	w.OnLevelUp = func(_ uint32, newLevel int16, maxHP, maxSP int32, _ uint32) {
 		hookLevel, hookMaxHP, hookMaxSP = newLevel, maxHP, maxSP
 	}
 
@@ -220,5 +221,110 @@ func TestLeveling_LevelPersistsViaLeaveMap(t *testing.T) {
 	}
 	if got.MaxHP != 150 || got.MaxSP != 15 {
 		t.Errorf("reloaded max vitals = %d/%d, want 150/15", got.MaxHP, got.MaxSP)
+	}
+}
+
+// newStatWorld seeds a PC with spendable status points and known base stats.
+func newStatWorld(t *testing.T) *app.WorldService {
+	t.Helper()
+	repo := infra.NewMemoryWorldRepository(domain.Entity{
+		ID: 150001, Account: 2000001, Type: domain.EntityTypePC, Job: 0,
+		Map: "new_1-1", Pos: domain.Position{X: 53, Y: 111},
+		Name: "Hero", Level: 1, HP: 100, MaxHP: 100, SP: 10, MaxSP: 10, Speed: 150,
+		Str: 5, Agi: 4, Vit: 3, Int: 2, Dex: 1, Luk: 0, StatusPoint: 10,
+	})
+	w := app.NewWorldService(repo, slog.Default(), 50)
+	if _, err := w.EnterMap(context.Background(), 150001); err != nil {
+		t.Fatalf("EnterMap: %v", err)
+	}
+	return w
+}
+
+// TestAllocateStat_RaisesStatAndSpendsPoints proves the happy path: raising Str
+// from 5 costs the kernel rate (1+(5+9)/10 = 2) and leaves 8 points.
+func TestAllocateStat_RaisesStatAndSpendsPoints(t *testing.T) {
+	w := newStatWorld(t)
+	newVal, remaining, cost, err := w.AllocateStat(150001, "Str")
+	if err != nil {
+		t.Fatalf("AllocateStat: %v", err)
+	}
+	if newVal != 6 {
+		t.Errorf("newVal = %d, want 6", newVal)
+	}
+	if cost != 2 {
+		t.Errorf("cost = %d, want 2 (kernel rate for cur=5)", cost)
+	}
+	if remaining != 8 {
+		t.Errorf("remaining = %d, want 8", remaining)
+	}
+	e := getEnt(t, w, 150001)
+	if e.Str != 6 || e.StatusPoint != 8 {
+		t.Errorf("entity str/points = %d/%d, want 6/8", e.Str, e.StatusPoint)
+	}
+}
+
+// TestAllocateStat_InsufficientPoints proves the sentinel: Luk at 0 costs 1, so
+// 0 available points is refused and the stat is untouched.
+func TestAllocateStat_InsufficientPoints(t *testing.T) {
+	repo := infra.NewMemoryWorldRepository(domain.Entity{
+		ID: 150001, Account: 2000001, Type: domain.EntityTypePC,
+		Map: "new_1-1", Pos: domain.Position{X: 53, Y: 111},
+		Name: "Broke", Level: 1, Speed: 150, Str: 5, StatusPoint: 0,
+	})
+	w := app.NewWorldService(repo, slog.Default(), 50)
+	if _, err := w.EnterMap(context.Background(), 150001); err != nil {
+		t.Fatalf("EnterMap: %v", err)
+	}
+	_, _, _, err := w.AllocateStat(150001, "Luk")
+	if !errors.Is(err, domain.ErrNoStatusPoints) {
+		t.Fatalf("err = %v, want ErrNoStatusPoints", err)
+	}
+	if e := getEnt(t, w, 150001); e.Luk != 0 {
+		t.Errorf("luk = %d, want 0 (refused)", e.Luk)
+	}
+}
+
+// TestAllocateStat_CapAt99 proves the cap sentinel: a 99 stat cannot rise.
+func TestAllocateStat_CapAt99(t *testing.T) {
+	repo := infra.NewMemoryWorldRepository(domain.Entity{
+		ID: 150001, Account: 2000001, Type: domain.EntityTypePC,
+		Map: "new_1-1", Pos: domain.Position{X: 53, Y: 111},
+		Name: "Capped", Level: 1, Speed: 150, Str: 99, StatusPoint: 100,
+	})
+	w := app.NewWorldService(repo, slog.Default(), 50)
+	if _, err := w.EnterMap(context.Background(), 150001); err != nil {
+		t.Fatalf("EnterMap: %v", err)
+	}
+	if _, _, _, err := w.AllocateStat(150001, "Str"); !errors.Is(err, domain.ErrStatCapped) {
+		t.Fatalf("err = %v, want ErrStatCapped", err)
+	}
+	if e := getEnt(t, w, 150001); e.Str != 99 || e.StatusPoint != 100 {
+		t.Errorf("str/points = %d/%d, want 99/100 (untouched)", e.Str, e.StatusPoint)
+	}
+}
+
+// TestAllocateStat_UnknownStatRefused proves the sentinel for an unmapped name.
+func TestAllocateStat_UnknownStatRefused(t *testing.T) {
+	w := newStatWorld(t)
+	if _, _, _, err := w.AllocateStat(150001, "Pow"); !errors.Is(err, domain.ErrUnknownStat) {
+		t.Fatalf("err = %v, want ErrUnknownStat", err)
+	}
+}
+
+// TestLevelUp_GrantsStatusPoints proves each level-up grants +3 spendable points.
+func TestLevelUp_GrantsStatusPoints(t *testing.T) {
+	w, _ := newLevelingWorld(t)
+	if _, _, err := w.GrantExp(context.Background(), 150001, 9, 0); err != nil {
+		t.Fatalf("GrantExp: %v", err)
+	}
+	if e := getEnt(t, w, 150001); e.StatusPoint != 3 {
+		t.Errorf("points after 1 level-up = %d, want 3", e.StatusPoint)
+	}
+	// And the points are spendable through the same world.
+	if _, _, _, err := w.AllocateStat(150001, "Luk"); err != nil {
+		t.Fatalf("spend granted points: %v", err)
+	}
+	if e := getEnt(t, w, 150001); e.Luk != 1 || e.StatusPoint != 2 {
+		t.Errorf("luk/points = %d/%d, want 1/2", e.Luk, e.StatusPoint)
 	}
 }

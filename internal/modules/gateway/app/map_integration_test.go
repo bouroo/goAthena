@@ -123,6 +123,9 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 		// Save point distinct from the enter cell so respawn relocate/reseat is
 		// observable (died PC respawns here, not at its death cell).
 		SaveMap: "new_1-1", SavePos: worlddomain.Position{X: 1, Y: 1},
+		// Known base stats + spendable points so the stat-allocation verb works
+		// without a kill (Str 5, 48 points).
+		Str: 5, Agi: 5, Vit: 5, Int: 5, Dex: 5, Luk: 5, StatusPoint: 48,
 	})
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
 	// Leveling over a tiny Novice curve (L1→2 costs 9, L2→3 costs 16, max 3)
@@ -742,6 +745,9 @@ func TestMap_MobKillsPlayerRespawns(t *testing.T) {
 		Pos: worlddomain.Position{X: 53, Y: 111}, HP: 1, MaxHP: 1000,
 		SP: 100, MaxSP: 100, Speed: 150,
 		SaveMap: "new_1-1", SavePos: worlddomain.Position{X: 1, Y: 1},
+		// Known base stats + spendable points so the stat-allocation verb works
+		// without a kill (Str 5, 48 points).
+		Str: 5, Agi: 5, Vit: 5, Int: 5, Dex: 5, Luk: 5, StatusPoint: 48,
 	}); err != nil {
 		t.Fatalf("AddEntity: %v", err)
 	}
@@ -869,6 +875,9 @@ func TestMap_Restart_Respawn(t *testing.T) {
 		Pos: worlddomain.Position{X: 53, Y: 111}, Sex: 1, Job: 0, Level: 1,
 		Name: "Hero", HP: 0, MaxHP: 1000, SP: 0, MaxSP: 100, Speed: 150,
 		SaveMap: "new_1-1", SavePos: worlddomain.Position{X: 1, Y: 1},
+		// Known base stats + spendable points so the stat-allocation verb works
+		// without a kill (Str 5, 48 points).
+		Str: 5, Agi: 5, Vit: 5, Int: 5, Dex: 5, Luk: 5, StatusPoint: 48,
 	}); err != nil {
 		t.Fatalf("AddEntity dead: %v", err)
 	}
@@ -1091,16 +1100,20 @@ func TestMap_KillMobGrantsEXP(t *testing.T) {
 	if _, err := io.ReadFull(conn, make([]byte, 7)); err != nil {
 		t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
 	}
-	// With leveling wired, the level-up ZC_PAR_CHANGE burst (5×8B) lands FIRST —
-	// GrantExp consumes the thresholds before reporting the net EXP — followed
-	// by the two ZC_LONGLONGPAR_CHANGE frames (12B each): SP_BASEEXP, SP_JOBEXP.
+	// With leveling wired, the level-up ZC_PAR_CHANGE burst (6×8B: level,
+	// maxima, healed vitals, status points) lands FIRST — GrantExp consumes the
+	// thresholds before reporting the net EXP — followed by the two
+	// ZC_LONGLONGPAR_CHANGE frames (12B each): SP_BASEEXP, SP_JOBEXP.
 	const parFrame = 8
-	burst := make([]byte, 5*parFrame)
+	burst := make([]byte, 6*parFrame)
 	if _, err := io.ReadFull(conn, burst); err != nil {
 		t.Fatalf("read level-up burst: %v", err)
 	}
 	if varID := binary.LittleEndian.Uint16(burst[2:4]); varID != ropacket.SPBaseLevel {
 		t.Errorf("level-up frame0 varID = %d, want SPBaseLevel", varID)
+	}
+	if varID := binary.LittleEndian.Uint16(burst[5*parFrame+2 : 5*parFrame+4]); varID != ropacket.SPStatusPoint {
+		t.Errorf("level-up frame5 varID = %d, want SPStatusPoint", varID)
 	}
 	exp := make([]byte, 24)
 	if _, err := io.ReadFull(conn, exp); err != nil {
@@ -2232,9 +2245,9 @@ func TestMap_KillMobLevelsUp(t *testing.T) {
 		t.Fatalf("send attack: %v", err)
 	}
 
-	// Drain in order: attack echo, vanish, the level-up burst (5×8B ZC_PAR_CHANGE
-	// — GrantExp consumes thresholds before reporting EXP), then the two EXP
-	// frames (12B each).
+	// Drain in order: attack echo, vanish, the level-up burst (6×8B ZC_PAR_CHANGE:
+	// level, maxima, healed vitals, status points — 2 level-ups × 3 points = 6),
+	// then the two EXP frames (12B each).
 	if _, err := io.ReadFull(conn, make([]byte, 11)); err != nil {
 		t.Fatalf("read ZC_ACTION_RESPONSE: %v", err)
 	}
@@ -2242,7 +2255,7 @@ func TestMap_KillMobLevelsUp(t *testing.T) {
 		t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
 	}
 	const parFrame = 8
-	burst := make([]byte, 5*parFrame)
+	burst := make([]byte, 6*parFrame)
 	if _, err := io.ReadFull(conn, burst); err != nil {
 		t.Fatalf("read level-up burst: %v", err)
 	}
@@ -2268,6 +2281,10 @@ func TestMap_KillMobLevelsUp(t *testing.T) {
 	if varID, v := readPar(4); varID != ropacket.SPSP || v != 140 {
 		t.Errorf("frame4 = SPSP %d, want 140 (full heal)", v)
 	}
+	// frame5: the points total after two level-ups: 48 seeded + 2×3 granted = 54.
+	if varID, v := readPar(5); varID != ropacket.SPStatusPoint || v != 54 {
+		t.Errorf("frame5 = SPStatusPoint %d, want 54 (48 seed + 2 level-ups × 3)", v)
+	}
 
 	// World state agrees: max level, recalculated maxima, full heal.
 	pc, err := env.world.Get(150001)
@@ -2277,5 +2294,81 @@ func TestMap_KillMobLevelsUp(t *testing.T) {
 	if pc.Level != 3 || pc.MaxHP != 1400 || pc.MaxSP != 140 || pc.HP != 1400 || pc.SP != 140 {
 		t.Errorf("post-kill pc = level %d max %d/%d vitals %d/%d, want 3 1400/140 1400/140",
 			pc.Level, pc.MaxHP, pc.MaxSP, pc.HP, pc.SP)
+	}
+}
+
+// TestMap_StatusChangeAllocates proves the stat-allocation verb end-to-end over
+// real gnet: the seeded player (Str 5, 48 points — see buildTestMapDeps) sends
+// CZ_STATUS_CHANGE targeting SP_STR, and the conn receives ZC_STATUS_CHANGE_ACK
+// (result 0, value 6) followed by ZC_PAR_CHANGE frames for the raised stat and
+// the remaining points; the world's entity carries Str 6 / points 46 (kernel
+// rate 2 for cur=5).
+func TestMap_StatusChangeAllocates(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// CZ_STATUS_CHANGE (5B): cmd 0x00bb + SP_STR(13) + amount 1.
+	req := make([]byte, 5)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZSTATUSCHANGE)
+	binary.LittleEndian.PutUint16(req[2:], ropacket.SPStr)
+	req[4] = 1
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send CZ_STATUS_CHANGE: %v", err)
+	}
+
+	// ZC_STATUS_CHANGE_ACK (6B): cmd 0x00bc + statusID + result 0 + value 6.
+	ack := make([]byte, 6)
+	if _, err := io.ReadFull(conn, ack); err != nil {
+		t.Fatalf("read ack: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCSTATUSCHANGEACK {
+		t.Fatalf("ack cmd = 0x%04x, want 0x00bc", got)
+	}
+	if got := binary.LittleEndian.Uint16(ack[2:4]); got != ropacket.SPStr {
+		t.Errorf("ack statusID = %d, want SPStr", got)
+	}
+	if ack[4] != 0 {
+		t.Errorf("ack result = %d, want 0 (success)", ack[4])
+	}
+	if ack[5] != 6 {
+		t.Errorf("ack value = %d, want 6 (Str 5→6)", ack[5])
+	}
+
+	// ParChange burst: SPStr=6, then SPStatusPoint=46, then HP/SP vitals.
+	const parFrame = 8
+	frames := make([]byte, 4*parFrame)
+	if _, err := io.ReadFull(conn, frames); err != nil {
+		t.Fatalf("read par burst: %v", err)
+	}
+	readPar := func(i int) (uint16, int32) {
+		b := i * parFrame
+		return binary.LittleEndian.Uint16(frames[b+2 : b+4]), int32(binary.LittleEndian.Uint32(frames[b+4 : b+8]))
+	}
+	if varID, v := readPar(0); varID != ropacket.SPStr || v != 6 {
+		t.Errorf("frame0 = varID %d val %d, want SPStr 6", varID, v)
+	}
+	if varID, v := readPar(1); varID != ropacket.SPStatusPoint || v != 46 {
+		t.Errorf("frame1 = varID %d val %d, want SPStatusPoint 46 (48−2 cost)", varID, v)
+	}
+
+	// World state agrees.
+	pc, err := env.world.Get(150001)
+	if err != nil {
+		t.Fatalf("get player: %v", err)
+	}
+	if pc.Str != 6 || pc.StatusPoint != 46 {
+		t.Errorf("pc str/points = %d/%d, want 6/46", pc.Str, pc.StatusPoint)
 	}
 }
