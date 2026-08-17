@@ -856,9 +856,9 @@ func (c *countRepo) SetOnline(ctx context.Context, charID uint32, online bool, p
 	return c.MemoryWorldRepository.SetOnline(ctx, charID, online, pos)
 }
 
-func (c *countRepo) SaveState(ctx context.Context, charID uint32, baseLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64, statusPoint uint32) error {
+func (c *countRepo) SaveState(ctx context.Context, charID uint32, baseLevel int16, jobLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64, statusPoint, skillPoint uint32) error {
 	c.saveState.Add(1)
-	return c.MemoryWorldRepository.SaveState(ctx, charID, baseLevel, maxHP, maxSP, hp, sp, baseExp, jobExp, statusPoint)
+	return c.MemoryWorldRepository.SaveState(ctx, charID, baseLevel, jobLevel, maxHP, maxSP, hp, sp, baseExp, jobExp, statusPoint, skillPoint)
 }
 
 // TestCheckpoint_KeepsOnlineAndPersists proves a periodic checkpoint persists

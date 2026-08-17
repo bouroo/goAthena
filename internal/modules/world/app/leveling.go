@@ -100,3 +100,57 @@ func (s *LevelingService) CheckLevelUp(_ context.Context, charID uint32) (int, e
 
 	return levelsGained, nil
 }
+
+// CheckJobLevelUp is called after job EXP accrual to determine if the entity
+// job-levels up. It consumes job EXP and increments the character's SkillPoint
+// counter (+1 per job level, pre-re Novice convention). Returns the number of
+// job levels gained.
+func (s *LevelingService) CheckJobLevelUp(_ context.Context, charID uint32) (int, error) {
+	if s.curve == nil {
+		return 0, nil // Leveling disabled (backward compat)
+	}
+
+	s.world.mu.Lock()
+	e, ok := s.world.entities[domain.EntityID(charID)]
+	if !ok {
+		s.world.mu.Unlock()
+		return 0, domain.ErrEntityNotFound
+	}
+
+	// We only support "Novice" for now (Class=0).
+	jobName := "Novice"
+	if e.Job != 0 {
+		// For non-Novices, we accrue EXP but don't level up yet (Deferred).
+		s.world.mu.Unlock()
+		return 0, nil
+	}
+
+	jobLevelsGained := 0
+	for {
+		maxJobLv, ok := s.curve.MaxJobLevel(jobName)
+		if !ok {
+			break // Unknown job or no job curve
+		}
+		if int(e.JobLevel) >= maxJobLv {
+			break // Already at max job level
+		}
+
+		nextExp, ok := s.curve.NextJobExp(jobName, int(e.JobLevel))
+		if !ok {
+			break // No next-level row (should not happen before max, but be safe)
+		}
+
+		if e.JobExp < nextExp {
+			break
+		}
+
+		// Job level up!
+		e.JobExp -= nextExp
+		e.JobLevel++
+		e.SkillPoint++ // Pre-re: +1 skill point per job level
+		jobLevelsGained++
+	}
+
+	s.world.mu.Unlock()
+	return jobLevelsGained, nil
+}

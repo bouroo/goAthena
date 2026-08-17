@@ -68,13 +68,16 @@ func newSkillTestWorld(t *testing.T) (*app.WorldService, *app.SkillService) {
 }
 
 // addCaster places a level-1 PC (Str=50 -> 75 BaseATK against 0 DEF) with the
-// given SP at (50,50). Mob ID 1 is reserved for the caster.
+// given SP at (50,50). Mob ID 1 is reserved for the caster. The caster starts
+// with both test skills (1000, 1001) pre-learned at max level so existing tests
+// continue to pass; the learned-skill-gate tests manage their own LearnSkill calls.
 func addCaster(t *testing.T, world *app.WorldService, sp int32) {
 	t.Helper()
 	require.NoError(t, world.AddEntity(domain.Entity{
 		ID: 1, Type: domain.EntityTypePC, Map: "prontera",
 		Pos:   domain.Position{X: 50, Y: 50},
 		Level: 1, Str: 50, SP: sp, MaxSP: 100,
+		LearnedSkills: map[int32]int16{skillStrikeID: 5, skillBuffID: 1},
 	}))
 }
 
@@ -221,4 +224,89 @@ func TestSkill_NonOffensiveNoDamage(t *testing.T) {
 
 	caster, _ := world.Get(1)
 	assert.Equal(t, int32(97), caster.SP, "buff still costs its SP")
+}
+
+// TestSkill_LearnedSkill_CastsSuccessfully proves that once a skill is learned
+// (via LearnSkill) it casts successfully and costs SP.
+func TestSkill_LearnedSkill_CastsSuccessfully(t *testing.T) {
+	t.Parallel()
+	world, svc := newSkillTestWorld(t)
+	addCaster(t, world, 100)
+
+	// Learn skill 1000 at level 1.
+	require.NoError(t, world.LearnSkill(1, skillStrikeID, 1))
+
+	addTarget(t, world, 2, 1000, 51, 50)
+	dmg, died, err := svc.UseSkillOnTarget(1, skillStrikeID, 1, 2)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, dmg, int32(1))
+	assert.False(t, died)
+
+	caster, _ := world.Get(1)
+	assert.Equal(t, int32(95), caster.SP, "learned skill cast costs SP")
+}
+
+// TestSkill_NotLearned_ErrSkillNotLearned proves that a caster without the skill
+// in LearnedSkills gets ErrSkillNotLearned and spends nothing. Uses a bare caster
+// (no LearnedSkills) so it is isolated from addCaster's pre-learned skills.
+func TestSkill_NotLearned_ErrSkillNotLearned(t *testing.T) {
+	t.Parallel()
+	world, svc := newSkillTestWorld(t)
+	// Bare caster without LearnedSkills (no addCaster pre-learn).
+	require.NoError(t, world.AddEntity(domain.Entity{
+		ID: 1, Type: domain.EntityTypePC, Map: "prontera",
+		Pos: domain.Position{X: 50, Y: 50}, Level: 1, Str: 50, SP: 100, MaxSP: 100,
+	}))
+	addTarget(t, world, 2, 1000, 51, 50)
+
+	_, _, err := svc.UseSkillOnTarget(1, skillStrikeID, 1, 2)
+	assert.ErrorIs(t, err, domain.ErrSkillNotLearned)
+
+	caster, _ := world.Get(1)
+	assert.Equal(t, int32(100), caster.SP, "unlearned cast spends no SP")
+}
+
+// TestSkill_LearnedLevelTooLow_ErrSkillLevelInsufficient proves that a caster who
+// learned a skill at level 1 cannot cast it at level 3 (above their learned level).
+// Uses a bare caster so it is isolated from addCaster's pre-learned level 5.
+func TestSkill_LearnedLevelTooLow_ErrSkillLevelInsufficient(t *testing.T) {
+	t.Parallel()
+	world, svc := newSkillTestWorld(t)
+	require.NoError(t, world.AddEntity(domain.Entity{
+		ID: 1, Type: domain.EntityTypePC, Map: "prontera",
+		Pos: domain.Position{X: 50, Y: 50}, Level: 1, Str: 50, SP: 100, MaxSP: 100,
+	}))
+	require.NoError(t, world.LearnSkill(1, skillStrikeID, 1)) // learn level 1
+
+	addTarget(t, world, 2, 1000, 51, 50)
+	_, _, err := svc.UseSkillOnTarget(1, skillStrikeID, 3, 2) // try level 3
+	assert.ErrorIs(t, err, domain.ErrSkillLevelInsufficient)
+
+	caster, _ := world.Get(1)
+	assert.Equal(t, int32(100), caster.SP, "insufficient-level cast spends no SP")
+}
+
+// TestSkill_LearnSkill_RaisesInPlace proves that calling LearnSkill with a higher
+// level raises the learned level in-place; casting at the new level then succeeds.
+// Uses a bare caster so it is isolated from addCaster's pre-learned level 5.
+func TestSkill_LearnSkill_RaisesInPlace(t *testing.T) {
+	t.Parallel()
+	world, svc := newSkillTestWorld(t)
+	require.NoError(t, world.AddEntity(domain.Entity{
+		ID: 1, Type: domain.EntityTypePC, Map: "prontera",
+		Pos: domain.Position{X: 50, Y: 50}, Level: 1, Str: 50, SP: 100, MaxSP: 100,
+	}))
+	addTarget(t, world, 2, 1000, 51, 50)
+
+	// Learn level 1, then fail to cast at level 2.
+	require.NoError(t, world.LearnSkill(1, skillStrikeID, 1))
+	_, _, err := svc.UseSkillOnTarget(1, skillStrikeID, 2, 2)
+	assert.ErrorIs(t, err, domain.ErrSkillLevelInsufficient)
+
+	// Raise the learned level to 2.
+	require.NoError(t, world.LearnSkill(1, skillStrikeID, 2))
+	dmg, died, err := svc.UseSkillOnTarget(1, skillStrikeID, 2, 2)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, dmg, int32(1))
+	assert.False(t, died)
 }

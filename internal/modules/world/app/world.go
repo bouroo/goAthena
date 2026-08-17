@@ -448,6 +448,17 @@ func (w *WorldService) EnterMap(ctx context.Context, charID uint32) (domain.Enti
 	}
 	e.ID = domain.EntityID(charID)
 	e.Type = domain.EntityTypePC
+	// Load learned skills from the skill table.
+	skills, err := w.repo.LoadSkills(ctx, charID)
+	if err != nil {
+		return domain.Entity{}, fmt.Errorf("load skills: %w", err)
+	}
+	if len(skills) > 0 {
+		e.LearnedSkills = make(map[int32]int16, len(skills))
+		for _, s := range skills {
+			e.LearnedSkills[s.SkillID] = s.Level
+		}
+	}
 	if err := w.AddEntity(e); err != nil {
 		return domain.Entity{}, err
 	}
@@ -478,8 +489,17 @@ func (w *WorldService) LeaveMap(ctx context.Context, charID uint32) error {
 	if err := w.repo.SetOnline(ctx, charID, false, e.Pos); err != nil {
 		return fmt.Errorf("set offline: %w", err)
 	}
-	if err := w.repo.SaveState(ctx, charID, e.Level, e.MaxHP, e.MaxSP, e.HP, e.SP, e.BaseExp, e.JobExp, e.StatusPoint); err != nil {
+	if err := w.repo.SaveState(ctx, charID, e.Level, e.JobLevel, e.MaxHP, e.MaxSP, e.HP, e.SP, e.BaseExp, e.JobExp, e.StatusPoint, e.SkillPoint); err != nil {
 		return fmt.Errorf("save state: %w", err)
+	}
+	if len(e.LearnedSkills) > 0 {
+		skills := make([]domain.LearnedSkill, 0, len(e.LearnedSkills))
+		for sid, lvl := range e.LearnedSkills {
+			skills = append(skills, domain.LearnedSkill{SkillID: sid, Level: lvl})
+		}
+		if err := w.repo.SaveSkills(ctx, charID, skills); err != nil {
+			return fmt.Errorf("save skills: %w", err)
+		}
 	}
 	return nil
 }
@@ -500,9 +520,11 @@ func (w *WorldService) SaveAll(ctx context.Context) {
 		hp, sp       int32
 		maxHP, maxSP int32
 		level        int16
+		jobLevel     int16
 		baseExp      uint64
 		jobExp       uint64
 		statusPoint  uint32
+		skillPoint   uint32
 	}
 	snaps := make([]vitalSnap, 0, len(w.entities))
 	for id, e := range w.entities {
@@ -515,14 +537,16 @@ func (w *WorldService) SaveAll(ctx context.Context) {
 			hp:          e.HP,
 			sp:          e.SP,
 			level:       e.Level,
+			jobLevel:    e.JobLevel,
 			baseExp:     e.BaseExp,
 			jobExp:      e.JobExp,
 			statusPoint: e.StatusPoint,
+			skillPoint:  e.SkillPoint,
 		})
 	}
 	w.mu.RUnlock()
 	for _, s := range snaps {
-		if err := w.repo.SaveState(ctx, s.charID, s.level, s.maxHP, s.maxSP, s.hp, s.sp, s.baseExp, s.jobExp, s.statusPoint); err != nil {
+		if err := w.repo.SaveState(ctx, s.charID, s.level, s.jobLevel, s.maxHP, s.maxSP, s.hp, s.sp, s.baseExp, s.jobExp, s.statusPoint, s.skillPoint); err != nil {
 			w.log.Warn("save-all state", "char_id", s.charID, "err", err)
 			continue
 		}
@@ -551,9 +575,11 @@ func (w *WorldService) Checkpoint(ctx context.Context) {
 		hp, sp       int32
 		maxHP, maxSP int32
 		level        int16
+		jobLevel     int16
 		baseExp      uint64
 		jobExp       uint64
 		statusPoint  uint32
+		skillPoint   uint32
 	}
 	snaps := make([]vitalSnap, 0, len(w.entities))
 	for id, e := range w.entities {
@@ -566,14 +592,16 @@ func (w *WorldService) Checkpoint(ctx context.Context) {
 			hp:          e.HP,
 			sp:          e.SP,
 			level:       e.Level,
+			jobLevel:    e.JobLevel,
 			baseExp:     e.BaseExp,
 			jobExp:      e.JobExp,
 			statusPoint: e.StatusPoint,
+			skillPoint:  e.SkillPoint,
 		})
 	}
 	w.mu.RUnlock()
 	for _, s := range snaps {
-		if err := w.repo.SaveState(ctx, s.charID, s.level, s.maxHP, s.maxSP, s.hp, s.sp, s.baseExp, s.jobExp, s.statusPoint); err != nil {
+		if err := w.repo.SaveState(ctx, s.charID, s.level, s.jobLevel, s.maxHP, s.maxSP, s.hp, s.sp, s.baseExp, s.jobExp, s.statusPoint, s.skillPoint); err != nil {
 			w.log.Warn("checkpoint state", "char_id", s.charID, "err", err)
 			continue
 		}
@@ -856,6 +884,7 @@ func (w *WorldService) GrantExp(ctx context.Context, charID uint32, baseExp, job
 	// pre-leveling EXP and leave the client's bar drifting ahead of the server.
 	if w.leveling != nil {
 		_, _ = w.leveling.CheckLevelUp(ctx, charID)
+		_, _ = w.leveling.CheckJobLevelUp(ctx, charID)
 	}
 	w.mu.RLock()
 	if e, ok := w.entities[domain.EntityID(charID)]; ok {
@@ -915,6 +944,29 @@ func (w *WorldService) AllocateStat(charID uint32, stat string) (newVal uint32, 
 	newVal = uint32(*cur)
 	remaining = e.StatusPoint
 	return newVal, remaining, cost, nil
+}
+
+// LearnSkill records skillID as learned at level for the given char. It raises the
+// learned level in-place if level exceeds the current record. A zero or negative
+// level is a no-op. This is the test seam and the future CZ_SKILLUP handler's
+// underlying primitive.
+func (w *WorldService) LearnSkill(charID uint32, skillID int32, level int16) error {
+	if level <= 0 {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	e, ok := w.entities[domain.EntityID(charID)]
+	if !ok {
+		return domain.ErrEntityNotFound
+	}
+	if e.LearnedSkills == nil {
+		e.LearnedSkills = make(map[int32]int16)
+	}
+	if cur, exists := e.LearnedSkills[skillID]; !exists || level > cur {
+		e.LearnedSkills[skillID] = level
+	}
+	return nil
 }
 
 // clampExpAdd returns cur+delta saturated at math.MaxUint64. EXP is an

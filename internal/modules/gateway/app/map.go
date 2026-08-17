@@ -20,6 +20,7 @@ import (
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
 
 // czEnterSize is the wire length of CZ_ENTER (0x0072): 2 cmd + 4 AID + 4 GID +
@@ -56,6 +57,7 @@ type MapServer struct {
 	inv     *invapp.InventoryService
 	content *contentapp.Engine
 	skills  *worldapp.SkillService
+	skillDB *skilldb.Registry
 	shops   *shopapp.ShopService
 	trade   *worldapp.TradeService
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
@@ -84,7 +86,8 @@ type MapServer struct {
 // commerce verb (open/buy/sell); trade wires the player-to-player trade verb.
 // shops/shopStore/trade may be nil in a reduced harness where their packets are
 // never exercised, but production wiring resolves all three.
-func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, mobAI *worldapp.MobAIService, equip *worldapp.EquipService, itemUse *worldapp.ItemUseService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
+// skillDB is optional (may be nil) so existing callers are not broken.
+func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, mobAI *worldapp.MobAIService, equip *worldapp.EquipService, itemUse *worldapp.ItemUseService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, skillDB *skilldb.Registry, log *slog.Logger) (*MapServer, error) {
 	s := &MapServer{
 		world:       world,
 		spawn:       spawn,
@@ -95,6 +98,7 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 		inv:         inv,
 		content:     content,
 		skills:      skills,
+		skillDB:     skillDB,
 		shops:       shops,
 		shopStore:   shopStore,
 		trade:       trade,
@@ -664,6 +668,54 @@ func (s *MapServer) writeAcceptEnter(c gnet.Conn, e worlddomain.Entity) {
 		return
 	}
 	_ = c.AsyncWrite(out, nil)
+}
+
+// writeSkillInfoList appends ZC_SKILLINFO_LIST (0x010f) — every learned skill
+// from the entity's LearnedSkills map — to the LoadEndAck init burst, matching
+// rAthena's clif.cpp skill-list-on-loadend placement. For each skill, it
+// resolves SP cost and range from the skill_db registry (if available); unknown
+// skills are listed with their id/level only. An empty LearnedSkills map
+// appends nothing (the client treats a missing list as no skills).
+// skillDataFor builds one SKILLDATA row. skill ids and levels come from the
+// persisted skill table and skill_db, both bounded well under uint16.
+func (s *MapServer) skillDataFor(skillID int32, level int16) ropacket.SkillData {
+	sd := ropacket.SkillData{
+		ID:    uint16(skillID), //nolint:gosec // skill ids fit uint16 (max ~5k)
+		Level: uint16(level),   //nolint:gosec // skill levels cap at 10
+	}
+	if s.skillDB == nil {
+		return sd
+	}
+	entry := s.skillDB.Get(skillID)
+	if entry == nil {
+		return sd
+	}
+	sd.SP = uint16(s.skillDB.SpCostAt(skillID, int(level))) //nolint:gosec // SP costs are small
+	if entry.Range.IsScalar {
+		sd.Range2 = uint16(entry.Range.Value) //nolint:gosec // ranges fit uint16
+		return sd
+	}
+	if int(level) <= len(entry.Range.Levels) {
+		sd.Range2 = uint16(entry.Range.Levels[int(level)-1].Size) //nolint:gosec // ranges fit uint16
+	}
+	return sd
+}
+
+func (s *MapServer) writeSkillInfoList(burst []byte, e worlddomain.Entity) []byte {
+	if len(e.LearnedSkills) == 0 {
+		return burst
+	}
+	skills := make([]ropacket.SkillData, 0, len(e.LearnedSkills))
+	for skillID, level := range e.LearnedSkills {
+		skills = append(skills, s.skillDataFor(skillID, level))
+	}
+	resp := ropacket.SkillInfoListResponse{Skills: skills}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		s.log.Error("map: encode skill info list", "err", err)
+		return burst
+	}
+	return append(burst, buf.Bytes()...)
 }
 
 // writeRefuseEnter sends ZC_REFUSE_ENTER.

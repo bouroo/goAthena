@@ -6,6 +6,7 @@ package infra
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"gorm.io/gorm"
 
@@ -38,6 +39,8 @@ type charRow struct {
 	BaseLevel   uint16 `gorm:"column:base_level"`
 	BaseExp     uint64 `gorm:"column:base_exp"`
 	JobExp      uint64 `gorm:"column:job_exp"`
+	JobLevel    uint16 `gorm:"column:job_level"`
+	SkillPoint  uint32 `gorm:"column:skill_point"`
 	Hair        uint8  `gorm:"column:hair"`
 	Weapon      uint16 `gorm:"column:weapon"`
 	Shield      uint16 `gorm:"column:shield"`
@@ -84,6 +87,8 @@ func (r *GORMWorldRepository) LoadEnterState(ctx context.Context, charID uint32)
 		Level:       int16(cr.BaseLevel),
 		BaseExp:     cr.BaseExp,
 		JobExp:      cr.JobExp,
+		JobLevel:    int16(cr.JobLevel),
+		SkillPoint:  cr.SkillPoint,
 		Head:        cr.HeadTop,
 		Weapon:      uint32(cr.Weapon),
 		Shield:      uint32(cr.Shield),
@@ -133,14 +138,15 @@ func (r *GORMWorldRepository) SetPosition(ctx context.Context, charID uint32, ma
 }
 
 // SaveState persists the char's full runtime snapshot: hp/sp, accumulated
-// base_exp/job_exp, and status_point. Mirrors SetOnline's map[string]any Updates
-// (GORM auto-quotes; base_exp/job_exp/status_point are plain columns); hp/sp are
-// clamped >= 0 so the int-unsigned char column is never fed a negative.
-func (r *GORMWorldRepository) SaveState(ctx context.Context, charID uint32, baseLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64, statusPoint uint32) error {
+// base_exp/job_exp, job_level, skill_point, and status_point. Mirrors SetOnline's
+// map[string]any Updates (GORM auto-quotes); hp/sp are clamped >= 0 so the
+// int-unsigned char column is never fed a negative.
+func (r *GORMWorldRepository) SaveState(ctx context.Context, charID uint32, baseLevel int16, jobLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64, statusPoint, skillPoint uint32) error {
 	return r.db.WithContext(ctx).Table("char").
 		Where("char_id = ?", charID).
 		Updates(map[string]any{
 			"base_level":   baseLevel,
+			"job_level":    jobLevel,
 			"max_hp":       maxHP,
 			"max_sp":       maxSP,
 			"hp":           hp,
@@ -148,5 +154,53 @@ func (r *GORMWorldRepository) SaveState(ctx context.Context, charID uint32, base
 			"base_exp":     baseExp,
 			"job_exp":      jobExp,
 			"status_point": statusPoint,
+			"skill_point":  skillPoint,
 		}).Error
+}
+
+// skillRow is the GORM row type for the skill table.
+type skillRow struct {
+	CharID  uint32 `gorm:"column:char_id"`
+	SkillID int32  `gorm:"column:skill_id"`
+	Level   int16  `gorm:"column:level"`
+}
+
+// LoadSkills returns every learned skill (skillID → level) for charID, or an
+// empty slice when the char has no learned skills yet.
+func (r *GORMWorldRepository) LoadSkills(ctx context.Context, charID uint32) ([]domain.LearnedSkill, error) {
+	var rows []skillRow
+	if err := r.db.WithContext(ctx).
+		Where("char_id = ?", charID).
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("load skills: %w", err)
+	}
+	skills := make([]domain.LearnedSkill, len(rows))
+	for i, row := range rows {
+		skills[i] = domain.LearnedSkill{SkillID: row.SkillID, Level: row.Level}
+	}
+	return skills, nil
+}
+
+// SaveSkills replaces the char's entire learned-skills list with skills.
+func (r *GORMWorldRepository) SaveSkills(ctx context.Context, charID uint32, skills []domain.LearnedSkill) error {
+	if err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Delete existing skills for this char.
+		if err := tx.Where("char_id = ?", charID).Delete(&skillRow{}).Error; err != nil {
+			return fmt.Errorf("delete skills: %w", err)
+		}
+		if len(skills) == 0 {
+			return nil
+		}
+		rows := make([]skillRow, len(skills))
+		for i, s := range skills {
+			rows[i] = skillRow{CharID: charID, SkillID: s.SkillID, Level: s.Level}
+		}
+		if err := tx.Create(&rows).Error; err != nil {
+			return fmt.Errorf("insert skills: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("save skills: %w", err)
+	}
+	return nil
 }

@@ -439,8 +439,11 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	burst = append(burst, ropacket.EncodeEmptyInventoryListNormal()...)
 	burst = append(burst, ropacket.EncodeEmptyInventoryListEquip()...)
 	burst = append(burst, ropacket.EncodeInventoryEnd()...)
+	if e, err := s.world.Get(worlddomain.EntityID(auth.charID)); err == nil {
+		burst = s.writeSkillInfoList(burst, e)
+	}
 	_ = c.AsyncWrite(burst, nil)
-	s.log.Debug("map: client load complete (inventory init sent)", "aid", auth.accountID, "gid", auth.charID)
+	s.log.Debug("map: client load complete (inventory + skill init sent)", "aid", auth.accountID, "gid", auth.charID)
 }
 
 // handleRestart processes CZ_RESTART (0x00b2, 3B): the client's respawn-or-return-

@@ -140,3 +140,31 @@ func (reg *Registry) MaxBaseLevel(jobName string) (int, bool) {
 	max, ok := reg.maxBaseLv[jobName]
 	return max, ok
 }
+
+// NextJobExp returns the JobExp needed to go from level → level+1 for the given
+// job. Returns false if the job is unknown or the level is at or past the max.
+func (reg *Registry) NextJobExp(jobName string, level int) (uint64, bool) {
+	curve, ok := reg.jobCurves[jobName]
+	if !ok {
+		return 0, false
+	}
+
+	maxLv, ok := reg.maxJobLv[jobName]
+	if !ok || level >= maxLv {
+		return 0, false
+	}
+
+	// rAthena convention: curve[0] is Level 1 Exp (to go to 2), etc.
+	for _, row := range curve {
+		if row.Level == level {
+			return row.Exp, true
+		}
+	}
+	return 0, false
+}
+
+// MaxJobLevel returns the maximum job level for a job.
+func (reg *Registry) MaxJobLevel(jobName string) (int, bool) {
+	max, ok := reg.maxJobLv[jobName]
+	return max, ok
+}

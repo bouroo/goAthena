@@ -19,6 +19,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
 
 // NewLoginServer resolves the Authenticator + SessionStore and builds the login
@@ -64,6 +65,19 @@ func NewCharServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.C
 	return cs, nil
 }
 
+// resolveOptional invokes an optional dependency, downgrading a resolve
+// failure to a warn + nil so a missing registry degrades feature quality
+// instead of refusing startup.
+func resolveOptional[T any](inj do.Injector, log *slog.Logger, name string) T {
+	v, err := do.Invoke[T](inj)
+	if err != nil {
+		log.Warn("optional dependency unresolved", "dep", name, "err", err)
+		var zero T
+		return zero
+	}
+	return v
+}
+
 // NewMapServer resolves the WorldService + SessionStore and builds the map listener.
 func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	world, err := do.Invoke[*worldapp.WorldService](inj)
@@ -102,6 +116,7 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve skill service: %w", err)
 	}
+	skillDB := resolveOptional[*skilldb.Registry](inj, log, "skilldb")
 	shops, err := do.Invoke[*shopapp.ShopService](inj)
 	if err != nil {
 		return nil, fmt.Errorf("resolve shop service: %w", err)
@@ -123,7 +138,7 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	} else {
 		mobAI = svc
 	}
-	ms, err := app.NewMapServer(world, spawn, combat, mobAI, equip, itemUse, inv, content, skills, shops, shopStore, trade, sess, log)
+	ms, err := app.NewMapServer(world, spawn, combat, mobAI, equip, itemUse, inv, content, skills, shops, shopStore, trade, sess, skillDB, log)
 	if err != nil {
 		return nil, fmt.Errorf("map server: %w", err)
 	}

@@ -126,6 +126,9 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 		// Known base stats + spendable points so the stat-allocation verb works
 		// without a kill (Str 5, 48 points).
 		Str: 5, Agi: 5, Vit: 5, Int: 5, Dex: 5, Luk: 5, StatusPoint: 48,
+		// Pre-seed one learned skill (id 5 = SM_BASH) at level 1 so the skill-list
+		// and cast tests have a known learned skill to exercise.
+		LearnedSkills: map[int32]int16{5: 1},
 	})
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
 	// Leveling over a tiny Novice curve (L1→2 costs 9, L2→3 costs 16, max 3)
@@ -167,7 +170,7 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	shopStore := contentinfra.NewMemoryShopStore()
 	shopStore.RegisterShop(shop.DevShopGID, devTestShopName)
 
-	ms, err := gwapp.NewMapServer(world, spawn, combat, mobAI, equipSvc, itemUse, inv, content, skills, shops, shopStore, nil, sessions, slog.Default())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, mobAI, equipSvc, itemUse, inv, content, skills, shops, shopStore, nil, sessions, testSkillDB(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,6 +312,151 @@ func TestMap_AcceptEnterOverTCP(t *testing.T) {
 	got := binary.LittleEndian.Uint16(hdr)
 	if got != ropacket.HeaderZCACCEPTENTER {
 		t.Fatalf("response header = 0x%04x, want ZC_ACCEPT_ENTER (0x%04x)", got, ropacket.HeaderZCACCEPTENTER)
+	}
+}
+
+// TestMap_SkillInfoListOnEnter proves that a player with a seeded LearnedSkill
+// receives a non-empty ZC_SKILLINFO_LIST (0x010f) inside the LoadEndAck init
+// burst, after the four inventory frames.
+func TestMap_SkillInfoListOnEnter(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	conn := startMapListener(t, port, sessions)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+
+	// Drain ZC_ACCEPT_ENTER (13 bytes).
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain ZC_ACCEPT_ENTER: %v", err)
+	}
+
+	// CZ_NOTIFY_ACTORINIT (0x007d, 2B cmd-only): trigger the init burst.
+	if _, err := conn.Write([]byte{0x7d, 0x00}); err != nil {
+		t.Fatalf("send LoadEndAck: %v", err)
+	}
+	// Drain the inventory burst: START(6) + ITEMLIST_NORMAL(5) +
+	// ITEMLIST_EQUIP(5) + END(4) = 20 bytes.
+	if _, err := io.ReadFull(conn, make([]byte, 20)); err != nil {
+		t.Fatalf("drain inventory burst: %v", err)
+	}
+
+	// Read ZC_SKILLINFO_LIST (0x010f). Empty = 4 bytes; one entry = 41 bytes.
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		t.Fatalf("read skill-list header: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(header[0:2]); got != uint16(ropacket.HeaderZCSKILLINFOLIST) {
+		t.Fatalf("skill-list header = 0x%04x, want 0x010f", got)
+	}
+	packetLen := binary.LittleEndian.Uint16(header[2:4])
+	if packetLen < 4+37 {
+		t.Fatalf("skill-list len = %d, want >= 41", packetLen)
+	}
+
+	// Read the entry body (37 bytes).
+	entry := make([]byte, 37)
+	if _, err := io.ReadFull(conn, entry); err != nil {
+		t.Fatalf("read skill entry: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(entry[0:2]); got != 5 {
+		t.Fatalf("skill id = %d, want 5 (SM_BASH)", got)
+	}
+	if got := binary.LittleEndian.Uint16(entry[6:8]); got != 1 {
+		t.Fatalf("skill level = %d, want 1", got)
+	}
+}
+
+// TestMap_CastLearnedAndUnlearnedSkill proves: learned skill (5, lvl 1) casts
+// successfully; unlearned skill (9999) is silently ignored and the connection
+// remains open.
+func TestMap_CastLearnedAndUnlearnedSkill(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	conn, spawn := startMapListenerWithSpawn(t, port, sessions)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+
+	// Drain ZC_ACCEPT_ENTER (13 bytes) — the skill list rides the LoadEndAck
+	// burst now, not the enter burst.
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain ZC_ACCEPT_ENTER: %v", err)
+	}
+
+	// Spawn a mob on the player's cell (53,111 — see buildTestMapDeps) so the
+	// cast is inside skill range.
+	if err := spawn.SpawnMob(160010, 1002, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "Poring", 50, 50, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+
+	// Cast the LEARNED skill (id=5, level=1).
+	req := make([]byte, 10)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILL)
+	binary.LittleEndian.PutUint16(req[2:], 1) // skillLv
+	binary.LittleEndian.PutUint16(req[4:], 5) // SM_BASH (learned)
+	binary.LittleEndian.PutUint32(req[6:], 160010)
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send learned skill: %v", err)
+	}
+	notify := make([]byte, 33)
+	if _, err := io.ReadFull(conn, notify); err != nil {
+		t.Fatalf("read ZC_NOTIFY_SKILL: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(notify[0:2]); got != uint16(ropacket.HeaderZCNOTIFYSKILL) {
+		t.Fatalf("notify header = 0x%04x, want 0x01de", got)
+	}
+
+	// Cast an UNLEARNED skill (id=9999). The server silently ignores it (logs
+	// error). The conn must NOT close; a 300ms timeout confirms nothing was sent.
+	req2 := make([]byte, 10)
+	binary.LittleEndian.PutUint16(req2[0:], ropacket.HeaderCZUSESKILL)
+	binary.LittleEndian.PutUint16(req2[2:], 1)
+	binary.LittleEndian.PutUint16(req2[4:], 9999)
+	binary.LittleEndian.PutUint32(req2[6:], 160010)
+	conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write(req2); err != nil {
+		t.Fatalf("send unlearned skill: %v", err)
+	}
+	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	n, err := conn.Read(make([]byte, 256))
+	if err == nil && n > 0 {
+		t.Fatalf("expected no response for unlearned skill, got %d bytes", n)
+	}
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("conn should timeout on unlearned skill, got err=%v", err)
+	}
+
+	// Verify connection still alive: send a normal attack via CZ_ACTION_REQUEST
+	// (0x0089). Clear the read deadline FIRST (SetDeadline would be undone by a
+	// later SetReadDeadline(Time{})) then arm a fresh absolute deadline.
+	conn.SetReadDeadline(time.Time{})
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	attack := make([]byte, 7)
+	binary.LittleEndian.PutUint16(attack[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint32(attack[2:], 160010) // targetGID
+	attack[6] = 0                                     // action: attack
+	if _, err := conn.Write(attack); err != nil {
+		t.Fatalf("send attack after unlearned skill: %v", err)
+	}
+	// The mob may already be dead (50 HP vs one SM_BASH), so the attack may
+	// yield no ZC_NOTIFY_ACT. Any server-initiated frame (despawn broadcast,
+	// drop notification) still proves the conn is alive after the unlearned
+	// cast; per the async-frame capture discipline, tolerate interleaved
+	// frames and accept any non-empty read.
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	liveness := make([]byte, 256)
+	ln, lerr := conn.Read(liveness)
+	if lerr != nil || ln == 0 {
+		t.Fatalf("conn appears dead after unlearned cast: read %d bytes, err=%v", ln, lerr)
 	}
 }
 
@@ -1894,7 +2042,7 @@ func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*g
 	econ := economyapp.NewEconomyService(charRepo)
 	trade := worldapp.NewTradeService(world, inv, econ)
 
-	ms, err := gwapp.NewMapServer(world, spawn, combat, nil, nil, nil, inv, content, skills, nil, nil, trade, sessions, slog.Default())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, nil, nil, nil, inv, content, skills, nil, nil, trade, sessions, testSkillDB(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}

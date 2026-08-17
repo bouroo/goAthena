@@ -240,9 +240,10 @@ func TestWorld_GORMSaveState(t *testing.T) {
 	// seedChar inserts HP=800/MaxHP=1000, SP=40/MaxSP=50.
 	charID := seedChar(t, dbForTest(t), "WorldVitals", worlddomain.Position{X: 53, Y: 111})
 
-	// SaveState with a leveling-recalculated snapshot: level 2, maxima grown to
-	// 1200/60, current vitals 750/25, EXP totals 1234/5678.
-	if err := worldRepo.SaveState(ctx, charID, 2, 1200, 60, 750, 25, 1234, 5678, 6); err != nil {
+	// SaveState with a leveling-recalculated snapshot: level 2, job level 3,
+	// maxima grown to 1200/60, current vitals 750/25, EXP totals 1234/5678,
+	// 6 status points + 3 skill points.
+	if err := worldRepo.SaveState(ctx, charID, 2, 3, 1200, 60, 750, 25, 1234, 5678, 6, 3); err != nil {
 		t.Fatalf("save state: %v", err)
 	}
 	got, err := worldRepo.LoadEnterState(ctx, charID)
@@ -263,6 +264,12 @@ func TestWorld_GORMSaveState(t *testing.T) {
 	}
 	if got.StatusPoint != 6 {
 		t.Errorf("status points after save = %d, want 6 (points persist)", got.StatusPoint)
+	}
+	if got.JobLevel != 3 {
+		t.Errorf("job level after save = %d, want 3 (job_level persists)", got.JobLevel)
+	}
+	if got.SkillPoint != 3 {
+		t.Errorf("skill points after save = %d, want 3 (skill points persist)", got.SkillPoint)
 	}
 }
 

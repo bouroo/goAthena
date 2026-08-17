@@ -68,6 +68,18 @@ func (s *SkillService) UseSkillOnTarget(
 	if err != nil {
 		return 0, false, fmt.Errorf("caster: %w", err)
 	}
+	// Learned-skill gate: the caster must have learned this skill at >= the
+	// requested level. A skill not in LearnedSkills is unlearned.
+	if caster.LearnedSkills == nil {
+		return 0, false, domain.ErrSkillNotLearned
+	}
+	learned, ok := caster.LearnedSkills[skillID]
+	if !ok || level > learned {
+		if !ok {
+			return 0, false, domain.ErrSkillNotLearned
+		}
+		return 0, false, domain.ErrSkillLevelInsufficient
+	}
 	target, err := s.world.Get(targetGID)
 	if err != nil {
 		return 0, false, fmt.Errorf("target: %w", err)

@@ -29,6 +29,8 @@ func writeTempYAML(t *testing.T, name, data string) string {
 }
 
 // curveYAML is a tiny Novice curve: 1→2 costs 9, 2→3 costs 16, max level 3.
+// It also includes a Novice job curve (L1→2 costs 10, max job level 3) for the
+// job-level-up tests. Pre-re Novice values mirror rAthena's job_exp.yml.
 const curveYAML = `
 Header:
   Type: JOB_STATS
@@ -42,6 +44,12 @@ Body:
         Exp: 9
       - Level: 2
         Exp: 16
+    MaxJobLevel: 3
+    JobExp:
+      - Level: 1
+        Exp: 10
+      - Level: 2
+        Exp: 18
 `
 
 // statsYAML is a tiny per-level HP/SP table: L1 100/10, L2 150/15, L3 220/20.
@@ -84,7 +92,7 @@ func newLevelingWorld(t *testing.T) (*app.WorldService, *infra.MemoryWorldReposi
 	repo := infra.NewMemoryWorldRepository(domain.Entity{
 		ID: 150001, Account: 2000001, Type: domain.EntityTypePC, Job: 0,
 		Map: "new_1-1", Pos: domain.Position{X: 53, Y: 111},
-		Name: "Hero", Level: 1, HP: 100, MaxHP: 100, SP: 10, MaxSP: 10, Speed: 150,
+		Name: "Hero", Level: 1, JobLevel: 1, HP: 100, MaxHP: 100, SP: 10, MaxSP: 10, Speed: 150,
 	})
 	w := app.NewWorldService(repo, slog.Default(), 50)
 	w.SetLeveling(app.NewLevelingService(w, curve, stats, slog.Default()))
@@ -184,7 +192,7 @@ func TestLeveling_NilCurveNoLeveling(t *testing.T) {
 	repo := infra.NewMemoryWorldRepository(domain.Entity{
 		ID: 150001, Account: 2000001, Type: domain.EntityTypePC, Job: 0,
 		Map: "new_1-1", Pos: domain.Position{X: 53, Y: 111},
-		Name: "Hero", Level: 1, HP: 100, MaxHP: 100, SP: 10, MaxSP: 10, Speed: 150,
+		Name: "Hero", Level: 1, JobLevel: 1, HP: 100, MaxHP: 100, SP: 10, MaxSP: 10, Speed: 150,
 	})
 	w := app.NewWorldService(repo, slog.Default(), 50)
 	if _, err := w.EnterMap(context.Background(), 150001); err != nil {
@@ -326,5 +334,74 @@ func TestLevelUp_GrantsStatusPoints(t *testing.T) {
 	}
 	if e := getEnt(t, w, 150001); e.Luk != 1 || e.StatusPoint != 2 {
 		t.Errorf("luk/points = %d/%d, want 1/2", e.Luk, e.StatusPoint)
+	}
+}
+
+// TestJobLevelUp_GrantsSkillPoint proves that job level-up increments SkillPoint by
+// 1 per level (pre-re convention). Job exp is granted via GrantExp; the job-level
+// loop is invoked synchronously in GrantExp after job-exp accrual.
+func TestJobLevelUp_GrantsSkillPoint(t *testing.T) {
+	w, _ := newLevelingWorld(t)
+
+	// Seed entity starts at JobLevel 1, SkillPoint 0.
+	e0, _ := w.Get(150001)
+	if e0.JobLevel != 1 || e0.SkillPoint != 0 {
+		t.Fatalf("initial job_level=%d, skill_point=%d; want 1/0", e0.JobLevel, e0.SkillPoint)
+	}
+
+	// Grant enough job exp to go from job level 1 → 2 (costs 10).
+	_, _, err := w.GrantExp(context.Background(), 150001, 0, 10)
+	if err != nil {
+		t.Fatalf("GrantExp(job=10): %v", err)
+	}
+	e1, _ := w.Get(150001)
+	if e1.JobLevel != 2 || e1.SkillPoint != 1 {
+		t.Errorf("after job-exp 10: job_level=%d, skill_point=%d; want 2/1", e1.JobLevel, e1.SkillPoint)
+	}
+	if e1.JobExp != 0 {
+		t.Errorf("job_exp after level-up = %d, want 0", e1.JobExp)
+	}
+
+	// Grant enough job exp to go from job level 2 → 3 (costs 18).
+	_, _, err = w.GrantExp(context.Background(), 150001, 0, 18)
+	if err != nil {
+		t.Fatalf("GrantExp(job=18): %v", err)
+	}
+	e2, _ := w.Get(150001)
+	if e2.JobLevel != 3 || e2.SkillPoint != 2 {
+		t.Errorf("after job-exp 18 more: job_level=%d, skill_point=%d; want 3/2", e2.JobLevel, e2.SkillPoint)
+	}
+
+	// Grant enough job exp for one more level (3→4 would cost 28), but max job level
+	// in curveYAML is 3 so no further level-up occurs.
+	_, _, err = w.GrantExp(context.Background(), 150001, 0, 28)
+	if err != nil {
+		t.Fatalf("GrantExp(job=28): %v", err)
+	}
+	e3, _ := w.Get(150001)
+	if e3.JobLevel != 3 || e3.SkillPoint != 2 {
+		t.Errorf("at max job level: job_level=%d, skill_point=%d; want 3/2", e3.JobLevel, e3.SkillPoint)
+	}
+	if e3.JobExp != 28 {
+		t.Errorf("job_exp at max level = %d, want 28 (accumulated, not consumed)", e3.JobExp)
+	}
+}
+
+// TestJobLevelUp_RequiresSufficientJobExp proves that insufficient job exp does not
+// grant a level or consume exp.
+func TestJobLevelUp_RequiresSufficientJobExp(t *testing.T) {
+	w, _ := newLevelingWorld(t)
+
+	// Grant 9 job exp (below the 10 needed for level 1→2).
+	_, _, err := w.GrantExp(context.Background(), 150001, 0, 9)
+	if err != nil {
+		t.Fatalf("GrantExp(job=9): %v", err)
+	}
+	e, _ := w.Get(150001)
+	if e.JobLevel != 1 || e.SkillPoint != 0 {
+		t.Errorf("insufficient exp: job_level=%d, skill_point=%d; want 1/0", e.JobLevel, e.SkillPoint)
+	}
+	if e.JobExp != 9 {
+		t.Errorf("job_exp = %d, want 9 (not consumed)", e.JobExp)
 	}
 }

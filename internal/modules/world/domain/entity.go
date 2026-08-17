@@ -75,6 +75,16 @@ type Entity struct {
 	// accrues EXP here; a future track consumes these for level-up.
 	BaseExp uint64
 	JobExp  uint64
+	// JobLevel is the character's job level (pre-re Novice starts at 1, max 10).
+	// Loaded from char.job_level at map-enter and mutated by job-level-up.
+	JobLevel int16
+	// SkillPoint accumulates on job level-up (pre-re: +1 per job level). Used by
+	// the deferred CZ_SKILLUP opcode to raise a learned skill's level.
+	SkillPoint uint32
+	// LearnedSkills maps skillID → learned level (1-based). Lazily created on
+	// first access via getLearned; persisted by the WorldRepository's
+	// LoadSkills/SaveSkills pair. Empty map means no skills learned yet.
+	LearnedSkills map[int32]int16
 	// Str/Agi/Vit/Int/Dex/Luk are the six base stats the combat service feeds to
 	// the kernel's Attacker/Defender profiles. PCs load them from the char table
 	// at map-enter; mobs leave them zero (mob stats come from mob_db by Class).
@@ -85,6 +95,12 @@ type Entity struct {
 	Dex         uint16
 	Luk         uint16
 	StatusPoint uint32
+}
+
+// LearnedSkill is a single learned-skill row persisted in the skill table.
+type LearnedSkill struct {
+	SkillID int32
+	Level   int16
 }
 
 // PlayerEntity wraps a PC entity with its connection session for the map server.
@@ -105,14 +121,20 @@ type WorldRepository interface {
 	// transit before the client reconnects to re-enter the new map).
 	SetPosition(ctx context.Context, charID uint32, mapName string, pos Position) error
 	// SaveState persists the char's full runtime snapshot — vitals plus the
-	// accumulated base_exp/job_exp — so in-session combat/regen/heal/respawn and
-	// EXP-from-kill changes survive disconnect and restart. hp/sp are the runtime
-	// int32 vitals (clamped >= 0 by AddVitals/clampVitals); baseExp/jobExp are the
-	// uint64 EXP totals (clamped at math.MaxUint64 by GrantExp/clampExpAdd);
-	// maxHP/maxSP ride along because a level-up recalculates them. Folding all of
-	// it into the same persist path means disconnect (LeaveMap), shutdown
-	// (SaveAll) and warp persist from one primitive.
-	SaveState(ctx context.Context, charID uint32, baseLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64, statusPoint uint32) error
+	// accumulated base_exp/job_exp/job_level/skill_point — so in-session
+	// combat/regen/heal/respawn and EXP-from-kill changes survive disconnect
+	// and restart. hp/sp are the runtime int32 vitals (clamped >= 0 by
+	// AddVitals/clampVitals); baseExp/jobExp are the uint64 EXP totals (clamped
+	// at math.MaxUint64 by GrantExp/clampExpAdd); maxHP/maxSP ride along because
+	// a level-up recalculates them. Folding all of it into the same persist
+	// path means disconnect (LeaveMap), shutdown (SaveAll) and warp persist from
+	// one primitive.
+	SaveState(ctx context.Context, charID uint32, baseLevel int16, jobLevel int16, maxHP, maxSP, hp, sp int32, baseExp, jobExp uint64, statusPoint, skillPoint uint32) error
+	// LoadSkills returns every learned skill (skillID → level) for charID, or an
+	// empty slice when the char has no learned skills yet.
+	LoadSkills(ctx context.Context, charID uint32) ([]LearnedSkill, error)
+	// SaveSkills replaces the char's entire learned-skills list with skills.
+	SaveSkills(ctx context.Context, charID uint32, skills []LearnedSkill) error
 }
 
 // errors  for the world domain.
@@ -129,4 +151,9 @@ var (
 	ErrStatCapped = errors.New("stat at cap")
 	// ErrNoStatusPoints is returned when the cost exceeds the char's points.
 	ErrNoStatusPoints = errors.New("insufficient status points")
+	// ErrSkillNotLearned is returned when the caster has not learned the skill.
+	ErrSkillNotLearned = errors.New("skill not learned")
+	// ErrSkillLevelInsufficient is returned when the requested level exceeds the
+	// caster's learned level for the skill.
+	ErrSkillLevelInsufficient = errors.New("skill level insufficient")
 )
