@@ -170,3 +170,80 @@ func TestMap_WhisperTargetOffline(t *testing.T) {
 		t.Fatalf("offline ack result = %d, want 1 (target offline)", ack[2])
 	}
 }
+
+// TestMap_GlobalMessageBroadcastsToNeighbor: public say chat reaches the
+// OTHER player's client as ZC_NOTIFY_CHAT (0x008d) with "<name> : <text>",
+// and the speaker's own conn stays silent (its client renders locally).
+func TestMap_GlobalMessageBroadcastsToNeighbor(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	ms, _ := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p1 accept-enter: %v", err)
+	}
+	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p2 accept-enter: %v", err)
+	}
+	drainQuiescent(t, conn1)
+	drainQuiescent(t, conn2)
+
+	// Player 1 says something publicly.
+	var gbuf bytes.Buffer
+	_ = ropacket.CZGlobalMessageRequest{Message: "hello world"}.Encode(&gbuf) //nolint:errcheck // buffer write cannot fail
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(gbuf.Bytes()); err != nil {
+		t.Fatalf("send CZ_GLOBAL_MESSAGE: %v", err)
+	}
+
+	// The neighbor scans forward to the 0x008d frame and reads GID + text.
+	cid, text := drainToNotifyChat(t, conn2)
+	if text != "Hero : hello world" {
+		t.Fatalf("neighbor chat = %q, want %q", text, "Hero : hello world")
+	}
+	if cid != 2000001 {
+		t.Fatalf("chat GID = %d, want speaker AID 2000001", cid)
+	}
+
+	// The speaker's own conn must NOT have received the broadcast.
+	conn1.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if n, err := conn1.Read(make([]byte, 64)); err == nil && n > 0 {
+		t.Fatalf("speaker received own broadcast (%d bytes), want silence", n)
+	}
+}
+
+// drainToNotifyChat scans queued frames until ZC_NOTIFY_CHAT (0x008d) and
+// returns its GID and message text. Same scan-forward discipline as
+// drainToWhisper: enter-time frame counts interleave.
+func drainToNotifyChat(t *testing.T, c net.Conn) (uint32, string) {
+	t.Helper()
+	for {
+		c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		head := make([]byte, 4)
+		if _, err := io.ReadFull(c, head); err != nil {
+			t.Fatalf("read frame header: %v", err)
+		}
+		cmd := binary.LittleEndian.Uint16(head[0:2])
+		plen := int(binary.LittleEndian.Uint16(head[2:4]))
+		body := make([]byte, plen-4)
+		if _, err := io.ReadFull(c, body); err != nil {
+			t.Fatalf("read frame body (0x%04x): %v", cmd, err)
+		}
+		if cmd != ropacket.HeaderZCNOTIFYCHAT {
+			continue
+		}
+		msg := body[4:]
+		if idx := bytes.IndexByte(msg, 0); idx >= 0 {
+			msg = msg[:idx]
+		}
+		return binary.LittleEndian.Uint32(body[0:4]), string(msg)
+	}
+}

@@ -84,6 +84,7 @@ func mapHandlers() map[uint16]mapHandler {
 		ropacket.HeaderCZREQWEAREQUIPV5:     {size: 8, fn: (*MapServer).handleReqWearEquip},                          // CZ_REQ_WEAR_EQUIP_V5 0x0998 (cmd+index+position)
 		ropacket.HeaderCZREQTAKEOFFEQUIP:    {size: 4, fn: (*MapServer).handleReqTakeoffEquip},                       // CZ_REQ_TAKEOFF_EQUIP 0x00ab (cmd+index)
 		ropacket.HeaderCZWHISPER:            {frameSize: variableFrameSize, fn: (*MapServer).handleWhisper},          // CZ_WHISPER 0x0096 (variable)
+		ropacket.HeaderCZGLOBALMESSAGE:      {frameSize: variableFrameSize, fn: (*MapServer).handleGlobalMessage},    // CZ_GLOBAL_MESSAGE 0x008c (variable)
 	}
 }
 
