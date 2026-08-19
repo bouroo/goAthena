@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/panjf2000/gnet/v2"
 
@@ -129,4 +130,23 @@ func chebyshev(x1, y1, x2, y2 int16) int {
 		return dx
 	}
 	return dy
+}
+
+// handleRequestTime answers CZ_REQUEST_TIME (0x007e) — the client's periodic
+// clock ping — with ZC_NOTIFY_TIME (0x007f) carrying the server tick. An
+// unanswered ping is why stock clients drop the connection after a while, so
+// this is a keep-alive verb, not just latency telemetry.
+func (s *MapServer) handleRequestTime(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		return
+	}
+	if _, err := ropacket.ParseCZRequestTime(frame); err != nil {
+		s.log.Warn("map: parse CZ_REQUEST_TIME", "err", err)
+		return
+	}
+	var buf bytes.Buffer
+	_ = ropacket.NotifyTimeResponse{ //nolint:errcheck // buffer write cannot fail
+		Time: uint32(time.Now().UnixMilli()), //nolint:gosec // G115: client uses low 32 bits for RTT only.
+	}.Encode(&buf)
+	_ = c.AsyncWrite(buf.Bytes(), nil)
 }

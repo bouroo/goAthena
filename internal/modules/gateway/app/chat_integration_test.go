@@ -376,3 +376,36 @@ func trimNul(b []byte) string {
 	}
 	return string(b)
 }
+
+// TestMap_RequestTimePing: CZ_REQUEST_TIME (0x007e) answers ZC_NOTIFY_TIME
+// (0x007f, 6B) with a nonzero server tick — the keep-alive the stock client
+// needs to hold the connection.
+func TestMap_RequestTimePing(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+
+	ms, _ := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	conn2.Close()
+
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+	drainQuiescent(t, conn1)
+
+	ping := make([]byte, 6)
+	binary.LittleEndian.PutUint16(ping[0:], ropacket.HeaderCZREQUESTTIME)
+	binary.LittleEndian.PutUint32(ping[2:], 123456) // client tick (echoed only)
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(ping); err != nil {
+		t.Fatalf("send CZ_REQUEST_TIME: %v", err)
+	}
+
+	reply := drainFixed(t, conn1, ropacket.HeaderZCNOTIFYTIME, 6)
+	if got := binary.LittleEndian.Uint32(reply[2:6]); got == 0 {
+		t.Fatalf("server tick = 0, want nonzero")
+	}
+}
