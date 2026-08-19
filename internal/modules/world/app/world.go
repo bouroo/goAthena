@@ -283,6 +283,21 @@ func (w *WorldService) PlayersOnMap(mapName string) []domain.EntityID {
 	return out
 }
 
+// PlayerByName resolves an online player-character's entity by exact name.
+// Names are unique among live PCs (the char table enforces it); the scan walks
+// the registry under RLock. Whisper routing uses this — a target that is not
+// online resolves false, which the caller reports as target-offline.
+func (w *WorldService) PlayerByName(name string) (domain.Entity, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	for _, e := range w.entities {
+		if e.Type == domain.EntityTypePC && e.Name == name {
+			return *e, true
+		}
+	}
+	return domain.Entity{}, false
+}
+
 // StartTick runs the periodic game loop. Each tick fires update and blocks until
 // ctx is cancelled or Stop is called. The composition root passes a regen
 // callback (RegenTick); spawn runs on SpawnService's own timers and combat is

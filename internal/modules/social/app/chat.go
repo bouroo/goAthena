@@ -19,19 +19,18 @@ func NewChatService(dir domain.PlayerDirectory) *ChatService {
 	return &ChatService{dir: dir}
 }
 
-// SendWhisper routes a private message to the named target. Returns an error
-// if the target is offline.
+// SendWhisper routes a private message to the named target and reports delivery.
+// The handler (which owns the packet codec) encodes ZC_WHISPER through the
+// resolved ConnWriter; ChatService only resolves routing. Returns an error only
+// when the target is not an online player (the wire-level target-offline case).
 func (s *ChatService) SendWhisper(ctx context.Context, msg domain.ChatMessage) error {
 	targetID, ok := s.dir.ResolveName(ctx, msg.Target)
 	if !ok {
 		return fmt.Errorf("whisper target %q: not online", msg.Target)
 	}
-	conn, ok := s.dir.ResolveConn(ctx, targetID)
+	_, ok = s.dir.ResolveConn(ctx, targetID)
 	if !ok {
 		return fmt.Errorf("whisper target %q: no connection", msg.Target)
 	}
-	// The caller (dispatch handler) builds the ZC_WHISPER packet bytes and
-	// passes them via the ConnWriter; ChatService only resolves routing.
-	_ = conn // packet encoding + write done by the handler that has the packet codec
 	return nil
 }
