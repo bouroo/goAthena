@@ -53,8 +53,11 @@ type DialogSession struct {
 }
 
 // NPCStore resolves an NPC entity GID to its script name (so a click can find
-// which script to run). The world's NPC registry implements this.
+// which script to run) and registers new GID→name mappings as the world
+// seeder places NPCs. The world's NPC registry implements this.
 type NPCStore interface {
 	// ScriptForNPC returns the script name registered for the NPC GID, or false.
 	ScriptForNPC(ctx context.Context, npcGID uint32) (string, bool)
+	// Register maps an NPC GID to its script name.
+	Register(gid uint32, scriptName string)
 }

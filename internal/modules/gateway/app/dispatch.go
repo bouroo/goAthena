@@ -95,6 +95,17 @@ func (s *MapServer) handleContactNPC(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: parse CZ_CONTACT_NPC", "err", err)
 		return
 	}
+	// Shop NPCs open the deal-type selector instead of a dialog (rAthena's
+	// clif_parse_NpcClicked → npc_click shop branch): reply ZC_SELECT_DEALTYPE
+	// and wait for CZ_ACK_SELECT_DEALTYPE.
+	if s.shops != nil && s.shopStore != nil {
+		if _, isShop := s.shopStore.ShopForNPC(context.Background(), req.AID); isShop {
+			var buf bytes.Buffer
+			_ = ropacket.SelectDealtypeResponse{NpcID: req.AID}.Encode(&buf) //nolint:errcheck // buffer write cannot fail
+			_ = c.AsyncWrite(buf.Bytes(), nil)
+			return
+		}
+	}
 	s.content.StartDialog(auth.accountID, auth.charID, req.AID, gnetWriter{c: c})
 }
 
@@ -598,6 +609,11 @@ const objectTypePC uint8 = 0
 // (rAthena's clif_bl_type: 5=MOB). Used by the mob-chase broadcast.
 const objectTypeMob uint8 = 5
 
+// objectTypeNPC is the ZC_SPAWN_UNIT object-type byte for a static NPC
+// (rAthena's clif_bl_type: 6=NPC_EVT). Used by the map-enter AOI back-fill so
+// a joining client sees seeded dialog/shop NPCs.
+const objectTypeNPC uint8 = 6
+
 // unitWalkFromEntity builds the ZC_UNIT_WALKING (0x09fd) observer broadcast for
 // a PC moving from src to dest. The mover's own move-ack (ZC_NOTIFY_PLAYERMOVE
 // 0x0087) is a separate packet; this is what OTHER nearby clients receive so
@@ -631,8 +647,26 @@ func unitWalkFromEntity(src worlddomain.Entity, destX, destY int16) ropacket.Uni
 // spawnUnitFromEntity builds the ZC_SPAWN_UNIT (0x09fe) broadcast for a PC that
 // just entered a map, so OTHER nearby clients see the player appear.
 func spawnUnitFromEntity(e worlddomain.Entity) ropacket.SpawnUnitResponse {
+	resp := spawnUnitAny(e, objectTypePC)
+	resp.AID = e.Account
+	return resp
+}
+
+// spawnUnitNPC builds the ZC_SPAWN_UNIT frame for a static NPC: ObjectType=6
+// and the sprite rides the Job field (rAthena renders an NPC's view from the
+// job/class slot). AID=GID (NPCs have no account).
+func spawnUnitNPC(e worlddomain.Entity) ropacket.SpawnUnitResponse {
+	resp := spawnUnitAny(e, objectTypeNPC)
+	resp.AID = uint32(e.ID)   //nolint:gosec // G115: EntityID wraps a uint32 GID.
+	resp.Job = int16(e.Class) //nolint:gosec // G115: the NPC's sprite id rides Class for EntityTypeNPC.
+	resp.XSize, resp.YSize = 5, 5
+	return resp
+}
+
+// spawnUnitAny fills the entity-independent ZC_SPAWN_UNIT fields.
+func spawnUnitAny(e worlddomain.Entity, objectType uint8) ropacket.SpawnUnitResponse {
 	return ropacket.SpawnUnitResponse{
-		ObjectType: objectTypePC,
+		ObjectType: objectType,
 		AID:        e.Account,
 		GID:        uint32(e.ID), //nolint:gosec // G115: EntityID wraps a uint32 char_id.
 		Speed:      e.Speed,

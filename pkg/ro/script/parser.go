@@ -257,7 +257,7 @@ func parseFloatingHeader(p *parser, start Position) (*NPCHeader, error) {
 }
 
 func parsePlacedHeader(p *parser, start Position) (*NPCHeader, error) {
-	mapName, err := p.expectIdentVal()
+	mapName, err := p.expectMapName()
 	if err != nil {
 		return nil, err
 	}
@@ -380,6 +380,31 @@ func (p *parser) expectCommaBeforeBody() error {
 }
 
 // --- header token shortcuts ---
+
+// expectMapName reads a map name: identifiers (and digit runs) joined by
+// dashes (new_1-1, prt_fild08, gef_fild13 — the corpus is full of them). The
+// lexer emits `new_1` `-` `1` as IDENT OP INT; this folds the run back into
+// one name. It stops at the first comma.
+func (p *parser) expectMapName() (string, error) {
+	name, err := p.expectIdentVal()
+	if err != nil {
+		return "", err
+	}
+	for p.at(TokenOperator, "-") {
+		p.next()
+		switch t := p.peek(); t.Kind {
+		case TokenIdent:
+			name += "-" + t.Value
+			p.next()
+		case TokenInt:
+			name += "-" + t.Value
+			p.next()
+		default:
+			return "", p.errorf(p.peek().Pos, "map name: expected IDENT or INT after -, got %s", t.Kind)
+		}
+	}
+	return name, nil
+}
 
 func (p *parser) expectIdent(value string) (Token, error) {
 	return p.expect(TokenIdent, value)

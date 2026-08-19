@@ -77,6 +77,8 @@ func (c *compiler) compileFile(f *File, set *CompiledScriptSet) error {
 			MapName: hdr.MapName,
 			X:       hdr.X,
 			Y:       hdr.Y,
+			Facing:  hdr.Facing,
+			Sprite:  hdr.SpriteID,
 			Items:   f.Items(),
 		})
 		return nil
@@ -88,6 +90,14 @@ func (c *compiler) compileFile(f *File, set *CompiledScriptSet) error {
 	c.emitOp(OpEOF, hdr.pos)
 	if _, dup := set.Scripts[hdr.Name]; !dup {
 		set.Scripts[hdr.Name] = c.cs
+	}
+	// A placed dialog NPC (non-empty map) also records its placement so the
+	// world seeder can spawn an NPC entity at this cell.
+	if hdr.MapName != "" {
+		set.NPCs = append(set.NPCs, NPCDef{
+			Name: hdr.Name, MapName: hdr.MapName, X: hdr.X, Y: hdr.Y,
+			Facing: hdr.Facing, Sprite: hdr.SpriteID,
+		})
 	}
 	return nil
 }

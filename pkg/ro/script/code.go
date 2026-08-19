@@ -77,6 +77,39 @@ type CompiledScriptSet struct {
 	Funcs   map[string]*CompiledScript
 	Warps   []WarpDef
 	Shops   []ShopDef
+	// NPCs records the placement of every placed (non-floating) dialog NPC,
+	// in compile order. The world seeder turns each into a spawned NPC
+	// entity registered under its script name.
+	NPCs    []NPCDef
+	Spawns  []SpawnDef
+	MapName string
+}
+
+// NPCDef is a placed dialog NPC: where it stands and the sprite the client
+// renders. The script body lives in Scripts[Name].
+type NPCDef struct {
+	Name    string
+	MapName string
+	X       int
+	Y       int
+	Facing  int
+	Sprite  int
+}
+
+// SpawnDef is one monster-spawn line (`map,x,y[,xs,ys] monster Name class,amount[,d1,d2]`).
+// Amount mobs spawn inside the xs×ys cell box centered on (X,Y); d1/d2 bound the
+// respawn delay window in seconds (rAthena: respawn after d1 + rand(d2-d1)).
+type SpawnDef struct {
+	MapName string
+	X       int
+	Y       int
+	XSize   int
+	YSize   int
+	Class   int32
+	Name    string
+	Amount  int
+	Delay1  int
+	Delay2  int
 }
 
 // NewCompiledScriptSet returns an empty set with all maps initialized.
@@ -84,6 +117,8 @@ func NewCompiledScriptSet() *CompiledScriptSet {
 	return &CompiledScriptSet{
 		Scripts: make(map[string]*CompiledScript),
 		Funcs:   make(map[string]*CompiledScript),
+		Spawns:  []SpawnDef{},
+		NPCs:    []NPCDef{},
 	}
 }
 
@@ -119,6 +154,8 @@ type ShopDef struct {
 	MapName string
 	X       int
 	Y       int
+	Facing  int
+	Sprite  int
 	Items   []ShopItem
 }
 

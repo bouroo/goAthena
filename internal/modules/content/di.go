@@ -2,6 +2,7 @@
 package content
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
 	"github.com/bouroo/goAthena/internal/modules/content/infra"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
+	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
 
@@ -49,12 +51,60 @@ func Register(inj do.Injector, cfg *config.Config) {
 	do.Provide(inj, func(i do.Injector) (domain.ShopStore, error) {
 		return do.MustInvoke[*infra.MemoryShopStore](i), nil
 	})
+	// The world seeder places corpus NPCs/shops/mobs. It registers after
+	// world+content providers exist; composition invokes it once at boot
+	// (Seed), so a resolve failure here only means an unseeded world, which
+	// composition logs.
+	do.Provide(inj, func(i do.Injector) (*worldapp.WorldSeeder, error) {
+		world := do.MustInvoke[*worldapp.WorldService](i)
+		spawn := do.MustInvoke[*worldapp.SpawnService](i)
+		var mobs *mobdb.Registry
+		if m, err := do.Invoke[*mobdb.Registry](i); err == nil {
+			mobs = m
+		}
+		log := do.MustInvoke[*slog.Logger](i)
+		return worldapp.NewWorldSeeder(world, spawn, mobs, log), nil
+	})
+}
+
+// SeedWorld places the script corpus into the world: dialog NPCs, shop NPCs,
+// and mob spawns, with GID→name registrations in the content stores. It is
+// invoked once from composition after every module has registered. A nil
+// seeder/set is a no-op (the empty world stands).
+func SeedWorld(inj do.Injector, log *slog.Logger) {
+	seeder, err := do.Invoke[*worldapp.WorldSeeder](inj)
+	if err != nil {
+		log.Warn("world seeder unavailable; world stays unseeded", "err", err)
+		return
+	}
+	set, err := do.Invoke[*script.CompiledScriptSet](inj)
+	if err != nil || set == nil {
+		log.Info("no script corpus; world stays unseeded")
+		return
+	}
+	npcStore, _ := do.Invoke[domain.NPCStore](inj)
+	shopStore, _ := do.Invoke[domain.ShopStore](inj)
+	registerNPC := func(gid uint32, name string) {
+		if npcStore != nil {
+			npcStore.Register(gid, name)
+		}
+	}
+	registerShop := func(gid uint32, shopName string) {
+		if shopStore != nil {
+			shopStore.RegisterShop(gid, shopName)
+		}
+	}
+	npcs, mobs := seeder.Seed(set, registerNPC, registerShop)
+	log.Info("world seeded", "npcs", npcs, "mobs", mobs)
 }
 
 // compileScripts reads NPC .txt files from cfg.Zone.ScriptPath and compiles
-// them into a CompiledScriptSet. Empty ScriptPath → returns an empty set.
-// Load failure → logged warning, returns nil so the server boots with the dev
-// catalog standing.
+// them into a CompiledScriptSet. A directory is walked recursively (the
+// rAthena corpus nests: npc/cities, npc/pre-re/mobs/fields, ...). Files the
+// NPC grammar rejects are retried as mob-spawn files (their lines are
+// `map,x,y monster Name class,amount` — not NPC scripts); a file yielding
+// neither is skipped with a warning. Empty ScriptPath → empty set. Total
+// load failure → nil so the server boots with the dev catalog standing.
 func compileScripts(cfg *config.Config, log *slog.Logger) *script.CompiledScriptSet {
 	if cfg.Zone.ScriptPath == "" {
 		log.Info("script_path not configured; NPC shop catalog falls back to dev shop")
@@ -68,13 +118,12 @@ func compileScripts(cfg *config.Config, log *slog.Logger) *script.CompiledScript
 	}
 	var paths []string
 	if info.IsDir() {
-		m, err := filepath.Glob(filepath.Join(cfg.Zone.ScriptPath, "*.txt"))
-		if err != nil || len(m) == 0 {
-			log.Warn("script_path glob found no .txt files; falling back to dev shop",
+		paths, err = collectScripts(cfg.Zone.ScriptPath)
+		if err != nil || len(paths) == 0 {
+			log.Warn("script_path walk found no .txt files; falling back to dev shop",
 				"script_path", cfg.Zone.ScriptPath, "err", err)
 			return nil
 		}
-		paths = m
 	} else {
 		paths = []string{cfg.Zone.ScriptPath}
 	}
@@ -86,10 +135,36 @@ func compileScripts(cfg *config.Config, log *slog.Logger) *script.CompiledScript
 			continue
 		}
 		if err := script.CompileInto(data, set); err != nil {
+			// Mob-spawn files are not NPC scripts: fall back to the line
+			// scanner. Zero spawns = the file is genuinely bad → skip.
+			if defs := script.ParseSpawnLines(data); len(defs) > 0 {
+				set.Spawns = append(set.Spawns, defs...)
+				continue
+			}
 			log.Warn("script compile failed; skipping", "path", path, "err", err)
 			continue
 		}
-		log.Info("scripts compiled", "path", path, "shops", len(set.Shops))
+		log.Debug("scripts compiled", "path", path)
 	}
+	log.Info("script corpus loaded", "npcs", len(set.NPCs), "shops", len(set.Shops), "warps", len(set.Warps), "spawns", len(set.Spawns))
 	return set
+}
+
+// collectScripts walks root recursively and returns every .txt path.
+func collectScripts(root string) ([]string, error) {
+	var paths []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Ext(path) != ".txt" {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk script root: %w", err)
+	}
+	return paths, nil
 }

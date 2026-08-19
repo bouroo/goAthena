@@ -125,6 +125,11 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	transit.Register(inj)
 	world.Register(inj, cfg.Zone.TickRateHz, cfg.Zone.DBPath)
 
+	// Seed the world from the compiled script corpus: dialog NPCs, shop NPCs,
+	// and mob spawns become live entities. Best-effort — a corpus failure
+	// leaves an unseeded but bootable world.
+	content.SeedWorld(inj, log)
+
 	// Resolve the world service so App.Run can start/stop its tick loop.
 	if ws, err := do.Invoke[*worldapp.WorldService](inj); err != nil {
 		log.Error("world service resolve failed; tick loop will not run", "err", err)

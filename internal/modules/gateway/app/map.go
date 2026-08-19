@@ -558,11 +558,12 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 	if sbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(entity)); ok {
 		s.broadcast(sbuf, entity.Map, entity.Pos, req.CharID)
 	}
-	// AOI back-fill: the newcomer also sees every existing nearby PC, one
+	// AOI back-fill: the newcomer also sees every existing nearby entity, one
 	// ZC_SPAWN_UNIT per neighbor written to its own conn (not a broadcast). The
-	// newcomer's own entity is already in the world, so PlayersNear may list it;
-	// self is skipped by charID.
-	for _, nid := range s.world.PlayersNear(entity.Map, entity.Pos) {
+	// newcomer's own entity is already in the world, so the query may list it;
+	// self is skipped by charID. NPCs get ObjectType=6 so the client renders
+	// them as clickable static sprites.
+	for _, nid := range s.world.QueryVisible(entity.Map, int(entity.Pos.X), int(entity.Pos.Y)) {
 		if nid == worlddomain.EntityID(req.CharID) {
 			continue
 		}
@@ -571,11 +572,24 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 			s.log.Debug("map: AOI neighbor lookup skipped", "gid", nid, "err", gerr)
 			continue
 		}
-		if nbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(neighbor)); ok {
+		builder := spawnUnitFromEntity
+		if neighbor.Type == worlddomain.EntityTypeNPC {
+			builder = spawnUnitNPC
+		}
+		if nbuf, ok := encodeSpawnUnit(s, builder(neighbor)); ok {
 			_ = c.AsyncWrite(nbuf, nil)
 		}
 	}
 	s.log.Info("map entered", "aid", req.AccountID, "gid", req.CharID, "map", entity.Map)
+}
+
+// BindShop associates a seeded shop NPC's GID with a shop catalog name so
+// CZ_CONTACT_NPC resolves the shop instead of starting a dialog script.
+func (s *MapServer) BindShop(npcGID uint32, shopName string) {
+	if s.shopStore == nil {
+		return
+	}
+	s.shopStore.RegisterShop(npcGID, shopName)
 }
 
 // mapAuth is the per-connection auth cache set after a verified CZ_ENTER.
