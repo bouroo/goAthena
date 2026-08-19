@@ -55,40 +55,43 @@ func (h mapHandler) frameLen(c gnet.Conn) (n int, ready bool) {
 // trust gate); the rest are only valid post-auth.
 func mapHandlers() map[uint16]mapHandler {
 	return map[uint16]mapHandler{
-		0x0072:                              {size: czEnterSize, fn: (*MapServer).handleEnterFrame},
-		0x007d:                              {size: 2, fn: (*MapServer).handleLoadEndAck},
-		0x0085:                              {size: 5, fn: (*MapServer).handleRequestMove},
-		0x0089:                              {size: 7, fn: (*MapServer).handleActionRequest},                         // CZ_ACTION_REQUEST
-		0x0090:                              {size: 7, fn: (*MapServer).handleContactNPC},                            // CZ_CONTACT_NPC (NPC click)
-		ropacket.HeaderCZRESTART:            {size: 3, fn: (*MapServer).handleRestart},                               // CZ_RESTART (respawn / return to char-select)
-		ropacket.HeaderCZSTATUSCHANGE:       {size: 5, fn: (*MapServer).handleStatusChange},                          // CZ_STATUS_CHANGE (stat allocation)
-		0x00b8:                              {size: 7, fn: (*MapServer).handleChooseMenu},                            // CZ_CHOOSE_MENU
-		0x00b9:                              {size: 6, fn: (*MapServer).handleReqNextScript},                         // CZ_REQ_NEXT_SCRIPT
-		0x0143:                              {size: 10, fn: (*MapServer).handleInputEditDlg},                         // CZ_INPUT_EDITDLG
-		0x01d5:                              {frameSize: variableFrameSize, fn: (*MapServer).handleInputEditDlgStr},  // CZ_INPUT_EDITDLGSTR (variable length)
-		0x0146:                              {size: 6, fn: (*MapServer).handleCloseDialog},                           // CZ_CLOSE_DIALOG
-		ropacket.HeaderCZACKSELECTDEALTYPE:  {size: 7, fn: (*MapServer).handleAckSelectDealtype},                     // CZ_ACK_SELECT_DEALTYPE (NPC shop open)
-		ropacket.HeaderCZPCPURCHASEITEMLIST: {frameSize: variableFrameSize, fn: (*MapServer).handlePurchaseItemList}, // CZ_PC_PURCHASE_ITEMLIST (variable)
-		ropacket.HeaderCZPCSELLITEMLIST:     {frameSize: variableFrameSize, fn: (*MapServer).handleSellItemList},     // CZ_PC_SELL_ITEMLIST (variable)
-		0x0362:                              {size: 6, fn: (*MapServer).handleItemPickup},                            // CZ_ITEM_PICKUP @ 20250604
-		0x0363:                              {size: 6, fn: (*MapServer).handleItemDrop},                              // CZ_ITEM_DROP @ 20250604
-		0x0439:                              {size: 8, fn: (*MapServer).handleUseItem},                               // CZ_USE_ITEM2 @ 20250604 (cmd+index+AID)
-		0x0438:                              {size: 10, fn: (*MapServer).handleUseSkill2},                            // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
-		0x0af4:                              {size: 11, fn: (*MapServer).handleUseSkillToPos},                        // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
-		ropacket.HeaderCZSKILLUP:            {size: 4, fn: (*MapServer).handleSkillUp},                               // CZ_SKILLUP (skill learn)
-		ropacket.HeaderCZTRADEREQUEST:       {size: 6, fn: (*MapServer).handleTradeRequest},                          // CZ_TRADE_REQUEST 0x00e4 (cmd+targetGID)
-		ropacket.HeaderCZTRADEACK:           {size: 3, fn: (*MapServer).handleTradeAck},                              // CZ_TRADE_ACK 0x00e6 (cmd+type)
-		ropacket.HeaderCZADDEXCHANGEITEM:    {size: 8, fn: (*MapServer).handleAddExchangeItem},                       // CZ_ADD_EXCHANGE_ITEM 0x00e8 (cmd+index+amount)
-		ropacket.HeaderCZTRADEOK:            {size: 2, fn: (*MapServer).handleTradeOK},                               // CZ_TRADE_OK 0x00eb (cmd only)
-		ropacket.HeaderCZTRADECANCEL:        {size: 2, fn: (*MapServer).handleTradeCancel},                           // CZ_TRADE_CANCEL 0x00ed (cmd only)
-		ropacket.HeaderCZREQWEAREQUIPV5:     {size: 8, fn: (*MapServer).handleReqWearEquip},                          // CZ_REQ_WEAR_EQUIP_V5 0x0998 (cmd+index+position)
-		ropacket.HeaderCZREQTAKEOFFEQUIP:    {size: 4, fn: (*MapServer).handleReqTakeoffEquip},                       // CZ_REQ_TAKEOFF_EQUIP 0x00ab (cmd+index)
-		ropacket.HeaderCZWHISPER:            {frameSize: variableFrameSize, fn: (*MapServer).handleWhisper},          // CZ_WHISPER 0x0096 (variable)
-		ropacket.HeaderCZGLOBALMESSAGE:      {frameSize: variableFrameSize, fn: (*MapServer).handleGlobalMessage},    // CZ_GLOBAL_MESSAGE 0x008c (variable)
-		ropacket.HeaderCZGETCHARNAMEREQUEST: {size: 6, fn: (*MapServer).handleGetCharNameRequest},                    // CZ_GETCHARNAMEREQUEST 0x0094
-		ropacket.HeaderCZREQUESTTIME:        {size: 6, fn: (*MapServer).handleRequestTime},                           // CZ_REQUEST_TIME 0x007e (clock ping)
-		ropacket.HeaderCZREQEMOTION:         {size: 3, fn: (*MapServer).handleReqEmotion},                            // CZ_REQ_EMOTION 0x00bf (emotion icon)
-		ropacket.HeaderCZCHANGEDIR:          {size: 5, fn: (*MapServer).handleChangeDir},                             // CZ_CHANGE_DIR 0x009b (facing)
+		0x0072:                               {size: czEnterSize, fn: (*MapServer).handleEnterFrame},
+		0x007d:                               {size: 2, fn: (*MapServer).handleLoadEndAck},
+		0x0085:                               {size: 5, fn: (*MapServer).handleRequestMove},
+		0x0089:                               {size: 7, fn: (*MapServer).handleActionRequest},                         // CZ_ACTION_REQUEST
+		0x0090:                               {size: 7, fn: (*MapServer).handleContactNPC},                            // CZ_CONTACT_NPC (NPC click)
+		ropacket.HeaderCZRESTART:             {size: 3, fn: (*MapServer).handleRestart},                               // CZ_RESTART (respawn / return to char-select)
+		ropacket.HeaderCZSTATUSCHANGE:        {size: 5, fn: (*MapServer).handleStatusChange},                          // CZ_STATUS_CHANGE (stat allocation)
+		0x00b8:                               {size: 7, fn: (*MapServer).handleChooseMenu},                            // CZ_CHOOSE_MENU
+		0x00b9:                               {size: 6, fn: (*MapServer).handleReqNextScript},                         // CZ_REQ_NEXT_SCRIPT
+		0x0143:                               {size: 10, fn: (*MapServer).handleInputEditDlg},                         // CZ_INPUT_EDITDLG
+		0x01d5:                               {frameSize: variableFrameSize, fn: (*MapServer).handleInputEditDlgStr},  // CZ_INPUT_EDITDLGSTR (variable length)
+		0x0146:                               {size: 6, fn: (*MapServer).handleCloseDialog},                           // CZ_CLOSE_DIALOG
+		ropacket.HeaderCZACKSELECTDEALTYPE:   {size: 7, fn: (*MapServer).handleAckSelectDealtype},                     // CZ_ACK_SELECT_DEALTYPE (NPC shop open)
+		ropacket.HeaderCZPCPURCHASEITEMLIST:  {frameSize: variableFrameSize, fn: (*MapServer).handlePurchaseItemList}, // CZ_PC_PURCHASE_ITEMLIST (variable)
+		ropacket.HeaderCZPCSELLITEMLIST:      {frameSize: variableFrameSize, fn: (*MapServer).handleSellItemList},     // CZ_PC_SELL_ITEMLIST (variable)
+		0x0362:                               {size: 6, fn: (*MapServer).handleItemPickup},                            // CZ_ITEM_PICKUP @ 20250604
+		0x0363:                               {size: 6, fn: (*MapServer).handleItemDrop},                              // CZ_ITEM_DROP @ 20250604
+		0x0439:                               {size: 8, fn: (*MapServer).handleUseItem},                               // CZ_USE_ITEM2 @ 20250604 (cmd+index+AID)
+		0x0438:                               {size: 10, fn: (*MapServer).handleUseSkill2},                            // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
+		0x0af4:                               {size: 11, fn: (*MapServer).handleUseSkillToPos},                        // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
+		ropacket.HeaderCZSKILLUP:             {size: 4, fn: (*MapServer).handleSkillUp},                               // CZ_SKILLUP (skill learn)
+		ropacket.HeaderCZTRADEREQUEST:        {size: 6, fn: (*MapServer).handleTradeRequest},                          // CZ_TRADE_REQUEST 0x00e4 (cmd+targetGID)
+		ropacket.HeaderCZTRADEACK:            {size: 3, fn: (*MapServer).handleTradeAck},                              // CZ_TRADE_ACK 0x00e6 (cmd+type)
+		ropacket.HeaderCZADDEXCHANGEITEM:     {size: 8, fn: (*MapServer).handleAddExchangeItem},                       // CZ_ADD_EXCHANGE_ITEM 0x00e8 (cmd+index+amount)
+		ropacket.HeaderCZTRADEOK:             {size: 2, fn: (*MapServer).handleTradeOK},                               // CZ_TRADE_OK 0x00eb (cmd only)
+		ropacket.HeaderCZTRADECANCEL:         {size: 2, fn: (*MapServer).handleTradeCancel},                           // CZ_TRADE_CANCEL 0x00ed (cmd only)
+		ropacket.HeaderCZREQWEAREQUIPV5:      {size: 8, fn: (*MapServer).handleReqWearEquip},                          // CZ_REQ_WEAR_EQUIP_V5 0x0998 (cmd+index+position)
+		ropacket.HeaderCZREQTAKEOFFEQUIP:     {size: 4, fn: (*MapServer).handleReqTakeoffEquip},                       // CZ_REQ_TAKEOFF_EQUIP 0x00ab (cmd+index)
+		ropacket.HeaderCZWHISPER:             {frameSize: variableFrameSize, fn: (*MapServer).handleWhisper},          // CZ_WHISPER 0x0096 (variable)
+		ropacket.HeaderCZGLOBALMESSAGE:       {frameSize: variableFrameSize, fn: (*MapServer).handleGlobalMessage},    // CZ_GLOBAL_MESSAGE 0x008c (variable)
+		ropacket.HeaderCZGETCHARNAMEREQUEST:  {size: 6, fn: (*MapServer).handleGetCharNameRequest},                    // CZ_GETCHARNAMEREQUEST 0x0094
+		ropacket.HeaderCZREQUESTTIME:         {size: 6, fn: (*MapServer).handleRequestTime},                           // CZ_REQUEST_TIME 0x007e (clock ping)
+		ropacket.HeaderCZREQEMOTION:          {size: 3, fn: (*MapServer).handleReqEmotion},                            // CZ_REQ_EMOTION 0x00bf (emotion icon)
+		ropacket.HeaderCZCHANGEDIR:           {size: 5, fn: (*MapServer).handleChangeDir},                             // CZ_CHANGE_DIR 0x009b (facing)
+		ropacket.HeaderCZPMIGNORE:            {size: 27, fn: (*MapServer).handlePMIgnore},                             // CZ_PMIgnore 0x00cf (/ex /in)
+		ropacket.HeaderCZSETTINGWHISPERSTATE: {size: 3, fn: (*MapServer).handleSettingWhisperState},                   // CZ_SETTING_WHISPER_STATE 0x00d0 (/exall /inall)
+		ropacket.HeaderCZREQWHISPERLIST:      {size: 2, fn: (*MapServer).handleReqWhisperList},                        // CZ_REQ_WHISPER_LIST 0x00d3 (/wl)
 	}
 }
 

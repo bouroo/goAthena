@@ -86,6 +86,11 @@ func drainQuiescent(t *testing.T, c net.Conn) {
 			return // quiescent
 		}
 		cmd := binary.LittleEndian.Uint16(head[0:2])
+		// The two fixed 2-byte frames this drain can encounter carry no length
+		// slot; recognize them by opcode instead of misreading bytes 2-4.
+		if cmd == ropacket.HeaderCZREQWHISPERLIST || cmd == 0x0083 {
+			continue
+		}
 		plen := int(binary.LittleEndian.Uint16(head[2:4]))
 		if plen < 4 {
 			t.Fatalf("frame 0x%04x bad length %d", cmd, plen)
@@ -365,6 +370,16 @@ func fixedReplyLen(cmd uint16) int {
 		return 107
 	case ropacket.HeaderZCNOTIFYCHAT:
 		return 0 // variable: caller never skips these
+	case ropacket.HeaderZCWHISPERLIST:
+		return 0 // variable: readWantVarFrame owns these
+	case ropacket.HeaderZCNOTIFYTIME:
+		return 6
+	case ropacket.HeaderZCEMOTION:
+		return 7
+	case ropacket.HeaderZCCHANGEDIR:
+		return 9
+	case ropacket.HeaderZCSETTINGWHISPERPC, ropacket.HeaderZCSETTINGWHISPERSTATE:
+		return 4
 	default:
 		return -1
 	}
@@ -515,5 +530,194 @@ func TestMap_ChangeDirBroadcastsAndPersists(t *testing.T) {
 	conn1.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 	if n, err := conn1.Read(make([]byte, 64)); err == nil && n > 0 {
 		t.Fatalf("actor received own changedir (%d bytes), want silence", n)
+	}
+}
+
+// pmIgnoreFrame builds a raw CZ_PMIgnore: [2:cmd=0x00cf][24:name][1:type].
+func pmIgnoreFrame(name string, t uint8) []byte {
+	buf := make([]byte, 27)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZPMIGNORE)
+	copy(buf[2:], name)
+	buf[26] = t
+	return buf
+}
+
+// whisperStateFrame builds a raw CZ_SETTING_WHISPER_STATE: [2:cmd=0x00d0][1:type].
+func whisperStateFrame(t uint8) []byte {
+	buf := make([]byte, 3)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZSETTINGWHISPERSTATE)
+	buf[2] = t
+	return buf
+}
+
+// reqWhisperListFrame is the bare 2-byte CZ_REQ_WHISPER_LIST.
+func reqWhisperListFrame() []byte {
+	buf := make([]byte, 2)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQWHISPERLIST)
+	return buf
+}
+
+// enterTwoBoth runs the standard two-player enter handshake and returns the
+// quiesced connections.
+func enterTwoBoth(t *testing.T, conn1, conn2 net.Conn) {
+	t.Helper()
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p1 accept-enter: %v", err)
+	}
+	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p2 accept-enter: %v", err)
+	}
+	drainQuiescent(t, conn1)
+	drainQuiescent(t, conn2)
+}
+
+// twoPlayerWorld is the shared session+server+conns scaffold for whisper-list
+// tests (Hero = AID 2000001/CID 150001, Partner = AID 2000002/CID 150002).
+func twoPlayerWorld(t *testing.T) (net.Conn, net.Conn) {
+	t.Helper()
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+	ms, _ := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	t.Cleanup(func() { conn1.Close(); conn2.Close() })
+	enterTwoBoth(t, conn1, conn2)
+	return conn1, conn2
+}
+
+// TestMap_PMIgnoreVerbsMatrix exercises /ex, /in, /exall, /inall, /wl replies:
+// add (result 0), duplicate add (result 0, idempotent), remove (0), remove
+// missing (1), /wl lists remaining names, /exall (0) then repeat /exall (1),
+// /inall clears (0) then repeat on clean state (1).
+func TestMap_PMIgnoreVerbsMatrix(t *testing.T) {
+	conn1, _ := twoPlayerWorld(t)
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+
+	send := func(frame []byte, want uint16, size int, resultIdx int, wantResult uint8) {
+		if _, err := conn1.Write(frame); err != nil {
+			t.Fatalf("send frame 0x%04x: %v", binary.LittleEndian.Uint16(frame), err)
+		}
+		reply := drainFixed(t, conn1, want, size)
+		if reply[resultIdx] != wantResult {
+			t.Fatalf("reply 0x%04x result byte = %d, want %d", want, reply[resultIdx], wantResult)
+		}
+	}
+
+	// /ex Hero-add on Partner's behalf: block "Somebody".
+	send(pmIgnoreFrame("Somebody", 0), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 0)
+	// duplicate block → success, still one entry.
+	send(pmIgnoreFrame("Somebody", 0), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 0)
+	// /wl: one 24-byte entry.
+	if _, err := conn1.Write(reqWhisperListFrame()); err != nil {
+		t.Fatalf("send /wl: %v", err)
+	}
+	list := readWantVarFrame(t, conn1, ropacket.HeaderZCWHISPERLIST)
+	if len(list) != 4+24 {
+		t.Fatalf("/wl length = %d, want %d", len(list), 4+24)
+	}
+	if got := trimNul(list[4:28]); got != "Somebody" {
+		t.Fatalf("/wl first name = %q, want Somebody", got)
+	}
+	// /in Somebody → 0.
+	send(pmIgnoreFrame("Somebody", 1), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 0)
+	// /in Ghost (not on list) → 1.
+	send(pmIgnoreFrame("Ghost", 1), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 1)
+
+	// /exall → 0; repeat → 1 (already denying).
+	send(whisperStateFrame(0), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 0)
+	send(whisperStateFrame(0), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 1)
+	// /inall while denying → 0 (clears flag+list).
+	send(whisperStateFrame(1), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 0)
+	// /inall on clean state (no flag, empty list) → 1.
+	send(whisperStateFrame(1), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 1)
+}
+
+// readWantVarFrame scans queued frames for a wanted variable-length opcode and
+// returns it whole, using the on-wire length slot (cmd+packetSize, 4B header).
+func readWantVarFrame(t *testing.T, c net.Conn, want uint16) []byte {
+	t.Helper()
+	for {
+		c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		head := make([]byte, 4)
+		if _, err := io.ReadFull(c, head); err != nil {
+			t.Fatalf("read want var frame header: %v", err)
+		}
+		cmd := binary.LittleEndian.Uint16(head[0:2])
+		plen := int(binary.LittleEndian.Uint16(head[2:4]))
+		if plen < 4 {
+			t.Fatalf("want var frame 0x%04x bad length %d", cmd, plen)
+		}
+		body := make([]byte, plen-4)
+		if _, err := io.ReadFull(c, body); err != nil {
+			t.Fatalf("read want var frame body (0x%04x): %v", cmd, err)
+		}
+		if cmd != want {
+			continue
+		}
+		out := make([]byte, 0, plen)
+		out = append(out, head...)
+		out = append(out, body...)
+		return out
+	}
+}
+
+// TestMap_WhisperIgnoredByList: Partner /ex blocks "Hero", then Hero's whisper
+// gets ack result 2 (ignored) and Partner's conn stays silent.
+func TestMap_WhisperIgnoredByList(t *testing.T) {
+	conn1, conn2 := twoPlayerWorld(t)
+
+	conn2.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn2.Write(pmIgnoreFrame("Hero", 0)); err != nil {
+		t.Fatalf("send /ex Hero: %v", err)
+	}
+	ack := drainFixed(t, conn2, ropacket.HeaderZCSETTINGWHISPERPC, 4)
+	if ack[3] != 0 {
+		t.Fatalf("/ex result = %d, want 0", ack[3])
+	}
+
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(whisperFrame("Partner", "can you hear me?")); err != nil {
+		t.Fatalf("send whisper: %v", err)
+	}
+	wack := drainFixed(t, conn1, ropacket.HeaderZCACKWHISPER, 7)
+	if wack[2] != 2 {
+		t.Fatalf("whisper ack = %d, want 2 (ignored by list)", wack[2])
+	}
+
+	conn2.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if n, err := conn2.Read(make([]byte, 64)); err == nil && n > 0 {
+		t.Fatalf("ignored target received %d bytes, want silence", n)
+	}
+}
+
+// TestMap_WhisperDeniedByExall: Partner /exall, then Hero's whisper acks
+// result 3 (all ignored) and nothing is delivered.
+func TestMap_WhisperDeniedByExall(t *testing.T) {
+	conn1, conn2 := twoPlayerWorld(t)
+
+	conn2.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn2.Write(whisperStateFrame(0)); err != nil {
+		t.Fatalf("send /exall: %v", err)
+	}
+	ack := drainFixed(t, conn2, ropacket.HeaderZCSETTINGWHISPERSTATE, 4)
+	if ack[3] != 0 {
+		t.Fatalf("/exall result = %d, want 0", ack[3])
+	}
+
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(whisperFrame("Partner", "hello?")); err != nil {
+		t.Fatalf("send whisper: %v", err)
+	}
+	wack := drainFixed(t, conn1, ropacket.HeaderZCACKWHISPER, 7)
+	if wack[2] != 3 {
+		t.Fatalf("whisper ack = %d, want 3 (all ignored)", wack[2])
+	}
+
+	conn2.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if n, err := conn2.Read(make([]byte, 64)); err == nil && n > 0 {
+		t.Fatalf("deny-all target received %d bytes, want silence", n)
 	}
 }

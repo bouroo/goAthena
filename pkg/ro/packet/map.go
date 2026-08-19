@@ -49,6 +49,20 @@ const (
 	// at rathena/src/map/packets.hpp:1406-1409.
 	HeaderCZREQEMOTION uint16 = 0x00bf
 
+	// CZ_PMIgnore (0x00cf) — add/remove one name from this player's whisper
+	// ignore list (/ex and /in). rathena/src/map/clif_packetdb.hpp:78
+	// (`parseable_packet(0x00cf,27,clif_parse_PMIgnore,2,26)`).
+	// Fixed 27 bytes: [2:cmd][24:name char[24]][1:type 0=block 1=unblock].
+	HeaderCZPMIGNORE uint16 = 0x00cf
+	// CZ_SETTING_WHISPER_STATE (0x00d0) — allow/deny ALL whispers (/exall and
+	// /inall). rathena/src/map/clif_packetdb.hpp:79. Fixed 3 bytes:
+	// [2:cmd][1:type 0=deny-all 1=allow-all].
+	HeaderCZSETTINGWHISPERSTATE uint16 = 0x00d0
+	// CZ_REQ_WHISPER_LIST (0x00d3) — request this player's ignore list (/wl).
+	// rathena/src/map/clif_packetdb.hpp:80 (`parseable_packet(0x00d3,2,...)`).
+	// Fixed 2 bytes: [2:cmd].
+	HeaderCZREQWHISPERLIST uint16 = 0x00d3
+
 	// S→C — map server → client.
 	HeaderZCACCEPTENTER      uint16 = 0x02eb // rathena/src/map/packets.hpp:571 (ZC_ACCEPT_ENTER, PACKETVER >= 20160330 branch)
 	HeaderZCREFUSEENTER      uint16 = 0x0074 // rathena/src/map/packets.hpp:590 (ZC_REFUSE_ENTER)
@@ -77,6 +91,19 @@ const (
 	// (`PACKET_ZC_EMOTION { int16 packetType; int32 GID; uint8 type }`).
 	// Fixed 7 bytes: [2:cmd][4:GID int32][1:type uint8].
 	HeaderZCEMOTION uint16 = 0x00c0
+
+	// ZC_SETTING_WHISPER_PC (0x00d1) — result of /ex or /in (single-name ignore
+	// state change). rathena/src/map/packets.hpp PACKET_ZC_SETTING_WHISPER_PC.
+	// Fixed 4 bytes: [2:cmd][1:type echoing request][1:result 0=ok 1=fail 2=too-many].
+	HeaderZCSETTINGWHISPERPC uint16 = 0x00d1
+	// ZC_SETTING_WHISPER_STATE (0x00d2) — result of /exall or /inall.
+	// rathena/src/map/packets.hpp PACKET_ZC_SETTING_WHISPER_STATE.
+	// Fixed 4 bytes: [2:cmd][1:type][1:result 0=ok 1=fail].
+	HeaderZCSETTINGWHISPERSTATE uint16 = 0x00d2
+	// ZC_WHISPER_LIST (0x00d4) — the player's ignore list (/wl reply).
+	// rathena/src/map/packets.hpp PACKET_ZC_WHISPER_LIST.
+	// Variable: [2:cmd][2:packetSize]{24-byte NUL-padded names}*.
+	HeaderZCWHISPERLIST uint16 = 0x00d4
 	// CZ_GETCHARNAMEREQUEST (0x0094) — client requests a character name by GID.
 	// rathena/src/map/clif_packetdb.hpp:45 (`parseable_packet(0x0094,6,clif_parse_GetCharNameRequest,2)`).
 	// Fixed 6 bytes: [2:cmd][4:GID int32].
@@ -541,6 +568,19 @@ const (
 	// sizeCZReqEmotion = int16 packetType + uint8 emotion_type = 2+1 = 3
 	// (rathena/src/map/packets.hpp:1406-1410).
 	sizeCZReqEmotion = 3
+
+	// sizeCZPMIgnore = int16 packetType + char name[24] + uint8 type = 2+24+1 = 27
+	sizeCZPMIgnore = 27
+	// sizeCZSettingWhisperState = int16 packetType + uint8 type = 2+1 = 3
+	sizeCZSettingWhisperState = 3
+	// sizeZCSettingWhisperPC = ZC_SETTING_WHISPER_PC (0x00d1):
+	// int16 packetType + uint8 type + uint8 result = 2+1+1 = 4
+	sizeZCSettingWhisperPC = 4
+	// sizeZCSettingWhisperState = ZC_SETTING_WHISPER_STATE (0x00d2): same
+	// 4-byte layout as 0x00d1 (type + result).
+	sizeZCSettingWhisperState = 4
+	// sizeZCWhisperListName is the per-entry width in ZC_WHISPER_LIST (0x00d4).
+	sizeZCWhisperListName = 24
 	// sizeZCEmotion = int16 packetType + int32 GID + uint8 type = 2+4+1 = 7
 	// (rathena/src/map/packets.hpp:1973-1978).
 	sizeZCEmotion = 7
@@ -818,6 +858,43 @@ func NewMapServerDB() *DB {
 		Name:      "CZ_REQ_EMOTION",
 		Length:    sizeCZReqEmotion,
 		Direction: DirectionClientToServer,
+	})
+	// Phase 41: whisper ignore-list verbs — /ex /in /exall /inall /wl.
+	db.Register(Definition{
+		ID:        HeaderCZPMIGNORE,
+		Name:      "CZ_PMIgnore",
+		Length:    sizeCZPMIgnore,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZSETTINGWHISPERSTATE,
+		Name:      "CZ_SETTING_WHISPER_STATE",
+		Length:    sizeCZSettingWhisperState,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQWHISPERLIST,
+		Name:      "CZ_REQ_WHISPER_LIST",
+		Length:    2,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCSETTINGWHISPERPC,
+		Name:      "ZC_SETTING_WHISPER_PC",
+		Length:    sizeZCSettingWhisperPC,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCSETTINGWHISPERSTATE,
+		Name:      "ZC_SETTING_WHISPER_STATE",
+		Length:    sizeZCSettingWhisperState,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCWHISPERLIST,
+		Name:      "ZC_WHISPER_LIST",
+		Length:    -1, // variable: 4 + 24 per name
+		Direction: DirectionServerToClient,
 	})
 	// M13: CZ_GETCHARNAMEREQUEST (fixed 6 bytes) + CZ_RESTART (fixed 3
 	// bytes) — name lookup and respawn/char-select request.

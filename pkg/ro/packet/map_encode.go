@@ -1,6 +1,7 @@
 package packet
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -2144,6 +2145,81 @@ func (r SellResultResponse) Encode(w io.Writer) error {
 	buf[2] = r.Result
 	if _, err := w.Write(buf[:]); err != nil {
 		return fmt.Errorf("packet: write ZC_PC_SELL_RESULT: %w", err)
+	}
+	return nil
+}
+
+// ZCSettingWhisperPCResponse encodes ZC_SETTING_WHISPER_PC (0x00d1, 4B) — the
+// /ex|/in result. result: 0 = success, 1 = failed, 2 = too many blocks
+// (rathena/src/map/clif.cpp:9621 clif_wisexin).
+type ZCSettingWhisperPCResponse struct {
+	Type   uint8
+	Result uint8
+}
+
+// Size returns the fixed wire size of ZC_SETTING_WHISPER_PC.
+func (ZCSettingWhisperPCResponse) Size() int { return sizeZCSettingWhisperPC }
+
+// Encode writes the 4-byte ZC_SETTING_WHISPER_PC frame.
+func (r ZCSettingWhisperPCResponse) Encode(w io.Writer) error {
+	var buf [sizeZCSettingWhisperPC]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSETTINGWHISPERPC)
+	buf[2] = r.Type
+	buf[3] = r.Result
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_SETTING_WHISPER_PC: %w", err)
+	}
+	return nil
+}
+
+// ZCSettingWhisperStateResponse encodes ZC_SETTING_WHISPER_STATE (0x00d2, 4B) —
+// the /exall|/inall result. result: 0 = success, 1 = failure
+// (rathena/src/map/clif.cpp:9639 clif_wisall).
+type ZCSettingWhisperStateResponse struct {
+	Type   uint8
+	Result uint8
+}
+
+// Size returns the fixed wire size of ZC_SETTING_WHISPER_STATE.
+func (ZCSettingWhisperStateResponse) Size() int { return sizeZCSettingWhisperState }
+
+// Encode writes the 4-byte ZC_SETTING_WHISPER_STATE frame.
+func (r ZCSettingWhisperStateResponse) Encode(w io.Writer) error {
+	var buf [sizeZCSettingWhisperState]byte
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSETTINGWHISPERSTATE)
+	buf[2] = r.Type
+	buf[3] = r.Result
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write ZC_SETTING_WHISPER_STATE: %w", err)
+	}
+	return nil
+}
+
+// ZCWhisperListResponse encodes ZC_WHISPER_LIST (0x00d4, variable) — the /wl
+// reply. Wire: [2:cmd][2:packetSize]{24-byte NUL-padded name}* with packetSize
+// counting the whole frame including the header (rathena/src/map/clif.cpp:15214
+// clif_PMIgnoreList).
+type ZCWhisperListResponse struct {
+	Names []string
+}
+
+// Size returns the full wire byte count this Encode will write.
+func (r ZCWhisperListResponse) Size() int { return 4 + len(r.Names)*sizeZCWhisperListName }
+
+// Encode writes the variable-length ZC_WHISPER_LIST frame.
+func (r ZCWhisperListResponse) Encode(w io.Writer) error {
+	var buf bytes.Buffer
+	var head [4]byte
+	binary.LittleEndian.PutUint16(head[0:], HeaderZCWHISPERLIST)
+	binary.LittleEndian.PutUint16(head[2:], uint16(r.Size())) //nolint:gosec // G115: 4+24*20 fits u16.
+	buf.Write(head[:])
+	for _, n := range r.Names {
+		var name [sizeZCWhisperListName]byte
+		copy(name[:], n)
+		buf.Write(name[:])
+	}
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		return fmt.Errorf("packet: write ZC_WHISPER_LIST: %w", err)
 	}
 	return nil
 }

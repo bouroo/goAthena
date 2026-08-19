@@ -1283,3 +1283,44 @@ func (r CZDropItemRequest) Encode(w io.Writer) error {
 	}
 	return nil
 }
+
+// CZPMIgnoreRequest is the decoded form of CZ_PMIgnore (0x00cf) — /ex (block)
+// or /in (unblock) one name. Wire: [2:cmd][24:name char[24]][1:type] = 27B
+// (rathena/src/map/clif_packetdb.hpp:78, clif.cpp:15134).
+type CZPMIgnoreRequest struct {
+	Name string
+	Type uint8 // 0 = add to ignore list, 1 = remove
+}
+
+// ParseCZPMIgnore decodes a fixed 27-byte CZ_PMIgnore frame.
+func ParseCZPMIgnore(frame []byte) (CZPMIgnoreRequest, error) {
+	if len(frame) != sizeCZPMIgnore {
+		return CZPMIgnoreRequest{}, fmt.Errorf("packet: parse CZ_PMIgnore: want %d bytes, got %d", sizeCZPMIgnore, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZPMIGNORE {
+		return CZPMIgnoreRequest{}, fmt.Errorf("packet: parse CZ_PMIgnore: unexpected cmd 0x%04x", cmd)
+	}
+	name := frame[2:26]
+	if idx := bytes.IndexByte(name, 0); idx >= 0 {
+		name = name[:idx]
+	}
+	return CZPMIgnoreRequest{Name: string(name), Type: frame[26]}, nil
+}
+
+// CZSettingWhisperStateRequest is the decoded form of CZ_SETTING_WHISPER_STATE
+// (0x00d0) — /exall (deny all) or /inall (allow all). Wire: [2:cmd][1:type] = 3B
+// (rathena/src/map/clif.cpp:15188).
+type CZSettingWhisperStateRequest struct {
+	Type uint8 // 0 = deny all, 1 = allow all
+}
+
+// ParseCZSettingWhisperState decodes a fixed 3-byte CZ_SETTING_WHISPER_STATE frame.
+func ParseCZSettingWhisperState(frame []byte) (CZSettingWhisperStateRequest, error) {
+	if len(frame) != sizeCZSettingWhisperState {
+		return CZSettingWhisperStateRequest{}, fmt.Errorf("packet: parse CZ_SETTING_WHISPER_STATE: want %d bytes, got %d", sizeCZSettingWhisperState, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZSETTINGWHISPERSTATE {
+		return CZSettingWhisperStateRequest{}, fmt.Errorf("packet: parse CZ_SETTING_WHISPER_STATE: unexpected cmd 0x%04x", cmd)
+	}
+	return CZSettingWhisperStateRequest{Type: frame[2]}, nil
+}

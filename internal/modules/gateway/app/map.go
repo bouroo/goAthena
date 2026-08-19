@@ -82,6 +82,12 @@ type MapServer struct {
 	// resolves via connFor + AsyncWrite only, never reading a peer's context.
 	conns  map[uint32]gnet.Conn
 	connMu sync.RWMutex
+	// ignoreMu guards whisper-ignore state: per-char ignored-name sets plus the
+	// per-char deny-all flag (rAthena sd.ignore[] + sd.state.ignoreAll). Handlers
+	// for /ex /in /exall /inall and the whisper-delivery gate read/write it.
+	ignoreMu  sync.RWMutex
+	ignores   map[uint32]map[string]bool
+	ignoreAll map[uint32]bool
 }
 
 // NewMapServer builds a map listener. shops and shopStore wire the NPC shop
@@ -108,6 +114,8 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 		log:         log,
 		handlers:    mapHandlers(),
 		conns:       make(map[uint32]gnet.Conn),
+		ignores:     make(map[uint32]map[string]bool),
+		ignoreAll:   make(map[uint32]bool),
 		db:          ropacket.NewMapServerDB(),
 		openedShops: make(map[uint32]string),
 	}

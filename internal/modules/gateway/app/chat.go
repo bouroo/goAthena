@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/panjf2000/gnet/v2"
@@ -10,6 +11,10 @@ import (
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
+
+// maxIgnoreList caps per-char ignored names (rAthena map.hpp:80
+// MAX_IGNORE_LIST 20; official clients ship 14).
+const maxIgnoreList = 20
 
 // handleWhisper delivers CZ_WHISPER (0x0096): the target receives ZC_WHISPER
 // (0x09de) carrying sender name/GID + text; the sender receives ZC_ACK_WHISPER
@@ -38,6 +43,21 @@ func (s *MapServer) handleWhisper(c gnet.Conn, auth *mapAuth, frame []byte) {
 	targetConn, cok := s.connFor(uint32(target.ID))
 	if !cok {
 		s.writeWhisperAck(c, auth.charID, 1)
+		return
+	}
+	// rAthena clif_parse_WisMessage delivery gate: deny-all → result 3,
+	// sender ignored by name → result 2 (intif.cpp:1295-1305). GM-level
+	// bypass is out of scope (no GM levels modeled yet).
+	targetID := uint32(target.ID) //nolint:gosec // G115: EntityID wraps char_id.
+	s.ignoreMu.RLock()
+	denied := s.ignoreAll[targetID] || s.ignores[targetID][sender.Name]
+	s.ignoreMu.RUnlock()
+	if denied {
+		if s.ignoreAll[targetID] {
+			s.writeWhisperAck(c, auth.charID, 3)
+		} else {
+			s.writeWhisperAck(c, auth.charID, 2)
+		}
 		return
 	}
 	var wbuf bytes.Buffer
@@ -204,4 +224,100 @@ func (s *MapServer) handleChangeDir(_ gnet.Conn, auth *mapAuth, frame []byte) {
 		SrcID: auth.charID, HeadDir: req.HeadDir, Dir: req.Dir,
 	}.Encode(&buf)
 	s.broadcast(buf.Bytes(), sender.Map, sender.Pos, auth.charID)
+}
+
+// handlePMIgnore serves CZ_PMIgnore (0x00cf) — /ex (block) and /in (unblock)
+// one name — answering ZC_SETTING_WHISPER_PC (0x00d1) with the request's type
+// byte and a result: 0 success, 1 failed (removing a name not on the list),
+// 2 too many blocks (list full at maxIgnoreList, rAthena MAX_IGNORE_LIST).
+// Duplicate-add reports success without a second entry (Aegis semantics).
+func (s *MapServer) handlePMIgnore(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		return
+	}
+	req, err := ropacket.ParseCZPMIgnore(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_PMIgnore", "err", err)
+		return
+	}
+	result := uint8(0)
+	s.ignoreMu.Lock()
+	set := s.ignores[auth.charID]
+	if set == nil {
+		set = make(map[string]bool)
+		s.ignores[auth.charID] = set
+	}
+	if req.Type == 0 {
+		switch {
+		case set[req.Name]:
+			// already ignored — Aegis reports success
+		case len(set) >= maxIgnoreList:
+			result = 2
+		default:
+			set[req.Name] = true
+		}
+	} else {
+		switch {
+		case !set[req.Name]:
+			result = 1 // not on the list
+		default:
+			delete(set, req.Name)
+		}
+	}
+	s.ignoreMu.Unlock()
+	var buf bytes.Buffer
+	_ = ropacket.ZCSettingWhisperPCResponse{Type: req.Type, Result: result}.Encode(&buf) //nolint:errcheck // buffer write cannot fail
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// handleSettingWhisperState serves CZ_SETTING_WHISPER_STATE (0x00d0) — /exall
+// (deny all) and /inall (allow all) — answering ZC_SETTING_WHISPER_STATE
+// (0x00d2). Per rAthena clif_parse_PMIgnoreAll: /exall fails only when already
+// denying; /inall clears the deny flag AND wipes the per-name list (failing
+// when neither was set — the client uses that to print "nobody was ignored").
+func (s *MapServer) handleSettingWhisperState(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		return
+	}
+	req, err := ropacket.ParseCZSettingWhisperState(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_SETTING_WHISPER_STATE", "err", err)
+		return
+	}
+	result := uint8(0)
+	s.ignoreMu.Lock()
+	switch alreadyDenying, hasEntries := s.ignoreAll[auth.charID], len(s.ignores[auth.charID]) > 0; {
+	case req.Type == 0 && alreadyDenying:
+		result = 1 // already denying all
+	case req.Type == 0:
+		s.ignoreAll[auth.charID] = true
+	case !alreadyDenying && !hasEntries:
+		result = 1 // nothing to allow
+	default:
+		s.ignoreAll[auth.charID] = false
+		s.ignores[auth.charID] = make(map[string]bool)
+	}
+	s.ignoreMu.Unlock()
+	var buf bytes.Buffer
+	_ = ropacket.ZCSettingWhisperStateResponse{Type: req.Type, Result: result}.Encode(&buf) //nolint:errcheck // buffer write cannot fail
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// handleReqWhisperList serves CZ_REQ_WHISPER_LIST (0x00d3) — /wl — with
+// ZC_WHISPER_LIST (0x00d4): [2:cmd][2:packetSize]{24B names}*, names in list
+// order.
+func (s *MapServer) handleReqWhisperList(c gnet.Conn, auth *mapAuth, _ []byte) {
+	if auth == nil {
+		return
+	}
+	s.ignoreMu.RLock()
+	names := make([]string, 0, len(s.ignores[auth.charID]))
+	for n := range s.ignores[auth.charID] {
+		names = append(names, n)
+	}
+	s.ignoreMu.RUnlock()
+	sort.Strings(names)
+	var buf bytes.Buffer
+	_ = ropacket.ZCWhisperListResponse{Names: names}.Encode(&buf) //nolint:errcheck // buffer write cannot fail
+	_ = c.AsyncWrite(buf.Bytes(), nil)
 }
