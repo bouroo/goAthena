@@ -79,3 +79,54 @@ func (s *MapServer) handleGlobalMessage(_ gnet.Conn, auth *mapAuth, frame []byte
 	}.Encode(&buf)
 	s.broadcast(buf.Bytes(), sender.Map, sender.Pos, auth.charID)
 }
+
+// handleGetCharNameRequest answers CZ_GETCHARNAMEREQUEST (0x0094) — the
+// client's mouseover/target name lookup. A PC GID resolves through the full
+// ZC_ACK_REQNAMEALL2 (0x0a30: name + empty party/guild/position, title 0);
+// an NPC/mob GID resolves the compact ZC_ACK_REQNAMEALL_NPC (0x0adf). A GID
+// beyond the AOI radius or unknown to the world gets no reply — the client
+// asked about something it cannot see.
+func (s *MapServer) handleGetCharNameRequest(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		return
+	}
+	req, err := ropacket.ParseCZGetCharNameRequest(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_GETCHARNAMEREQUEST", "err", err)
+		return
+	}
+	e, gerr := s.world.Get(worlddomain.EntityID(req.GID))
+	if gerr != nil {
+		return
+	}
+	viewer, verr := s.world.Get(worlddomain.EntityID(auth.charID))
+	if verr != nil {
+		return
+	}
+	if chebyshev(viewer.Pos.X, viewer.Pos.Y, e.Pos.X, e.Pos.Y) > aoiSweepRadius || viewer.Map != e.Map {
+		return
+	}
+	var buf bytes.Buffer
+	if e.Type == worlddomain.EntityTypePC {
+		_ = ropacket.ReqNameAll2Response{GID: req.GID, Name: e.Name}.Encode(&buf) //nolint:errcheck // buffer write cannot fail
+	} else {
+		_ = ropacket.ReqNameAllNPCResponse{GID: req.GID, Name: e.Name}.Encode(&buf) //nolint:errcheck // buffer write cannot fail
+	}
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// chebyshev is the cell distance metric the AOI grid uses.
+func chebyshev(x1, y1, x2, y2 int16) int {
+	dx := int(x1) - int(x2)
+	dy := int(y1) - int(y2)
+	if dx < 0 {
+		dx = -dx
+	}
+	if dy < 0 {
+		dy = -dy
+	}
+	if dx > dy {
+		return dx
+	}
+	return dy
+}
