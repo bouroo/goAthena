@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"time"
 
 	"github.com/panjf2000/gnet/v2"
@@ -149,4 +150,58 @@ func (s *MapServer) handleRequestTime(c gnet.Conn, auth *mapAuth, frame []byte) 
 		Time: uint32(time.Now().UnixMilli()), //nolint:gosec // G115: client uses low 32 bits for RTT only.
 	}.Encode(&buf)
 	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// handleReqEmotion broadcasts CZ_REQ_EMOTION (0x00bf) as ZC_EMOTION (0x00c0,
+// [4:GID][1:type]) to AOI neighbors. The emotion byte is forwarded verbatim —
+// the client owns the icon set — and the actor is excluded because its own
+// client renders the icon locally (same exclude-actor semantics as public
+// chat). No state to persist; this verb is a pure fan-out.
+func (s *MapServer) handleReqEmotion(_ gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		return
+	}
+	req, err := ropacket.ParseCZReqEmotion(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_REQ_EMOTION", "err", err)
+		return
+	}
+	sender, gerr := s.world.Get(worlddomain.EntityID(auth.charID))
+	if gerr != nil {
+		return
+	}
+	var buf bytes.Buffer
+	_ = ropacket.EmotionResponse{ //nolint:errcheck // buffer write cannot fail
+		GID: auth.charID, Type: req.EmotionType,
+	}.Encode(&buf)
+	s.broadcast(buf.Bytes(), sender.Map, sender.Pos, auth.charID)
+}
+
+// handleChangeDir answers CZ_CHANGE_DIR (0x009b): persist the new body/head
+// facing on the world entity, then broadcast ZC_CHANGE_DIR (0x009c,
+// [4:GID][2:headDir][1:dir]) to AOI neighbors. The actor is excluded — its
+// client already turned locally. Facing lives on the cached entity so later
+// spawn/walk frames carry it; rAthena clamps headDir 0..2 upstream and the
+// server forwards verbatim.
+func (s *MapServer) handleChangeDir(_ gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		return
+	}
+	req, err := ropacket.ParseCZChangeDir(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_CHANGE_DIR", "err", err)
+		return
+	}
+	sender, gerr := s.world.Get(worlddomain.EntityID(auth.charID))
+	if gerr != nil {
+		return
+	}
+	if ferr := s.world.SetFacing(auth.charID, req.Dir, req.HeadDir); ferr != nil && !errors.Is(ferr, worlddomain.ErrEntityNotFound) {
+		s.log.Warn("map: persist facing", "gid", auth.charID, "err", ferr)
+	}
+	var buf bytes.Buffer
+	_ = ropacket.ChangeDirResponse{ //nolint:errcheck // buffer write cannot fail
+		SrcID: auth.charID, HeadDir: req.HeadDir, Dir: req.Dir,
+	}.Encode(&buf)
+	s.broadcast(buf.Bytes(), sender.Map, sender.Pos, auth.charID)
 }

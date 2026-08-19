@@ -87,6 +87,8 @@ func mapHandlers() map[uint16]mapHandler {
 		ropacket.HeaderCZGLOBALMESSAGE:      {frameSize: variableFrameSize, fn: (*MapServer).handleGlobalMessage},    // CZ_GLOBAL_MESSAGE 0x008c (variable)
 		ropacket.HeaderCZGETCHARNAMEREQUEST: {size: 6, fn: (*MapServer).handleGetCharNameRequest},                    // CZ_GETCHARNAMEREQUEST 0x0094
 		ropacket.HeaderCZREQUESTTIME:        {size: 6, fn: (*MapServer).handleRequestTime},                           // CZ_REQUEST_TIME 0x007e (clock ping)
+		ropacket.HeaderCZREQEMOTION:         {size: 3, fn: (*MapServer).handleReqEmotion},                            // CZ_REQ_EMOTION 0x00bf (emotion icon)
+		ropacket.HeaderCZCHANGEDIR:          {size: 5, fn: (*MapServer).handleChangeDir},                             // CZ_CHANGE_DIR 0x009b (facing)
 	}
 }
 

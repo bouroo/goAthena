@@ -454,6 +454,23 @@ func (w *WorldService) SetSitting(charID uint32, sitting bool) error {
 	return nil
 }
 
+// SetFacing commits a PC entity's body direction and head facing (CZ_CHANGE_DIR).
+// The broadcast to neighbors reads it off the cached entity, so a client that
+// walks or re-enters AOI afterwards sees the updated facing. Absent entity is a
+// late packet after leave — callers treat it like SetSitting's sentinel.
+func (w *WorldService) SetFacing(charID uint32, dir uint8, head uint16) error {
+	w.mu.Lock()
+	e, ok := w.entities[domain.EntityID(charID)]
+	if !ok {
+		w.mu.Unlock()
+		return domain.ErrEntityNotFound
+	}
+	e.Dir = dir
+	e.Head = head
+	w.mu.Unlock()
+	return nil
+}
+
 // EnterMap loads a character's enter state from the repo and registers it as a
 // PC entity. Returns the populated entity for the map-enter response path.
 func (w *WorldService) EnterMap(ctx context.Context, charID uint32) (domain.Entity, error) {

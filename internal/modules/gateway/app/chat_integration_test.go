@@ -409,3 +409,111 @@ func TestMap_RequestTimePing(t *testing.T) {
 		t.Fatalf("server tick = 0, want nonzero")
 	}
 }
+
+// emotionFrame builds a raw CZ_REQ_EMOTION: [2:cmd=0x00bf][1:type].
+func emotionFrame(t uint8) []byte {
+	buf := make([]byte, 3)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQEMOTION)
+	buf[2] = t
+	return buf
+}
+
+// TestMap_ReqEmotionBroadcastsToNeighbor: the neighbor receives ZC_EMOTION
+// (0x00c0, 7B) naming the emoting player's GID and carrying the icon byte
+// verbatim; the emoter's own conn stays silent (client renders locally).
+func TestMap_ReqEmotionBroadcastsToNeighbor(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	ms, _ := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p1 accept-enter: %v", err)
+	}
+	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p2 accept-enter: %v", err)
+	}
+	drainQuiescent(t, conn1)
+	drainQuiescent(t, conn2)
+
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(emotionFrame(6)); err != nil { // 6 = /heh icon
+		t.Fatalf("send CZ_REQ_EMOTION: %v", err)
+	}
+	em := drainFixed(t, conn2, ropacket.HeaderZCEMOTION, 7)
+	if got := binary.LittleEndian.Uint32(em[2:6]); got != 150001 {
+		t.Fatalf("emotion GID = %d, want emoter charID 150001", got)
+	}
+	if em[6] != 6 {
+		t.Fatalf("emotion type = %d, want 6", em[6])
+	}
+
+	conn1.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if n, err := conn1.Read(make([]byte, 64)); err == nil && n > 0 {
+		t.Fatalf("emoter received own emotion (%d bytes), want silence", n)
+	}
+}
+
+// TestMap_ChangeDirBroadcastsAndPersists: the neighbor receives ZC_CHANGE_DIR
+// (0x009c, 9B) with the new head+body facing; the facing is committed on the
+// world entity (a world.Get read-back sees it); the actor's conn stays silent.
+func TestMap_ChangeDirBroadcastsAndPersists(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	ms, env := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+	_ = env
+
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p1 accept-enter: %v", err)
+	}
+	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p2 accept-enter: %v", err)
+	}
+	drainQuiescent(t, conn1)
+	drainQuiescent(t, conn2)
+
+	var dbuf bytes.Buffer
+	_ = ropacket.CZChangeDirRequest{HeadDir: 1, Dir: 4}.Encode(&dbuf) //nolint:errcheck // buffer write cannot fail
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(dbuf.Bytes()); err != nil {
+		t.Fatalf("send CZ_CHANGE_DIR: %v", err)
+	}
+	cd := drainFixed(t, conn2, ropacket.HeaderZCCHANGEDIR, 9)
+	if got := binary.LittleEndian.Uint32(cd[2:6]); got != 150001 {
+		t.Fatalf("changedir GID = %d, want actor charID 150001", got)
+	}
+	if got := binary.LittleEndian.Uint16(cd[6:8]); got != 1 {
+		t.Fatalf("changedir headDir = %d, want 1", got)
+	}
+	if cd[8] != 4 {
+		t.Fatalf("changedir dir = %d, want 4", cd[8])
+	}
+
+	if e, err := env.world.Get(worlddomain.EntityID(150001)); err == nil {
+		if e.Dir != 4 || e.Head != 1 {
+			t.Fatalf("persisted facing dir=%d head=%d, want 4/1", e.Dir, e.Head)
+		}
+	} else {
+		t.Fatalf("world.Get after changedir: %v", err)
+	}
+
+	conn1.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if n, err := conn1.Read(make([]byte, 64)); err == nil && n > 0 {
+		t.Fatalf("actor received own changedir (%d bytes), want silence", n)
+	}
+}
