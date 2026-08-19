@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bouroo/goAthena/pkg/ro/aoi"
+
 	"github.com/panjf2000/gnet/v2"
 
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
@@ -136,6 +138,14 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 	if mobAI != nil {
 		mobAI.OnMobAttack = s.notifyMobAttack
 		mobAI.OnMobMove = s.notifyMobMove
+	}
+	// A (re)spawned mob enters the world off any client request (initial seed,
+	// respawn timer); this sink broadcasts the appear frame to the mob's AOI
+	// neighbors so a respawn does not stay invisible until the mob first acts.
+	// Players already nearby when the initial seed placed the mob learned about
+	// it through their enter back-fill, so the broadcast is idempotent for them.
+	if spawn != nil {
+		spawn.OnMobSpawn = s.notifyMobSpawn
 	}
 	return s, nil
 }
@@ -299,6 +309,23 @@ func (s *MapServer) notifyMobMove(mobID worlddomain.EntityID, from, to worlddoma
 	// Anchor at the destination cell (where the mob lands), matching the player-
 	// move observer broadcast; exclude 0 because a mob has no conn of its own.
 	s.broadcast(out, e.Map, to, 0)
+}
+
+// notifyMobSpawn is the SpawnService.OnMobSpawn sink: after a mob (re)enters
+// the world, broadcast its ZC_SPAWN_UNIT (ObjectType=MOB) to AOI neighbors at
+// the spawn cell so bystanders see it appear. The mob has no conn of its own,
+// so exclude is 0 and every nearby player is told. A mob that was removed again
+// between the AddEntity and this notify is a no-op.
+func (s *MapServer) notifyMobSpawn(mobID worlddomain.EntityID) {
+	e, err := s.world.Get(mobID)
+	if err != nil {
+		return // removed again between spawn and notify: nothing to show
+	}
+	resp := spawnUnitAny(e, objectTypeMob)
+	resp.AID = uint32(mobID) //nolint:gosec // G115: EntityID wraps a uint32 GID.
+	if sbuf, ok := encodeSpawnUnit(s, resp); ok {
+		s.broadcast(sbuf, e.Map, e.Pos, 0)
+	}
 }
 
 // handlePlayerDeath performs the bounded PC death model: broadcast ZC_NOTIFY_VANISH
@@ -509,6 +536,11 @@ func (s *MapServer) unhandledSkip(c gnet.Conn, opcode uint16) (skip int, buffere
 	return n, true
 }
 
+// aoiSweepRadius bounds the enter floor-item sweep to the same viewport the
+// AOI grid broadcasts into, so a player entering a map is told only about loot
+// it could actually see.
+const aoiSweepRadius = aoi.DefaultBroadcastRadius - 1
+
 // handleEnter verifies the CZ_ENTER, admits the player into the world, and sends
 // the map-enter + self-spawn reply.
 func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
@@ -580,7 +612,40 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 			_ = c.AsyncWrite(nbuf, nil)
 		}
 	}
+	// Floor items already on the ground inside the newcomer's AOI are sent as
+	// ZC_ITEM_ENTRY (0x009d, clif_getareachar_item): the item becomes visible
+	// AND pickable — a client that only saw a drop's 0x0ADD landing frame (sent
+	// to whoever was near at drop time) cannot pick one it never learned about.
+	// Fresh drops are excluded by proximity: only items within the AOI range of
+	// the enter cell are swept.
+	s.sweepFloorItems(c, entity)
 	s.log.Info("map entered", "aid", req.AccountID, "gid", req.CharID, "map", entity.Map)
+}
+
+// sweepFloorItems sends ZC_ITEM_ENTRY (0x009d, clif_getareachar_item) for every
+// floor item already on the ground within the AOI radius of the entering
+// player's cell. The enter back-fill covers entities; this covers loot — without
+// it a newcomer cannot see or pick up items dropped before it arrived.
+func (s *MapServer) sweepFloorItems(c gnet.Conn, entity worlddomain.Entity) {
+	for _, fi := range s.spawn.FloorItems(entity.Map) {
+		if abs(int(fi.PosX)-int(entity.Pos.X)) > aoiSweepRadius || abs(int(fi.PosY)-int(entity.Pos.Y)) > aoiSweepRadius {
+			continue
+		}
+		entry := ropacket.ItemEntryResponse{
+			AID:        fi.GroundID,
+			NameID:     fi.NameID,
+			Identified: 1,
+			X:          uint16(fi.PosX),   //nolint:gosec // G115: map coords are non-negative int16.
+			Y:          uint16(fi.PosY),   //nolint:gosec // G115: map coords are non-negative int16.
+			Amount:     uint16(fi.Amount), //nolint:gosec // G115: amount bounded to small stack values.
+		}
+		ebuf := make([]byte, entry.Size())
+		if err := entry.Encode(sliceWriter(ebuf)); err != nil {
+			s.log.Error("map: encode item-entry", "err", err)
+			continue
+		}
+		_ = c.AsyncWrite(ebuf, nil)
+	}
 }
 
 // BindShop associates a seeded shop NPC's GID with a shop catalog name so

@@ -746,6 +746,17 @@ func (s *MapServer) handleItemPickup(c gnet.Conn, auth *mapAuth, frame []byte) {
 		return
 	}
 	_ = c.AsyncWrite(out, nil)
+	// Other nearby players must stop seeing the item on the ground
+	// (ZC_ITEM_DISAPPEAR at the item's cell; the picker's own copy left with
+	// the ack above). Without it neighbors keep a ghost loot sprite and any
+	// click on it dead-ends at "not found".
+	dis := ropacket.ItemDisappearResponse{AID: fi.GroundID}
+	dbuf := make([]byte, dis.Size())
+	if err := dis.Encode(sliceWriter(dbuf)); err != nil {
+		s.log.Error("map: encode item-disappear", "err", err)
+		return
+	}
+	s.broadcast(dbuf, fi.Map, worlddomain.Position{X: fi.PosX, Y: fi.PosY}, auth.charID)
 }
 
 // handleItemDrop handles CZ_ITEM_DROP (0x0363, 6B): resolve the inventory slot

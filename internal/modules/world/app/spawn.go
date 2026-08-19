@@ -31,6 +31,11 @@ type SpawnService struct {
 	spawnMu sync.Mutex
 	spawns  map[domain.EntityID]spawnPoint
 
+	// OnMobSpawn, when set, is invoked after a mob (re)enters the world — the
+	// initial SpawnMob placement and every respawn-timer AddEntity — so the
+	// gateway can broadcast the appear frame to the mob's AOI neighbors.
+	OnMobSpawn func(mobID domain.EntityID)
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -81,7 +86,7 @@ func (s *SpawnService) SpawnMob(mobID domain.EntityID, mobClass int32, mapName s
 		}
 		s.spawnMu.Unlock()
 	}
-	return s.world.AddEntity(domain.Entity{
+	if err := s.world.AddEntity(domain.Entity{
 		ID:    mobID,
 		Type:  domain.EntityTypeMob,
 		Class: mobClass,
@@ -90,7 +95,13 @@ func (s *SpawnService) SpawnMob(mobID domain.EntityID, mobClass int32, mapName s
 		Name:  name,
 		HP:    hp,
 		MaxHP: maxHp,
-	})
+	}); err != nil {
+		return err
+	}
+	if s.OnMobSpawn != nil {
+		s.OnMobSpawn(mobID)
+	}
+	return nil
 }
 
 // OnMobDeath generates floor-item drops from the mob's drop table, despawns the
@@ -188,6 +199,9 @@ func (s *SpawnService) scheduleRespawn(mobID domain.EntityID) {
 				ID: mobID, Type: domain.EntityTypeMob, Class: sp.class, Map: sp.mapName,
 				Pos: sp.pos, Name: sp.name, HP: sp.hp, MaxHP: sp.maxHp,
 			})
+			if s.OnMobSpawn != nil {
+				s.OnMobSpawn(mobID)
+			}
 		}
 	}()
 }

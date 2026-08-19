@@ -421,6 +421,7 @@ func TestMap_CastLearnedAndUnlearnedSkill(t *testing.T) {
 	if err := spawn.SpawnMob(160010, 1002, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "Poring", 50, 50, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	// Cast the LEARNED skill (id=5, level=1).
 	req := make([]byte, 10)
@@ -765,6 +766,7 @@ func TestMap_MobAttacksPlayer(t *testing.T) {
 	if err := env.spawn.SpawnMob(mobGID, 8001, "new_1-1", worlddomain.Position{X: 54, Y: 111}, "AggroMob", 1000, 1000, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	// One cadence interval (2 s) elapsed ⇒ exactly one swing. Driving MonsterTick
 	// directly keeps this deterministic.
@@ -857,6 +859,7 @@ func TestMap_MobChasesPlayer(t *testing.T) {
 		worlddomain.Position{X: mobStartX, Y: 111}, "AggroMob", 1000, 1000, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	// Drive one WalkSpeed of tick time per step: each call banks exactly one
 	// chase step (moveDue resets on a full cell), and the step's ZC_UNIT_WALKING
@@ -983,6 +986,7 @@ func TestMap_MobKillsPlayerRespawns(t *testing.T) {
 	if err := env.spawn.SpawnMob(mobGID, 8001, "new_1-1", worlddomain.Position{X: 54, Y: 111}, "AggroMob", 1000, 1000, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	// One cadence interval (2 s) ⇒ one lethal swing: HP 1 → 0, died=true.
 	env.mobAI.MonsterTick(t.Context(), 2*time.Second)
@@ -1242,6 +1246,7 @@ func TestMap_Dispatch_AttackMob(t *testing.T) {
 	if err := spawn.SpawnMob(mobGID, 1002, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "Poring", 50, 50, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	// CZ_ACTION_REQUEST action=0x07 (attack) targeting the mob.
 	req := make([]byte, 7)
@@ -1308,6 +1313,7 @@ func TestMap_KillMobGrantsEXP(t *testing.T) {
 	if err := env.spawn.SpawnMob(mobGID, mobClas, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "ExpMob", 1, 1, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	// CZ_ACTION_REQUEST action=0x07 (attack) targeting the mob.
 	req := make([]byte, 7)
@@ -1418,6 +1424,7 @@ func TestMap_Dispatch_CastAttackSkill(t *testing.T) {
 	if err := spawn.SpawnMob(mobGID, 1002, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "Poring", 50, 50, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	// CZ_USE_SKILL2 (0x0438, 10B): cmd + int16 skillLv + uint16 skillID + uint32 targetID.
 	const skillID = 5
@@ -1514,6 +1521,7 @@ func TestMap_Dispatch_EquipIncreasesDamage(t *testing.T) {
 		worlddomain.Position{X: 53, Y: 111}, "Poring", 200, 200, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	// 1. Bare-handed hit.
 	bareDmg := castSkillHit(t, conn, mobGID)
@@ -2172,6 +2180,15 @@ func sendRaw(t *testing.T, c net.Conn, frame []byte) {
 	}
 }
 
+// drainMobAppearFrame consumes the ZC_SPAWN_UNIT that SpawnMob's OnMobSpawn
+// hook broadcasts to in-range players. Every test that spawns a mob after the
+// player entered must drain it before reading later frames, or the stream
+// desyncs (the appear frame precedes attack/AI frames).
+func drainMobAppearFrame(t *testing.T, c net.Conn) {
+	t.Helper()
+	readTradeFrame(t, c, ropacket.HeaderZCSPAWNUNIT, 107)
+}
+
 // packMoveDest encodes (x, y) into the kRO 3-byte packed position carried by
 // CZ_REQUEST_MOVE (mirrors pkg/ro/packet.encodePos). Raw coordinate bytes decode
 // to a different cell, so the move frame must use this packing to land on an
@@ -2463,6 +2480,7 @@ func TestMap_KillMobLevelsUp(t *testing.T) {
 	if err := env.spawn.SpawnMob(mobGID, mobClas, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "LvlMob", 1, 1, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	req := make([]byte, 7)
 	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
@@ -2597,5 +2615,156 @@ func TestMap_StatusChangeAllocates(t *testing.T) {
 	}
 	if pc.Str != 6 || pc.StatusPoint != 46 {
 		t.Errorf("pc str/points = %d/%d, want 6/46", pc.Str, pc.StatusPoint)
+	}
+}
+
+// TestMap_NeighborSeesPickup proves the Phase-34 pickup broadcast: when B picks
+// up a floor item, B's conn gets ZC_ITEM_PICKUP_ACK and A's conn ALSO gets
+// ZC_ITEM_DISAPPEAR (0x00a1) carrying the item's GroundID — without it, A keeps
+// a ghost loot sprite at the tile and any click on it dead-ends.
+func TestMap_NeighborSeesPickup(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	ms, env := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+
+	if _, err := env.itemRepo.Add(t.Context(), 150002, 501, 1); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+
+	// Both enter; drain accept-enter + the mutual back-fill spawns.
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p1 accept-enter: %v", err)
+	}
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
+		t.Fatalf("drain p2 accept-enter: %v", err)
+	}
+	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107)
+	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT, 107)
+
+	// B drops (1 Red Potion) so a floor item exists at B's cell.
+	dropReq := make([]byte, 6)
+	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
+	binary.LittleEndian.PutUint16(dropReq[2:], 1)
+	binary.LittleEndian.PutUint16(dropReq[4:], 1)
+	sendRaw(t, conn2, dropReq)
+	// B gets the throw-ack + fall-entry burst; A gets the fall-entry broadcast.
+	readTradeFrame(t, conn2, ropacket.HeaderZCItemThrowAck, 6)
+	fallA := readTradeFrame(t, conn1, ropacket.HeaderZCItemFallEntry, 24)
+	_ = readTradeFrame(t, conn2, ropacket.HeaderZCItemFallEntry, 24)
+	groundID := binary.LittleEndian.Uint32(fallA[2:6])
+
+	// B picks it up.
+	pick := make([]byte, 6)
+	binary.LittleEndian.PutUint16(pick[0:], ropacket.HeaderCZITEMTAKE0362)
+	binary.LittleEndian.PutUint32(pick[2:], groundID)
+	sendRaw(t, conn2, pick)
+	// B's own ack.
+	readTradeFrame(t, conn2, ropacket.HeaderZCItemPickupAck, 70)
+	// A sees the item leave the ground.
+	dis := readTradeFrame(t, conn1, ropacket.HeaderZCItemDisappear, 6)
+	if got := binary.LittleEndian.Uint32(dis[2:6]); got != groundID {
+		t.Fatalf("disappear AID = %d, want %d", got, groundID)
+	}
+}
+
+// TestMap_EnterShowsExistingFloorItems proves the enter sweep: a player who
+// enters a map where a floor item is already on the ground receives
+// ZC_ITEM_ENTRY (0x009d) for it, so the item is visible AND pickable without
+// ever having observed the drop's 0x0ADD landing frame.
+func TestMap_EnterShowsExistingFloorItems(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, Sex: 1})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	fi := env.spawn.DropItem(501, 3, "new_1-1", worlddomain.Position{X: 53, Y: 111}, 150001)
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+	entry := make([]byte, 19)
+	if _, err := io.ReadFull(conn, entry); err != nil {
+		t.Fatalf("read ZC_ITEM_ENTRY: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(entry[0:2]); got != ropacket.HeaderZCItemEntry {
+		t.Fatalf("entry header = 0x%04x, want 0x009d", got)
+	}
+	if got := binary.LittleEndian.Uint32(entry[2:6]); got != fi.GroundID {
+		t.Fatalf("entry AID = %d, want %d", got, fi.GroundID)
+	}
+	if got := binary.LittleEndian.Uint32(entry[6:10]); got != 501 {
+		t.Fatalf("entry nameID = %d, want Red Potion 501", got)
+	}
+
+	// And the swept item is actually pickable through the normal verb.
+	pick := make([]byte, 6)
+	binary.LittleEndian.PutUint16(pick[0:], ropacket.HeaderCZITEMTAKE0362)
+	binary.LittleEndian.PutUint32(pick[2:], fi.GroundID)
+	sendRaw(t, conn, pick)
+	readTradeFrame(t, conn, ropacket.HeaderZCItemPickupAck, 70)
+}
+
+// TestMap_MobRespawnVisible proves the mob-respawn appear broadcast: after a
+// mob with a respawn delay dies (despawns), a nearby player's conn receives the
+// mob's ZC_SPAWN_UNIT (ObjectType=5) when the timer revives it — the respawn is
+// visible without any action from the mob. Frame sequence after the killing
+// attack mirrors TestMap_KillMobGrantsEXP: ZC_ACTION_RESPONSE (11B), then
+// ZC_NOTIFY_VANISH (7B); mob 8002 carries EXP so the level-up burst also
+// arrives — drain it before waiting on the respawn frame.
+func TestMap_MobRespawnVisible(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// 1-HP mob with a 300ms respawn; the killing blow arms the timer.
+	if err := env.spawn.SpawnMob(160050, 8002, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "RespMob", 1, 1, 300*time.Millisecond); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+	drainMobAppearFrame(t, conn)
+
+	// Killing attack.
+	req := make([]byte, 7)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint32(req[2:], 160050)
+	req[6] = 0x07
+	sendRaw(t, conn, req)
+
+	readTradeFrame(t, conn, ropacket.HeaderZCACTIONRESPONSE, 11)
+	readTradeFrame(t, conn, ropacket.HeaderZCNOTIFYVANISH, 7)
+	// Level-up burst (6x8B) + 2 EXP frames (12B each), as in the EXP test.
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	leftover := make([]byte, 6*8+2*12)
+	if _, err := io.ReadFull(conn, leftover); err != nil {
+		t.Fatalf("drain level-up/EXP burst: %v", err)
+	}
+
+	// The respawn timer fires within 300ms; the revived mob's ZC_SPAWN_UNIT
+	// (107B) arrives without any mob action or client request.
+	respawn := readTradeFrame(t, conn, ropacket.HeaderZCSPAWNUNIT, 107)
+	if got := binary.LittleEndian.Uint32(respawn[9:13]); got != 160050 {
+		t.Fatalf("respawn spawn-unit GID = %d, want mob GID 160050", got)
 	}
 }
