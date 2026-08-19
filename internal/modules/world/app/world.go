@@ -663,6 +663,42 @@ func (w *WorldService) WarpPlayer(charID uint32, mapName string, x, y int16) err
 	return nil
 }
 
+// RelocatePlayer moves a live PC to a new map+cell in one step: entity map+pos,
+// AOI grid (off the old map's grid, onto the destination map's grid), and the
+// persisted position. It is the portal path's world capability — unlike
+// WarpPlayer (persist-only, for the script builtin whose client reconnects),
+// the live entity is reseated immediately so destination-map neighbors and the
+// re-enter back-fill resolve the player at the arrival cell.
+func (w *WorldService) RelocatePlayer(charID uint32, mapName string, x, y int16) error {
+	id := domain.EntityID(charID) //nolint:gosec // G115: charID is a char_id (uint32).
+	pos := domain.Position{X: x, Y: y}
+	w.mu.Lock()
+	e, ok := w.entities[id]
+	if !ok {
+		w.mu.Unlock()
+		return domain.ErrEntityNotFound
+	}
+	oldMap := e.Map
+	e.Map = mapName
+	e.Pos = pos
+	destGrid := w.grids[mapName]
+	oldGrid := w.grids[oldMap]
+	w.mu.Unlock()
+
+	if oldGrid != nil {
+		_ = oldGrid.RemoveEntity(aoi.EntityID(id))
+	}
+	if destGrid != nil {
+		_ = destGrid.AddEntity(&aoi.Entity{
+			ID: aoi.EntityID(id), X: int(x), Y: int(y),
+		})
+	}
+	if err := w.repo.SetPosition(context.Background(), charID, mapName, pos); err != nil {
+		return fmt.Errorf("relocate player: %w", err)
+	}
+	return nil
+}
+
 // RespawnPlayer moves a dead PC to its save point and revives its vitals, so a
 // mob-killed player reappears at its save point instead of sitting dead forever.
 // It is the bounded goAthena death model: no ghost/tomb/respawn-button — a killed

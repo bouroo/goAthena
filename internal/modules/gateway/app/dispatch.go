@@ -14,6 +14,7 @@ import (
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/script"
 )
 
 // mapHandler is one entry in the map-server dispatch table and the function that
@@ -599,6 +600,43 @@ func (s *MapServer) handleRequestMove(c gnet.Conn, auth *mapAuth, frame []byte) 
 	if wbuf, ok := encodeUnitWalk(s, unitWalkFromEntity(src, req.DestX, req.DestY)); ok {
 		s.broadcast(wbuf, src.Map, worlddomain.Position{X: req.DestX, Y: req.DestY}, auth.charID)
 	}
+
+	// Warp portal: landing on a corpus warp trigger tile teleports the player
+	// (rAthena's invisible tile portals). The move above already seated the
+	// player at the trigger cell; the portal relocation re-seats it at the
+	// destination, persists the position, and hands the client a
+	// ZC_NPCACK_MAPMOVE so it re-enters at the destination.
+	if def, ok := s.spawn.PortalAt(src.Map, int(req.DestX), int(req.DestY)); ok {
+		s.relocateThroughPortal(c, auth.charID, def)
+	}
+}
+
+// relocateThroughPortal moves a player through a warp portal: destination
+// persists via WarpPlayer, the source-map neighbors see the player vanish, and
+// the client receives ZC_NPCACK_MAPMOVE to relocate. The destination-side
+// appear/back-fill happens when the client re-enters through handleEnter
+// (same contract as the script `warp` builtin).
+func (s *MapServer) relocateThroughPortal(c gnet.Conn, charID uint32, def script.WarpDef) {
+	e, err := s.world.Get(worlddomain.EntityID(charID)) //nolint:gosec // G115: charID is a char_id (uint32).
+	if err != nil {
+		return // left between move and portal check
+	}
+	fromMap, fromPos := e.Map, e.Pos
+	if err := s.world.RelocatePlayer(charID, def.DestMap, int16(def.DestX), int16(def.DestY)); err != nil { //nolint:gosec // G115: portal coords are map-tile bounds.
+		s.log.Warn("map: portal warp", "charID", charID, "dest", def.DestMap, "err", err)
+		return
+	}
+	// Source-map farewell: neighbors stop seeing the player at the trigger cell.
+	vanish := ropacket.NotifyVanishResponse{GID: charID, Type: ropacket.VanishDead}
+	vbuf := make([]byte, vanish.Size())
+	if err := vanish.Encode(sliceWriter(vbuf)); err != nil {
+		s.log.Error("map: encode portal vanish", "err", err)
+	} else {
+		s.broadcast(vbuf, fromMap, fromPos, charID)
+	}
+	var buf bytes.Buffer
+	_ = ropacket.MapMoveResponse{MapName: def.DestMap, X: uint16(def.DestX), Y: uint16(def.DestY)}.Encode(&buf) //nolint:errcheck,gosec // G115: portal coords fit; encode cannot fail on a bytes.Buffer.
+	_ = c.AsyncWrite(buf.Bytes(), nil)
 }
 
 // objectTypePC is the ZC_SPAWN_UNIT / ZC_UNIT_WALKING object-type byte for a

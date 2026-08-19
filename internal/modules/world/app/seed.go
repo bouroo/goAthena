@@ -110,6 +110,7 @@ func (s *WorldSeeder) Seed(set *script.CompiledScriptSet,
 		}
 		npcs++
 	}
+	s.spawn.RegisterPortals(set.Warps)
 	return npcs, s.SeedMobs(set.Spawns)
 }
 

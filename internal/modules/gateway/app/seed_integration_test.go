@@ -4,6 +4,7 @@ package app_test
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"io"
 	"log/slog"
@@ -194,5 +195,65 @@ func TestMap_SeededShopClickOpensDealType(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint32(body[0:4]); got != shopGID {
 		t.Fatalf("dealtype NpcID = %d, want %d", got, shopGID)
+	}
+}
+
+// TestMap_WarpPortalTeleports proves the Phase-35 portal path: a corpus warp
+// portal registered by the seeder, a player walking onto the trigger tile is
+// relocated — the client receives ZC_NPCACK_MAPMOVE naming the destination
+// map+cell, and the live world entity sits at the destination.
+func TestMap_WarpPortalTeleports(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	// A portal on the tile east of the player's spawn (53,111): trigger (54,111)
+	// → destination (1,1) on "prontera".
+	env.spawn.RegisterPortals([]script.WarpDef{{
+		MapName: "new_1-1", X: 54, Y: 111, TriggerX: 54, TriggerY: 111,
+		DestMap: "prontera", DestX: 1, DestY: 1,
+	}})
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
+		t.Fatalf("drain accept-enter: %v", err)
+	}
+
+	// Walk one cell east onto the trigger tile.
+	moveReq := make([]byte, 5)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	dest := packMoveDest(54, 111)
+	copy(moveReq[2:], dest[:])
+	sendRaw(t, conn, moveReq)
+
+	// Self move-ack (12B ZC_NOTIFY_PLAYERMOVE) then the portal's
+	// ZC_NPCACK_MAPMOVE (22B) carrying the destination map+cell.
+	readTradeFrame(t, conn, ropacket.HeaderZCNOTIFYPLAYERMOVE, 12)
+	move := readTradeFrame(t, conn, ropacket.HeaderZCNPCACKMAPMOVE, 22)
+	gotMap := string(bytes.TrimRight(move[2:18], "\x00"))
+	if gotMap != "prontera" {
+		t.Fatalf("portal dest map = %q, want prontera", gotMap)
+	}
+	if got := binary.LittleEndian.Uint16(move[18:20]); got != 1 {
+		t.Fatalf("portal dest X = %d, want 1", got)
+	}
+	if got := binary.LittleEndian.Uint16(move[20:22]); got != 1 {
+		t.Fatalf("portal dest Y = %d, want 1", got)
+	}
+
+	// The live entity relocated immediately (the client's re-enter will
+	// back-fill from here).
+	e, err := env.world.Get(150001)
+	if err != nil {
+		t.Fatalf("get player: %v", err)
+	}
+	if e.Map != "prontera" || e.Pos.X != 1 || e.Pos.Y != 1 {
+		t.Fatalf("player at %s(%d,%d), want prontera(1,1)", e.Map, e.Pos.X, e.Pos.Y)
 	}
 }
