@@ -4,7 +4,7 @@
 # container once migrations land (persistence phase).
 
 # ---- builder ----
-FROM golang:1.26 AS build
+FROM golang:1.27 AS build
 WORKDIR /src
 # Cache deps first.
 COPY go.mod go.sum ./
