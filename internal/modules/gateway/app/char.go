@@ -141,7 +141,8 @@ func (s *CharServer) OnBoot(e gnet.Engine) gnet.Action {
 // packet DB supplies its on-wire length (or, for an opcode unknown to the DB
 // too, the 2-byte header) so the frame is skipped and the connection stays
 // alive — a client sending a not-yet-wired verb must not be booted.
-func (s *CharServer) OnTraffic(c gnet.Conn) gnet.Action {
+func (s *CharServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
+	defer closeOnPanicAction(s.log, "char.OnTraffic", &action)
 	for {
 		if c.InboundBuffered() < 2 {
 			return gnet.None // need at least the 2-byte opcode header
@@ -160,7 +161,10 @@ func (s *CharServer) OnTraffic(c gnet.Conn) gnet.Action {
 				return gnet.None
 			}
 			cp := append([]byte(nil), frame...) // detach from gnet's ring buffer
-			go h.fn(s, c, cp)
+			go func() {
+				defer closeOnPanic(s.log, "char.dispatch", c)
+				h.fn(s, c, cp)
+			}()
 			continue
 		}
 		// Unwired opcode: skip the frame using the DB's length so the client

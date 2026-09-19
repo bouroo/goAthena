@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/internal/shared/safe"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/script"
@@ -195,6 +196,9 @@ func (s *SpawnService) scheduleRespawn(mobID domain.EntityID) {
 		return
 	}
 	go func() {
+		// A panicking respawn timer must not take the process down: the mob stays
+		// dead and the next death re-arms a timer.
+		defer safe.Guard(s.world.log, "world.mobRespawn")
 		t := time.NewTimer(sp.delay)
 		defer t.Stop()
 		select {

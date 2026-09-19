@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
+	"github.com/bouroo/goAthena/internal/shared/safe"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
@@ -64,7 +65,10 @@ func (e *Engine) StartDialog(accountID, charID, npcGID uint32, writer domain.Pac
 	sess := &domain.DialogSession{NpcID: npcGID, CharID: charID, Writer: writer, Signal: make(chan domain.DialogSignal, 1)}
 	e.put(accountID, sess)
 	host := &ScriptHost{session: sess, world: e.world, log: e.log}
-	go e.runScript(accountID, cs, host)
+	// The VM runs scripts reached from the client (NPC clicks, dialog input), so
+	// a panic inside it must cost this one player's dialog — runScript's own
+	// defer still unregisters the session — rather than the process.
+	safe.Go(e.log, "content.runScript", func() { e.runScript(accountID, cs, host) })
 }
 
 // runScript runs the VM and always unregisters the session on completion.

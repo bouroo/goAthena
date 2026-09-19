@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/bouroo/goAthena/internal/config"
+	"github.com/bouroo/goAthena/internal/shared/safe"
 )
 
 // App is the assembled modular monolith.
@@ -77,6 +78,10 @@ func (a *App) Run(ctx context.Context) error {
 		tick := a.deps.tick
 		mobAI := a.deps.mobAI
 		go tick.StartTick(ctx, func(ctx context.Context, dt time.Duration) { //nolint:contextcheck // lifecycle tied to ctx via select
+			// One panicking tick must not end the world loop (and with it every
+			// player's session): recover inside the callback, so the loop's next
+			// tick still runs.
+			defer safe.Guard(a.log, "world.tick")
 			tick.RegenTick(dt)
 			if mobAI != nil {
 				mobAI.MonsterTick(ctx, dt)

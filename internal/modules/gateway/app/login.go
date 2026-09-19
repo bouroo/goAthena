@@ -68,7 +68,8 @@ func (s *LoginServer) OnBoot(e gnet.Engine) gnet.Action {
 // copied (gnet's Next buffer is invalid off the event loop) and dispatched to a
 // goroutine so the blocking DB auth never stalls the reactor. The response is
 // written back via the concurrency-safe AsyncWrite.
-func (s *LoginServer) OnTraffic(c gnet.Conn) gnet.Action {
+func (s *LoginServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
+	defer closeOnPanicAction(s.log, "login.OnTraffic", &action)
 	for c.InboundBuffered() >= loginFrameSize {
 		frame, err := c.Next(loginFrameSize)
 		if err != nil {
@@ -76,7 +77,10 @@ func (s *LoginServer) OnTraffic(c gnet.Conn) gnet.Action {
 		}
 		cp := append([]byte(nil), frame...) // detach from gnet's ring buffer
 		ip := remoteIP(c.RemoteAddr())
-		go s.handleLogin(c, cp, ip)
+		go func() {
+			defer closeOnPanic(s.log, "login.handleLogin", c)
+			s.handleLogin(c, cp, ip)
+		}()
 	}
 	return gnet.None
 }

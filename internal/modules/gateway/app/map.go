@@ -400,7 +400,11 @@ func (s *MapServer) unregisterConn(charID uint32) {
 // the closing connection's own eventloop goroutine, so reading its cached
 // mapAuth context is race-free here (unlike handler goroutines, which must not
 // touch c.Context()).
-func (s *MapServer) OnClose(c gnet.Conn, _ error) gnet.Action {
+func (s *MapServer) OnClose(c gnet.Conn, _ error) (action gnet.Action) {
+	// OnClose runs on the event loop and persists vitals + prunes registries; a
+	// panic here would unwind the reactor, so it is recovered into a teardown of
+	// the connection that is closing anyway.
+	defer closeOnPanicAction(s.log, "map.OnClose", &action)
 	a, ok := c.Context().(mapAuth)
 	if !ok {
 		return gnet.None
@@ -474,7 +478,8 @@ func (s *MapServer) OnBoot(e gnet.Engine) gnet.Action {
 // too, the 2-byte header) so the frame is skipped and the connection stays
 // alive — a client sending a not-yet-wired playable action (drop/trade/skill)
 // must not be booted.
-func (s *MapServer) OnTraffic(c gnet.Conn) gnet.Action {
+func (s *MapServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
+	defer closeOnPanicAction(s.log, "map.OnTraffic", &action)
 	for {
 		if c.InboundBuffered() < 2 {
 			return gnet.None // need at least the 2-byte opcode header
@@ -498,7 +503,10 @@ func (s *MapServer) OnTraffic(c gnet.Conn) gnet.Action {
 			// conn's context — and pass it in. Handlers must not read c.Context()
 			// off-loop, where gnet's conn.release() races it on close.
 			auth := authFromConn(c)
-			go h.fn(s, c, auth, cp)
+			go func() {
+				defer closeOnPanic(s.log, "map.dispatch", c)
+				h.fn(s, c, auth, cp)
+			}()
 			continue
 		}
 		// Unwired opcode: skip the frame using the DB's length so the client

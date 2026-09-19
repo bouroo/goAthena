@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/internal/shared/safe"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
@@ -656,6 +657,9 @@ func (w *WorldService) Checkpoint(ctx context.Context) {
 // no-op fast, leaving the final flush to SaveAll.
 func (w *WorldService) StartCheckpoint(ctx context.Context, interval time.Duration) {
 	go func() {
+		// A panic mid-checkpoint must not end the durability loop for the rest of
+		// the process's life; the next interval still runs.
+		defer safe.Guard(w.log, "world.checkpoint")
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		w.log.Info("world checkpoint loop started", "interval", interval)
@@ -844,6 +848,7 @@ func (w *WorldService) ArmRespawn(charID uint32, delay time.Duration) {
 	w.mu.Unlock()
 
 	go func() {
+		defer safe.Guard(w.log, "world.respawn")
 		t := time.NewTimer(delay)
 		defer t.Stop()
 		defer cancel()
