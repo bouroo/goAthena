@@ -235,8 +235,10 @@ then storage service + storage table + migration. Both have L1+L2 tests.
 
 **Remaining (the bulk):** full rAthena `script.cpp` coverage. The 29k LOC C++
 script VM carries roughly 600 builtins in the production engine. Currently
-implemented (12): `mes`, `next`, `close`, `close2`, `end`, `set`, `warp`,
-`percentheal`, `select`, `prompt`, `menu`, `input`.
+implemented (17): `mes`, `next`, `close`, `close2`, `end`, `set`, `warp`,
+`percentheal`, `select`, `prompt`, `menu`, `input`, `getitem`, `getitem2`,
+`delitem`, `countitem`, `equip`, `unequip`. Item-script Rung A landed in
+commit `556a8ee`.
 
 **Scope ladder** (each rung is a commit; we ship as far as time + L2 permits):
 
@@ -384,3 +386,6 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | Date | Author | Commit | Note |
 |---|---|---|---|
 | 2026-09-20 | goAthena agent | `00af9aa` | WIP: panic-recovery hardening (safe pkg + gateway reactor guards) — committed + L1+L2 green |
+| 2026-09-20 | goAthena agent | `d25d14c` | docs: add handoff ledger |
+| 2026-09-20 | goAthena agent | `8c87e57` | M8: zeny ledger (transaction log + audit + reason-tagged movement) |
+| 2026-09-20 | goAthena agent | `556a8ee` | M10 Rung A: item-script builtins (getitem/delitem/countitem/equip/unequip) + world-side adapter |
