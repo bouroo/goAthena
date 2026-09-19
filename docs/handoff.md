@@ -215,6 +215,9 @@ real ledger needs:~~ **done** in commit `8c87e57`:
 
 **Plan:** design vending port + vending service + vending gateway wiring;
 then storage service + storage table + migration. Both have L1+L2 tests.
+**Deferred to next session** — the storage slice is pattern-equivalent to
+inventory and the vending slice is a separate bounded context; together
+they are a full multi-commit effort that did not fit in this turn.
 
 ---
 
@@ -239,6 +242,9 @@ implemented (17): `mes`, `next`, `close`, `close2`, `end`, `set`, `warp`,
 `percentheal`, `select`, `prompt`, `menu`, `input`, `getitem`, `getitem2`,
 `delitem`, `countitem`, `equip`, `unequip`. Item-script Rung A landed in
 commit `556a8ee`.
+
+Rungs B–E (quest engine, monster/event scripts, buffs/sc_start, operator
+primitives) are deferred — each is its own commit-sized effort.
 
 **Scope ladder** (each rung is a commit; we ship as far as time + L2 permits):
 
@@ -389,3 +395,4 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-20 | goAthena agent | `d25d14c` | docs: add handoff ledger |
 | 2026-09-20 | goAthena agent | `8c87e57` | M8: zeny ledger (transaction log + audit + reason-tagged movement) |
 | 2026-09-20 | goAthena agent | `556a8ee` | M10 Rung A: item-script builtins (getitem/delitem/countitem/equip/unequip) + world-side adapter |
+| 2026-09-20 | goAthena agent | `0e8a104` | M14: security audit pass — login rate limiter + cmd/loadgen + audit doc |
