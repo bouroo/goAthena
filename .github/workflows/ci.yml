@@ -38,9 +38,22 @@ permissions:
 
 # Pinned version constants. Every job references these so a bump happens in one
 # place. They are also overridable via workflow_dispatch inputs (coalesced).
+#
+# GO_VERSION tracks upstream `stable` deliberately: the project builds on the
+# current Go release (go.mod and the Containerfile's golang image follow it).
+#
+# The consequence is that GOLANGCI_LINT_VERSION must be kept in step with it.
+# golangci-lint embeds its own Go type-checker, so it can only read a stdlib no
+# newer than the Go it was built against. A stale linter against a newer
+# toolchain dies *inside the standard library* with `could not import
+# math/rand/v2 (... method must have no type parameters) (typecheck)` — a
+# failure naming no project file, so it reads as noise. This broke CI on
+# 2026-09-19 when `stable` moved to Go 1.27.1 while lint stayed on v2.12.2
+# (built with Go 1.26). When Go stable moves, bump this too, and confirm with a
+# local `golangci-lint run` on the same toolchain.
 env:
   GO_VERSION: ${{ inputs.go-version || 'stable' }}
-  GOLANGCI_LINT_VERSION: ${{ inputs.golangci-lint-version || 'v2.12.2' }}
+  GOLANGCI_LINT_VERSION: ${{ inputs.golangci-lint-version || 'v2.13.2' }}
   MARIADB_VERSION: ${{ inputs.mariadb-version || '11.8' }}
   POSTGRES_VERSION: ${{ inputs.postgres-version || '18' }}
   VALKEY_VERSION: ${{ inputs.valkey-version || '9' }}

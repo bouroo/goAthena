@@ -1,6 +1,6 @@
 module github.com/bouroo/goAthena
 
-go 1.26.3
+go 1.27.1
 
 require (
 	github.com/go-playground/validator/v10 v10.30.3
