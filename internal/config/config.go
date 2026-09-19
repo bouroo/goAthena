@@ -129,13 +129,20 @@ type NATSConfig struct {
 
 // GatewayConfig holds the game-protocol listeners. The client only knows the
 // login port statically; char/map ports are advertised during the handoff.
+//
+// LoginRateBurst and LoginRatePerSec throttle brute-force login attempts
+// per source IP via a token bucket (see gateway/app/ratelimit.go). A zero
+// value disables the limiter; the defaults (5 attempts burst, 1/sec refill)
+// match common SSH-style fail2ban defaults.
 type GatewayConfig struct {
-	LoginHost string `yaml:"login_host" env:"GATEWAY_LOGIN_HOST"` // bind host for all listeners
-	LoginPort int    `yaml:"login_port" env:"GATEWAY_LOGIN_PORT" validate:"min=1,max=65535"`
-	CharHost  string `yaml:"char_host"  env:"GATEWAY_CHAR_HOST"` // advertised char-server host (client-facing)
-	CharPort  int    `yaml:"char_port"  env:"GATEWAY_CHAR_PORT" validate:"min=1,max=65535"`
-	MapHost   string `yaml:"map_host"   env:"GATEWAY_MAP_HOST"` // advertised map-server host (client-facing)
-	MapPort   int    `yaml:"map_port"   env:"GATEWAY_MAP_PORT" validate:"min=1,max=65535"`
+	LoginHost       string  `yaml:"login_host"       env:"GATEWAY_LOGIN_HOST"` // bind host for all listeners
+	LoginPort       int     `yaml:"login_port"       env:"GATEWAY_LOGIN_PORT"     validate:"min=1,max=65535"`
+	CharHost        string  `yaml:"char_host"        env:"GATEWAY_CHAR_HOST"` // advertised char-server host (client-facing)
+	CharPort        int     `yaml:"char_port"        env:"GATEWAY_CHAR_PORT"      validate:"min=1,max=65535"`
+	MapHost         string  `yaml:"map_host"         env:"GATEWAY_MAP_HOST"` // advertised map-server host (client-facing)
+	MapPort         int     `yaml:"map_port"         env:"GATEWAY_MAP_PORT"       validate:"min=1,max=65535"`
+	LoginRateBurst  float64 `yaml:"login_rate_burst" env:"GATEWAY_LOGIN_RATE_BURST" validate:"min=0"`     // per-IP login burst (0 disables)
+	LoginRatePerSec float64 `yaml:"login_rate_per_sec" env:"GATEWAY_LOGIN_RATE_PER_SEC" validate:"min=0"` // per-IP login refill/sec (0 disables)
 }
 
 // IdentityConfig holds the login/char-server identity knobs rAthena .conf files
@@ -234,6 +241,11 @@ func defaults() *Config {
 			LoginHost: "0.0.0.0", LoginPort: 6900,
 			CharHost: "127.0.0.1", CharPort: 6121,
 			MapHost: "127.0.0.1", MapPort: 5121,
+			// 5 attempts per IP per burst, refilling at 1/sec — matches the
+			// default fail2ban posture for SSH. Operators with stricter
+			// requirements lower the burst via env or yaml.
+			LoginRateBurst:  5,
+			LoginRatePerSec: 1,
 		},
 		Identity: IdentityConfig{UseMD5Passwords: true, MaxChars: 9},
 		Zone:     ZoneConfig{TickRateHz: 50, ViewRangeCells: 20, DBPath: "db", CheckpointInterval: 5 * time.Minute},

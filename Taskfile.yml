@@ -15,10 +15,11 @@ tasks:
       - go build -o {{.BINARY}} ./cmd/goathena
 
   build-tools:
-    desc: Build cmd/goathena and cmd/healthcheck
+    desc: Build cmd/goathena, cmd/healthcheck, and cmd/loadgen
     cmds:
       - go build -o {{.BINARY}} ./cmd/goathena
       - go build -o bin/healthcheck ./cmd/healthcheck
+      - go build -o bin/loadgen ./cmd/loadgen
 
   serve:
     desc: Build + run `goathena serve` (blocks until SIGINT/SIGTERM)

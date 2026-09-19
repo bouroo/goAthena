@@ -39,6 +39,7 @@ type LoginServer struct {
 	booted   bool
 	auth     domain.Authenticator
 	sessions chardomain.SessionStore // stores login session for char/map validation
+	limiter  *LoginRateLimiter       // per-IP brute-force throttle (nil = disabled)
 	log      *slog.Logger
 	charIP   uint32 // advertised char-server IPv4 (wire uint32)
 	charPort uint16 // advertised char-server port
@@ -48,12 +49,13 @@ type LoginServer struct {
 // NewLoginServer builds a login listener. charHost/charPort/charName are the
 // char-server endpoint advertised to the client inside AC_ACCEPT_LOGIN. sessions
 // persists the login handshake so the char server can validate CH_ENTER.
-func NewLoginServer(auth domain.Authenticator, sessions chardomain.SessionStore, log *slog.Logger, charHost, charName string, charPort uint16) (*LoginServer, error) {
+// limiter is the per-IP brute-force throttle; nil disables it (e.g. tests).
+func NewLoginServer(auth domain.Authenticator, sessions chardomain.SessionStore, limiter *LoginRateLimiter, log *slog.Logger, charHost, charName string, charPort uint16) (*LoginServer, error) {
 	ip, err := ipToWire(charHost)
 	if err != nil {
 		return nil, fmt.Errorf("char server host %q: %w", charHost, err)
 	}
-	return &LoginServer{auth: auth, sessions: sessions, log: log, charIP: ip, charPort: charPort, charName: charName}, nil
+	return &LoginServer{auth: auth, sessions: sessions, limiter: limiter, log: log, charIP: ip, charPort: charPort, charName: charName}, nil
 }
 
 // OnBoot captures the running engine so Stop can shut the listener down.
@@ -68,15 +70,23 @@ func (s *LoginServer) OnBoot(e gnet.Engine) gnet.Action {
 // copied (gnet's Next buffer is invalid off the event loop) and dispatched to a
 // goroutine so the blocking DB auth never stalls the reactor. The response is
 // written back via the concurrency-safe AsyncWrite.
+//
+// Pre-dispatch, the per-IP rate limiter is consulted; a denial is silently
+// dropped (no AC_REFUSE_LOGIN — that would let the attacker probe the
+// limiter). The brute-force attempt is logged so ops can correlate.
 func (s *LoginServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
 	defer closeOnPanicAction(s.log, "login.OnTraffic", &action)
+	ip := remoteIP(c.RemoteAddr())
 	for c.InboundBuffered() >= loginFrameSize {
 		frame, err := c.Next(loginFrameSize)
 		if err != nil {
 			break // short read: wait for more bytes next OnTraffic
 		}
 		cp := append([]byte(nil), frame...) // detach from gnet's ring buffer
-		ip := remoteIP(c.RemoteAddr())
+		if s.limiter != nil && !s.limiter.Allow(ip) {
+			s.log.Warn("login: rate-limited", "ip", ip)
+			continue
+		}
 		go func() {
 			defer closeOnPanic(s.log, "login.handleLogin", c)
 			s.handleLogin(c, cp, ip)

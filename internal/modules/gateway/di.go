@@ -25,6 +25,8 @@ import (
 
 // NewLoginServer resolves the Authenticator + SessionStore and builds the login
 // listener. Called from the composition root after account + character register.
+// The login rate limiter is built from cfg.Gateway.LoginRateLimit (capacity +
+// per-second refill); a zero capacity or rate returns nil and disables limiting.
 func NewLoginServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.LoginServer, error) {
 	auth, err := do.Invoke[domain.Authenticator](inj)
 	if err != nil {
@@ -34,9 +36,11 @@ func NewLoginServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.
 	if err != nil {
 		return nil, fmt.Errorf("resolve session store: %w", err)
 	}
+	limiter := app.NewLoginRateLimiter(cfg.Gateway.LoginRateBurst, cfg.Gateway.LoginRatePerSec)
 	ls, err := app.NewLoginServer(
 		auth,
 		sess,
+		limiter,
 		log,
 		cfg.Gateway.CharHost,
 		cfg.App.Name,
