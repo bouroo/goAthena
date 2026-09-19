@@ -175,17 +175,17 @@
 | GetZeny read-only path | service.go | ✅ |
 | L1+L2 unit tests | service_test.go (115 LOC) + zeny_test.go (57 LOC) | ✅ |
 
-**Remaining:** **transaction log + audit ledger** — the slice only balances an
+**Remaining:** ~~**transaction log + audit ledger** — the slice only balances an
 in-memory Zeny and persists it; no record of why a movement happened. A
-real ledger needs:
+real ledger needs:~~ **done** in commit `8c87e57`:
 
-- `economy_domain.ZenyTransaction` (account, amount, reason, peer_char, ts).
-- Append on every deduct/credit, immutable.
-- A `LedgerRepository` port + GORM-backed impl with a `zeny_transaction` table
-  (composable with the migration suite).
-- A query port for ops (last N for char, totals by reason).
-
-**Plan:** design + port + repo + tests + migration + push as M8-final.
+- `economy_domain.ZenyTransaction` (account, amount, reason, peer_char, map, ts).
+- Append on every deduct/credit (one row per successful movement).
+- `LedgerRepository` port + GORM-backed impl with a `zeny_ledger` table
+  (migration `000005_zeny_ledger`).
+- Query ports for ops (`ListByChar`, `SumByChar`).
+- Shop and trade wired with reason-tagged variants (`ReasonShopBuy`,
+  `ReasonShopSell`, `ReasonTrade` + peer char).
 
 ---
 

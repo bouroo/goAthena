@@ -43,7 +43,17 @@ func Register(inj do.Injector, cfg *config.Config) {
 		if ws, err := do.Invoke[*worldapp.WorldService](i); err == nil {
 			world = ws
 		}
-		return app.NewEngine(scripts, npcs, world, log), nil
+		// The script inventory port is the world-side adapter that translates
+		// getitem/delitem/countitem/equip/unequip into actual inventory writes
+		// plus the ZC_ITEM_PICKUP_ACK the client needs. The world module
+		// registers the adapter; a resolve failure (e.g. compose order drift)
+		// leaves inventory nil so the item builtins return 0 / no-op rather
+		// than crash the script VM goroutine.
+		var inventory domain.ScriptInventory
+		if inv, err := do.Invoke[domain.ScriptInventory](i); err == nil {
+			inventory = inv
+		}
+		return app.NewEngine(scripts, npcs, world, inventory, log), nil
 	})
 	do.Provide(inj, func(i do.Injector) (domain.NPCStore, error) {
 		return do.MustInvoke[*infra.MemoryNPCStore](i), nil

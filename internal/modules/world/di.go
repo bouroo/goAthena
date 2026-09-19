@@ -10,6 +10,8 @@ import (
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
 
+	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	"github.com/bouroo/goAthena/internal/modules/world/app"
@@ -141,6 +143,18 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		combatSvc := do.MustInvoke[*app.CombatService](i)
 		log := do.MustInvoke[*slog.Logger](i)
 		return app.NewMobAIService(world, mobs, combatSvc, log), nil
+	})
+
+	// ScriptInventory adapter: bridges the content module's script VM
+	// (getitem/delitem/countitem/equip/unequip builtins) to the world's
+	// inventory + equip services, with character-repo accountID resolution.
+	// Inventory and Equip both register above; character module registers
+	// before world in composition.go.
+	do.Provide(inj, func(i do.Injector) (contentdomain.ScriptInventory, error) {
+		inv := do.MustInvoke[*invapp.InventoryService](i)
+		equip := do.MustInvoke[*app.EquipService](i)
+		chars := do.MustInvoke[chardomain.CharacterRepository](i)
+		return app.NewScriptInventoryAdapter(inv, equip, chars), nil
 	})
 }
 
