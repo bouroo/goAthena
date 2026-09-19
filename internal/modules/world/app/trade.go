@@ -44,10 +44,18 @@ type TradeInventoryPort interface {
 // TradeEconPort is the narrow economy surface trade needs: read a balance (to
 // validate staged zeny) and move zeny at conclude. economy.EconomyService
 // satisfies it directly.
+//
+// Trade legs are tagged with ReasonTrade and the partner's charID, so the
+// ledger shows the "who paid whom" pair on both sides. The peer parameter on
+// the *WithPeer variants lets the trade service stamp each leg without
+// coupling to the economy domain type; the DI adapter translates it into a
+// LedgerEntry.
 type TradeEconPort interface {
 	GetZeny(ctx context.Context, charID uint32) (int32, error)
 	DeductZeny(ctx context.Context, charID uint32, amount int32) error
 	CreditZeny(ctx context.Context, charID uint32, amount int32) error
+	DeductZenyWithPeer(ctx context.Context, charID uint32, amount int32, peer uint32) error
+	CreditZenyWithPeer(ctx context.Context, charID uint32, amount int32, peer uint32) error
 }
 
 // AddItemResult carries what the gateway emits after a successful stage: the wire
@@ -454,22 +462,24 @@ func (s *TradeService) grantOffered(ctx context.Context, charID uint32, offered 
 }
 
 // moveZeny deducts amount from fromID and credits it to toID, pushing undos for
-// each step. A zero amount is a no-op.
+// each step. A zero amount is a no-op. Both legs are tagged with ReasonTrade
+// and the partner's charID so the ledger shows "fromID paid toID" on both
+// sides, which is what an audit query needs to reconstruct any P2P transfer.
 func (s *TradeService) moveZeny(ctx context.Context, fromID uint32, amount int32, toID uint32, undos *undoStack) error {
 	if amount == 0 {
 		return nil
 	}
-	if err := s.econ.DeductZeny(ctx, fromID, amount); err != nil {
+	if err := s.econ.DeductZenyWithPeer(ctx, fromID, amount, toID); err != nil {
 		return fmt.Errorf("deduct zeny %d: %w", fromID, err)
 	}
 	undos.push(func(ctx context.Context) error {
-		return fmt.Errorf("undo zeny credit %d: %w", fromID, s.econ.CreditZeny(ctx, fromID, amount))
+		return fmt.Errorf("undo zeny credit %d: %w", fromID, s.econ.CreditZenyWithPeer(ctx, fromID, amount, toID))
 	})
-	if err := s.econ.CreditZeny(ctx, toID, amount); err != nil {
+	if err := s.econ.CreditZenyWithPeer(ctx, toID, amount, fromID); err != nil {
 		return fmt.Errorf("credit zeny %d: %w", toID, err)
 	}
 	undos.push(func(ctx context.Context) error {
-		return fmt.Errorf("undo zeny deduct %d: %w", toID, s.econ.DeductZeny(ctx, toID, amount))
+		return fmt.Errorf("undo zeny deduct %d: %w", toID, s.econ.DeductZenyWithPeer(ctx, toID, amount, fromID))
 	})
 	return nil
 }

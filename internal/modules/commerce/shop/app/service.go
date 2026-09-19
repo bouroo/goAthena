@@ -14,6 +14,10 @@ import (
 // EconomyPort is the narrow port the shop service needs from the economy
 // bounded context (credit/deduct zeny). Defining it locally avoids importing
 // economy/app (clean-architecture: commerce imports only ports, not services).
+//
+// The shop adapter supplies ReasonShopBuy / ReasonShopSell at the call site so
+// the ledger carries the audit trail; this port stays shape-stable so callers
+// don't have to know about the economy domain types.
 type EconomyPort interface {
 	DeductZeny(ctx context.Context, charID uint32, amount int32) error
 	CreditZeny(ctx context.Context, charID uint32, amount int32) error

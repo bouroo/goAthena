@@ -9,6 +9,7 @@ import (
 
 	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
+	economydomain "github.com/bouroo/goAthena/internal/modules/economy/domain"
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
 	itemdb "github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/script"
@@ -17,7 +18,10 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/commerce/shop/domain"
 )
 
-// economyAdapter bridges economy.EconomyService → shop's EconomyPort.
+// economyAdapter bridges economy.EconomyService → shop's EconomyPort. It tags
+// each movement with ReasonShopBuy / ReasonShopSell so the zeny ledger carries
+// the audit trail (the audit row carries the reason, the char id, and the
+// amount — everything else is reconstructed from the catalog).
 type economyAdapter struct {
 	deduct func(context.Context, uint32, int32) error
 	credit func(context.Context, uint32, int32) error
@@ -72,10 +76,18 @@ func Register(inj do.Injector) {
 		catalog := do.MustInvoke[*domain.CatalogRegistry](i)
 		itemRepo := do.MustInvoke[invdomain.ItemRepository](i)
 		econSvc := do.MustInvoke[*economyapp.EconomyService](i)
-		econ := economyAdapter{
-			deduct: econSvc.DeductZeny,
-			credit: econSvc.CreditZeny,
+		// Wire the reason-tagged methods so the ledger carries ReasonShopBuy on
+		// the player's debit and ReasonShopSell on the player's credit. The
+		// shop doesn't carry a peer char (NPC leg is anonymous) so the LedgerEntry
+		// peer stays zero and the map name is empty (offline at the moment of
+		// settlement).
+		deduct := func(ctx context.Context, charID uint32, amount int32) error {
+			return econSvc.DeductZenyFor(ctx, charID, amount, economyapp.LedgerEntry{Reason: economydomain.ReasonShopBuy})
 		}
+		credit := func(ctx context.Context, charID uint32, amount int32) error {
+			return econSvc.CreditZenyFor(ctx, charID, amount, economyapp.LedgerEntry{Reason: economydomain.ReasonShopSell})
+		}
+		econ := economyAdapter{deduct: deduct, credit: credit}
 		return app.NewShopService(catalog, itemRepo, econ), nil
 	})
 }

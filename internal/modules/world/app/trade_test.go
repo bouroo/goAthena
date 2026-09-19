@@ -133,6 +133,18 @@ func (f *fakeEcon) CreditZeny(_ context.Context, charID uint32, amount int32) er
 	return nil
 }
 
+// DeductZenyWithPeer / CreditZenyWithPeer mirror the legacy methods in the
+// trade port's trade-specific entry points. The fake ignores the peer charID;
+// the production adapter in world/di.go translates it into a ReasonTrade +
+// peer ledger row.
+func (f *fakeEcon) DeductZenyWithPeer(_ context.Context, charID uint32, amount int32, _ uint32) error {
+	return f.DeductZeny(context.Background(), charID, amount)
+}
+
+func (f *fakeEcon) CreditZenyWithPeer(_ context.Context, charID uint32, amount int32, _ uint32) error {
+	return f.CreditZeny(context.Background(), charID, amount)
+}
+
 func (f *fakeEcon) balance(charID uint32) int32 {
 	f.mu.Lock()
 	defer f.mu.Unlock()

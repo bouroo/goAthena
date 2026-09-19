@@ -19,6 +19,8 @@ import (
 	shopmod "github.com/bouroo/goAthena/internal/modules/commerce/shop"
 	"github.com/bouroo/goAthena/internal/modules/content"
 	"github.com/bouroo/goAthena/internal/modules/economy"
+	economydomain "github.com/bouroo/goAthena/internal/modules/economy/domain"
+	economyinfra "github.com/bouroo/goAthena/internal/modules/economy/infra"
 	"github.com/bouroo/goAthena/internal/modules/gateway"
 	"github.com/bouroo/goAthena/internal/modules/inventory"
 	"github.com/bouroo/goAthena/internal/modules/social"
@@ -94,6 +96,16 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 		d.db = gdb
 		do.ProvideValue(inj, gdb)
 		closers = append(closers, func() { _ = db.Close(gdb) })
+
+		// The zeny ledger is the GORM-backed append-only audit trail behind
+		// every balance movement. Wiring it in composition keeps the economy
+		// module independent of GORM (the only place that knows about GORM is
+		// the composition root). economy.Register resolves the port lazily,
+		// so a down DB simply leaves the ledger nil and the service refuses
+		// movements with ErrLedgerAppendFailed — matching the readiness state.
+		do.Provide(inj, func(i do.Injector) (economydomain.LedgerRepository, error) {
+			return economyinfra.NewGORMLedger(do.MustInvoke[*gorm.DB](i)), nil
+		})
 
 		// Apply the embedded rAthena schema at boot so a fresh volume reaches
 		// readiness without a manual `goathena migrate up`. Bounded retry
