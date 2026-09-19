@@ -1532,6 +1532,15 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCItemPickupAck,
 		Direction: DirectionServerToClient,
 	})
+	// Phase 44: the inventory-removal counterpart. A shop sale deletes the sold
+	// row and rAthena tells the client with this frame (clif_delitem,
+	// clif.cpp:2915-2928; struct packets.hpp:825-831, 8B at every PACKETVER).
+	db.Register(Definition{
+		ID:        HeaderZCDeleteItemFromBody,
+		Name:      "ZC_DELETE_ITEM_FROM_BODY",
+		Length:    sizeZCDeleteItemFromBody,
+		Direction: DirectionServerToClient,
+	})
 
 	return db
 }

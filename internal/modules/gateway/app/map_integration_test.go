@@ -1730,6 +1730,13 @@ func TestMap_Dispatch_CastGroundSkill(t *testing.T) {
 // TestMap_Dispatch_PickupFloorItem exercises the loot slice of the playable
 // surface: CZ_ITEM_PICKUP (0x0362 @ 20250604) resolves a dropped floor item,
 // moves it into the player's inventory, and replies ZC_ITEM_PICKUP_ACK (0x0b41).
+//
+// It picks up twice on purpose. The ack's index field names the slot the item
+// landed in (rAthena writes packet.index = client_index(n) for the row
+// pc_additem chose, clif.cpp:2897), and the first grant always goes to server
+// row 0 — so a single pickup cannot distinguish a tracked slot from a constant.
+// The second grant lands in row 1, whose client index is 3: a handler that left
+// Index at its zero value reports 0 there, and the assert reads that field.
 func TestMap_Dispatch_PickupFloorItem(t *testing.T) {
 	port := freePort(t)
 	sessions := charinfra.NewMemorySessionStore()
@@ -1743,23 +1750,44 @@ func TestMap_Dispatch_PickupFloorItem(t *testing.T) {
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	awaitAcceptEnter(t, conn)
 
-	// Drop a floor item; the returned GroundID is what the pickup targets.
-	fi := spawn.DropItem(512, 1, "new_1-1", worlddomain.Position{X: 53, Y: 111}, 0)
-
-	// CZ_ITEM_PICKUP (0x0362, 6B), targeting the dropped GroundID.
-	req := make([]byte, 6)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZITEMTAKE0362)
-	binary.LittleEndian.PutUint32(req[2:], fi.GroundID)
-	if _, err := conn.Write(req); err != nil {
-		t.Fatalf("send CZ_ITEM_PICKUP: %v", err)
+	// pickup drops a floor item of nameID and returns the ZC_ITEM_PICKUP_ACK
+	// frame the server replied with.
+	pickup := func(nameID uint32) []byte {
+		t.Helper()
+		fi := spawn.DropItem(nameID, 1, "new_1-1", worlddomain.Position{X: 53, Y: 111}, 0)
+		// CZ_ITEM_PICKUP (0x0362, 6B), targeting the dropped GroundID.
+		req := make([]byte, 6)
+		binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZITEMTAKE0362)
+		binary.LittleEndian.PutUint32(req[2:], fi.GroundID)
+		if _, err := conn.Write(req); err != nil {
+			t.Fatalf("send CZ_ITEM_PICKUP: %v", err)
+		}
+		cmd, frame := nextServerFrame(t, conn, 3*time.Second)
+		if cmd != ropacket.HeaderZCItemPickupAck {
+			t.Fatalf("pickup-ack opcode = 0x%04x, want ZC_ITEM_PICKUP_ACK (0x%04x)", cmd, ropacket.HeaderZCItemPickupAck)
+		}
+		if len(frame) != 70 {
+			t.Fatalf("pickup-ack length = %d, want 70", len(frame))
+		}
+		return frame
 	}
 
-	ack := make([]byte, 70) // sizeZCItemPickupAck
-	if _, err := io.ReadFull(conn, ack); err != nil {
-		t.Fatalf("read ZC_ITEM_PICKUP_ACK: %v", err)
+	first := pickup(512)
+	if got := binary.LittleEndian.Uint16(first[2:4]); got != 2 {
+		t.Fatalf("first pickup-ack index = %d, want 2 (server row 0 → client index 2)", got)
 	}
-	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCItemPickupAck {
-		t.Fatalf("pickup-ack header = 0x%04x, want ZC_ITEM_PICKUP_ACK (0x%04x)", got, ropacket.HeaderZCItemPickupAck)
+	if got := binary.LittleEndian.Uint32(first[6:10]); got != 512 {
+		t.Fatalf("first pickup-ack nameid = %d, want 512", got)
+	}
+
+	// The bag now holds one row, so the second grant lands in server row 1 →
+	// client index 3. This is the assert a hardcoded zero cannot pass.
+	second := pickup(513)
+	if got := binary.LittleEndian.Uint16(second[2:4]); got != 3 {
+		t.Fatalf("second pickup-ack index = %d, want 3 (server row 1 → client index 3) — the ack is not reporting the slot the item landed in", got)
+	}
+	if got := binary.LittleEndian.Uint32(second[6:10]); got != 513 {
+		t.Fatalf("second pickup-ack nameid = %d, want 513", got)
 	}
 }
 
@@ -1955,9 +1983,10 @@ func TestMap_Dispatch_InputEditDlgStrVariableFrameKeepsConnection(t *testing.T) 
 // TestMap_Dispatch_ShopBuyRoundTrip exercises the NPC shop commerce verb (#15):
 // CZ_ACK_SELECT_DEALTYPE (Buy) opens the shop and the server replies with
 // ZC_PC_PURCHASE_ITEMLIST carrying the catalog; then CZ_PC_PURCHASE_ITEMLIST buys
-// one Red Potion and the server replies ZC_PC_PURCHASE_RESULT(success). The
-// transaction is real — zeny is deducted (1000 → 950) and the item lands in
-// inventory — proving the full buy round-trip through ShopService.
+// one Red Potion and the server re-syncs the bag grid with ZC_ITEM_PICKUP_ACK
+// before it replies ZC_PC_PURCHASE_RESULT(success). The transaction is real —
+// zeny is deducted (1000 → 950) and the item lands in inventory — proving the
+// full buy round-trip through ShopService.
 func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	port := freePort(t)
 	sessions := charinfra.NewMemorySessionStore()
@@ -2029,15 +2058,44 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	if _, err := conn.Write(pur); err != nil {
 		t.Fatalf("send CZ_PC_PURCHASE_ITEMLIST: %v", err)
 	}
-	res := make([]byte, 3) // ZC_PC_PURCHASE_RESULT: cmd + result byte
-	if _, err := io.ReadFull(conn, res); err != nil {
-		t.Fatalf("read purchase-result: %v", err)
+
+	// 3a. The grant re-syncs the bag grid FIRST: ZC_ITEM_PICKUP_ACK naming the
+	// slot the potion landed in. The bag was empty, so the granted row is server
+	// row 0 → client index 2. Read it through the framing authority rather than a
+	// bare 70-byte read: the frame is fixed-length, so bytes [2:4] are the index
+	// field, not a length slot, and a reader that mistook them for one would
+	// desync here. rAthena's order is clif_additem per grant (clif.cpp:2836-2901)
+	// and only then the result byte.
+	addCmd, addFrame := nextServerFrame(t, conn, 3*time.Second)
+	if addCmd != ropacket.HeaderZCItemPickupAck {
+		t.Fatalf("buy frame 1 opcode = 0x%04x, want 0x%04x (ZC_ITEM_PICKUP_ACK) — the grant did not re-sync the bag grid", addCmd, ropacket.HeaderZCItemPickupAck)
 	}
-	if got := binary.LittleEndian.Uint16(res[0:2]); got != ropacket.HeaderZCPCPURCHASERESULT {
-		t.Fatalf("purchase-result header = 0x%04x, want ZC_PC_PURCHASE_RESULT (0x%04x)", got, ropacket.HeaderZCPCPURCHASERESULT)
+	if len(addFrame) != 70 {
+		t.Fatalf("buy frame 1 length = %d, want 70", len(addFrame))
 	}
-	if res[2] != 0 {
-		t.Fatalf("purchase-result = %d, want 0 (success)", res[2])
+	if got := binary.LittleEndian.Uint16(addFrame[2:4]); got != 2 {
+		t.Fatalf("buy frame 1 index = %d, want 2 (server row 0 → client index 2)", got)
+	}
+	if got := binary.LittleEndian.Uint16(addFrame[4:6]); got != 1 {
+		t.Fatalf("buy frame 1 count = %d, want 1", got)
+	}
+	if got := binary.LittleEndian.Uint32(addFrame[6:10]); got != 501 {
+		t.Fatalf("buy frame 1 nameid = %d, want 501 (Red Potion)", got)
+	}
+	if addFrame[33] != 0 {
+		t.Fatalf("buy frame 1 result = %d, want 0 (success)", addFrame[33])
+	}
+
+	// 3b. ...and only then the purchase result byte.
+	resCmd, resFrame := nextServerFrame(t, conn, 3*time.Second)
+	if resCmd != ropacket.HeaderZCPCPURCHASERESULT {
+		t.Fatalf("buy frame 2 opcode = 0x%04x, want 0x%04x (ZC_PC_PURCHASE_RESULT)", resCmd, ropacket.HeaderZCPCPURCHASERESULT)
+	}
+	if len(resFrame) != 3 {
+		t.Fatalf("buy frame 2 length = %d, want 3", len(resFrame))
+	}
+	if resFrame[2] != 0 {
+		t.Fatalf("purchase-result = %d, want 0 (success)", resFrame[2])
 	}
 
 	// 4. Real transaction: zeny deducted (1000 - 50 = 950) and the potion added.
@@ -2060,6 +2118,130 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	}
 	if potionAmount != 1 {
 		t.Fatalf("potion amount after buy = %d, want 1", potionAmount)
+	}
+}
+
+// TestMap_Dispatch_ShopSellRoundTrip exercises the sell half of the NPC shop
+// verb: CZ_ACK_SELECT_DEALTYPE(Sell) renders the priced sell list, then
+// CZ_PC_SELL_ITEMLIST sells one Red Potion. The server re-syncs the bag grid
+// with ZC_DELETE_ITEM_FROM_BODY (deleteType 6 = "Item sold", the client slot the
+// request carried, the amount removed) BEFORE the ZC_PC_SELL_RESULT byte. That
+// frame is what actually removes the slot from the client's grid — without it
+// the sold potion stays in the bag until some other verb re-sends a list. The
+// transaction is real: the row leaves the DB and the shop pays its SellPrice
+// (25z) into the balance.
+func TestMap_Dispatch_ShopSellRoundTrip(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	conn, env := startMapListenerWithShopEnv(t, port, sessions)
+	defer conn.Close()
+
+	const gid uint32 = 150001
+	hero, err := env.charRepo.Create(t.Context(), chardomain.Character{
+		AccountID: 2000001, Name: "Hero", Zeny: 0,
+	})
+	if err != nil {
+		t.Fatalf("seed character: %v", err)
+	}
+	if uint32(hero.ID) != gid {
+		t.Fatalf("seeded character id = %d, want %d (world entity)", hero.ID, gid)
+	}
+	// One sellable row. It is the only row, so it is server row 0 and the client
+	// addresses it as index 2.
+	if _, err := env.itemRepo.Add(t.Context(), gid, 501, 1); err != nil {
+		t.Fatalf("seed inventory: %v", err)
+	}
+
+	// 1. CZ_ENTER → ZC_ACCEPT_ENTER.
+	sendCZEnter(t, conn, 2000001, gid, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// 2. CZ_ACK_SELECT_DEALTYPE (Sell) → ZC_PC_SELL_ITEMLIST.
+	ack := make([]byte, 7)
+	binary.LittleEndian.PutUint16(ack[0:], ropacket.HeaderCZACKSELECTDEALTYPE)
+	binary.LittleEndian.PutUint32(ack[2:], shop.DevShopGID)
+	ack[6] = 1 // type = Sell
+	if _, err := conn.Write(ack); err != nil {
+		t.Fatalf("send CZ_ACK_SELECT_DEALTYPE: %v", err)
+	}
+	listCmd, listFrame := nextServerFrame(t, conn, 3*time.Second)
+	if listCmd != ropacket.HeaderZCPCSELLITEMLIST {
+		t.Fatalf("sell-list opcode = 0x%04x, want ZC_PC_SELL_ITEMLIST (0x%04x)", listCmd, ropacket.HeaderZCPCSELLITEMLIST)
+	}
+	// The list must offer the seeded row at client index 2 with the shop's
+	// SellPrice (25z); otherwise the sell request below would address a slot the
+	// client was never offered (index 0 — the very bug the re-sync frame fixes).
+	if len(listFrame) != 14 { // 4 header + one 10-byte entry
+		t.Fatalf("sell-list length = %d, want 14 (one entry)", len(listFrame))
+	}
+	if got := binary.LittleEndian.Uint16(listFrame[4:6]); got != 2 {
+		t.Fatalf("sell-list index = %d, want 2 (server row 0 → client index 2)", got)
+	}
+	if got := binary.LittleEndian.Uint32(listFrame[6:10]); got != 25 {
+		t.Fatalf("sell-list price = %d, want 25 (Tool Shop SellPrice)", got)
+	}
+
+	// 3. CZ_PC_SELL_ITEMLIST: sell 1 unit from client index 2 (4 header + one
+	// 4-byte entry: uint16 index + uint16 amount).
+	sell := make([]byte, 8)
+	binary.LittleEndian.PutUint16(sell[0:], ropacket.HeaderCZPCSELLITEMLIST)
+	binary.LittleEndian.PutUint16(sell[2:], 8) // packet length
+	binary.LittleEndian.PutUint16(sell[4:], 2) // client index
+	binary.LittleEndian.PutUint16(sell[6:], 1) // amount
+	if _, err := conn.Write(sell); err != nil {
+		t.Fatalf("send CZ_PC_SELL_ITEMLIST: %v", err)
+	}
+
+	// 3a. ZC_DELETE_ITEM_FROM_BODY first: 8B fixed (cmd + int16 deleteType +
+	// uint16 index + int16 count), deleteType 6 = "Item sold", index echoed from
+	// the request, count = the amount removed.
+	delCmd, delFrame := nextServerFrame(t, conn, 3*time.Second)
+	if delCmd != ropacket.HeaderZCDeleteItemFromBody {
+		t.Fatalf("sell frame 1 opcode = 0x%04x, want 0x%04x (ZC_DELETE_ITEM_FROM_BODY) — the sale did not re-sync the bag grid", delCmd, ropacket.HeaderZCDeleteItemFromBody)
+	}
+	if len(delFrame) != 8 {
+		t.Fatalf("sell frame 1 length = %d, want 8", len(delFrame))
+	}
+	if got := int16(binary.LittleEndian.Uint16(delFrame[2:4])); got != ropacket.DeleteTypeItemSold {
+		t.Fatalf("sell frame 1 deleteType = %d, want %d (Item sold)", got, ropacket.DeleteTypeItemSold)
+	}
+	if got := binary.LittleEndian.Uint16(delFrame[4:6]); got != 2 {
+		t.Fatalf("sell frame 1 index = %d, want 2 (the client slot the request carried)", got)
+	}
+	if got := int16(binary.LittleEndian.Uint16(delFrame[6:8])); got != 1 {
+		t.Fatalf("sell frame 1 count = %d, want 1", got)
+	}
+
+	// 3b. ...then the sell result byte.
+	resCmd, resFrame := nextServerFrame(t, conn, 3*time.Second)
+	if resCmd != ropacket.HeaderZCPCSELLRESULT {
+		t.Fatalf("sell frame 2 opcode = 0x%04x, want 0x%04x (ZC_PC_SELL_RESULT)", resCmd, ropacket.HeaderZCPCSELLRESULT)
+	}
+	if len(resFrame) != 3 {
+		t.Fatalf("sell frame 2 length = %d, want 3", len(resFrame))
+	}
+	if resFrame[2] != 0 {
+		t.Fatalf("sell-result = %d, want 0 (success)", resFrame[2])
+	}
+
+	// 4. Real transaction: the row is gone and the shop paid 25z.
+	after, err := env.charRepo.FindByID(t.Context(), hero.ID)
+	if err != nil {
+		t.Fatalf("reload character: %v", err)
+	}
+	if after.Zeny != 25 {
+		t.Fatalf("zeny after sell = %d, want 25", after.Zeny)
+	}
+	items, err := env.itemRepo.LoadByChar(t.Context(), 2000001, gid)
+	if err != nil {
+		t.Fatalf("load inventory after sell: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("inventory rows after sell = %d, want 0 (the sold stack was the whole row)", len(items))
 	}
 }
 

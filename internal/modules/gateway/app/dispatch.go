@@ -11,6 +11,7 @@ import (
 	"github.com/panjf2000/gnet/v2"
 
 	dialogdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
+	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
@@ -257,6 +258,14 @@ func (s *MapServer) handleAckSelectDealtype(c gnet.Conn, auth *mapAuth, frame []
 // error it emits ZC_PC_PURCHASE_RESULT(failed) and keeps the connection alive.
 // Partial success is not rolled back (documented simplification: earlier entries
 // in the same request that succeeded stay bought).
+//
+// Each granted entry first emits ZC_ITEM_PICKUP_ACK for the row it landed in,
+// then the request's single result byte — rAthena's order: npc_buylist grants
+// with pc_additem (npc.cpp:2921-2928), pc_additem calls clif_additem at both
+// grant sites (pc.cpp:6079 stacking, :6110 fresh), and clif_additem emits the
+// add-item frame with the destination slot (clif.cpp:2836-2901); the buy result
+// byte follows (clif_npc_buy_result, clif.cpp:12343). Without that frame the
+// client never learns its bag changed and keeps a stale grid.
 func (s *MapServer) handlePurchaseItemList(c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_PC_PURCHASE_ITEMLIST from unauthed conn")
@@ -281,11 +290,22 @@ func (s *MapServer) handlePurchaseItemList(c gnet.Conn, auth *mapAuth, frame []b
 	ctx := context.Background()
 	result := shopResultSuccess
 	for _, e := range req.Entries {
-		if err := s.shops.Buy(ctx, auth.charID, shopName, e.ItemID, int(e.Amount)); err != nil {
+		granted, err := s.shops.Buy(ctx, auth.charID, shopName, e.ItemID, int(e.Amount))
+		if err != nil {
 			s.log.Warn("map: shop buy", "shop", shopName, "item", e.ItemID, "amount", e.Amount, "err", err)
 			result = shopResultFailed
 			break
 		}
+		slot, ok := s.clientIndexForItem(ctx, auth.accountID, auth.charID, granted.ID)
+		if !ok {
+			// The row was just written, so this is an internal inconsistency
+			// (a failed reload), not a client error. Suppressing the frame is
+			// deliberate: a wrong slot would move the client's item, a missing
+			// frame only leaves that slot stale until the next list verb.
+			s.log.Error("map: granted row has no resolvable bag slot", "nameID", e.ItemID, "row", granted.ID)
+			continue
+		}
+		s.writeItemPickupAck(c, slot, e.ItemID, e.Amount)
 	}
 	s.writePurchaseResult(c, result)
 }
@@ -302,6 +322,12 @@ func (s *MapServer) handlePurchaseItemList(c gnet.Conn, auth *mapAuth, frame []b
 //     item_db sell price + overcharge, not just the shop catalog).
 //
 // On any error it emits ZC_PC_SELL_RESULT(failed) and keeps the connection alive.
+//
+// Each sold entry first emits ZC_DELETE_ITEM_FROM_BODY(deleteType 6, "Item sold")
+// for the slot it removed, then the request's single result byte — rAthena's
+// order: npc_selllist calls pc_delitem (npc.cpp:3090-3114), which calls
+// clif_delitem (pc.cpp:6170 → clif.cpp:2915-2928), and the sell result byte
+// follows (clif_npc_sell_result, clif.cpp:12352).
 func (s *MapServer) handleSellItemList(c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_PC_SELL_ITEMLIST from unauthed conn")
@@ -352,6 +378,18 @@ func (s *MapServer) handleSellItemList(c gnet.Conn, auth *mapAuth, frame []byte)
 			result = shopResultFailed
 			break
 		}
+		// Re-sync the bag grid before the result byte: rAthena removes with
+		// pc_delitem → clif_delitem (ZC_DELETE_ITEM_FROM_BODY, deleteType 6 =
+		// "Item sold") and only then sends the sell result (npc.cpp:3090-3114 →
+		// clif_npc_sell_result, clif.cpp:12352). The index echoed is the client
+		// slot the request carried: npc_selllist passes pc_delitem the SERVER
+		// row (item_list[i].index - 2) and clif_delitem writes it back through
+		// client_index (clif.cpp:2921), so the value round-trips unchanged.
+		s.writeItemDelete(c, ropacket.DeleteItemFromBodyResponse{
+			DeleteType: ropacket.DeleteTypeItemSold,
+			Index:      e.Index,
+			Count:      int16(e.Amount), //nolint:gosec // G115: wire count is int16; player-bounded stack count.
+		})
 	}
 	s.writeSellResult(c, result)
 }
@@ -415,6 +453,66 @@ func (s *MapServer) writeSellItemList(ctx context.Context, c gnet.Conn, shopName
 	out := make([]byte, resp.Size())
 	if err := resp.Encode(sliceWriter(out)); err != nil {
 		s.log.Error("map: encode ZC_PC_SELL_ITEMLIST", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// clientIndexForItem resolves the client-facing bag slot of the inventory row
+// with the given id. The slot is that row's position in the ordered LoadByChar
+// list — the same list writeInventoryLists assigns client indices from
+// (ropacket.ClientIndex, server row + 2), so a row written by a grant and the
+// index the client addresses it by cannot diverge.
+//
+// A miss is not a client error: the caller has just written the row, so failing
+// to find it means the reload failed or the row vanished. Callers suppress their
+// re-sync frame rather than invent a slot — a wrong slot moves the client's item
+// to the wrong cell, while a missing frame only leaves that slot stale until the
+// next list verb re-sends it.
+func (s *MapServer) clientIndexForItem(ctx context.Context, accountID, charID uint32, id invdomain.ItemID) (uint16, bool) {
+	if s.inv == nil {
+		return 0, false
+	}
+	items, err := s.inv.LoadByChar(ctx, accountID, charID)
+	if err != nil {
+		s.log.Error("map: load inventory to resolve a granted slot", "err", err)
+		return 0, false
+	}
+	for row, it := range items {
+		if it.ID == id {
+			return ropacket.ClientIndex(uint16(row)), true //nolint:gosec // G115: row count bounded by MAX_INVENTORY
+		}
+	}
+	return 0, false
+}
+
+// writeItemPickupAck emits ZC_ITEM_PICKUP_ACK for one granted inventory row: the
+// bag slot the client must place the item in and the amount granted. Every grant
+// path (a shop buy, a floor pickup) sends exactly this frame with result 0,
+// mirroring clif_additem (clif.cpp:2836-2901) — so both routes to a bag slot
+// share one construction and cannot drift from each other.
+func (s *MapServer) writeItemPickupAck(c gnet.Conn, slot uint16, nameID uint32, count uint16) {
+	resp := ropacket.ItemPickupAckResponse{
+		Index:        slot,
+		Count:        count,
+		NameID:       nameID,
+		IsIdentified: 1,
+		Result:       0, // success
+	}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_ITEM_PICKUP_ACK", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// writeItemDelete emits ZC_DELETE_ITEM_FROM_BODY, the frame that removes or
+// decrements a bag slot on the client (clif_delitem, clif.cpp:2915-2928).
+func (s *MapServer) writeItemDelete(c gnet.Conn, resp ropacket.DeleteItemFromBodyResponse) {
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_DELETE_ITEM_FROM_BODY", "err", err)
 		return
 	}
 	_ = c.AsyncWrite(out, nil)
@@ -779,23 +877,21 @@ func (s *MapServer) handleItemPickup(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Debug("map: pickup (not found)", "gid", req.GroundID)
 		return // item already taken or gone — client re-syncs
 	}
-	_, err = s.inv.Add(context.Background(), auth.charID, fi.NameID, int(fi.Amount))
+	added, err := s.inv.Add(context.Background(), auth.charID, fi.NameID, int(fi.Amount))
 	if err != nil {
 		s.log.Error("map: pickup add inventory", "err", err)
 		return
 	}
-	resp := ropacket.ItemPickupAckResponse{
-		Count:        uint16(fi.Amount), //nolint:gosec // G115: item amount bounded to small stack values.
-		NameID:       fi.NameID,
-		IsIdentified: 1,
-		Result:       0, // success
-	}
-	out := make([]byte, resp.Size())
-	if err := resp.Encode(sliceWriter(out)); err != nil {
-		s.log.Error("map: encode pickup-ack", "err", err)
+	// The ack must name the slot the item actually landed in, not the zero
+	// value: rAthena writes packet.index = client_index(n) for the row
+	// pc_additem chose (clif_additem, clif.cpp:2897), and a hardcoded 0 would
+	// tell every pickup it became the first grid slot.
+	slot, ok := s.clientIndexForItem(context.Background(), auth.accountID, auth.charID, added.ID)
+	if !ok {
+		s.log.Error("map: picked-up row has no resolvable bag slot", "nameID", fi.NameID, "row", added.ID)
 		return
 	}
-	_ = c.AsyncWrite(out, nil)
+	s.writeItemPickupAck(c, slot, fi.NameID, uint16(fi.Amount)) //nolint:gosec // G115: item amount bounded to small stack values.
 	// Other nearby players must stop seeing the item on the ground
 	// (ZC_ITEM_DISAPPEAR at the item's cell; the picker's own copy left with
 	// the ack above). Without it neighbors keep a ghost loot sprite and any

@@ -86,6 +86,8 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCItemDisappear, "ZC_ITEM_DISAPPEAR", sizeZCItemDisappear, DirectionServerToClient},
 		{HeaderZCItemThrowAck, "ZC_ITEM_THROW_ACK", sizeZCItemThrowAck, DirectionServerToClient},
 		{HeaderZCItemPickupAck, "ZC_ITEM_PICKUP_ACK", sizeZCItemPickupAck, DirectionServerToClient},
+		// Phase 44: the removal counterpart (clif.cpp:2915-2928, packets.hpp:825-831).
+		{HeaderZCDeleteItemFromBody, "ZC_DELETE_ITEM_FROM_BODY", sizeZCDeleteItemFromBody, DirectionServerToClient},
 		// M14c: NPC input dialogs (clif.cpp:13378/13397, packets.hpp:769/775/1837/1844).
 		{HeaderCZINPUTEDITDLG, "CZ_INPUT_EDITDLG", sizeCZInputEditDlg, DirectionClientToServer},
 		{HeaderCZINPUTEDITDLGSTR, "CZ_INPUT_EDITDLGSTR", VariableLength, DirectionClientToServer},
@@ -166,8 +168,10 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// CZ_SETTING_WHISPER_STATE, CZ_REQ_WHISPER_LIST, ZC_SETTING_WHISPER_PC,
 	// ZC_SETTING_WHISPER_STATE, ZC_WHISPER_LIST) → 105. Phase 43 registers
 	// ZC_NPCACK_MAPMOVE (0x0091), the warp-portal relocation directive the
-	// server had always emitted but never declared in the DB → 106.
-	const want = 106
+	// server had always emitted but never declared in the DB → 106. Phase 44
+	// registers ZC_DELETE_ITEM_FROM_BODY (0x07fa), the inventory-removal frame
+	// a shop sale needs to re-sync the bag grid → 107.
+	const want = 107
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -244,6 +248,8 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCItemDisappear, sizeZCItemDisappear},
 		{HeaderZCItemThrowAck, sizeZCItemThrowAck},
 		{HeaderZCItemPickupAck, sizeZCItemPickupAck},
+		// Phase 44: shop-sale bag re-sync.
+		{HeaderZCDeleteItemFromBody, sizeZCDeleteItemFromBody},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

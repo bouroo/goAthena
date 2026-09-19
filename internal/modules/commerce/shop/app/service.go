@@ -31,24 +31,29 @@ func NewShopService(catalog *domain.CatalogRegistry, items invdomain.ItemReposit
 	return &ShopService{catalog: catalog, items: items, econ: econ}
 }
 
-// Buy charges zeny and grants amount units of nameID from the named shop.
-func (s *ShopService) Buy(ctx context.Context, charID uint32, shopName string, nameID uint32, amount int) error {
+// Buy charges zeny and grants amount units of nameID from the named shop. It
+// returns the granted inventory row alongside the error so the caller can
+// re-sync the client's bag grid: rAthena emits ZC_ITEM_PICKUP_ACK for every
+// grant with the slot pc_additem chose (clif_additem, clif.cpp:2836-2901), and
+// the caller needs that same row to address the item.
+func (s *ShopService) Buy(ctx context.Context, charID uint32, shopName string, nameID uint32, amount int) (invdomain.Item, error) {
 	shop, ok := s.catalog.Get(shopName)
 	if !ok {
-		return fmt.Errorf("shop %q: not found", shopName)
+		return invdomain.Item{}, fmt.Errorf("shop %q: not found", shopName)
 	}
 	item, ok := shop.FindBuy(nameID)
 	if !ok {
-		return fmt.Errorf("item %d not in shop %q", nameID, shopName)
+		return invdomain.Item{}, fmt.Errorf("item %d not in shop %q", nameID, shopName)
 	}
 	total := item.Price * int32(amount) //nolint:gosec // G115: amount is player-bounded stack count.
 	if err := s.econ.DeductZeny(ctx, charID, total); err != nil {
-		return fmt.Errorf("buy deduct zeny: %w", err)
+		return invdomain.Item{}, fmt.Errorf("buy deduct zeny: %w", err)
 	}
-	if _, err := s.items.Add(ctx, charID, nameID, amount); err != nil {
-		return fmt.Errorf("buy add item: %w", err)
+	granted, err := s.items.Add(ctx, charID, nameID, amount)
+	if err != nil {
+		return invdomain.Item{}, fmt.Errorf("buy add item: %w", err)
 	}
-	return nil
+	return granted, nil
 }
 
 // Sell removes amount units of the item and credits zeny at the shop's sell price.
