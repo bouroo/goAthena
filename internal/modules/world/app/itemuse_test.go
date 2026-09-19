@@ -162,7 +162,7 @@ func TestItemUseService_HealPotion(t *testing.T) {
 		ID: 101, CharID: itemUseChar, NameID: 501, Amount: 5,
 	}
 
-	ack, err := svc.Use(ctx, itemUseAccID, itemUseChar, 1)
+	ack, err := svc.Use(ctx, itemUseAccID, itemUseChar, 0)
 	require.NoError(t, err)
 	assert.Equal(t, uint16(501), ack.ItemID)
 	assert.Equal(t, uint16(4), ack.Remaining, "stack 5 -> 4 after one use")
@@ -187,7 +187,7 @@ func TestItemUseService_HealPotion_LastUnitDeleted(t *testing.T) {
 		ID: 101, CharID: itemUseChar, NameID: 501, Amount: 1,
 	}
 
-	ack, err := svc.Use(ctx, itemUseAccID, itemUseChar, 1)
+	ack, err := svc.Use(ctx, itemUseAccID, itemUseChar, 0)
 	require.NoError(t, err)
 	assert.Equal(t, uint16(0), ack.Remaining, "deleted stack reports 0 remaining")
 	require.Len(t, vit.calls, 1)
@@ -203,7 +203,7 @@ func TestItemUseService_NonHealUsable_ConsumedNoVitals(t *testing.T) {
 		ID: 101, CharID: itemUseChar, NameID: 601, Amount: 3, // Fly Wing: usable, no itemheal
 	}
 
-	ack, err := svc.Use(ctx, itemUseAccID, itemUseChar, 1)
+	ack, err := svc.Use(ctx, itemUseAccID, itemUseChar, 0)
 	require.NoError(t, err)
 	assert.Equal(t, uint16(601), ack.ItemID)
 	assert.Equal(t, uint16(2), ack.Remaining)
@@ -223,7 +223,7 @@ func TestItemUseService_NotUsable_Rejected(t *testing.T) {
 		ID: 101, CharID: itemUseChar, NameID: 1101, Amount: 1, // Knife: weapon, not usable
 	}
 
-	_, err := svc.Use(ctx, itemUseAccID, itemUseChar, 1)
+	_, err := svc.Use(ctx, itemUseAccID, itemUseChar, 0)
 	assert.ErrorIs(t, err, worldapp.ErrNotUsable)
 	assert.Equal(t, 0, vit.callCount(), "rejected use applies no vitals")
 	amt, ok := inv.amount(101)
@@ -239,7 +239,7 @@ func TestItemUseService_InsufficientStack_NoHeal(t *testing.T) {
 		ID: 101, CharID: itemUseChar, NameID: 501, Amount: 0, // depleted stack
 	}
 
-	_, err := svc.Use(ctx, itemUseAccID, itemUseChar, 1)
+	_, err := svc.Use(ctx, itemUseAccID, itemUseChar, 0)
 	assert.ErrorIs(t, err, domain.ErrInsufficientAmount, "consume fails before any heal")
 	assert.Equal(t, 0, vit.callCount(), "no vitals applied when consume fails")
 }

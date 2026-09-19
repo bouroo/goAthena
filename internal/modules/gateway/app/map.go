@@ -21,6 +21,8 @@ import (
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/pkg/ro/equip"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
@@ -60,8 +62,13 @@ type MapServer struct {
 	content *contentapp.Engine
 	skills  *worldapp.SkillService
 	skillDB *skilldb.Registry
-	shops   *shopapp.ShopService
-	trade   *worldapp.TradeService
+	// itemDB resolves item_db rows for the S→C inventory burst (IT_* wire type,
+	// item_db.View sprite) and the equip ack's view sprite. Optional: a nil
+	// registry degrades to the pre-Phase-42 empty-list behaviour, so harnesses
+	// that do not provide item_db keep working.
+	itemDB *itemdb.Registry
+	shops  *shopapp.ShopService
+	trade  *worldapp.TradeService
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
 	// DEALTYPE carries an NPC id, not a shop name).
 	shopStore contentdomain.ShopStore
@@ -788,6 +795,101 @@ func (s *MapServer) skillDataFor(skillID int32, level int16) ropacket.SkillData 
 	return sd
 }
 
+// writeInventoryLists appends ZC_INVENTORY_ITEMLIST_NORMAL (0x0b09) and
+// ZC_INVENTORY_ITEMLIST_EQUIP (0x0b39) to the LoadEndAck init burst, carrying
+// every inventory row the character owns. This is what populates the client's
+// bag grid: rAthena initialises the grid solely from these two lists
+// (clif_inventorylist), so sending the empty form leaves a player with items in
+// the DB staring at an empty bag.
+//
+// Row → entry mapping is index-preserving: the wire Index is ClientIndex(row)
+// (server row + 2) and every row is emitted, even one whose item_db entry is
+// missing. Dropping an unknown row would shift every later row's index and make
+// the client address the wrong item — the same class of bug the index convention
+// fix in this phase removes.
+func (s *MapServer) writeInventoryLists(burst []byte, auth *mapAuth) []byte {
+	if s.inv == nil {
+		return burst
+	}
+	items, err := s.inv.LoadByChar(context.Background(), auth.accountID, auth.charID)
+	if err != nil {
+		s.log.Error("map: load inventory for init burst", "aid", auth.accountID, "gid", auth.charID, "err", err)
+		return burst
+	}
+	normal := make([]ropacket.InventoryNormalItem, 0, len(items))
+	equipped := make([]ropacket.InventoryEquipItem, 0, len(items))
+	for row, it := range items {
+		//nolint:gosec // G115: inventory row counts are bounded far below uint16.
+		clientIdx := ropacket.ClientIndex(uint16(row))
+		entry := s.itemEntry(it.NameID)
+		wireType := uint8(itemdb.WireType("") & 0xff) //nolint:gosec // G115: IT_* values are small.
+		if entry != nil {
+			wireType = uint8(itemdb.WireType(entry.Type) & 0xff) //nolint:gosec // G115: IT_* values are small.
+		}
+		common := ropacket.InventoryNormalItem{
+			Index: clientIdx,
+			ITID:  uint16(it.NameID), //nolint:gosec // G115: item_db ids are registered well below 2^16 in this corpus.
+			Type:  wireType,          //nolint:gosec // G115: IT_* values are small (see above).
+			Count: uint16(it.Amount), //nolint:gosec // G115: inventory stacks are bounded far below 2^16.
+			Card: [4]uint16{ //nolint:gosec // G115: card ids are item_db ids, same bound as ITID.
+				uint16(it.Card0), uint16(it.Card1), uint16(it.Card2), uint16(it.Card3), //nolint:gosec // G115: ditto.
+			},
+		}
+		if it.Identify != 0 {
+			common.Flag = 1 // bit 0 = IsIdentified
+		}
+		if !it.IsEquipped() {
+			normal = append(normal, common)
+			continue
+		}
+		eq := ropacket.InventoryEquipItem{
+			Index:         clientIdx,
+			ITID:          common.ITID,
+			Type:          common.Type,
+			Location:      it.Equip,
+			RefiningLevel: it.Refine,
+			Card:          common.Card,
+			Flag:          common.Flag,
+		}
+		// The equip view sprite is gated on the item occupying a visible slot,
+		// exactly as clif_equipitemack does (clif.cpp:4316-4322). Without the
+		// item_db entry there is no view to resolve, so it stays 0.
+		if entry != nil && entry.View > 0 && entry.View <= 0xffff && it.Equip&equip.EquipVisible != 0 {
+			eq.ItemSpriteNumber = uint16(entry.View) //nolint:gosec // G115: range-checked above.
+		}
+		equipped = append(equipped, eq)
+	}
+
+	normalResp := ropacket.InventoryListNormalResponse{Items: normal}
+	equipResp := ropacket.InventoryListEquipResponse{Items: equipped}
+	var buf bytes.Buffer
+	if err := normalResp.Encode(&buf); err != nil {
+		s.log.Error("map: encode inventory list normal", "err", err)
+		return burst
+	}
+	if err := equipResp.Encode(&buf); err != nil {
+		s.log.Error("map: encode inventory list equip", "err", err)
+		return burst
+	}
+	return append(burst, buf.Bytes()...)
+}
+
+// maxItemID bounds the uint32→int32 cast for item_db id lookup, matching
+// worldapp's own bound: item_db ids are < 2^31, so anything larger is not a real
+// id and resolves to "not found" rather than wrapping negative.
+const maxItemID = uint32(1<<31 - 1)
+
+// itemEntry resolves an item_db entry by nameid, tolerating a nil registry (a
+// reduced harness). Callers get nil for both an unloaded registry and an unknown
+// id, which is the correct degradation for every current caller: they fall back
+// to a zeroed wire field rather than dropping the row.
+func (s *MapServer) itemEntry(nameID uint32) *itemdb.ItemEntry {
+	if s.itemDB == nil || nameID > maxItemID {
+		return nil
+	}
+	return s.itemDB.Get(int32(nameID)) //nolint:gosec // G115: bounded by maxItemID above.
+}
+
 func (s *MapServer) writeSkillInfoList(burst []byte, e worlddomain.Entity) []byte {
 	if len(e.LearnedSkills) == 0 {
 		return burst
@@ -814,6 +916,15 @@ func (s *MapServer) writeRefuseEnter(c gnet.Conn) {
 		return
 	}
 	_ = c.AsyncWrite(out, nil)
+}
+
+// SetItemDB attaches the item_db registry after construction so the DI root
+// (which loads item_db*.yml) can wire it without churning NewMapServer's many
+// call sites. nil (the zero value) keeps the pre-Phase-42 behaviour: the
+// LoadEndAck burst carries empty inventory lists and the equip ack's view
+// sprite stays 0.
+func (s *MapServer) SetItemDB(db *itemdb.Registry) {
+	s.itemDB = db
 }
 
 // Start runs the map listener in a goroutine.

@@ -115,9 +115,9 @@ func TestEquipWeaponAddsWeaponATK(t *testing.T) {
 	svc, inv := newEquipSvc(t)
 	ctx := context.Background()
 
-	inv.seed(domain.Item{CharID: equipChar, NameID: 1101, Amount: 1, Identify: 1}) // index 1
+	inv.seed(domain.Item{CharID: equipChar, NameID: 1101, Amount: 1, Identify: 1}) // row 0
 
-	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 1, equip.HandRight))
+	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 0, equip.HandRight))
 
 	eq, err := svc.EquipmentProfile(ctx, equipAccID, equipChar)
 	require.NoError(t, err)
@@ -133,9 +133,9 @@ func TestEquipArmorAddsItemDEF(t *testing.T) {
 	svc, inv := newEquipSvc(t)
 	ctx := context.Background()
 
-	inv.seed(domain.Item{CharID: equipChar, NameID: 2301, Amount: 1, Identify: 1}) // index 1
+	inv.seed(domain.Item{CharID: equipChar, NameID: 2301, Amount: 1, Identify: 1}) // row 0
 
-	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 1, equip.Armor))
+	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 0, equip.Armor))
 
 	eq, err := svc.EquipmentProfile(ctx, equipAccID, equipChar)
 	require.NoError(t, err)
@@ -148,11 +148,11 @@ func TestEquipWeaponAndArmorStacks(t *testing.T) {
 	svc, inv := newEquipSvc(t)
 	ctx := context.Background()
 
-	inv.seed(domain.Item{CharID: equipChar, NameID: 1101, Amount: 1, Identify: 1}) // index 1 weapon
-	inv.seed(domain.Item{CharID: equipChar, NameID: 2301, Amount: 1, Identify: 1}) // index 2 armor
+	inv.seed(domain.Item{CharID: equipChar, NameID: 1101, Amount: 1, Identify: 1}) // row 0 weapon
+	inv.seed(domain.Item{CharID: equipChar, NameID: 2301, Amount: 1, Identify: 1}) // row 1 armor
 
-	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 1, equip.HandRight))
-	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 2, equip.Armor))
+	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 0, equip.HandRight))
+	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 1, equip.Armor))
 
 	eq, err := svc.EquipmentProfile(ctx, equipAccID, equipChar)
 	require.NoError(t, err)
@@ -166,7 +166,7 @@ func TestEquipNonEquippableItem(t *testing.T) {
 
 	inv.seed(domain.Item{CharID: equipChar, NameID: 909, Amount: 1}) // Jellopy (Etc, no locations)
 
-	err := svc.Equip(ctx, equipAccID, equipChar, 1, equip.Armor)
+	err := svc.Equip(ctx, equipAccID, equipChar, 0, equip.Armor)
 	assert.ErrorIs(t, err, worldapp.ErrNotEquippable)
 }
 
@@ -177,7 +177,7 @@ func TestEquipWrongSlot(t *testing.T) {
 	inv.seed(domain.Item{CharID: equipChar, NameID: 1101, Amount: 1}) // Knife (right_hand only)
 
 	// A weapon cannot go in the armor slot.
-	err := svc.Equip(ctx, equipAccID, equipChar, 1, equip.Armor)
+	err := svc.Equip(ctx, equipAccID, equipChar, 0, equip.Armor)
 	assert.ErrorIs(t, err, worldapp.ErrWrongSlot)
 }
 
@@ -185,12 +185,12 @@ func TestEquipSlotConflictUnequipsFirst(t *testing.T) {
 	svc, inv := newEquipSvc(t)
 	ctx := context.Background()
 
-	inv.seed(domain.Item{CharID: equipChar, NameID: 1101, Amount: 1}) // index 1
-	inv.seed(domain.Item{CharID: equipChar, NameID: 1101, Amount: 1}) // index 2 (second Knife)
+	inv.seed(domain.Item{CharID: equipChar, NameID: 1101, Amount: 1}) // row 0
+	inv.seed(domain.Item{CharID: equipChar, NameID: 1101, Amount: 1}) // row 1 (second Knife)
 
-	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 1, equip.HandRight))
+	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 0, equip.HandRight))
 	// Equip the second Knife into the same slot: the first must be unequipped.
-	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 2, equip.HandRight))
+	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 1, equip.HandRight))
 
 	loaded, err := inv.LoadByChar(ctx, equipAccID, equipChar)
 	require.NoError(t, err)
@@ -207,10 +207,10 @@ func TestUnequipClearsSlot(t *testing.T) {
 	svc, inv := newEquipSvc(t)
 	ctx := context.Background()
 
-	inv.seed(domain.Item{CharID: equipChar, NameID: 1101, Amount: 1}) // index 1
-	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 1, equip.HandRight))
+	inv.seed(domain.Item{CharID: equipChar, NameID: 1101, Amount: 1}) // row 0
+	require.NoError(t, svc.Equip(ctx, equipAccID, equipChar, 0, equip.HandRight))
 
-	require.NoError(t, svc.Unequip(ctx, equipAccID, equipChar, 1))
+	require.NoError(t, svc.Unequip(ctx, equipAccID, equipChar, 0))
 
 	eq, err := svc.EquipmentProfile(ctx, equipAccID, equipChar)
 	require.NoError(t, err)
@@ -231,5 +231,9 @@ func TestEquipIndexOutOfRange(t *testing.T) {
 	assert.ErrorIs(t, err, worldapp.ErrItemNotFound)
 
 	err = svc.Unequip(ctx, equipAccID, equipChar, 5)
+	assert.ErrorIs(t, err, worldapp.ErrItemNotFound)
+
+	// A negative row is rejected too (it would otherwise index backwards).
+	err = svc.Equip(ctx, equipAccID, equipChar, -1, equip.HandRight)
 	assert.ErrorIs(t, err, worldapp.ErrItemNotFound)
 }

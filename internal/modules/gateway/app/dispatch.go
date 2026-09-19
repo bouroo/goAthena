@@ -13,6 +13,7 @@ import (
 	dialogdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/pkg/ro/equip"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
@@ -331,12 +332,12 @@ func (s *MapServer) handleSellItemList(c gnet.Conn, auth *mapAuth, frame []byte)
 	}
 	result := shopResultSuccess
 	for _, e := range req.Entries {
-		idx := int(e.Index)
-		if idx >= len(items) {
+		row := int(ropacket.ServerIndex(e.Index))
+		if row >= len(items) {
 			result = shopResultFailed
 			break
 		}
-		it := items[idx]
+		it := items[row]
 		if it.IsEquipped() {
 			result = shopResultFailed
 			break
@@ -383,9 +384,11 @@ func (s *MapServer) writePurchaseItemList(c gnet.Conn, shopName string) {
 }
 
 // writeSellItemList emits ZC_PC_SELL_ITEMLIST: the player's inventory priced for
-// resale. Index is the LoadByChar list position (matches the sell handler's
-// resolution); Price == Overcharge (no overcharge model yet). Only items the shop
-// trades appear (pricing simplification, see handleSellItemList).
+// resale. Index is the CLIENT index of the LoadByChar row (ropacket.ClientIndex,
+// server row + 2) — the same index space the client echoes back in
+// CZ_PC_SELL_ITEMLIST, which handleSellItemList converts with ServerIndex. Price
+// == Overcharge (no overcharge model yet). Only items the shop trades appear
+// (pricing simplification, see handleSellItemList).
 func (s *MapServer) writeSellItemList(ctx context.Context, c gnet.Conn, shopName string, accountID, charID uint32) {
 	items, err := s.inv.LoadByChar(ctx, accountID, charID)
 	if err != nil {
@@ -403,7 +406,7 @@ func (s *MapServer) writeSellItemList(ctx context.Context, c gnet.Conn, shopName
 		}
 		price := uint32(sellPrice) //nolint:gosec // G115: catalog sell prices are non-negative zeny; int32 is the domain's zeny type.
 		sell = append(sell, ropacket.ShopSellItem{
-			Index:      uint16(i), //nolint:gosec // G115: list position, bounded by MAX_INVENTORY
+			Index:      ropacket.ClientIndex(uint16(i)), //nolint:gosec // G115: row count bounded by MAX_INVENTORY
 			Price:      price,
 			Overcharge: price,
 		})
@@ -449,18 +452,18 @@ func (s *MapServer) handleEnterFrame(c gnet.Conn, auth *mapAuth, frame []byte) {
 // the signal the client finished loading the map; rAthena replies with the
 // inventory/skill/hotkey init burst. The burst is: ZC_INVENTORY_START →
 // ZC_INVENTORY_ITEMLIST_NORMAL → ZC_INVENTORY_ITEMLIST_EQUIP → ZC_INVENTORY_END.
-// Populated item lists (with item_db type/view resolution) land in M5b; for a
-// fresh character (or before item_db is loaded) the empty lists are correct.
+// The item lists are populated from the character's real inventory rows
+// (writeInventoryLists); before Phase 42 they were the empty forms, which left
+// the client's bag grid permanently empty for a character who owned items.
 func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		s.log.Warn("map: LoadEndAck from unauthed conn")
 		return
 	}
-	// Coalesce the 4-frame burst into one AsyncWrite to avoid four syscalls.
+	// Coalesce the whole burst into one AsyncWrite to avoid per-frame syscalls.
 	var burst []byte
 	burst = append(burst, ropacket.EncodeInventoryStart()...)
-	burst = append(burst, ropacket.EncodeEmptyInventoryListNormal()...)
-	burst = append(burst, ropacket.EncodeEmptyInventoryListEquip()...)
+	burst = s.writeInventoryLists(burst, auth)
 	burst = append(burst, ropacket.EncodeInventoryEnd()...)
 	if e, err := s.world.Get(worlddomain.EntityID(auth.charID)); err == nil {
 		burst = s.writeSkillInfoList(burst, e)
@@ -811,11 +814,12 @@ func (s *MapServer) handleItemPickup(c gnet.Conn, auth *mapAuth, frame []byte) {
 // the player's feet, and reply ZC_ITEM_THROW_ACK (SELF) + ZC_ITEM_FALL_ENTRY
 // (the floor-item landing packet the rathenaThailand fork emits on a drop).
 //
-// The wire InventoryIndex is the client's 1-based slot. The inventory port keys
-// removal by ItemID, not index, so the index resolves against the ordered list
-// LoadByChar returns (the same order the LoadEndAck init burst will assign once
-// populated, M5b). The GORM repo orders by id; a future inventory-list emitter
-// owns the canonical index once M5b populates the init burst.
+// The wire InventoryIndex is a CLIENT index (server row + 2, clif.cpp:122-128);
+// it converts with ropacket.ServerIndex to the row rAthena's clif_parse_DropItem
+// computes as `RFIFOW(...)-2` (clif.cpp:12063). The inventory port keys removal
+// by ItemID, not index, so the row resolves against the ordered list LoadByChar
+// returns — which is the same order handleLoadEndAck's init burst assigns
+// (Phase 42), so the client's slot and this row now agree.
 func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ITEM_DROP from unauthed conn")
@@ -835,12 +839,12 @@ func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Error("map: drop load inventory", "err", err)
 		return
 	}
-	idx := int(req.InventoryIndex) //nolint:gosec // G115: uint16→int is lossless; slot count is tiny.
-	if idx < 1 || idx > len(items) {
+	row := int(ropacket.ServerIndex(req.InventoryIndex))
+	if row >= len(items) {
 		s.log.Warn("map: CZ_ITEM_DROP index out of range", "index", req.InventoryIndex, "slots", len(items))
 		return
 	}
-	item := items[idx-1]
+	item := items[row]
 	if uint32(req.Amount) > item.Amount { //nolint:gosec // G115: uint16→uint32 is lossless.
 		s.log.Warn("map: CZ_ITEM_DROP amount over stack", "index", req.InventoryIndex, "want", req.Amount, "have", item.Amount)
 		return
@@ -887,15 +891,14 @@ func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
 
 // handleReqWearEquip handles CZ_REQ_WEAR_EQUIP_V5 (0x0998, 8B): the client
 // requests wearing the item at inventory Index into Position (an EQP_* bitmask).
-// On success it persists the equip via EquipService (which resolves slot
-// conflicts) and replies ZC_REQ_WEAR_EQUIP_ACK_V5 with result=1. On a validation
-// failure (sentinel error) it logs and keeps the connection alive — only the
-// success path emits an ack, because the exact rAthena failure-encoding for the
-// V5 ack (which field carries the success/fail byte varies by client era) is
-// uncertain; emitting a wrong failure byte could wedge the client's equip slot.
-// ItemSpriteNumber (the client view sprite) is 0 this milestone: item_db.View
-// resolution is deferred and the field is cosmetic (the WeaponATK combat win is
-// unaffected).
+// Index is a CLIENT index (server row + 2, clif.cpp:122-128), converted with
+// ropacket.ServerIndex before the row is resolved. On success it persists the
+// equip via EquipService (which resolves slot conflicts) and replies
+// ZC_REQ_WEAR_EQUIP_ACK_V5 with result=1. On a validation failure (sentinel
+// error) it logs and keeps the connection alive — only the success path emits an
+// ack, because the exact rAthena failure-encoding for the V5 ack (which field
+// carries the success/fail byte varies by client era) is uncertain; emitting a
+// wrong failure byte could wedge the client's equip slot.
 func (s *MapServer) handleReqWearEquip(c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_REQ_WEAR_EQUIP from unauthed conn")
@@ -906,14 +909,15 @@ func (s *MapServer) handleReqWearEquip(c gnet.Conn, auth *mapAuth, frame []byte)
 		s.log.Warn("map: parse CZ_REQ_WEAR_EQUIP", "err", err)
 		return
 	}
-	if err := s.equip.Equip(context.Background(), auth.accountID, auth.charID, int(req.Index), req.Position); err != nil {
+	serverRow := int(ropacket.ServerIndex(req.Index))
+	if err := s.equip.Equip(context.Background(), auth.accountID, auth.charID, serverRow, req.Position); err != nil {
 		s.log.Warn("map: wear equip", "gid", auth.charID, "index", req.Index, "err", err)
 		return
 	}
 	resp := ropacket.ReqWearEquipAckResponse{
-		Index:            req.Index,
+		Index:            req.Index, // client index, echoed verbatim (clif.cpp:4315)
 		WearLocation:     req.Position,
-		ItemSpriteNumber: 0, // view sprite resolution deferred (item_db.View)
+		ItemSpriteNumber: s.equipSprite(serverRow, req.Position, auth),
 		Result:           1, // 1 = success
 	}
 	out := make([]byte, resp.Size())
@@ -931,11 +935,14 @@ func (s *MapServer) handleReqWearEquip(c gnet.Conn, auth *mapAuth, frame []byte)
 // NewMapServer), so ZC_PAR_CHANGE is emitted during the Use call itself; this
 // handler emits only the ack to avoid a duplicate stat-change frame.
 //
-// Index convention: the wire Index is the 1-based inventory-list position (same
-// as the wear-equip handler); the ack carries the client-visible index (server
-// index + 2 for PACKETVER 20250604, per the ZC_USE_ITEM_ACK2 doc comment /
-// clif.cpp:4482). On a validation failure (sentinel error) it emits the ack with
-// Result=0 and keeps the connection alive — the failure encoding is known.
+// Index convention: the wire Index is a CLIENT index (server row + 2,
+// clif.cpp:122-128), converted with ropacket.ServerIndex to reach the row
+// rAthena's clif_parse_UseItem computes with `n = RFIFOW(...)-2` (clif.cpp:12121).
+// The ack carries that same client index back unchanged — rAthena's
+// clif_useitemack writes `index + 2` where index is already the server row
+// (clif.cpp:4484), which is the value the client originally sent. On a validation
+// failure (sentinel error) it emits the ack with Result=0 and keeps the
+// connection alive — the failure encoding is known.
 func (s *MapServer) handleUseItem(c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_USE_ITEM2 from unauthed conn")
@@ -946,13 +953,14 @@ func (s *MapServer) handleUseItem(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: parse CZ_USE_ITEM2", "err", err)
 		return
 	}
-	ack, err := s.itemUse.Use(context.Background(), auth.accountID, auth.charID, int(req.Index))
+	serverRow := int(ropacket.ServerIndex(req.Index))
+	ack, err := s.itemUse.Use(context.Background(), auth.accountID, auth.charID, serverRow)
 	if err != nil {
 		s.log.Warn("map: use item", "gid", auth.charID, "index", req.Index, "err", err)
-		s.writeUseItemAck(c, auth.accountID, req.Index+2, 0, 0, 0)
+		s.writeUseItemAck(c, auth.accountID, req.Index, 0, 0, 0)
 		return
 	}
-	s.writeUseItemAck(c, auth.accountID, req.Index+2, ack.ItemID, ack.Remaining, 1)
+	s.writeUseItemAck(c, auth.accountID, req.Index, ack.ItemID, ack.Remaining, 1)
 }
 
 // writeUseItemAck emits ZC_USE_ITEM_ACK2 (0x01c8). clientIndex is the already
@@ -990,17 +998,18 @@ func (s *MapServer) handleReqTakeoffEquip(c gnet.Conn, auth *mapAuth, frame []by
 		s.log.Warn("map: parse CZ_REQ_TAKEOFF_EQUIP", "err", err)
 		return
 	}
-	worn, ok := s.wornSlot(auth, int(req.Index))
+	serverRow := int(ropacket.ServerIndex(req.Index))
+	worn, ok := s.wornSlot(auth, serverRow)
 	if !ok {
 		s.log.Warn("map: takeoff index out of range", "gid", auth.charID, "index", req.Index)
 		return
 	}
-	if err := s.equip.Unequip(context.Background(), auth.accountID, auth.charID, int(req.Index)); err != nil {
+	if err := s.equip.Unequip(context.Background(), auth.accountID, auth.charID, serverRow); err != nil {
 		s.log.Warn("map: takeoff equip", "gid", auth.charID, "index", req.Index, "err", err)
 		return
 	}
 	resp := ropacket.ReqTakeoffEquipAckResponse{
-		Index:        req.Index,
+		Index:        req.Index, // client index, echoed verbatim (clif.cpp:4346)
 		WearLocation: worn,
 		Flag:         0, // 0 = success on the wire (inverted) for PACKETVER >= 20110824
 	}
@@ -1012,22 +1021,45 @@ func (s *MapServer) handleReqTakeoffEquip(c gnet.Conn, auth *mapAuth, frame []by
 	_ = c.AsyncWrite(out, nil)
 }
 
-// wornSlot resolves the EQP_* bitmask currently worn by the item at the 1-based
-// inventory index, so the takeoff ack can report the slot it freed. It returns
-// ok=false when the index is out of range (the player cannot unequip a slot that
-// has no item). The read is best-effort: between this load and Unequip's
-// internal clear the slot could change for a racy double-unequip, but the only
-// consequence is a stale WearLocation in one ack — cosmetic, not state-corrupting.
-func (s *MapServer) wornSlot(auth *mapAuth, invIndex int) (uint32, bool) {
+// wornSlot resolves the EQP_* bitmask currently worn by the item at server row
+// serverRow (0-based), so the takeoff ack can report the slot it freed. It
+// returns ok=false when the row is out of range (the player cannot unequip a
+// slot that has no item). The read is best-effort: between this load and
+// Unequip's internal clear the slot could change for a racy double-unequip, but
+// the only consequence is a stale WearLocation in one ack — cosmetic, not
+// state-corrupting.
+func (s *MapServer) wornSlot(auth *mapAuth, serverRow int) (uint32, bool) {
 	items, err := s.inv.LoadByChar(context.Background(), auth.accountID, auth.charID)
 	if err != nil {
 		s.log.Error("map: load inventory for takeoff", "err", err)
 		return 0, false
 	}
-	if invIndex < 1 || invIndex > len(items) {
+	if serverRow < 0 || serverRow >= len(items) {
 		return 0, false
 	}
-	return items[invIndex-1].Equip, true
+	return items[serverRow].Equip, true
+}
+
+// equipSprite resolves the view sprite the equip ack should carry for the item
+// at server row serverRow. rAthena emits the item's look (item_db View) only when
+// the item occupies a VISIBLE equip position, and 0 otherwise (clif.cpp:4316-4322
+// gates on `equip & EQP_VISIBLE`). Reproducing that gate matters: writing a
+// non-zero view for, say, a weapon would make the client render a head sprite.
+// position is the EQP_* bitmask the client asked for; on any lookup miss the
+// sprite is 0, which is the same value the old hardcoded 0 produced.
+func (s *MapServer) equipSprite(serverRow int, position uint32, auth *mapAuth) uint16 {
+	if position&equip.EquipVisible == 0 {
+		return 0
+	}
+	items, err := s.inv.LoadByChar(context.Background(), auth.accountID, auth.charID)
+	if err != nil || serverRow < 0 || serverRow >= len(items) {
+		return 0
+	}
+	entry := s.itemEntry(items[serverRow].NameID)
+	if entry == nil || entry.View <= 0 || entry.View > 0xffff {
+		return 0
+	}
+	return uint16(entry.View) //nolint:gosec // G115: range-checked above.
 }
 
 // handleActionRequest handles CZ_ACTION_REQUEST (0x0089, 7B): sit/stand/attack.
@@ -1461,11 +1493,29 @@ func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []by
 		s.log.Debug("map: CZ_ADD_EXCHANGE_ITEM with no active trade", "gid", auth.charID)
 		return
 	}
-	res, err := s.trade.AddItem(context.Background(), auth.charID, int(req.Index), int(req.Amount)) //nolint:gosec // G115: wire index/amount are small positives
-	if err != nil {
-		s.writeAckAddItem(c, req.Index, tradeItemAddResult(err))
-		s.log.Debug("map: trade add-item rejected", "gid", auth.charID, "err", err)
-		return
+	// The zeny sentinel is a WIRE value, not a server row: rAthena tests the raw
+	// index for 0 before converting (clif.cpp:12565 `if( p->index == 0 )`), so it
+	// must be dispatched here, before ServerIndex turns 0 into a wrapped row. For
+	// an item index the wire value is a client index (server row + 2,
+	// clif.cpp:122-128).
+	ctx := context.Background()
+	var res worldapp.AddItemResult
+	if req.Index == 0 {
+		var err error
+		res, err = s.trade.AddZeny(ctx, auth.charID, int(req.Amount)) //nolint:gosec // G115: wire amount is a small positive
+		if err != nil {
+			s.writeAckAddItem(c, req.Index, tradeItemAddResult(err))
+			s.log.Debug("map: trade add-zeny rejected", "gid", auth.charID, "err", err)
+			return
+		}
+	} else {
+		var err error
+		res, err = s.trade.AddItem(ctx, auth.charID, int(ropacket.ServerIndex(req.Index)), int(req.Index), int(req.Amount)) //nolint:gosec // G115: wire index/amount are small positives
+		if err != nil {
+			s.writeAckAddItem(c, req.Index, tradeItemAddResult(err))
+			s.log.Debug("map: trade add-item rejected", "gid", auth.charID, "err", err)
+			return
+		}
 	}
 	s.writeAckAddItem(c, req.Index, ropacket.TradeItemAddSuccess)
 	if pc, ok := s.connFor(partnerID); ok {
@@ -1580,7 +1630,7 @@ func (s *MapServer) writeAckAddItem(c gnet.Conn, index uint16, result uint8) {
 // depend on it.
 func (s *MapServer) writeZCAddItem(c gnet.Conn, res worldapp.AddItemResult) {
 	resp := ropacket.ZCAddExchangeItem{}
-	if res.Index == 0 {
+	if res.IsZeny {
 		resp.Amount = res.Zeny
 	} else {
 		it := res.Item

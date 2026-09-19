@@ -179,6 +179,9 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Attach item_db the way the DI root does, so the LoadEndAck inventory burst
+	// resolves real IT_* wire types and view sprites (production wiring).
+	ms.SetItemDB(items)
 	return ms, mapTestEnv{spawn: spawn, charRepo: charRepo, itemRepo: itemRepo, world: world, mobAI: mobAI}
 }
 
@@ -278,7 +281,20 @@ func testItemDB(t *testing.T) *itemdb.Registry {
 		"  - Id: 1201\n    AegisName: Knife\n    Name: Knife\n    Type: Weapon\n" +
 		"    SubType: Dagger\n    Attack: 50\n    Locations:\n      Right_Hand: true\n" +
 		"  - Id: 501\n    AegisName: Red_Potion\n    Name: Red Potion\n    Type: Healing\n" +
-		"    Script: itemheal 45,0\n"
+		"    Script: itemheal 45,0\n" +
+		// 502/503 are distinct healing items so the inventory-index tests can
+		// seed three rows that are individually identifiable: consuming the
+		// wrong row is then observable, which is what makes the index
+		// convention testable at all.
+		"  - Id: 502\n    AegisName: Orange_Potion\n    Name: Orange Potion\n    Type: Healing\n" +
+		"    Script: itemheal 60,0\n" +
+		"  - Id: 503\n    AegisName: Yellow_Potion\n    Name: Yellow Potion\n    Type: Healing\n" +
+		"    Script: itemheal 80,0\n" +
+		// A headgear in a VISIBLE equip position (EQP_HEAD_TOP, bit 0x100) with a
+		// non-zero View, so the equip ack's view-sprite gate can be asserted in
+		// both directions: a visible head item carries the sprite, a weapon does not.
+		"  - Id: 2201\n    AegisName: Hat\n    Name: Hat\n    Type: Armor\n" +
+		"    View: 77\n    Locations:\n      Head_Top: true\n"
 	reg, err := itemdb.Load(strings.NewReader(yaml))
 	if err != nil {
 		t.Fatalf("load test item_db: %v", err)
@@ -1529,7 +1545,7 @@ func TestMap_Dispatch_EquipIncreasesDamage(t *testing.T) {
 	// 2. Equip the Knife: CZ_REQ_WEAR_EQUIP_V5 (0x0998, index 1, right hand).
 	wear := make([]byte, 8)
 	binary.LittleEndian.PutUint16(wear[0:], ropacket.HeaderCZREQWEAREQUIPV5)
-	binary.LittleEndian.PutUint16(wear[2:], 1)               // inventory index
+	binary.LittleEndian.PutUint16(wear[2:], 2)               // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint32(wear[4:], equip.HandRight) // EQP position
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := conn.Write(wear); err != nil {
@@ -1602,7 +1618,7 @@ func TestMap_Dispatch_UseItemHeals(t *testing.T) {
 	// 3. Send CZ_USE_ITEM2 (0x0439, 8B): cmd + inventory index 1 + AID.
 	useReq := make([]byte, 8)
 	binary.LittleEndian.PutUint16(useReq[0:], ropacket.HeaderCZUSEITEM2)
-	binary.LittleEndian.PutUint16(useReq[2:], 1)       // inventory index (1-based)
+	binary.LittleEndian.PutUint16(useReq[2:], 2)       // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint32(useReq[4:], 2000001) // AID
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := conn.Write(useReq); err != nil {
@@ -1636,13 +1652,14 @@ func TestMap_Dispatch_UseItemHeals(t *testing.T) {
 	if got := binary.LittleEndian.Uint32(out[12:16]); got != 100 {
 		t.Fatalf("SP after potion = %d, want 100 (potion heals 0 SP)", got)
 	}
-	// ZC_USE_ITEM_ACK2: index=server(1)+2=3, itemID=501, AID=2000001, amount=0,
-	// result=1 (success).
+	// ZC_USE_ITEM_ACK2: index=2 (the client index we sent, echoed back verbatim
+	// — rAthena emits client_index(serverRow), clif.cpp:4484), itemID=501,
+	// AID=2000001, amount=0, result=1 (success).
 	if got := binary.LittleEndian.Uint16(out[16:18]); got != ropacket.HeaderZCUSEITEMACK2 {
 		t.Fatalf("ack header = 0x%04x, want ZC_USE_ITEM_ACK2 (0x01c8)", got)
 	}
-	if got := binary.LittleEndian.Uint16(out[18:20]); got != 3 {
-		t.Fatalf("ack index = %d, want 3 (server index 1 + 2)", got)
+	if got := binary.LittleEndian.Uint16(out[18:20]); got != 2 {
+		t.Fatalf("ack index = %d, want 2 (the client index we sent, echoed)", got)
 	}
 	if got := binary.LittleEndian.Uint16(out[20:22]); got != 501 {
 		t.Fatalf("ack itemID = %d, want 501", got)
@@ -1828,7 +1845,7 @@ func TestMap_Dispatch_DropItem(t *testing.T) {
 	// CZ_ITEM_DROP (0x0363, 6B): drop 1 unit from inventory slot 1.
 	dropReq := make([]byte, 6)
 	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
-	binary.LittleEndian.PutUint16(dropReq[2:], 1) // inventory index (1-based)
+	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint16(dropReq[4:], 1) // amount
 	if _, err := conn.Write(dropReq); err != nil {
 		t.Fatalf("send CZ_ITEM_DROP: %v", err)
@@ -1842,8 +1859,8 @@ func TestMap_Dispatch_DropItem(t *testing.T) {
 	if got := binary.LittleEndian.Uint16(throwAck[0:2]); got != ropacket.HeaderZCItemThrowAck {
 		t.Fatalf("throw-ack header = 0x%04x, want ZC_ITEM_THROW_ACK (0x%04x)", got, ropacket.HeaderZCItemThrowAck)
 	}
-	if got := binary.LittleEndian.Uint16(throwAck[2:4]); got != 1 {
-		t.Fatalf("throw-ack index = %d, want 1", got)
+	if got := binary.LittleEndian.Uint16(throwAck[2:4]); got != 2 {
+		t.Fatalf("throw-ack index = %d, want 2 (the client index we sent, echoed)", got)
 	}
 	if got := binary.LittleEndian.Uint16(throwAck[4:6]); got != 1 {
 		t.Fatalf("throw-ack count = %d, want 1", got)
@@ -1897,7 +1914,7 @@ func TestMap_Dispatch_DropOutOfRangeKeepsConnection(t *testing.T) {
 	//    (no items seeded) → handler logs + returns; no reply, connection kept.
 	dropReq := make([]byte, 6)
 	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
-	binary.LittleEndian.PutUint16(dropReq[2:], 1) // inventory index
+	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint16(dropReq[4:], 1) // amount
 	if _, err := conn.Write(dropReq); err != nil {
 		t.Fatalf("send CZ_ITEM_DROP: %v", err)
@@ -2264,7 +2281,7 @@ func TestMap_Dispatch_TradeItemSwap(t *testing.T) {
 	//    partner gets the staged view.
 	addFrame := make([]byte, 8)
 	binary.LittleEndian.PutUint16(addFrame[0:], ropacket.HeaderCZADDEXCHANGEITEM)
-	binary.LittleEndian.PutUint16(addFrame[2:], 1) // index (slot 1)
+	binary.LittleEndian.PutUint16(addFrame[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint32(addFrame[4:], 1) // amount
 	sendRaw(t, conn1, addFrame)
 	selfAck := readTradeFrame(t, conn1, ropacket.HeaderZCACKADDEXCHANGEITEM, 5)
@@ -2383,7 +2400,7 @@ func TestMap_Dispatch_SharedWorld_Visibility(t *testing.T) {
 	//    A's own conn gets the throw-ack+fall burst (not asserted here).
 	dropReq := make([]byte, 6)
 	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
-	binary.LittleEndian.PutUint16(dropReq[2:], 1) // inventory index (1-based)
+	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint16(dropReq[4:], 1) // amount
 	sendRaw(t, conn1, dropReq)
 
@@ -2652,7 +2669,7 @@ func TestMap_NeighborSeesPickup(t *testing.T) {
 	// B drops (1 Red Potion) so a floor item exists at B's cell.
 	dropReq := make([]byte, 6)
 	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
-	binary.LittleEndian.PutUint16(dropReq[2:], 1)
+	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint16(dropReq[4:], 1)
 	sendRaw(t, conn2, dropReq)
 	// B gets the throw-ack + fall-entry burst; A gets the fall-entry broadcast.

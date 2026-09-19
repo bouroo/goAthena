@@ -27,7 +27,8 @@ type vitals interface {
 }
 
 // ItemUseService runs the usable-item (potion) use case: consume one unit of an
-// item at a 1-based inventory index and apply its effects. Healing items
+// item at server row serverRow (0-based, an index into the LoadByChar list) and
+// apply its effects. Healing items
 // (itemheal script) restore flat HP/SP through the vitals port; non-healing
 // usable items are consumed but apply no vitals here (buffs/status are deferred).
 // Item state lives on the inventory rows; the item_db Heal() ranges supply the
@@ -60,14 +61,14 @@ type ItemUseAck struct {
 // Item-use errors are distinct sentinels so the gateway maps each to a specific
 // S→C ack result without parsing strings (no branch on error strings).
 var (
-	// ErrItemUseNotFound means the 1-based inventory index is out of range.
-	ErrItemUseNotFound = errors.New("itemuse: inventory index out of range")
+	// ErrItemUseNotFound means the inventory row is out of range.
+	ErrItemUseNotFound = errors.New("itemuse: inventory row out of range")
 	// ErrNotUsable means the item is not a usable/healing type (the client
 	// should not send CZ_USE_ITEM for it, but this rejects it defensively).
 	ErrNotUsable = errors.New("itemuse: item is not usable")
 )
 
-// Use consumes one unit of the item at the 1-based inventory index invIndex and
+// Use consumes one unit of the item at server row serverRow (0-based) and
 // applies its effects.
 //
 // Healing items (itemheal script) restore a rolled [hpMin,hpMax]/[spMin,spMax]
@@ -79,15 +80,15 @@ var (
 // ErrItemNotFound before any heal; an AddVitals failure after the remove loses
 // the unit — acceptable since heal failures are rare and the alternative
 // (heal-then-remove) can duplicate the item on a mid-way crash.
-func (s *ItemUseService) Use(ctx context.Context, accountID, charID uint32, invIndex int) (ItemUseAck, error) {
+func (s *ItemUseService) Use(ctx context.Context, accountID, charID uint32, serverRow int) (ItemUseAck, error) {
 	items, err := s.inv.LoadByChar(ctx, accountID, charID)
 	if err != nil {
 		return ItemUseAck{}, fmt.Errorf("itemuse: load inventory: %w", err)
 	}
-	if invIndex < 1 || invIndex > len(items) {
+	if serverRow < 0 || serverRow >= len(items) {
 		return ItemUseAck{}, ErrItemUseNotFound
 	}
-	target := items[invIndex-1]
+	target := items[serverRow]
 	entry := s.itemEntry(target.NameID)
 	if !isUsable(entry) {
 		return ItemUseAck{}, ErrNotUsable

@@ -1,7 +1,9 @@
 package infra
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/bouroo/goAthena/internal/modules/inventory/domain"
@@ -19,7 +21,11 @@ func NewMemoryItemRepository() *MemoryItemRepository {
 	return &MemoryItemRepository{items: make(map[domain.ItemID]domain.Item)}
 }
 
-// LoadByChar returns the character's items.
+// LoadByChar returns the character's items ordered by row id, mirroring the
+// GORMItemRepository's `ORDER BY id`. The ordering is load-bearing, not
+// cosmetic: the inventory index the client sends is an offset into this list
+// (ropacket.ServerIndex), so an unstable order would map a client slot to a
+// different row between the LoadEndAck burst and the handler that consumes it.
 func (r *MemoryItemRepository) LoadByChar(_ context.Context, _, charID uint32) ([]domain.Item, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -29,6 +35,7 @@ func (r *MemoryItemRepository) LoadByChar(_ context.Context, _, charID uint32) (
 			out = append(out, it)
 		}
 	}
+	slices.SortFunc(out, func(a, b domain.Item) int { return cmp.Compare(a.ID, b.ID) })
 	return out, nil
 }
 

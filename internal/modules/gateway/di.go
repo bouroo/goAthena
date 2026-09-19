@@ -19,6 +19,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
 
@@ -147,5 +148,10 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("map server: %w", err)
 	}
+	// item_db resolves the IT_* wire type and View sprite the LoadEndAck
+	// inventory burst writes. Attached post-construction (like skillDB above) to
+	// keep NewMapServer's positional signature stable; unresolved leaves the
+	// burst's entries typed IT_ETC with a 0 sprite rather than refusing startup.
+	ms.SetItemDB(resolveOptional[*itemdb.Registry](inj, log, "itemdb"))
 	return ms, nil
 }
