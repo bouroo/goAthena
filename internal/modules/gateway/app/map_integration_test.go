@@ -371,9 +371,7 @@ func TestMap_SkillInfoListOnEnter(t *testing.T) {
 
 	// Drain ZC_ACCEPT_ENTER (13 bytes).
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain ZC_ACCEPT_ENTER: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// CZ_NOTIFY_ACTORINIT (0x007d, 2B cmd-only): trigger the init burst.
 	if _, err := conn.Write([]byte{0x7d, 0x00}); err != nil {
@@ -428,9 +426,7 @@ func TestMap_CastLearnedAndUnlearnedSkill(t *testing.T) {
 	// Drain ZC_ACCEPT_ENTER (13 bytes) — the skill list rides the LoadEndAck
 	// burst now, not the enter burst.
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain ZC_ACCEPT_ENTER: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Spawn a mob on the player's cell (53,111 — see buildTestMapDeps) so the
 	// cast is inside skill range.
@@ -516,9 +512,7 @@ func TestMap_SkillUpLearns(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain ZC_ACCEPT_ENTER: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// CZ_SKILLUP (4B): cmd 0x0112 + uint16 skillID 5.
 	req := make([]byte, 4)
@@ -613,10 +607,7 @@ func TestMap_Dispatch_MovementAfterEnter(t *testing.T) {
 	// 1. CZ_ENTER → ZC_ACCEPT_ENTER (drain the 13-byte response).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	enterReply := make([]byte, 13)
-	if _, err := io.ReadFull(conn, enterReply); err != nil {
-		t.Fatalf("read accept-enter: %v", err)
-	}
+	enterReply := awaitAcceptEnter(t, conn)
 	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
 		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
 	}
@@ -658,10 +649,7 @@ func TestMap_RegenEmitsParChange(t *testing.T) {
 	//    reactor has registered the conn for charID 150001 before we proceed.
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	enterReply := make([]byte, 13)
-	if _, err := io.ReadFull(conn, enterReply); err != nil {
-		t.Fatalf("read accept-enter: %v", err)
-	}
+	enterReply := awaitAcceptEnter(t, conn)
 	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
 		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
 	}
@@ -723,9 +711,7 @@ func TestMap_Dispatch_SitStandActionEcho(t *testing.T) {
 	// CZ_ENTER → ZC_ACCEPT_ENTER (drain the 13-byte accept-enter).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// CZ_ACTION_REQUEST action=2 (sit), self-targeted at the player's own GID.
 	const sitAction byte = 2
@@ -772,9 +758,7 @@ func TestMap_MobAttacksPlayer(t *testing.T) {
 	// for charID 150001 (the PC, full HP 1000 at new_1-1 (53,111)).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Spawn the aggressive mob one cell east of the player (Chebyshev dist 1 ≤ its
 	// AttackRange 2) so the cadence-accumulated swing lands.
@@ -865,9 +849,7 @@ func TestMap_MobChasesPlayer(t *testing.T) {
 	// for charID 150001 (the PC, full HP 1000 at new_1-1 (53,111)).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Spawn the aggressive mob 7 cells east (Chebyshev dist 7: within ChaseRange
 	// 12, outside AttackRange 2) so the chase loop pursues toward the player.
@@ -975,9 +957,7 @@ func TestMap_MobKillsPlayerRespawns(t *testing.T) {
 	// for charID 150001 (the PC, HP 1000 at new_1-1 (53,111), save point (1,1)).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Re-seed the PC at 1 HP so a single mob swing is lethal (the conn stays
 	// registered: RemoveEntity does not touch ms.conns). The save point is
@@ -1064,10 +1044,7 @@ func TestMap_MobKillsPlayerRespawns(t *testing.T) {
 	}
 
 	// ZC_ACCEPT_ENTER (13 B): the player's own client relocates to the save point.
-	enter := make([]byte, 13)
-	if _, err := io.ReadFull(conn, enter); err != nil {
-		t.Fatalf("read ZC_ACCEPT_ENTER relocate: %v", err)
-	}
+	enter := awaitAcceptEnter(t, conn)
 	if got := binary.LittleEndian.Uint16(enter[0:2]); got != ropacket.HeaderZCACCEPTENTER {
 		t.Fatalf("ZC_ACCEPT_ENTER header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
 	}
@@ -1107,9 +1084,7 @@ func TestMap_Restart_Respawn(t *testing.T) {
 	// CZ_ENTER → ZC_ACCEPT_ENTER (drain 13 B so the reactor registers the conn).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Re-seed the PC dead (HP 0) at the death cell; the save point stays (1,1) so
 	// respawn is observable. The conn stays registered (RemoveEntity never touches it).
@@ -1147,10 +1122,7 @@ func TestMap_Restart_Respawn(t *testing.T) {
 	}
 
 	// ZC_ACCEPT_ENTER (13 B): the client relocates to the save point (1,1).
-	enter := make([]byte, 13)
-	if _, err := io.ReadFull(conn, enter); err != nil {
-		t.Fatalf("read ZC_ACCEPT_ENTER relocate: %v", err)
-	}
+	enter := awaitAcceptEnter(t, conn)
 	if got := binary.LittleEndian.Uint16(enter[0:2]); got != ropacket.HeaderZCACCEPTENTER {
 		t.Fatalf("ZC_ACCEPT_ENTER header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
 	}
@@ -1196,9 +1168,7 @@ func TestMap_Restart_ReturnToCharSelect(t *testing.T) {
 	// CZ_ENTER → ZC_ACCEPT_ENTER (drain 13 B so the reactor registers the conn).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// CZ_RESTART type=1 (return to char-select).
 	restart := make([]byte, 3)
@@ -1253,9 +1223,7 @@ func TestMap_Dispatch_AttackMob(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Spawn a mob in the same map; its GID is the attack target.
 	const mobGID = 160000
@@ -1307,9 +1275,7 @@ func TestMap_KillMobGrantsEXP(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil { // drain accept-enter
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Spawn a 1-HP passive mob on the player's tile. A connecting hit floors at 1
 	// damage, so the first attack kills it deterministically. mob 8002 carries the
@@ -1431,9 +1397,7 @@ func TestMap_Dispatch_CastAttackSkill(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil { // drain accept-enter
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Spawn a mob on the player's tile (Chebyshev distance 0 <= skill range 1).
 	const mobGID = 160010
@@ -1526,9 +1490,7 @@ func TestMap_Dispatch_EquipIncreasesDamage(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil { // drain accept-enter
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// High-HP mob on the player's tile so it survives both hits (no death burst
 	// interleaving the reads).
@@ -1594,9 +1556,7 @@ func TestMap_Dispatch_UseItemHeals(t *testing.T) {
 	// 1. CZ_ENTER -> ZC_ACCEPT_ENTER (drain 13 bytes so the reactor has the conn).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// 2. Seed one Red Potion (id 501) at inventory slot 1 and drop the player to
 	//    HP 500/1000 so the +45 heal lands at 545 (not clamped). RemoveEntity does
@@ -1704,9 +1664,7 @@ func TestMap_Dispatch_CastGroundSkill(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil { // drain accept-enter
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// CZ_USE_SKILL_TOPOS (0x0AF4, 11B): cmd + int16 skillLv + uint16 skillID +
 	// uint16 xPos + uint16 yPos + uint8 moreinfo (server-ignored).
@@ -1783,9 +1741,7 @@ func TestMap_Dispatch_PickupFloorItem(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Drop a floor item; the returned GroundID is what the pickup targets.
 	fi := spawn.DropItem(512, 1, "new_1-1", worlddomain.Position{X: 53, Y: 111}, 0)
@@ -1825,9 +1781,7 @@ func TestMap_Dispatch_DropItem(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Seed the bag via the pickup path: drop a floor item server-side, then
 	// CZ_ITEM_PICKUP it into the player's inventory (slot 1).
@@ -1906,9 +1860,7 @@ func TestMap_Dispatch_DropOutOfRangeKeepsConnection(t *testing.T) {
 	// 1. CZ_ENTER → ZC_ACCEPT_ENTER (drain the 13-byte response).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// 2. CZ_ITEM_DROP (0x0363, 6B) against slot 1, which the player does not own
 	//    (no items seeded) → handler logs + returns; no reply, connection kept.
@@ -1961,9 +1913,7 @@ func TestMap_Dispatch_InputEditDlgStrVariableFrameKeepsConnection(t *testing.T) 
 	// 1. CZ_ENTER → drain the 13-byte ZC_ACCEPT_ENTER.
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// 2. CZ_INPUT_EDITDLGSTR (0x01d5): int16 cmd | uint16 pktLen | uint32 NpcID |
 	//    char[] value+NUL. A multi-byte value makes the frame longer than the
@@ -2033,10 +1983,7 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	// 1. CZ_ENTER → ZC_ACCEPT_ENTER (13B): drain the full reply.
 	sendCZEnter(t, conn, 2000001, gid, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	enterReply := make([]byte, 13)
-	if _, err := io.ReadFull(conn, enterReply); err != nil {
-		t.Fatalf("read accept-enter: %v", err)
-	}
+	enterReply := awaitAcceptEnter(t, conn)
 	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
 		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
 	}
@@ -2172,20 +2119,18 @@ func startAndDialTwo(t *testing.T, ms *gwapp.MapServer, port int) (net.Conn, net
 	return dial(), dial()
 }
 
-// readTradeFrame reads exactly size bytes and asserts the leading header. Trade
-// responses are fixed-length and the conn is quiescent between steps (no tick
-// broadcasts in the test harness), so an exact read is reliable.
+// readTradeFrame reads the next frame and asserts it is exactly the wanted
+// opcode and size. Trade responses are fixed-length and the conn is quiescent
+// between steps (no tick broadcasts in the test harness), so an exact read is
+// reliable — and asserting the *next* frame is the point here: a frame arriving
+// out of order is a failure, not something to scan past.
 func readTradeFrame(t *testing.T, c net.Conn, want uint16, size int) []byte {
 	t.Helper()
-	c.SetDeadline(time.Now().Add(3 * time.Second))
-	buf := make([]byte, size)
-	if _, err := io.ReadFull(c, buf); err != nil {
-		t.Fatalf("read frame 0x%04x: %v", want, err)
+	cmd, frame := nextServerFrame(t, c, 3*time.Second)
+	if cmd != want || len(frame) != size {
+		t.Fatalf("next frame = 0x%04x (%dB), want 0x%04x (%dB)", cmd, len(frame), want, size)
 	}
-	if got := binary.LittleEndian.Uint16(buf[0:2]); got != want {
-		t.Fatalf("frame header = 0x%04x, want 0x%04x", got, want)
-	}
-	return buf
+	return frame
 }
 
 // sendRaw writes frame bytes to conn with a deadline.
@@ -2243,13 +2188,9 @@ func TestMap_Dispatch_TradeItemSwap(t *testing.T) {
 
 	// 1. Both players enter (each drains its 13-byte ZC_ACCEPT_ENTER).
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p1 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
-	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p2 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn2)
 	// Player 1 also receives player 2's spawn (ZC_SPAWN_UNIT): the enter handler
 	// now broadcasts the newcomer to neighbors. Drain it off conn1 so the
 	// subsequent trade frames read cleanly.
@@ -2365,13 +2306,9 @@ func TestMap_Dispatch_SharedWorld_Visibility(t *testing.T) {
 	// 1. Both enter. Each drains its 13-byte accept-enter; A's conn also receives
 	//    B's spawn (B's enter broadcasts the newcomer to neighbors) and drains it.
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p1 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
-	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p2 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn2)
 	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107) // A sees B spawn in.
 	// B also sees A: the Phase-11 enter-sight back-fill sends one ZC_SPAWN_UNIT
 	// per existing nearby PC to the newcomer's own conn on enter. Drain it before
@@ -2486,9 +2423,7 @@ func TestMap_KillMobLevelsUp(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	const (
 		mobGID  = 160030
@@ -2577,9 +2512,7 @@ func TestMap_StatusChangeAllocates(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// CZ_STATUS_CHANGE (5B): cmd 0x00bb + SP_STR(13) + amount 1.
 	req := make([]byte, 5)
@@ -2656,13 +2589,9 @@ func TestMap_NeighborSeesPickup(t *testing.T) {
 
 	// Both enter; drain accept-enter + the mutual back-fill spawns.
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p1 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
-	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p2 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn2)
 	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107)
 	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT, 107)
 
@@ -2708,9 +2637,7 @@ func TestMap_EnterShowsExistingFloorItems(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 	entry := make([]byte, 19)
 	if _, err := io.ReadFull(conn, entry); err != nil {
 		t.Fatalf("read ZC_ITEM_ENTRY: %v", err)
@@ -2752,9 +2679,7 @@ func TestMap_MobRespawnVisible(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// 1-HP mob with a 300ms respawn; the killing blow arms the timer.
 	if err := env.spawn.SpawnMob(160050, 8002, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "RespMob", 1, 1, 300*time.Millisecond); err != nil {

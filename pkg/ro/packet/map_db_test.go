@@ -164,8 +164,10 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// Phase 40 adds the expression pair (CZ_CHANGE_DIRECTION, CZ_REQ_EMOTION)
 	// → 101; Phase 41 adds the whisper ignore-list family (CZ_PMIgnore,
 	// CZ_SETTING_WHISPER_STATE, CZ_REQ_WHISPER_LIST, ZC_SETTING_WHISPER_PC,
-	// ZC_SETTING_WHISPER_STATE, ZC_WHISPER_LIST) → 105.
-	const want = 105
+	// ZC_SETTING_WHISPER_STATE, ZC_WHISPER_LIST) → 105. Phase 43 registers
+	// ZC_NPCACK_MAPMOVE (0x0091), the warp-portal relocation directive the
+	// server had always emitted but never declared in the DB → 106.
+	const want = 106
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

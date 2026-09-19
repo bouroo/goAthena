@@ -930,6 +930,17 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCAcceptEnter,
 		Direction: DirectionServerToClient,
 	})
+	// ZC_NPCACK_MAPMOVE (0x0091) — the map-server's cross-map relocation
+	// directive, emitted on a warp portal (dispatch.go relocateThroughPortal).
+	// It was described by sizeZCNPCAckMapMove all along but never registered
+	// here, so the packet DB — the reference every frame reader resolves
+	// against — did not know a frame the server actually sends.
+	db.Register(Definition{
+		ID:        HeaderZCNPCACKMAPMOVE,
+		Name:      "ZC_NPCACK_MAPMOVE",
+		Length:    sizeZCNPCAckMapMove,
+		Direction: DirectionServerToClient,
+	})
 	db.Register(Definition{
 		ID:        HeaderZCNOTIFYPLAYERMOVE,
 		Name:      "ZC_NOTIFY_PLAYERMOVE",

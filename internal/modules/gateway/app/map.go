@@ -595,12 +595,20 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 	// re-verifying. AID/GID are sourced from the verified session, never the
 	// client-controlled packet fields.
 	c.SetContext(mapAuth{accountID: req.AccountID, charID: req.CharID})
+
+	// Submit this connection's own ZC_ACCEPT_ENTER before it becomes
+	// addressable. registerConn is the gate every cross-connection delivery
+	// resolves through (broadcast, trade and whisper all look their target up
+	// with connFor); registering first would let a peer's dispatch goroutine
+	// write a ZC_SPAWN_UNIT ahead of this conn's accept-enter. rAthena cannot
+	// produce that order — its map server runs one player's enter to
+	// completion (accept, then map_addblock, then the AREA broadcast) — and a
+	// client that sees a spawn-unit first has no session to attribute it to.
+	s.writeAcceptEnter(c, entity)
 	// Index the connection by charID so peer-to-peer trade and AOI-broadcast
 	// packets (whose target is on a different connection) can be delivered.
 	// Pruned on disconnect by OnClose → unregisterConn.
 	s.registerConn(req.CharID, c)
-
-	s.writeAcceptEnter(c, entity)
 	// Other players already on the map see the newcomer spawn in (ZC_SPAWN_UNIT).
 	if sbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(entity)); ok {
 		s.broadcast(sbuf, entity.Map, entity.Pos, req.CharID)

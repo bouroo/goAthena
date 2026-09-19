@@ -100,9 +100,7 @@ func prepareInventoryTestClient(t *testing.T, port int) (net.Conn, mapTestEnv) {
 	conn := startAndDial(t, ms, port)
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 	return conn, env
 }
 

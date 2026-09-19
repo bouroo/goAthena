@@ -43,60 +43,38 @@ func whisperFrame(target, message string) []byte {
 // dispatch goroutines, so a connection may carry one spawn-unit per neighbor
 // from BOTH the broadcast path and the AOI back-fill path — the exact count
 // interleaves. Scanning forward to the whisper (rather than draining a fixed
-// count) keeps the test insensitive to that ordering.
+// count) keeps the test insensitive to that ordering; each skipped frame is
+// framed by its real size, so the scan cannot desync.
 func drainToWhisper(t *testing.T, c net.Conn) (string, string) {
 	t.Helper()
-	for {
-		c.SetReadDeadline(time.Now().Add(3 * time.Second))
-		head := make([]byte, 4)
-		if _, err := io.ReadFull(c, head); err != nil {
-			t.Fatalf("read frame header: %v", err)
-		}
-		cmd := binary.LittleEndian.Uint16(head[0:2])
-		plen := int(binary.LittleEndian.Uint16(head[2:4]))
-		body := make([]byte, plen-4)
-		if _, err := io.ReadFull(c, body); err != nil {
-			t.Fatalf("read frame body (0x%04x): %v", cmd, err)
-		}
-		if cmd != ropacket.HeaderZCWHISPER {
-			continue // spawn-unit or other enter-time frame
-		}
-		// body: [4:senderGID][24:senderName][1:isAdmin][n:message+null]
-		name := body[4:28]
-		if idx := bytes.IndexByte(name, 0); idx >= 0 {
-			name = name[:idx]
-		}
-		msg := body[29:]
-		if idx := bytes.IndexByte(msg, 0); idx >= 0 {
-			msg = msg[:idx]
-		}
-		return string(name), string(msg)
+	frame := scanServerFrame(t, c, ropacket.HeaderZCWHISPER, 3*time.Second)
+	body := frame[4:] // skip the 4-byte header
+	// body: [4:senderGID][24:senderName][1:isAdmin][n:message+null]
+	name := body[4:28]
+	if idx := bytes.IndexByte(name, 0); idx >= 0 {
+		name = name[:idx]
 	}
+	msg := body[29:]
+	if idx := bytes.IndexByte(msg, 0); idx >= 0 {
+		msg = msg[:idx]
+	}
+	return string(name), string(msg)
 }
 
 // drainQuiescent consumes every buffered frame until the connection goes
 // quiet (200ms without bytes), tolerating any interleaved spawn-unit count.
 // Used on the sender's conn, where the next expected frame is the 7B ack.
+//
+// Every frame it passes is framed by its real size (readServerFrame →
+// serverFrameSize, driven by the map server's own packet DB). The earlier
+// version trusted bytes [2:4] as a length slot, which only variable-length
+// frames carry — a fixed frame's bytes there are payload, so the drain
+// consumed the wrong byte count and desynced the rest of the test.
 func drainQuiescent(t *testing.T, c net.Conn) {
 	t.Helper()
 	for {
-		c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-		head := make([]byte, 4)
-		if _, err := io.ReadFull(c, head); err != nil {
+		if _, _, err := readServerFrame(t, c, 200*time.Millisecond); err != nil {
 			return // quiescent
-		}
-		cmd := binary.LittleEndian.Uint16(head[0:2])
-		// The two fixed 2-byte frames this drain can encounter carry no length
-		// slot; recognize them by opcode instead of misreading bytes 2-4.
-		if cmd == ropacket.HeaderCZREQWHISPERLIST || cmd == 0x0083 {
-			continue
-		}
-		plen := int(binary.LittleEndian.Uint16(head[2:4]))
-		if plen < 4 {
-			t.Fatalf("frame 0x%04x bad length %d", cmd, plen)
-		}
-		if _, err := io.ReadFull(c, make([]byte, plen-4)); err != nil {
-			t.Fatalf("drain frame body (0x%04x): %v", cmd, err)
 		}
 	}
 }
@@ -118,12 +96,8 @@ func TestMap_WhisperBetweenPlayers(t *testing.T) {
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
 	// Each enter's reply: 13B accept-enter, then the other's 107B spawn-unit
 	// (same drain sequence the trade test uses).
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p1 accept-enter: %v", err)
-	}
-	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p2 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
 	drainQuiescent(t, conn1)
 	drainQuiescent(t, conn2)
 
@@ -162,9 +136,7 @@ func TestMap_WhisperTargetOffline(t *testing.T) {
 	conn2.Close() // only player 1 stays
 
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
 	drainQuiescent(t, conn1)
 
 	conn1.SetDeadline(time.Now().Add(3 * time.Second))
@@ -193,12 +165,8 @@ func TestMap_GlobalMessageBroadcastsToNeighbor(t *testing.T) {
 
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p1 accept-enter: %v", err)
-	}
-	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p2 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
 	drainQuiescent(t, conn1)
 	drainQuiescent(t, conn2)
 
@@ -286,12 +254,8 @@ func TestMap_GetCharNameResolvesPCAndNPC(t *testing.T) {
 
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p1 accept-enter: %v", err)
-	}
-	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p2 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
 	drainQuiescent(t, conn1)
 	drainQuiescent(t, conn2)
 
@@ -327,61 +291,25 @@ func TestMap_GetCharNameResolvesPCAndNPC(t *testing.T) {
 	}
 }
 
-// drainFixed scans queued frames until one carries the wanted fixed-size
-// opcode, asserting its size, and returns it whole.
+// drainFixed scans queued frames until one carries the wanted opcode, asserts
+// its size against the caller's expectation (the wire fact the test documents)
+// and returns it whole.
+//
+// Skipped frames are framed by their real size from the map server's own packet
+// DB (nextServerFrame → serverFrameSize). The hand-maintained skip table this
+// replaced knew six opcodes and had already drifted from the wire; an opcode
+// the DB does not know now fails loudly here instead of mis-skipping silently.
 func drainFixed(t *testing.T, c net.Conn, want uint16, size int) []byte {
 	t.Helper()
 	for {
-		c.SetReadDeadline(time.Now().Add(3 * time.Second))
-		head := make([]byte, 2)
-		if _, err := io.ReadFull(c, head); err != nil {
-			t.Fatalf("read frame cmd: %v", err)
-		}
-		cmd := binary.LittleEndian.Uint16(head)
-		// Read the rest of THIS frame by its true total length: the wanted
-		// reply is fixed-size, and any skip candidate has its own known size.
-		skip := size
-		if cmd != want {
-			skip = fixedReplyLen(cmd)
-			if skip < 2 {
-				t.Fatalf("frame 0x%04x not in known-skip table", cmd)
-			}
-		}
-		body := make([]byte, skip-2)
-		if _, err := io.ReadFull(c, body); err != nil {
-			t.Fatalf("read frame body (0x%04x): %v", cmd, err)
-		}
+		cmd, frame := nextServerFrame(t, c, 3*time.Second)
 		if cmd != want {
 			continue
 		}
-		out := make([]byte, 0, skip)
-		out = append(out, head...)
-		out = append(out, body...)
-		return out
-	}
-}
-
-// fixedReplyLen is the total wire length of fixed-size server replies these
-// tests skip past. Frames without an entry are fatal (the scan must know every
-// frame it can encounter, or it would mis-skip).
-func fixedReplyLen(cmd uint16) int {
-	switch cmd {
-	case ropacket.HeaderZCSPAWNUNIT:
-		return 107
-	case ropacket.HeaderZCNOTIFYCHAT:
-		return 0 // variable: caller never skips these
-	case ropacket.HeaderZCWHISPERLIST:
-		return 0 // variable: readWantVarFrame owns these
-	case ropacket.HeaderZCNOTIFYTIME:
-		return 6
-	case ropacket.HeaderZCEMOTION:
-		return 7
-	case ropacket.HeaderZCCHANGEDIR:
-		return 9
-	case ropacket.HeaderZCSETTINGWHISPERPC, ropacket.HeaderZCSETTINGWHISPERSTATE:
-		return 4
-	default:
-		return -1
+		if len(frame) != size {
+			t.Fatalf("frame 0x%04x length = %d, want %d", cmd, len(frame), size)
+		}
+		return frame
 	}
 }
 
@@ -406,9 +334,7 @@ func TestMap_RequestTimePing(t *testing.T) {
 	conn2.Close()
 
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
 	drainQuiescent(t, conn1)
 
 	ping := make([]byte, 6)
@@ -449,12 +375,8 @@ func TestMap_ReqEmotionBroadcastsToNeighbor(t *testing.T) {
 
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p1 accept-enter: %v", err)
-	}
-	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p2 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
 	drainQuiescent(t, conn1)
 	drainQuiescent(t, conn2)
 
@@ -493,12 +415,8 @@ func TestMap_ChangeDirBroadcastsAndPersists(t *testing.T) {
 
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p1 accept-enter: %v", err)
-	}
-	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p2 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
 	drainQuiescent(t, conn1)
 	drainQuiescent(t, conn2)
 
@@ -563,12 +481,8 @@ func enterTwoBoth(t *testing.T, conn1, conn2 net.Conn) {
 	t.Helper()
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p1 accept-enter: %v", err)
-	}
-	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p2 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
 	drainQuiescent(t, conn1)
 	drainQuiescent(t, conn2)
 }
@@ -635,33 +549,12 @@ func TestMap_PMIgnoreVerbsMatrix(t *testing.T) {
 	send(whisperStateFrame(1), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 1)
 }
 
-// readWantVarFrame scans queued frames for a wanted variable-length opcode and
-// returns it whole, using the on-wire length slot (cmd+packetSize, 4B header).
+// readWantVarFrame scans queued frames for a wanted opcode and returns it whole.
+// The wanted frame is variable-length (it carries its own length slot); the
+// frames it scans past are framed by their real size, fixed or variable.
 func readWantVarFrame(t *testing.T, c net.Conn, want uint16) []byte {
 	t.Helper()
-	for {
-		c.SetReadDeadline(time.Now().Add(3 * time.Second))
-		head := make([]byte, 4)
-		if _, err := io.ReadFull(c, head); err != nil {
-			t.Fatalf("read want var frame header: %v", err)
-		}
-		cmd := binary.LittleEndian.Uint16(head[0:2])
-		plen := int(binary.LittleEndian.Uint16(head[2:4]))
-		if plen < 4 {
-			t.Fatalf("want var frame 0x%04x bad length %d", cmd, plen)
-		}
-		body := make([]byte, plen-4)
-		if _, err := io.ReadFull(c, body); err != nil {
-			t.Fatalf("read want var frame body (0x%04x): %v", cmd, err)
-		}
-		if cmd != want {
-			continue
-		}
-		out := make([]byte, 0, plen)
-		out = append(out, head...)
-		out = append(out, body...)
-		return out
-	}
+	return scanServerFrame(t, c, want, 3*time.Second)
 }
 
 // TestMap_WhisperIgnoredByList: Partner /ex blocks "Hero", then Hero's whisper
