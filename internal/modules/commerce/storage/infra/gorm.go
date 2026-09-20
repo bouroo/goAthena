@@ -54,8 +54,14 @@ func (r *GORMStorageRepository) Add(ctx context.Context, accountID, nameID uint3
 			Order("id").First(&existing).Error
 		if ferr == nil {
 			existing.Amount += uint32(amount)
-			return tx.Model(&domain.StorageItem{}).Where("id = ?", existing.ID).
-				Update("amount", existing.Amount).Error
+			if uerr := tx.Model(&domain.StorageItem{}).Where("id = ?", existing.ID).
+				Update("amount", existing.Amount).Error; uerr != nil {
+				return uerr
+			}
+			// Return the merged row (caller needs the ID to echo on the wire)
+			// rather than the zero StorageItem that the empty `out` would yield.
+			out = existing
+			return nil
 		}
 		if !errors.Is(ferr, gorm.ErrRecordNotFound) {
 			return ferr

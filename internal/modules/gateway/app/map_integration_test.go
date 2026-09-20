@@ -23,6 +23,7 @@ import (
 	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
 	contentinfra "github.com/bouroo/goAthena/internal/modules/content/infra"
 	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
+	economyinfra "github.com/bouroo/goAthena/internal/modules/economy/infra"
 	gwapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
@@ -171,7 +172,7 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	// catalog, bound to its NPC GID so a CZ_ACK_SELECT_DEALTYPE on that GID opens it.
 	charRepo := charinfra.NewMemoryCharacterRepository()
 	shops := shopapp.NewShopService(devTestCatalog(), itemRepo,
-		testEconPort{svc: economyapp.NewEconomyService(charRepo)})
+		testEconPort{svc: economyapp.NewEconomyService(charRepo, economyinfra.NewMemoryLedger())})
 	shopStore := contentinfra.NewMemoryShopStore()
 	shopStore.RegisterShop(shop.DevShopGID, devTestShopName)
 
@@ -2272,7 +2273,7 @@ func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*g
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
 	skills.SetTree(testSkillTree())
 	charRepo := charinfra.NewMemoryCharacterRepository()
-	econ := economyapp.NewEconomyService(charRepo)
+	econ := economyapp.NewEconomyService(charRepo, economyinfra.NewMemoryLedger())
 	trade := worldapp.NewTradeService(world, inv, econ)
 
 	ms, err := gwapp.NewMapServer(world, spawn, combat, nil, nil, nil, inv, content, skills, nil, nil, trade, sessions, testSkillDB(), slog.Default())
