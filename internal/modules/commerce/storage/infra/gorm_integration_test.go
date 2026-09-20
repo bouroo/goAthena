@@ -202,6 +202,12 @@ func TestStorage_GORMRoundTrip(t *testing.T) {
 	if eqRow.ID == eqRow2.ID {
 		t.Errorf("equipment should not stack: got same id %d", eqRow.ID)
 	}
+	// Mark eqRow2 as equipment so the next Add(amount=3) doesn't merge into
+	// it as a stackable match — the test wants a fresh row with amount=3
+	// for the over-remove / not-found cases below.
+	if err := repo.SetEquip(ctx, eqRow2.ID, 0x0001); err != nil {
+		t.Fatalf("set equip 2: %v", err)
+	}
 
 	// Error paths against a fresh item: over-remove then not-found.
 	item2, err := repo.Add(ctx, testStorageAccountID, testStorageNameID, 3)
