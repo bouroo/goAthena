@@ -213,11 +213,29 @@ real ledger needs:~~ **done** in commit `8c87e57`:
   inventory + zeny ports. Needs a `storage` bounded sub-context with a
   `StorageService` and a separate `storage` table per char.
 
-**Plan:** design vending port + vending service + vending gateway wiring;
-then storage service + storage table + migration. Both have L1+L2 tests.
-**Deferred to next session** — the storage slice is pattern-equivalent to
-inventory and the vending slice is a separate bounded context; together
-they are a full multi-commit effort that did not fit in this turn.
+**Storage first slice — done** in commit `1a2b848`:
+
+- `commerce/storage/domain.StorageItem` + `StorageRepository` port
+  (account-keyed, `MAX_STORAGE` ceiling at rAthena floor of 600).
+- `commerce/storage/infra/{memory,gorm}.go` — stackable items merge into
+  existing same-NameID row; equipment always inserts; merge-or-insert
+  wrapped in a transaction.
+- Migration `000006_storage.{up,down}.sql` for both MariaDB and Postgres
+  (rAthena schema verbatim).
+- `app.StorageService` + memory-repo unit tests (Add/Remove/Stacking/
+  Equipment/StorageFull/Insufficient/InvalidAmount).
+- GORM integration test (Add/Stack/Load/Remove/Equipment-separate-row/over-remove/
+  not-found) using the shared testdb harness.
+- composition.go registers the module; the storage service is resolvable
+  from the DI injector at boot.
+
+**Storage second slice (gateway wiring)** — the next commit adds:
+packet codecs for `CZ_MOVE_ITEM_TO_STORE2` (0x07e6) /
+`CZ_MOVE_ITEM_TO_BODY2` (0x07e7) / `CZ_CLOSE_STORE` (0x07e5) +
+`ZC_STORE_NORMALITEMLIST` (0x07e9) / `ZC_STORE_EQUIPMENTITEMLIST` (0x07ea)
++ `ZC_STOREITEMLISTRESULT` (0x07eb) init frames; map-server dispatch
+handlers and a world-side orchestrator that moves items bag↔warehouse
+atomically (inventory.Remove + storage.Add).
 
 ---
 
@@ -375,7 +393,7 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 |---|---|---|
 | M8: full transaction log + audit | M | Small. Ship next session. |
 | M9: vending | L | Substantial. |
-| M9: storage/warehouse | M | Small once schema is in. |
+| M9: storage/warehouse gateway wiring | M | Service+schema landed (`1a2b848`); packet codecs + dispatch handlers next. |
 | M10: Rung B–E | L | Multi-session. |
 | M11: friend list | M | Persistent table. |
 | M11: guild | L | Large. |
@@ -396,3 +414,4 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-20 | goAthena agent | `8c87e57` | M8: zeny ledger (transaction log + audit + reason-tagged movement) |
 | 2026-09-20 | goAthena agent | `556a8ee` | M10 Rung A: item-script builtins (getitem/delitem/countitem/equip/unequip) + world-side adapter |
 | 2026-09-20 | goAthena agent | `0e8a104` | M14: security audit pass — login rate limiter + cmd/loadgen + audit doc |
+| 2026-09-20 | goAthena agent | `1a2b848` | M9 storage first slice — warehouse aggregate + rAthena `storage` schema + GORM repo + service tests (gateway wiring next) |
