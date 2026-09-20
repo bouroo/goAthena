@@ -5,8 +5,9 @@ package app
 import (
 	"testing"
 
-	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/bouroo/goAthena/internal/modules/world/domain"
 )
 
 // TestStepToward_AxesAndDiagonal verifies the greedy step reduces each axis by
