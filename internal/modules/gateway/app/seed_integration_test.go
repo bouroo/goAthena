@@ -88,28 +88,18 @@ func enterMap(t *testing.T, conn net.Conn, r *bufio.Reader) (spawnUnits int) {
 	return spawnUnits
 }
 
-// drainLoadEndAckBurst consumes the LoadEndAck inventory + skill-list burst
-// so a test can read the frames that follow it.
+// drainLoadEndAckBurst sends CZ_NOTIFY_ACTORINIT and consumes the whole init
+// burst — inventory frames, skill list, and ZC_PARTY_CONFIG — so a test can read
+// the frames that follow it. Each frame's length is read from its own header
+// rather than assumed, so a change to the burst's contents cannot leave an
+// unconsumed frame to be mistaken for the caller's reply.
 func drainLoadEndAckBurst(t *testing.T, conn net.Conn, r *bufio.Reader) {
 	t.Helper()
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := conn.Write([]byte{0x7d, 0x00}); err != nil { // CZ_NOTIFY_ACTORINIT
 		t.Fatalf("send LoadEndAck: %v", err)
 	}
-	if _, err := io.ReadFull(r, make([]byte, 20)); err != nil { // inventory burst
-		t.Fatalf("drain inventory burst: %v", err)
-	}
-	hdr := make([]byte, 4)
-	if _, err := io.ReadFull(r, hdr); err != nil {
-		t.Fatalf("read skill-list header: %v", err)
-	}
-	n := int(binary.LittleEndian.Uint16(hdr[2:4]))
-	if n < 4 {
-		t.Fatalf("skill-list len = %d", n)
-	}
-	if _, err := io.ReadFull(r, make([]byte, n-4)); err != nil {
-		t.Fatalf("drain skill list: %v", err)
-	}
+	drainUntilPartyConfig(t, r)
 }
 
 // fixedSize maps the fixed-size reply commands these tests read to their
