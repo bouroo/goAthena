@@ -301,8 +301,36 @@ primitives) are deferred — each is its own commit-sized effort.
 5. **Rung E — Operator primitives** (`getgmlevel`, `warp` variants,
    `pvpon`/`pvpoff`, `setmapflag`, `removemapflag`).
 
-**Plan in this session:** ship Rung A (item-script builtins + a working
-quest-trigger NPC); record remaining rungs as explicit follow-up tickets.
+**Rung B — Quest engine** — done in commit `b7f8ab7`:
+
+- `internal/modules/content/quest/{domain,app,infra}` new bounded context.
+  `QuestVar` mirrors the rAthena `quest` table (sql-files/main.sql
+  quest.sql) keyed `(char_id, npc_name, var_name)`. `QuestService`
+  exposes `GetVar / SetVar / GetVarOfNPC / ListByChar` with name-length
+  validation against the migration VARCHAR bounds (24 / 32 bytes) and
+  decimal↔int64 coercion at the boundary.
+- Migration `000007_quest_vars.{up,down}.sql` for both MariaDB and
+  Postgres. GORM upsert via `clause.OnConflict` (postgres
+  ON CONFLICT DO UPDATE; mariadb emits the matching ON DUPLICATE KEY
+  UPDATE). Last-writer-wins, matching rAthena's quest table.
+- `pkg/ro/script/builtins.go` — two new builtins:
+  - `getvariableofnpc(npcName, varName)`: reads another NPC's
+    persistent variable for the dialog's player. rAthena
+    script.cpp `buildin_getvariableofnpc`.
+  - `setquestvar(npcName, varName, value)`: persists a value with
+    explicit NPC-scope. rAthena's `set` has implicit script-variable
+    mirrors; we expose persistence explicitly so the script author is
+    never surprised by an implicit DB write.
+- `script.Host` interface gains `GetQuestVar / SetQuestVar` methods.
+  `ScriptHost` implements them via the content-domain `ScriptQuest` port
+  (DI-resolved; nil-tolerant).
+- `pkg/ro/script/vm_test.go` FakeHost extended with `questVars` map +
+  `questSetErr`; 3 new VM tests cover `getvariableofnpc` / `setquestvar`
+  / short-arg safety.
+- L1+L2 green (fmt + lint + vet + race tests).
+
+Rungs C–E (misc verbs, monster/event scripts, operator primitives) are
+deferred — each is its own commit-sized effort.
 
 ---
 
@@ -415,7 +443,7 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | M8: full transaction log + audit | M | Small. Ship next session. |
 | M9: vending | L | Substantial. |
 | M9: storage/warehouse | ✅ done | Service+schema `1a2b848` + gateway wiring `c33c242`. Guild storage deferred to M11. |
-| M10: Rung B–E | L | Multi-session. |
+| M10: Rung B–E | L | Rung A done (`556a8ee`); Rung B done (`b7f8ab7`); Rungs C–E queued. |
 | M11: friend list | M | Persistent table. |
 | M11: guild | L | Large. |
 | M11: mail | L | Large. |
@@ -437,3 +465,4 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-20 | goAthena agent | `0e8a104` | M14: security audit pass — login rate limiter + cmd/loadgen + audit doc |
 | 2026-09-20 | goAthena agent | `1a2b848` | M9 storage first slice — warehouse aggregate + rAthena `storage` schema + GORM repo + service tests (gateway wiring next) |
 | 2026-09-20 | goAthena agent | `c33c242` | M9 storage second slice — gateway wiring (packet codecs + dispatch handlers + world orchestrator) — storage end-to-end |
+| 2026-09-20 | goAthena agent | `b7f8ab7` | M10 Rung B — quest engine (persistent NPC vars + `getvariableofnpc` / `setquestvar` builtins) |
