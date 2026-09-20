@@ -28,6 +28,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/social"
 	friendmod "github.com/bouroo/goAthena/internal/modules/social/friend"
 	guildmod "github.com/bouroo/goAthena/internal/modules/social/guild"
+	mailmod "github.com/bouroo/goAthena/internal/modules/social/mail"
 	partymod "github.com/bouroo/goAthena/internal/modules/social/party"
 	"github.com/bouroo/goAthena/internal/modules/transit"
 	"github.com/bouroo/goAthena/internal/modules/world"
@@ -142,6 +143,7 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	partymod.Register(inj)
 	friendmod.Register(inj)
 	guildmod.Register(inj)
+	mailmod.Register(inj)
 	content.Register(inj, cfg)
 	questmod.Register(inj)
 	transit.Register(inj)

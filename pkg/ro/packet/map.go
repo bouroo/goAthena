@@ -1653,5 +1653,38 @@ func NewMapServerDB() *DB {
 		Direction: DirectionServerToClient,
 	})
 
+	// --- M11 mail (RODEX, >=20150513; clif_packetdb.hpp:1738-1762) ---
+	// C→S mailbox verbs. The three refreshinbox opcodes and the two 26-byte
+	// mailbox2 variants share handlers; read and delete share a shape.
+	db.Register(Definition{ID: HeaderCZOPENMAILBOX, Name: "CZ_OPEN_MAILBOX", Length: sizeCZOpenMailbox, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQNEXTMAILLIST, Name: "CZ_REQ_NEXT_MAIL_LIST", Length: sizeCZOpenMailbox, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQREFRESHMAILL, Name: "CZ_REQ_REFRESH_MAIL_LIST", Length: sizeCZOpenMailbox, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZOPENMAILBOX2, Name: "CZ_OPEN_MAILBOX2", Length: sizeCZOpenMailbox2, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREFRESHMAILLIST, Name: "CZ_REQ_REFRESH_MAIL_LIST2", Length: sizeCZOpenMailbox2, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZCLOSEMAILBOX, Name: "CZ_CLOSE_MAILBOX", Length: sizeCZCancelWrite, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQREADMAIL, Name: "CZ_REQ_READ_MAIL", Length: sizeCZReadDeleteMail, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQDELETEMAIL, Name: "CZ_REQ_DELETE_MAIL", Length: sizeCZReadDeleteMail, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQZENYFROMMAIL, Name: "CZ_REQ_ZENY_FROM_MAIL", Length: sizeCZGetAttach, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQITEMFROMMAIL, Name: "CZ_REQ_ITEM_FROM_MAIL", Length: sizeCZGetAttach, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQCANCELWRITE, Name: "CZ_REQ_CANCEL_WRITE_MAIL", Length: sizeCZCancelWrite, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQADDITEMMAIL, Name: "CZ_REQ_ADD_ITEM_TO_MAIL", Length: sizeCZMailItem, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQREMOVEITEMMA, Name: "CZ_REQ_REMOVE_ITEM_MAIL", Length: sizeCZMailItem, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQOPENWRITEMAI, Name: "CZ_REQ_OPEN_WRITE_MAIL", Length: sizeCZOpenWriteMail, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZCHECKRECEIVENAM, Name: "CZ_CHECK_RECEIVE_CHARACTER_NAME", Length: sizeCZOpenWriteMail, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZCHECKNAME2, Name: "CZ_CHECKNAME2", Length: sizeCZCheckName2, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQWRITEMAIL, Name: "CZ_REQ_WRITE_MAIL", Length: VariableLength, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQWRITEMAIL2, Name: "CZ_REQ_WRITE_MAIL2", Length: VariableLength, Direction: DirectionClientToServer})
+	// S→C fixed-size frames; the variable 0x0ac2 list and 0x0b63 read ack are
+	// emitted straight to the wire and need no inbound length.
+	db.Register(Definition{ID: HeaderZCNOTIFYUNREADMA, Name: "ZC_NOTIFY_UNREADMAIL", Length: sizeZCNotifyUnreadMail, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKMAILWRITE, Name: "ZC_ACK_WRITE_MAIL", Length: sizeZCAckWriteMail, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKZENYFROMMAI, Name: "ZC_ACK_ZENY_FROM_MAIL", Length: sizeZCAckZenyFromMail, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKITEMFROMMAI, Name: "ZC_ACK_ITEM_FROM_MAIL", Length: sizeZCAckItemFromMail, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKDELETEMAIL, Name: "ZC_ACK_DELETE_MAIL", Length: sizeZCAckDeleteMail, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKREMOVEITEMM, Name: "ZC_ACK_REMOVE_ITEM_MAIL", Length: sizeZCAckRemoveItem, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKOPENWRITE, Name: "ZC_ACK_OPEN_WRITE_MAIL", Length: sizeZCAckOpenWrite, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCCHECKNAME, Name: "ZC_CHECKNAME", Length: sizeZCCheckName, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKADDITEMRODE, Name: "ZC_ACK_ADD_ITEM_RODEX", Length: sizeZCAckAddItemRodex, Direction: DirectionServerToClient})
+
 	return db
 }

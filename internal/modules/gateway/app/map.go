@@ -21,6 +21,7 @@ import (
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	friendapp "github.com/bouroo/goAthena/internal/modules/social/friend/app"
 	guildapp "github.com/bouroo/goAthena/internal/modules/social/guild/app"
+	mailapp "github.com/bouroo/goAthena/internal/modules/social/mail/app"
 	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
@@ -105,6 +106,24 @@ type MapServer struct {
 	// guildInvites holds one pending invitation per invitee char id (rAthena
 	// sd.guild_invite / sd.guild_invite_account; never persisted).
 	guildInvites map[uint32]pendingGuildInvite
+	// mail wires the RODEX mail verb (M11). Optional: nil leaves the mail
+	// dispatch entries as no-ops. Set post-construction by DI root via
+	// SetMail.
+	mail *mailapp.MailService
+	// charRepo backs the staged-zeny balance check (the same source
+	// EconomyService.GetZeny reads). Optional: nil skips the check. Set
+	// post-construction by DI root via SetCharRepo.
+	charRepo chardomain.CharacterRepository
+	// mailMu guards mailStaging for the same reason as partyMu.
+	mailMu sync.RWMutex
+	// mailStaging holds the compose-window state per char (rAthena sd->mail:
+	// the writing flag, the staged zeny, the staged item rows). Never
+	// persisted; pruned on disconnect by OnClose → unregisterConn.
+	mailStaging map[uint32]mailStaging
+	// mailOps serializes a char's mail verbs (rAthena parses a session's
+	// frames on one thread; OnTraffic here runs each frame on its own
+	// goroutine). See lockMailOps.
+	mailOps sync.Map
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
 	// DEALTYPE carries an NPC id, not a shop name).
 	shopStore contentdomain.ShopStore
@@ -164,6 +183,7 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 		partyInvites: make(map[uint32]pendingInvite),
 		friendReqs:   make(map[uint32]pendingFriendReq),
 		guildInvites: make(map[uint32]pendingGuildInvite),
+		mailStaging:  make(map[uint32]mailStaging),
 	}
 	// Regen advances server-side on the world tick loop; this sink bridges the
 	// changed vitals back to the player's client as ZC_PAR_CHANGE (mirrors the
@@ -435,6 +455,7 @@ func (s *MapServer) unregisterConn(charID uint32) {
 	s.clearPartyInvitesFor(charID)
 	s.clearFriendReqsFor(charID)
 	s.clearGuildInvitesFor(charID)
+	s.clearMailSlot(charID)
 }
 
 // OnClose prunes the disconnecting connection from the char-indexed registries

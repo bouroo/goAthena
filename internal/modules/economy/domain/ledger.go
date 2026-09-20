@@ -50,6 +50,10 @@ const (
 	ReasonScript Reason = "script"
 	// ReasonAdmin: GM command.
 	ReasonAdmin Reason = "admin"
+	// ReasonMailSend: sender's zeny debit (zeny + fee) on a RODEX send.
+	ReasonMailSend Reason = "mail_send"
+	// ReasonMailCollect: receiver's zeny credit on a RODEX collect.
+	ReasonMailCollect Reason = "mail_collect"
 )
 
 // ZenyTransaction is one append-only audit row. Amount is a SIGNED int32: a

@@ -187,8 +187,9 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// server had always emitted but never declared in the DB → 106. Phase 44
 	// registers ZC_DELETE_ITEM_FROM_BODY (0x07fa), the inventory-removal frame
 	// a shop sale needs to re-sync the bag grid → 107. M11 registers the 14
-	// party (group) family packets → 121.
-	const want = 121
+	// party (group) family packets → 121, then the 27 RODEX mail packets
+	// (18 C→S + 9 S→C) → 148.
+	const want = 148
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

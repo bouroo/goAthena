@@ -126,6 +126,28 @@ func mapHandlers() map[uint16]mapHandler {
 		ropacket.HeaderCZREQDISORGANIZEGILD: {size: ropacket.SizeCZGuildBreak, fn: (*MapServer).handleGuildBreak},             // CZ_REQ_DISORGANIZE_GUILD 0x015d (cmd+key)
 		ropacket.HeaderCZGUILDCHAT:          {frameSize: variableFrameSize, fn: (*MapServer).handleGuildChat},                 // CZ_GUILD_CHAT 0x017e (cmd+len+msg)
 		ropacket.HeaderCZGUILDCHECKMASTER:   {size: ropacket.SizeCZGuildCheckMaster, fn: (*MapServer).handleGuildCheckMaster}, // CZ_REQ_GUILD_MENUINTERFACE 0x014d (cmd)
+		// M11: mail (RODEX) family. The five refreshinbox opcodes share a
+		// handler (clif_parse_Mail_refreshinbox); read/delete share a shape;
+		// the two send opcodes are variable-length (strings follow the
+		// fixed header); the name-check verbs share a shape.
+		ropacket.HeaderCZOPENMAILBOX:     {size: ropacket.SizeCZOpenMailbox, fn: (*MapServer).handleOpenMailbox},         // CZ_OPEN_MAILBOX 0x09e8 (cmd+mail id.Q)
+		ropacket.HeaderCZCLOSEMAILBOX:    {size: 2, fn: (*MapServer).handleCloseMailbox},                                 // CZ_CLOSE_MAILBOX 0x09e9 (no-op, clif_parse_dull)
+		ropacket.HeaderCZREQREADMAIL:     {size: ropacket.SizeCZReadDeleteMail, fn: (*MapServer).handleReadMail},         // CZ_REQ_READ_MAIL 0x09ea (cmd+tab.B+mail id.Q)
+		ropacket.HeaderCZREQNEXTMAILLIST: {size: ropacket.SizeCZOpenMailbox, fn: (*MapServer).handleOpenMailbox},         // CZ_REQ_NEXT_MAIL_LIST 0x09ee (refreshinbox)
+		ropacket.HeaderCZREQREFRESHMAILL: {size: ropacket.SizeCZOpenMailbox, fn: (*MapServer).handleOpenMailbox},         // CZ_REQ_REFRESH_MAIL_LIST 0x09ef (refreshinbox)
+		ropacket.HeaderCZREQZENYFROMMAIL: {size: ropacket.SizeCZGetAttach, fn: (*MapServer).handleCollectZeny},           // CZ_REQ_ZENY_FROM_MAIL 0x09f1 (cmd+mail id.Q+tab.B)
+		ropacket.HeaderCZREQITEMFROMMAIL: {size: ropacket.SizeCZGetAttach, fn: (*MapServer).handleCollectItems},          // CZ_REQ_ITEM_FROM_MAIL 0x09f3 (cmd+mail id.Q+tab.B)
+		ropacket.HeaderCZREQDELETEMAIL:   {size: ropacket.SizeCZReadDeleteMail, fn: (*MapServer).handleDeleteMail},       // CZ_REQ_DELETE_MAIL 0x09f5 (cmd+tab.B+mail id.Q)
+		ropacket.HeaderCZREQCANCELWRITE:  {size: 2, fn: (*MapServer).handleCancelWriteMail},                              // CZ_REQ_CANCEL_WRITE_MAIL 0x0a03 (cmd)
+		ropacket.HeaderCZREQADDITEMMAIL:  {size: ropacket.SizeCZMailItem, fn: (*MapServer).handleAddItemToMail},          // CZ_REQ_ADD_ITEM_TO_MAIL 0x0a04 (cmd+index.W+count.W)
+		ropacket.HeaderCZREQREMOVEITEMMA: {size: ropacket.SizeCZMailItem, fn: (*MapServer).handleRemoveItemFromMail},     // CZ_REQ_REMOVE_ITEM_MAIL 0x0a06 (cmd+index.W+count.W)
+		ropacket.HeaderCZREQOPENWRITEMAI: {size: ropacket.SizeCZOpenWriteMail, fn: (*MapServer).handleOpenWriteMail},     // CZ_REQ_OPEN_WRITE_MAIL 0x0a08 (cmd+name.24B)
+		ropacket.HeaderCZCHECKRECEIVENAM: {size: ropacket.SizeCZOpenWriteMail, fn: (*MapServer).handleCheckReceiverName}, // CZ_CHECK_RECEIVE_CHARACTER_NAME 0x0a13 (cmd+name.24B)
+		ropacket.HeaderCZREQWRITEMAIL:    {frameSize: variableFrameSize, fn: (*MapServer).handleWriteMail},               // CZ_REQ_WRITE_MAIL 0x09ec (variable)
+		ropacket.HeaderCZREQWRITEMAIL2:   {frameSize: variableFrameSize, fn: (*MapServer).handleWriteMail},               // CZ_REQ_WRITE_MAIL2 0x0a6e (variable)
+		ropacket.HeaderCZOPENMAILBOX2:    {size: ropacket.SizeCZOpenMailbox2, fn: (*MapServer).handleOpenMailbox},        // CZ_OPEN_MAILBOX2 0x0ac0 (cmd+mail id.Q+unknown.16B)
+		ropacket.HeaderCZREFRESHMAILLIST: {size: ropacket.SizeCZOpenMailbox2, fn: (*MapServer).handleOpenMailbox},        // CZ_REQ_REFRESH_MAIL_LIST2 0x0ac1 (refreshinbox)
+		ropacket.HeaderCZCHECKNAME2:      {size: ropacket.SizeCZCheckName2, fn: (*MapServer).handleCheckReceiverName},    // CZ_CHECKNAME2 0x0b97 (cmd+name.24B+own_char.B)
 	}
 }
 
@@ -629,6 +651,19 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	if s.guild != nil {
 		if g, gerr := s.guild.GetByMember(context.Background(), auth.charID); gerr == nil {
 			burst = s.appendGuildBurst(burst, g)
+		}
+	}
+	// Mail icon restore, mirroring rAthena's LoadEndAck tail (clif.cpp
+	// :11176 → clif_Mail_new): the unread-mail icon is sent on entry so the
+	// client's mail button shows the badge. The full inbox list is NOT sent
+	// here (rAthena requests it lazily on window open via
+	// CZ_REQ_REFRESH_MAIL_LIST).
+	if s.mail != nil {
+		if n, merr := s.mail.UnreadCount(context.Background(), auth.charID); merr == nil && n > 0 {
+			var icon bytes.Buffer
+			if ierr := ropacket.EncodeZCNotifyUnreadMail(&icon, true); ierr == nil {
+				burst = append(burst, icon.Bytes()...)
+			}
 		}
 	}
 	_ = c.AsyncWrite(burst, nil)

@@ -20,6 +20,7 @@ import (
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	friendapp "github.com/bouroo/goAthena/internal/modules/social/friend/app"
 	guildapp "github.com/bouroo/goAthena/internal/modules/social/guild/app"
+	mailapp "github.com/bouroo/goAthena/internal/modules/social/mail/app"
 	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
@@ -155,26 +156,25 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("map server: %w", err)
 	}
+	attachOptionalServices(ms, inj, log)
+	return ms, nil
+}
+
+// attachOptionalServices wires the optional post-construction services.
+// Each is optional so harnesses without it still build — the matching
+// dispatch entries log + skip rather than disconnect.
+func attachOptionalServices(ms *app.MapServer, inj do.Injector, log *slog.Logger) {
 	// item_db resolves the IT_* wire type and View sprite the LoadEndAck
 	// inventory burst writes. Attached post-construction (like skillDB above) to
 	// keep NewMapServer's positional signature stable; unresolved leaves the
 	// burst's entries typed IT_ETC with a 0 sprite rather than refusing startup.
 	ms.SetItemDB(resolveOptional[*itemdb.Registry](inj, log, "itemdb"))
-	// Storage service wires the bag↔warehouse verb (M9b). Optional so harnesses
-	// without a configured storage service still build (the storage dispatch
-	// entries log + skip rather than disconnect).
 	ms.SetStorage(resolveOptional[*worldapp.StorageService](inj, log, "storage"))
-	// Party service wires the group verbs (M11). Optional for the same reason as
-	// storage: a harness without a party service still builds, and the party
-	// dispatch entries log + skip rather than disconnect.
 	ms.SetParty(resolveOptional[*partyapp.PartyService](inj, log, "party"))
-	// Friend service wires the friend verbs (M11). Optional for the same reason
-	// as party: a harness without a friend service still builds, and the friend
-	// dispatch entries log + skip rather than disconnect.
 	ms.SetFriend(resolveOptional[*friendapp.FriendService](inj, log, "friend"))
-	// Guild service wires the guild verbs (M11). Optional for the same reason
-	// as party: a harness without a guild service still builds, and the guild
-	// dispatch entries log + skip rather than disconnect.
 	ms.SetGuild(resolveOptional[*guildapp.GuildService](inj, log, "guild"))
-	return ms, nil
+	// Mail wires the RODEX verbs (M11). The char repository backs the
+	// staged-zeny balance check (the same source EconomyService.GetZeny reads).
+	ms.SetMail(resolveOptional[*mailapp.MailService](inj, log, "mail"))
+	ms.SetCharRepo(resolveOptional[chardomain.CharacterRepository](inj, log, "charRepo"))
 }

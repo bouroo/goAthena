@@ -222,10 +222,14 @@ func devTestCatalog() *shopdomain.CatalogRegistry {
 	})
 }
 
-// testEconPort adapts the real economy service to the shop EconomyPort so the
-// integration test exercises real zeny movement (production di.go uses the same
-// adapter shape; it is unexported there, so the test re-implements it).
+// testEconPort adapts the real economy service to the shop/mail EconomyPort so
+// the integration tests exercise real zeny movement (production di.go uses the
+// same adapter shape; it is unexported there, so the test re-implements it).
 type testEconPort struct{ svc *economyapp.EconomyService }
+
+func (e testEconPort) GetZeny(ctx context.Context, charID uint32) (int32, error) {
+	return e.svc.GetZeny(ctx, charID)
+}
 
 func (e testEconPort) DeductZeny(ctx context.Context, charID uint32, amount int32) error {
 	return e.svc.DeductZeny(ctx, charID, amount)
