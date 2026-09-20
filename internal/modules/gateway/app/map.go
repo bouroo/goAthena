@@ -19,6 +19,7 @@ import (
 	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
 	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
+	friendapp "github.com/bouroo/goAthena/internal/modules/social/friend/app"
 	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
@@ -85,6 +86,15 @@ type MapServer struct {
 	// never persists it; a second invite simply replaces the first, which the
 	// one-entry-per-target map gives for free.
 	partyInvites map[uint32]pendingInvite
+	// friend wires the friend verb (M11). Optional: nil leaves the friend
+	// dispatch entries as no-ops. Set post-construction by DI root via SetFriend.
+	friend *friendapp.FriendService
+	// friendMu guards friendReqs. Friend handlers run off the reactor goroutine
+	// (they touch the DB), so the request map needs its own lock.
+	friendMu sync.RWMutex
+	// friendReqs holds one pending friend-add request per acceptor char id
+	// (rAthena sd.friend_req, clif.cpp:15458-15459).
+	friendReqs map[uint32]pendingFriendReq
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
 	// DEALTYPE carries an NPC id, not a shop name).
 	shopStore contentdomain.ShopStore
@@ -142,6 +152,7 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 		db:           ropacket.NewMapServerDB(),
 		openedShops:  make(map[uint32]string),
 		partyInvites: make(map[uint32]pendingInvite),
+		friendReqs:   make(map[uint32]pendingFriendReq),
 	}
 	// Regen advances server-side on the world tick loop; this sink bridges the
 	// changed vitals back to the player's client as ZC_PAR_CHANGE (mirrors the
@@ -411,6 +422,7 @@ func (s *MapServer) unregisterConn(charID uint32) {
 	// A disconnected player can neither answer an invitation addressed to them
 	// nor be answered if they were the inviter, so both directions go.
 	s.clearPartyInvitesFor(charID)
+	s.clearFriendReqsFor(charID)
 }
 
 // OnClose prunes the disconnecting connection from the char-indexed registries
@@ -448,6 +460,9 @@ func (s *MapServer) OnClose(c gnet.Conn, _ error) (action gnet.Action) {
 		s.log.Warn("map conn closed, leave world", "gid", a.charID, "err", err)
 	}
 	cancel()
+	// Tell the player's friends they went offline (the logout toggle,
+	// unit.cpp:3978 map_foreachpc clif_friendslist_toggle_sub ... false).
+	s.notifyFriendsOnline(a.charID, e.Account, e.Name, false)
 	// Broadcast the departure to OTHER nearby players (ZC_NOTIFY_VANISH,
 	// CLR_OUTSIGHT). The disconnecting conn is already closing, so excluding it
 	// from its own goodbye is both correct and a no-op-in-practice.

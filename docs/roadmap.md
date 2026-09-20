@@ -73,7 +73,7 @@ clean-architecture: `domain` (pure) → `app` (use cases) → `infra` (adapters)
 | `content` | Script engine (NPC dialog/quest/item script) | 🟡 partial — dialog bridge landed (602 LOC), full VM coverage open |
 | `commerce/{shop,trade,vending,storage}` | Use-case services over economy+inventory ports | 🟡 shop slice landed (157 LOC); trade/vending/storage open |
 | `economy` | Zeny-ledger aggregate | 🟡 first slice landed (216 LOC); full ledger open |
-| `social` | Chat / friend / party / guild / mail | 🟡 scaffold (PlayerDirectory port, 87 LOC); chat lives in `world` for now |
+| `social` | Chat / friend / party / guild / mail | 🟡 chat ✅ (e3e46fc), friend ✅ (000009_friend), party ✅ (000008_party); guild/mail remain |
 | `transit` | Cross-map / cross-zone handshake | 🟡 cross-map warp landed (SetPosition + LeaveMap, 61 LOC); cross-zone handshake open |
 
 Combat is a `world` **app service** (no independent data) to avoid a
@@ -189,7 +189,7 @@ started.**
 | **M8** Economy | Zeny value object + EconomyService (DeductZeny/CreditZeny) | 🟡 partial — first slice (216 LOC); full zeny-ledger open |
 | **M9** Commerce | Shop buy/sell (economy+inventory ports) | 🟡 partial — shop slice (157 LOC); trade/vending/storage open |
 | **M10** Content | script VM ↔ dialog bridge (mes/next/select/input/close) | 🟡 partial — dialog bridge landed (602 LOC); full script-VM coverage open |
-| **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 scaffold (87 LOC) |
+| **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 chat ✅; friend/party ✅; guild/mail remain |
 | **M12** Transit | cross-map warp (SetPosition + LeaveMap) | 🟡 partial — in-zone warp landed (61 LOC); cross-zone handshake + Agones allocation open |
 | **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 📋 planned (no `nats.Connect`, no Agones adapter yet) |
 | **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | 🟡 partial — /metrics + compose e2e login live; OTel tracing, security review, load test open |
@@ -230,7 +230,7 @@ it — never when the code merely looks right.
 | **M8** Economy | `economy` zeny-ledger aggregate + ports | L1+L2 | 🟡 partial (first slice) |
 | **M9** Commerce | `shop`/`trade`/`vending`/`storage` over economy+inventory | L3 (trade e2e) | 🟡 partial (shop slice) |
 | **M10** Content | `content` script VM — dialog/quest/item-script execution | L3 (NPC dialog e2e) | 🟡 partial (dialog bridge) |
-| **M11** Social | friend/party/guild/mail | L3 | 🟡 scaffold |
+| **M11** Social | friend/party/guild/mail | L3 | 🟡 friend ✅ party ✅ (L3 e2e); guild/mail remain |
 | **M12** Transit | cross-map handshake + Agones allocation path | L3 (map-change e2e) | 🟡 partial (in-zone warp; cross-zone+Agones open) |
 | **P-scale** Scale-out | extract one module to a NATS binary; Agones fleet | L3 (multi-process) | 📋 |
 | **P-hard** Harden | OTel coverage, security review, perf profiling, load test | perf budget met | 📋 |

@@ -18,6 +18,7 @@ import (
 	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	"github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
+	friendapp "github.com/bouroo/goAthena/internal/modules/social/friend/app"
 	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
@@ -166,5 +167,9 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	// storage: a harness without a party service still builds, and the party
 	// dispatch entries log + skip rather than disconnect.
 	ms.SetParty(resolveOptional[*partyapp.PartyService](inj, log, "party"))
+	// Friend service wires the friend verbs (M11). Optional for the same reason
+	// as party: a harness without a friend service still builds, and the friend
+	// dispatch entries log + skip rather than disconnect.
+	ms.SetFriend(resolveOptional[*friendapp.FriendService](inj, log, "friend"))
 	return ms, nil
 }

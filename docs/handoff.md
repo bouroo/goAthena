@@ -344,20 +344,17 @@ deferred — each is its own commit-sized effort.
 | CZ_WHISPER routing | commit `159e483` | ✅ |
 | CZ_GETCHARNAMEREQUEST | commit `70f336b` | ✅ |
 | Whisper ignore list | commit `1337f89` | ✅ |
+| Friend list (add/reply/remove + online toggles) | `social/friend/*` + `gateway/app/friend.go` + migration `000009_friend` | ✅ |
+| Party | `social/party/*` + `gateway/app/party.go` + migration `000008_party` | ✅ |
 
 **Remaining:**
 
-- **Friend list** — `CZ_ADD_FRIENDS`, `CZ_DELETE_FRIENDS`, accept/reject, online
-  notify. Persistent table.
-- **Party** — create/leave/exp-share, `CZ_MAKE_GROUP`, `CZ_REQ_JOIN_GROUP`,
-  `CZ_REQ_LEAVE_GROUP`, `ZC_PARTY_*`, `ZC_EXP_GROUPINFO_SHARING`, etc.
 - **Guild** — create/join/leave/alliances/chat (`CZ_REQ_GUILD_MENU`,
   `CZ_GUILD_*`).
 - **Mail** — send/receive/attachment (`CZ_MAIL_*`, `ZC_MAIL_*`).
 
-**Plan in this session:** ship **party** end-to-end (the smallest grouping with
-real gameplay consequence — exp share); record friend/guild/mail as
-follow-up tickets.
+**Plan in this session:** ✅ shipped — party end-to-end (`51e26f8`) and friend
+list end-to-end (this session); guild/mail remain as follow-up tickets.
 
 ---
 
@@ -444,7 +441,7 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | M9: vending | L | Substantial. |
 | M9: storage/warehouse | ✅ done | Service+schema `1a2b848` + gateway wiring `c33c242`. Guild storage deferred to M11. |
 | M10: Rung B–E | L | Rung A done (`556a8ee`); Rung B done (`b7f8ab7`); Rungs C–E queued. |
-| M11: friend list | M | Persistent table. |
+| M11: friend list | ✅ done | Wire codecs + dispatch + `friends` table + online toggles (`gateway/app/friend.go`, migration `000009_friend`). |
 | M11: guild | L | Large. |
 | M11: mail | L | Large. |
 | M12: Agones fleet adapter | L | M13 prereq. |
@@ -468,3 +465,4 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-20 | goAthena agent | `b7f8ab7` | M10 Rung B — quest engine (persistent NPC vars + `getvariableofnpc` / `setquestvar` builtins) |
 | 2026-09-20 | goAthena agent | `f1d96a8` | test: LoadEndAck burst drain by frame not byte count — fixes CI TestMap_SeededShopClickOpensDealType (0x02c9 leftover) |
 | 2026-09-20 | goAthena agent | `cfd8cb1` | build: CI job ordering (integration after lint+unit, build last) + pre-push gate gains L3 test-integration (runtime-gated, GATE_SKIP override) + fix `.` sentinel silently skipping new-branch pushes + fix set -e exempting gate_run in && list (L3 red exited 0) |
+| 2026-09-20 | goAthena agent | THIS | M11 friend list end-to-end — `CZ_ADD_FRIENDS`/`CZ_DELETE_FRIENDS`/`CZ_ACK_REQ_ADD_FRIENDS` wire codecs + dispatch, `friends` table (rAthena shape, one row per direction) + GORM repo, bidirectional accept/remove in one tx, online/offline `ZC_FRIENDS_STATE` toggles both directions, `ZC_FRIENDS_LIST` in LoadEndAck burst; unit+GORM integration+gateway e2e (two conns, add→accept→remove, restore) |

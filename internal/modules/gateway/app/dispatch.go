@@ -110,6 +110,11 @@ func mapHandlers() map[uint16]mapHandler {
 		ropacket.HeaderCZREQLEAVEGROUP:       {size: 2, fn: (*MapServer).handleLeaveGroup},           // CZ_REQ_LEAVE_GROUP 0x0100 (cmd only)
 		ropacket.HeaderCZCHANGEGROUPEXPOPT:   {size: 6, fn: (*MapServer).handleChangeGroupExpOption}, // CZ_CHANGE_GROUPEXPOPTION 0x0102 (cmd+expflag)
 		ropacket.HeaderCZREQEXPELGROUPMEMBER: {size: 30, fn: (*MapServer).handleExpelGroupMember},    // CZ_REQ_EXPEL_GROUP_MEMBER 0x0103 (cmd+AID+name)
+		// M11: friend family. Add is by display name; the reply names the inviter
+		// pair; delete names the friend pair (all three clif_packetdb.hpp:257-263).
+		ropacket.HeaderCZFRIENDSADD:    {size: 26, fn: (*MapServer).handleFriendsAdd},    // CZ_ADD_FRIENDS 0x0202 (cmd+name)
+		ropacket.HeaderCZFRIENDSDELETE: {size: 10, fn: (*MapServer).handleFriendsRemove}, // CZ_DELETE_FRIENDS 0x0203 (cmd+AID+CID)
+		ropacket.HeaderCZFRIENDSREPLY:  {size: 14, fn: (*MapServer).handleFriendsReply},  // CZ_ACK_REQ_ADD_FRIENDS 0x0208 (cmd+AID+CID+reply)
 	}
 }
 
@@ -595,6 +600,15 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 				burst = s.appendGroupList(burst, p, members)
 			}
 		}
+	}
+	// Friend restore, mirroring clif_friendslist_send's LoadEndAck tail
+	// (clif.cpp:15355-15391): the whole list first, then one online
+	// ZC_FRIENDS_STATE per friend the map registry reports connected.
+	if s.friend != nil {
+		if friends, ferr := s.friend.List(context.Background(), auth.charID); ferr == nil {
+			burst = s.appendFriendsList(burst, friends)
+		}
+		s.notifyFriendsOnline(auth.charID, auth.accountID, playerName(s.world, auth.charID), true)
 	}
 	_ = c.AsyncWrite(burst, nil)
 	s.log.Debug("map: client load complete (inventory + skill init sent)", "aid", auth.accountID, "gid", auth.charID)
