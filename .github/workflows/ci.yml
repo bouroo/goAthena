@@ -3,8 +3,23 @@ name: CI
 on:
   push:
     branches: [main, develop]
+    # Productivity fast path: a docs/handoff-only push does not need four
+    # runners, a MariaDB + a Postgres. Skipping the workflow entirely is cheaper
+    # than any job-level filter. NB: if branch protection later requires these
+    # checks, a docs-only PR will report "expected — waiting" and must be
+    # handled (add a same-named no-op job, or drop paths-ignore for PRs).
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'LICENSE'
+      - '.gitignore'
   pull_request:
     branches: [main, develop]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'LICENSE'
+      - '.gitignore'
   # Manual dispatch lets callers override any version; the defaults below are
   # the latest stable releases. push/PR runs pass no inputs, so each version
   # coalesces (||) to its latest-stable default.
@@ -15,7 +30,7 @@ on:
         default: "stable"
       golangci-lint-version:
         description: "golangci-lint release tag"
-        default: "v2.12.2"
+        default: "v2.13.2"
       mariadb-version:
         description: "MariaDB image tag"
         default: "11.8"
@@ -54,10 +69,19 @@ permissions:
 env:
   GO_VERSION: ${{ inputs.go-version || 'stable' }}
   GOLANGCI_LINT_VERSION: ${{ inputs.golangci-lint-version || 'v2.13.2' }}
+  # Pinned so CI cannot break on an unrelated upstream release. `@latest` here
+  # is a live footgun: a new gofumpt/gofmt style rule turns every open branch
+  # red with no project change. Bump deliberately, in step with `task fmt`.
+  GOFUMPT_VERSION: v0.11.0
+  TASK_VERSION: v3.53.1
   MARIADB_VERSION: ${{ inputs.mariadb-version || '11.8' }}
   POSTGRES_VERSION: ${{ inputs.postgres-version || '18' }}
   VALKEY_VERSION: ${{ inputs.valkey-version || '9' }}
   NATS_VERSION: ${{ inputs.nats-version || '2-alpine' }}
+  # The L2 gate's stated coverage target (docs/handoff.md §1). Enforced on the
+  # carried pkg/ro kernel, which is the only subtree with near-total coverage;
+  # the app layer is measured but not gated while it is still filling in.
+  COVERAGE_MIN: "60"
 
 jobs:
   lint:
@@ -84,16 +108,22 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+      # Single dev-tool install step, shared by the fmt check via $GITHUB_PATH.
+      # Pinned (not @latest) so an upstream style change cannot redden the tree
+      # without a project change; `task` lets the job run the same targets as
+      # the local hook, so CI and the hook cannot drift.
+      - name: install task + gofumpt + goimports
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@${{ env.TASK_VERSION }}
+          go install mvdan.cc/gofumpt@${{ env.GOFUMPT_VERSION }}
+          go install golang.org/x/tools/cmd/goimports@latest
       - run: go mod download
       - name: go vet
-        run: go vet ./...
-      - name: gofumpt check
-        run: |
-          go install mvdan.cc/gofumpt@latest
-          out="$(gofumpt -l . | grep -v '^third_party/' || true)"
-          if [ -n "$out" ]; then echo "needs task fmt:"; echo "$out"; exit 1; fi
-      - name: unit tests (-race)
-        run: go test -race -tags=unit ./internal/... ./pkg/...
+        run: task vet
+      - name: formatting check
+        run: task fmt-check
+      - name: unit tests (-race) + coverage floor
+        run: task coverage
 
   integration:
     name: Integration tests

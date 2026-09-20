@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# pre-push: the full merge-blocking gate (L1 static + L2 hermetic unit).
+#
+# Only runs when the push actually touches build-relevant files. A docs-only or
+# handoff-only push is the common case in this repo, and re-running lint + the
+# race suite for a Markdown edit is pure latency, so those pushes exit in
+# milliseconds. CI still runs the same gate on the remote for every push, so the
+# hook is a fast feedback loop, not the source of truth.
+#
+# Override: GATE_SKIP=1 git push ...
+#           GATE_SKIP=lint,test-unit git push ...
+set -euo pipefail
+. "$(dirname "$0")/_lib.sh"
+
+gate_skipped && exit 0
+
+cd "$(gate_root)"
+
+pushed="$(gate_pushed_files)"
+if [ -z "$pushed" ] || ! printf '%s\n' "$pushed" | gate_is_relevant_path; then
+	gate_yellow "pre-push: no build-relevant changes — skipping L1/L2"
+	exit 0
+fi
+
+trap 'gate_red "pre-push: gate failed — push blocked (fix, or GATE_SKIP=1 to override)"' ERR
+
+gate_skip_reason fmt-check || gate_run "L1 fmt" task fmt-check
+gate_skip_reason lint || gate_run "L1 lint" task lint
+gate_skip_reason vet || gate_run "L1 vet" task vet
+gate_skip_reason test-unit || gate_run "L2 test-unit" task test-unit
+
+trap - ERR
+gate_green "pre-push: L1 + L2 green"
