@@ -229,13 +229,34 @@ real ledger needs:~~ **done** in commit `8c87e57`:
 - composition.go registers the module; the storage service is resolvable
   from the DI injector at boot.
 
-**Storage second slice (gateway wiring)** — the next commit adds:
-packet codecs for `CZ_MOVE_ITEM_TO_STORE2` (0x07e6) /
-`CZ_MOVE_ITEM_TO_BODY2` (0x07e7) / `CZ_CLOSE_STORE` (0x07e5) +
-`ZC_STORE_NORMALITEMLIST` (0x07e9) / `ZC_STORE_EQUIPMENTITEMLIST` (0x07ea)
-+ `ZC_STOREITEMLISTRESULT` (0x07eb) init frames; map-server dispatch
-handlers and a world-side orchestrator that moves items bag↔warehouse
-atomically (inventory.Remove + storage.Add).
+**Storage second slice (gateway wiring)** — done in commit `c33c242`:
+
+- `pkg/ro/packet/storage.go` — packet codecs for `CZ_REQ_OPENSTORE2`
+  (0x07e4), `CZ_CLOSE_STORE` (0x07e5), `CZ_MOVE_ITEM_TO_STORE2`
+  (0x07e6), `CZ_MOVE_ITEM_TO_BODY2` (0x07e7), `ZC_STORE_NORMALITEMLIST`
+  (0x07e9), `ZC_STORE_EQUIPMENTITEMLIST` (0x07ea),
+  `ZC_STOREITEMLISTRESULT` (0x07eb). `ZC_ACCEPT_ENTER2` (0x07e3) header
+  defined but not yet emitted (the init lists carry everything the
+  client needs; the ack is informational).
+- `world/app/storage.go` — the cross-context orchestrator. Bag↔warehouse
+  moves with distinct sentinels (ErrStorageIndexOutOfRange /
+  ErrStorageEquipped / ErrStorageInsufficient / ErrStorageRowMissing /
+  ErrStorageFull) so the gateway maps each to a ZC_STOREITEMLISTRESULT
+  byte without string parsing.
+- `world/app/storage_test.go` — 9 orchestrator unit tests (stackable
+  move, warehouse-side merge, withdraw, index-out-of-range, equipped
+  rejection, insufficient amount, warehouse-full, load warehouse).
+- `gateway/app/dispatch.go` — 4 new handlers
+  (handleReqOpenStore2, handleCloseStore, handleMoveItemToStore2,
+  handleMoveItemToBody2) + writeStorageLists (init-burst encoder) +
+  writeStorageItemListResult (ack). The dispatch table registers the
+  four CZ opcodes with their fixed sizes.
+- `gateway/app/map.go` — SetStorage setter for DI-root injection;
+  nil-tolerant so harnesses without a storage service still build.
+- `gateway/di.go` — SetStorage wired via the optional-resolve helper.
+- `world/di.go` — StorageService provider registered alongside
+  TradeService (same Register, same injector).
+- L1+L2 green (fmt + lint + vet + race tests).
 
 ---
 
@@ -393,7 +414,7 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 |---|---|---|
 | M8: full transaction log + audit | M | Small. Ship next session. |
 | M9: vending | L | Substantial. |
-| M9: storage/warehouse gateway wiring | M | Service+schema landed (`1a2b848`); packet codecs + dispatch handlers next. |
+| M9: storage/warehouse | ✅ done | Service+schema `1a2b848` + gateway wiring `c33c242`. Guild storage deferred to M11. |
 | M10: Rung B–E | L | Multi-session. |
 | M11: friend list | M | Persistent table. |
 | M11: guild | L | Large. |
@@ -415,3 +436,4 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-20 | goAthena agent | `556a8ee` | M10 Rung A: item-script builtins (getitem/delitem/countitem/equip/unequip) + world-side adapter |
 | 2026-09-20 | goAthena agent | `0e8a104` | M14: security audit pass — login rate limiter + cmd/loadgen + audit doc |
 | 2026-09-20 | goAthena agent | `1a2b848` | M9 storage first slice — warehouse aggregate + rAthena `storage` schema + GORM repo + service tests (gateway wiring next) |
+| 2026-09-20 | goAthena agent | `c33c242` | M9 storage second slice — gateway wiring (packet codecs + dispatch handlers + world orchestrator) — storage end-to-end |
