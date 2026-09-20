@@ -19,6 +19,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	friendapp "github.com/bouroo/goAthena/internal/modules/social/friend/app"
+	guildapp "github.com/bouroo/goAthena/internal/modules/social/guild/app"
 	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
@@ -171,5 +172,9 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	// as party: a harness without a friend service still builds, and the friend
 	// dispatch entries log + skip rather than disconnect.
 	ms.SetFriend(resolveOptional[*friendapp.FriendService](inj, log, "friend"))
+	// Guild service wires the guild verbs (M11). Optional for the same reason
+	// as party: a harness without a guild service still builds, and the guild
+	// dispatch entries log + skip rather than disconnect.
+	ms.SetGuild(resolveOptional[*guildapp.GuildService](inj, log, "guild"))
 	return ms, nil
 }

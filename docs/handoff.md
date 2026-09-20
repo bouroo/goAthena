@@ -346,16 +346,16 @@ deferred — each is its own commit-sized effort.
 | Whisper ignore list | commit `1337f89` | ✅ |
 | Friend list (add/reply/remove + online toggles) | `social/friend/*` + `gateway/app/friend.go` + migration `000009_friend` | ✅ |
 | Party | `social/party/*` + `gateway/app/party.go` + migration `000008_party` | ✅ |
+| Guild (create/invite/reply/leave/ban/break/chat + menuinterface, LoadEndAck burst) | `pkg/ro/packet/guild.go` + `social/guild/*` + `gateway/app/guild.go` + migration `000010_guild` | ✅ |
 
 **Remaining:**
 
-- **Guild** — create/join/leave/alliances/chat (`CZ_REQ_GUILD_MENU`,
-  `CZ_GUILD_*`).
 - **Mail** — send/receive/attachment (`CZ_MAIL_*`, `ZC_MAIL_*`).
 
-**Plan in this session:** ✅ shipped — party end-to-end (`51e26f8`) and friend
-list end-to-end (this session); guild/mail remain as follow-up tickets.
-
+**Plan in this session:** ✅ shipped — party end-to-end (`51e26f8`), friend
+list end-to-end (`06fb692`), guild first slice end-to-end (this session);
+mail remains as the follow-up ticket. Guild deferred: alliances, positions/skills,
+exp donation, emblem, storage (needs M9 guild storage).
 ---
 
 ### M12 — Transit
@@ -442,7 +442,7 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | M9: storage/warehouse | ✅ done | Service+schema `1a2b848` + gateway wiring `c33c242`. Guild storage deferred to M11. |
 | M10: Rung B–E | L | Rung A done (`556a8ee`); Rung B done (`b7f8ab7`); Rungs C–E queued. |
 | M11: friend list | ✅ done | Wire codecs + dispatch + `friends` table + online toggles (`gateway/app/friend.go`, migration `000009_friend`). |
-| M11: guild | L | Large. |
+| M11: guild | ✅ done | First slice end-to-end: codecs + service + gateway + `000010_guild`; alliances/positions/skills/exp/emblem deferred. |
 | M11: mail | L | Large. |
 | M12: Agones fleet adapter | L | M13 prereq. |
 | M13: Agones SDK | L | Architecture-defining. |

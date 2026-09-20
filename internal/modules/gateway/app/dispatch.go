@@ -115,6 +115,17 @@ func mapHandlers() map[uint16]mapHandler {
 		ropacket.HeaderCZFRIENDSADD:    {size: 26, fn: (*MapServer).handleFriendsAdd},    // CZ_ADD_FRIENDS 0x0202 (cmd+name)
 		ropacket.HeaderCZFRIENDSDELETE: {size: 10, fn: (*MapServer).handleFriendsRemove}, // CZ_DELETE_FRIENDS 0x0203 (cmd+AID+CID)
 		ropacket.HeaderCZFRIENDSREPLY:  {size: 14, fn: (*MapServer).handleFriendsReply},  // CZ_ACK_REQ_ADD_FRIENDS 0x0208 (cmd+AID+CID+reply)
+		// M11: guild family. Create/leave/ban/disorganize/invite/reply are
+		// fixed-length; guild chat is length-prefixed. MenuInterface is the
+		// guild-window permission poll (clif_packetdb.hpp:150-159, 171).
+		ropacket.HeaderCZCREATEGUILD:        {size: ropacket.SizeCZCreateGuild, fn: (*MapServer).handleCreateGuild},           // CZ_REQ_MAKE_GUILD 0x0165 (cmd+charID+name)
+		ropacket.HeaderCZREQJOINGUILD:       {size: ropacket.SizeCZReqJoinGuild, fn: (*MapServer).handleGuildInvite},          // CZ_REQ_JOIN_GUILD 0x0168 (cmd+AID+inviterAID+inviterCID)
+		ropacket.HeaderCZJOINGUILD:          {size: ropacket.SizeCZJoinGuild, fn: (*MapServer).handleGuildReplyInvite},        // CZ_JOIN_GUILD 0x016b (cmd+guildID+answer)
+		ropacket.HeaderCZREQLEAVEGUILD:      {size: ropacket.SizeCZGuildLeave, fn: (*MapServer).handleGuildLeave},             // CZ_REQ_LEAVE_GUILD 0x0159 (cmd+guildID+AID+CID+reason)
+		ropacket.HeaderCZREQBANGUILD:        {size: ropacket.SizeCZGuildBan, fn: (*MapServer).handleGuildBan},                 // CZ_REQ_BAN_GUILD 0x015b (same shape)
+		ropacket.HeaderCZREQDISORGANIZEGILD: {size: ropacket.SizeCZGuildBreak, fn: (*MapServer).handleGuildBreak},             // CZ_REQ_DISORGANIZE_GUILD 0x015d (cmd+key)
+		ropacket.HeaderCZGUILDCHAT:          {frameSize: variableFrameSize, fn: (*MapServer).handleGuildChat},                 // CZ_GUILD_CHAT 0x017e (cmd+len+msg)
+		ropacket.HeaderCZGUILDCHECKMASTER:   {size: ropacket.SizeCZGuildCheckMaster, fn: (*MapServer).handleGuildCheckMaster}, // CZ_REQ_GUILD_MENUINTERFACE 0x014d (cmd)
 	}
 }
 
@@ -609,6 +620,16 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 			burst = s.appendFriendsList(burst, friends)
 		}
 		s.notifyFriendsOnline(auth.charID, auth.accountID, playerName(s.world, auth.charID), true)
+	}
+	// Guild restore, mirroring the LoadEndAck guild tail (clif_parse_LoadEndAck
+	// → clif_guild_send_basicinfo/memberlist): belong-info, guild-info, and
+	// roster, so a char entering while garrisoned sees their guild window
+	// populated. A char without a guild gets nothing (rAthena skips on null
+	// guild).
+	if s.guild != nil {
+		if g, gerr := s.guild.GetByMember(context.Background(), auth.charID); gerr == nil {
+			burst = s.appendGuildBurst(burst, g)
+		}
 	}
 	_ = c.AsyncWrite(burst, nil)
 	s.log.Debug("map: client load complete (inventory + skill init sent)", "aid", auth.accountID, "gid", auth.charID)

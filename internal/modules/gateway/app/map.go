@@ -20,6 +20,7 @@ import (
 	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	friendapp "github.com/bouroo/goAthena/internal/modules/social/friend/app"
+	guildapp "github.com/bouroo/goAthena/internal/modules/social/guild/app"
 	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
@@ -95,6 +96,15 @@ type MapServer struct {
 	// friendReqs holds one pending friend-add request per acceptor char id
 	// (rAthena sd.friend_req, clif.cpp:15458-15459).
 	friendReqs map[uint32]pendingFriendReq
+	// guild wires the guild verb (M11). Optional: nil leaves the guild
+	// dispatch entries as no-ops. Set post-construction by DI root via
+	// SetGuild.
+	guild *guildapp.GuildService
+	// guildMu guards guildInvites for the same reason as partyMu.
+	guildMu sync.RWMutex
+	// guildInvites holds one pending invitation per invitee char id (rAthena
+	// sd.guild_invite / sd.guild_invite_account; never persisted).
+	guildInvites map[uint32]pendingGuildInvite
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
 	// DEALTYPE carries an NPC id, not a shop name).
 	shopStore contentdomain.ShopStore
@@ -153,6 +163,7 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 		openedShops:  make(map[uint32]string),
 		partyInvites: make(map[uint32]pendingInvite),
 		friendReqs:   make(map[uint32]pendingFriendReq),
+		guildInvites: make(map[uint32]pendingGuildInvite),
 	}
 	// Regen advances server-side on the world tick loop; this sink bridges the
 	// changed vitals back to the player's client as ZC_PAR_CHANGE (mirrors the
@@ -423,6 +434,7 @@ func (s *MapServer) unregisterConn(charID uint32) {
 	// nor be answered if they were the inviter, so both directions go.
 	s.clearPartyInvitesFor(charID)
 	s.clearFriendReqsFor(charID)
+	s.clearGuildInvitesFor(charID)
 }
 
 // OnClose prunes the disconnecting connection from the char-indexed registries
