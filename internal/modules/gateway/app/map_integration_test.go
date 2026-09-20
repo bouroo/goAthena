@@ -163,7 +163,7 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	itemUse := worldapp.NewItemUseService(inv, items, world)
 	combat := worldapp.NewCombatService(world, mobs, equipSvc)
 	mobAI := worldapp.NewMobAIService(world, mobs, combat, slog.Default())
-	content := contentapp.NewEngine(nil, nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
+	content := contentapp.NewEngine(nil, nil, nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
 	skills.SetTree(testSkillTree())
 
@@ -2268,7 +2268,7 @@ func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*g
 	combat := worldapp.NewCombatService(world, nil, nil)
 	itemRepo := invinfra.NewMemoryItemRepository()
 	inv := invapp.NewInventoryService(itemRepo)
-	content := contentapp.NewEngine(nil, nil, nil, nil, slog.Default())
+	content := contentapp.NewEngine(nil, nil, nil, nil, nil, slog.Default())
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
 	skills.SetTree(testSkillTree())
 	charRepo := charinfra.NewMemoryCharacterRepository()

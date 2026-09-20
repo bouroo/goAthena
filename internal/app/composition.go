@@ -19,6 +19,7 @@ import (
 	shopmod "github.com/bouroo/goAthena/internal/modules/commerce/shop"
 	storagemod "github.com/bouroo/goAthena/internal/modules/commerce/storage"
 	"github.com/bouroo/goAthena/internal/modules/content"
+	questmod "github.com/bouroo/goAthena/internal/modules/content/quest"
 	"github.com/bouroo/goAthena/internal/modules/economy"
 	economydomain "github.com/bouroo/goAthena/internal/modules/economy/domain"
 	economyinfra "github.com/bouroo/goAthena/internal/modules/economy/infra"
@@ -136,6 +137,7 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	storagemod.Register(inj)
 	social.Register(inj)
 	content.Register(inj, cfg)
+	questmod.Register(inj)
 	transit.Register(inj)
 	world.Register(inj, cfg.Zone.TickRateHz, cfg.Zone.DBPath)
 

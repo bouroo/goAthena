@@ -23,6 +23,8 @@ type fakeHost struct {
 	countItems      []uint32
 	equips          []equipCall
 	unequips        []int
+	questReads      []questCall
+	questWrites     []questWriteCall
 	nextOK          bool
 	selectChoice    int
 	inputResult     int64
@@ -34,6 +36,10 @@ type fakeHost struct {
 	countItemResult int
 	equipOK         bool
 	unequipOK       bool
+	// questReads maps npcName -> varName -> value. An unset pair returns 0.
+	questVars map[string]map[string]int64
+	// questSetErr makes the next SetQuestVar return an error.
+	questSetErr error
 }
 
 type warpCall struct {
@@ -51,6 +57,17 @@ type itemCall struct {
 type equipCall struct {
 	index int
 	slot  uint32
+}
+
+type questCall struct {
+	npcName string
+	varName string
+}
+
+type questWriteCall struct {
+	npcName string
+	varName string
+	value   int64
 }
 
 func newFakeHost() *fakeHost {
@@ -103,6 +120,35 @@ func (h *fakeHost) Equip(index int, slot uint32) bool {
 func (h *fakeHost) Unequip(index int) bool {
 	h.unequips = append(h.unequips, index)
 	return h.unequipOK
+}
+
+// Quest variable Host methods. The fake keeps an in-memory map (npcName ->
+// varName -> value) so test scripts can round-trip through getvariableofnpc /
+// setquestvar without wiring a real QuestService.
+func (h *fakeHost) GetQuestVar(npcName, varName string) int64 {
+	h.questReads = append(h.questReads, questCall{npcName, varName})
+	if h.questVars == nil {
+		return 0
+	}
+	if v, ok := h.questVars[npcName]; ok {
+		return v[varName]
+	}
+	return 0
+}
+
+func (h *fakeHost) SetQuestVar(npcName, varName string, value int64) error {
+	h.questWrites = append(h.questWrites, questWriteCall{npcName, varName, value})
+	if h.questSetErr != nil {
+		return h.questSetErr
+	}
+	if h.questVars == nil {
+		h.questVars = make(map[string]map[string]int64)
+	}
+	if h.questVars[npcName] == nil {
+		h.questVars[npcName] = make(map[string]int64)
+	}
+	h.questVars[npcName][varName] = value
+	return nil
 }
 
 // runFirstScript compiles src, takes the first script in the set, and runs it
@@ -771,5 +817,59 @@ func TestVMUnequipBuiltin(t *testing.T) {
 	}
 	if len(h.unequips) != 1 || h.unequips[0] != 2 {
 		t.Errorf("unequips = %v, want [2]", h.unequips)
+	}
+}
+
+func TestVMGetVariableOfNPCBuiltin(t *testing.T) {
+	// `getvariableofnpc("QuestGiver", "Step")` reads another NPC's persistent
+	// variable for the dialog's player. An unset variable reads as 0.
+	const src = "-\tscript\tN\t-1,{\n" +
+		`getvariableofnpc("QuestGiver", "Step");` + "\n" +
+		`getvariableofnpc("OtherNPC", "Var");` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	h.questVars = map[string]map[string]int64{
+		"OtherNPC": {"Var": 42},
+	}
+	runFirstScript(t, src, h, nil)
+	if len(h.questReads) != 2 {
+		t.Fatalf("quest reads = %d, want 2", len(h.questReads))
+	}
+	if h.questReads[0] != (questCall{"QuestGiver", "Step"}) {
+		t.Errorf("read[0] = %+v, want {QuestGiver Step}", h.questReads[0])
+	}
+	if h.questReads[1] != (questCall{"OtherNPC", "Var"}) {
+		t.Errorf("read[1] = %+v, want {OtherNPC Var}", h.questReads[1])
+	}
+}
+
+func TestVMSetQuestVarBuiltin(t *testing.T) {
+	// `setquestvar("QuestGiver", "Step", 3)` persists a value through the
+	// Host: (npcName, varName, value).
+	const src = "-\tscript\tN\t-1,{\n" +
+		`setquestvar("QuestGiver", "Step", 3);` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.questWrites) != 1 {
+		t.Fatalf("quest writes = %d, want 1", len(h.questWrites))
+	}
+	if h.questWrites[0] != (questWriteCall{"QuestGiver", "Step", 3}) {
+		t.Errorf("write = %+v, want {QuestGiver Step 3}", h.questWrites[0])
+	}
+	if v := h.questVars["QuestGiver"]["Step"]; v != 3 {
+		t.Errorf("stored value = %d, want 3", v)
+	}
+}
+
+func TestVMSetQuestVarBuiltin_ShortArgList(t *testing.T) {
+	// A builtin with < 2 args should no-op without crashing the VM.
+	const src = "-\tscript\tN\t-1,{\n" +
+		`setquestvar("Step");` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.questWrites) != 0 {
+		t.Errorf("writes = %d, want 0 (short arg list)", len(h.questWrites))
 	}
 }

@@ -217,15 +217,17 @@ func DefaultBuiltins() map[string]BuiltinFunc {
 		"select":      builtinSelect,
 		// prompt() is select()'s paginated ("Prev/Next") sibling — same
 		// return-the-index semantics, no label jump.
-		"prompt":    builtinSelect, //nolint:goconst
-		"menu":      builtinMenu,   //nolint:goconst
-		"input":     builtinInput,  //nolint:goconst
-		"getitem":   builtinGetItem,
-		"getitem2":  builtinGetItem2,
-		"delitem":   builtinDelItem,
-		"countitem": builtinCountItem,
-		"equip":     builtinEquip,
-		"unequip":   builtinUnequip,
+		"prompt":           builtinSelect, //nolint:goconst
+		"menu":             builtinMenu,   //nolint:goconst
+		"input":            builtinInput,  //nolint:goconst
+		"getitem":          builtinGetItem,
+		"getitem2":         builtinGetItem2,
+		"delitem":          builtinDelItem,
+		"countitem":        builtinCountItem,
+		"equip":            builtinEquip,
+		"unequip":          builtinUnequip,
+		"getvariableofnpc": builtinGetVariableOfNPC,
+		"setquestvar":      builtinSetQuestVar,
 	}
 }
 
@@ -349,4 +351,35 @@ func builtinUnequip(vm *VM, args []Value) (Value, control) {
 		return IntVal(1), ctrlContinue
 	}
 	return IntVal(0), ctrlContinue
+}
+
+// builtinGetVariableOfNPC implements `getvariableofnpc(npcName, varName)`:
+// reads another NPC's persistent variable for the dialog's player. rAthena
+// source: script.cpp buildin_getvariableofnpc (script_command_getvariableofnpc).
+// An unset variable reads as 0 — matches rAthena's get_val fallback.
+func builtinGetVariableOfNPC(vm *VM, args []Value) (Value, control) {
+	if len(args) < 2 {
+		return IntVal(0), ctrlContinue
+	}
+	return IntVal(vm.host.GetQuestVar(args[0].String(), args[1].String())), ctrlContinue
+}
+
+// builtinSetQuestVar implements `setquestvar(npcName, varName, value)`: persists
+// a NPC-scoped variable for the dialog's player. rAthena equivalent is the
+// built-in `set` writing to a name that matches one of the script-variable
+// mirrors — here we expose persistence explicitly so the script author is
+// never surprised by an implicit DB write.
+//
+// Set errors are surfaced to the log but the script continues — matches
+// rAthena's "log and continue" behaviour for a quest-table failure rather
+// than a hard abort.
+func builtinSetQuestVar(vm *VM, args []Value) (Value, control) {
+	if len(args) < 3 {
+		return IntVal(0), ctrlContinue
+	}
+	value := args[2].asInt()
+	if err := vm.host.SetQuestVar(args[0].String(), args[1].String(), value); err != nil {
+		return IntVal(0), ctrlContinue
+	}
+	return IntVal(value), ctrlContinue
 }

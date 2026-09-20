@@ -53,7 +53,14 @@ func Register(inj do.Injector, cfg *config.Config) {
 		if inv, err := do.Invoke[domain.ScriptInventory](i); err == nil {
 			inventory = inv
 		}
-		return app.NewEngine(scripts, npcs, world, inventory, log), nil
+		// The quest port drives getvariableofnpc / setquestvar (M10 Rung B).
+		// Optional: a nil port makes those builtins read 0 / silently no-op so
+		// a reduced harness without the quest table still works.
+		var quest domain.ScriptQuest
+		if q, err := do.Invoke[domain.ScriptQuest](i); err == nil {
+			quest = q
+		}
+		return app.NewEngine(scripts, npcs, world, inventory, quest, log), nil
 	})
 	do.Provide(inj, func(i do.Injector) (domain.NPCStore, error) {
 		return do.MustInvoke[*infra.MemoryNPCStore](i), nil

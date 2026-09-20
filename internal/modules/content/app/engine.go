@@ -8,6 +8,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"sync"
@@ -29,6 +30,7 @@ type Engine struct {
 	npcs      domain.NPCStore
 	world     domain.ScriptWorld
 	inventory domain.ScriptInventory
+	quest     domain.ScriptQuest
 	log       *slog.Logger
 
 	mu       sync.Mutex
@@ -39,9 +41,10 @@ type Engine struct {
 // port used by effect builtins (warp/heal), and the inventory port used by
 // item-script builtins (getitem/delitem/countitem/equip/unequip). scripts,
 // world, and inventory may each be nil: clicks are then a no-op and effect
-// builtins drop their frames / return 0 respectively.
-func NewEngine(scripts *script.CompiledScriptSet, npcs domain.NPCStore, world domain.ScriptWorld, inventory domain.ScriptInventory, log *slog.Logger) *Engine {
-	return &Engine{scripts: scripts, npcs: npcs, world: world, inventory: inventory, log: log, sessions: make(map[uint32]*domain.DialogSession)}
+// builtins drop their frames / return 0 respectively. quest may be nil: the
+// getvariableofnpc / setquestvar builtins then read 0 / silently no-op.
+func NewEngine(scripts *script.CompiledScriptSet, npcs domain.NPCStore, world domain.ScriptWorld, inventory domain.ScriptInventory, quest domain.ScriptQuest, log *slog.Logger) *Engine {
+	return &Engine{scripts: scripts, npcs: npcs, world: world, inventory: inventory, quest: quest, log: log, sessions: make(map[uint32]*domain.DialogSession)}
 }
 
 // StartDialog resolves the NPC's script, creates a dialog session, and runs the
@@ -67,7 +70,7 @@ func (e *Engine) StartDialog(accountID, charID, npcGID uint32, writer domain.Pac
 	}
 	sess := &domain.DialogSession{NpcID: npcGID, CharID: charID, Writer: writer, Signal: make(chan domain.DialogSignal, 1)}
 	e.put(accountID, sess)
-	host := &ScriptHost{session: sess, world: e.world, inventory: e.inventory, log: e.log}
+	host := &ScriptHost{session: sess, world: e.world, inventory: e.inventory, quest: e.quest, log: e.log}
 	// The VM runs scripts reached from the client (NPC clicks, dialog input), so
 	// a panic inside it must cost this one player's dialog — runScript's own
 	// defer still unregisters the session — rather than the process.
@@ -136,6 +139,7 @@ type ScriptHost struct {
 	session   *domain.DialogSession
 	world     domain.ScriptWorld
 	inventory domain.ScriptInventory
+	quest     domain.ScriptQuest
 	log       *slog.Logger
 }
 
@@ -273,6 +277,31 @@ func (h *ScriptHost) Unequip(index int) bool {
 		return false
 	}
 	return h.inventory.Unequip(h.session.CharID, index)
+}
+
+// GetQuestVar reads a persistent NPC-scoped variable for the dialog's player.
+// Returns 0 when no quest port is wired or the variable is unset — matches
+// rAthena's "unset integer reads as 0" (script.cpp get_val).
+func (h *ScriptHost) GetQuestVar(npcName, varName string) int64 {
+	if h.quest == nil {
+		return 0
+	}
+	v := h.quest.GetVar(h.session.CharID, npcName, varName)
+	return v
+}
+
+// SetQuestVar stores a persistent NPC-scoped variable for the dialog's
+// player. Returns the wrapped error to the VM; a nil quest port returns
+// nil (the script continues as if the write succeeded).
+func (h *ScriptHost) SetQuestVar(npcName, varName string, value int64) error {
+	if h.quest == nil {
+		return nil
+	}
+	if err := h.quest.SetVar(h.session.CharID, npcName, varName, value); err != nil {
+		h.log.Debug("content: quest set failed", "charID", h.session.CharID, "npc", npcName, "var", varName, "val", value, "err", err)
+		return fmt.Errorf("quest set: %w", err)
+	}
+	return nil
 }
 
 // waitAdvance blocks for a Next/OK signal. Cancel/close/timeout → false.

@@ -94,3 +94,35 @@ type NPCStore interface {
 	// Register maps an NPC GID to its script name.
 	Register(gid uint32, scriptName string)
 }
+
+// ScriptQuest is the persistent-NPC-variable capability the script VM bridge
+// needs for `getvariableofnpc` and the persistent side of `set`. It is
+// implemented by the content bounded context's QuestService; isolating the
+// port here keeps the content domain free of content/quest/app imports.
+//
+// NPC variables are per-(charID, npcName, varName): rAthena stores them in the
+// `quest` table keyed that way (sql-files/main.sql quest.sql). The values are
+// text — numeric quest state is parsed from decimal — matching rAthena's
+// shape so an existing rAthena dump loads without a transform.
+type ScriptQuest interface {
+	// GetVar returns the integer value of (charID, npcName, varName). An unset
+	// variable returns 0 — matches rAthena's "unset integer reads as 0" and
+	// the VM's GetVar fallback (script.cpp:get_val).
+	GetVar(charID uint32, npcName, varName string) int64
+	// SetVar stores the integer value of (charID, npcName, varName). The
+	// caller decides whether the new value is persisted (a `set` inside an
+	// NPC script persists; a `set` inside a temporary item script does not).
+	SetVar(charID uint32, npcName, varName string, value int64) error
+	// GetVarOfNPC returns the integer value of another NPC's variable
+	// (`getvariableofnpc(npcName, varName)`). Same semantics as GetVar but
+	// the npcName is the argument, not the current NPC.
+	GetVarOfNPC(charID uint32, npcName, varName string) int64
+}
+
+// CurrentNPCName returns the script name the current NPC dialog is running
+// under. The VM bridge uses it to scope `set` to the right (charID, npcName)
+// row when an NPC script mutates a persistent variable. It is supplied by
+// the content Engine at VM-run time; a nil function (e.g. when running an
+// item script) means "no persistent scope" and `set` falls back to in-VM
+// memory only.
+type CurrentNPCName func() string
