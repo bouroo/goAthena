@@ -10,11 +10,13 @@ import (
 
 	"github.com/panjf2000/gnet/v2"
 
+	storagedomain "github.com/bouroo/goAthena/internal/modules/commerce/storage/domain"
 	dialogdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
@@ -60,40 +62,44 @@ func mapHandlers() map[uint16]mapHandler {
 		0x0072:                               {size: czEnterSize, fn: (*MapServer).handleEnterFrame},
 		0x007d:                               {size: 2, fn: (*MapServer).handleLoadEndAck},
 		0x0085:                               {size: 5, fn: (*MapServer).handleRequestMove},
-		0x0089:                               {size: 7, fn: (*MapServer).handleActionRequest},                         // CZ_ACTION_REQUEST
-		0x0090:                               {size: 7, fn: (*MapServer).handleContactNPC},                            // CZ_CONTACT_NPC (NPC click)
-		ropacket.HeaderCZRESTART:             {size: 3, fn: (*MapServer).handleRestart},                               // CZ_RESTART (respawn / return to char-select)
-		ropacket.HeaderCZSTATUSCHANGE:        {size: 5, fn: (*MapServer).handleStatusChange},                          // CZ_STATUS_CHANGE (stat allocation)
-		0x00b8:                               {size: 7, fn: (*MapServer).handleChooseMenu},                            // CZ_CHOOSE_MENU
-		0x00b9:                               {size: 6, fn: (*MapServer).handleReqNextScript},                         // CZ_REQ_NEXT_SCRIPT
-		0x0143:                               {size: 10, fn: (*MapServer).handleInputEditDlg},                         // CZ_INPUT_EDITDLG
-		0x01d5:                               {frameSize: variableFrameSize, fn: (*MapServer).handleInputEditDlgStr},  // CZ_INPUT_EDITDLGSTR (variable length)
-		0x0146:                               {size: 6, fn: (*MapServer).handleCloseDialog},                           // CZ_CLOSE_DIALOG
-		ropacket.HeaderCZACKSELECTDEALTYPE:   {size: 7, fn: (*MapServer).handleAckSelectDealtype},                     // CZ_ACK_SELECT_DEALTYPE (NPC shop open)
-		ropacket.HeaderCZPCPURCHASEITEMLIST:  {frameSize: variableFrameSize, fn: (*MapServer).handlePurchaseItemList}, // CZ_PC_PURCHASE_ITEMLIST (variable)
-		ropacket.HeaderCZPCSELLITEMLIST:      {frameSize: variableFrameSize, fn: (*MapServer).handleSellItemList},     // CZ_PC_SELL_ITEMLIST (variable)
-		0x0362:                               {size: 6, fn: (*MapServer).handleItemPickup},                            // CZ_ITEM_PICKUP @ 20250604
-		0x0363:                               {size: 6, fn: (*MapServer).handleItemDrop},                              // CZ_ITEM_DROP @ 20250604
-		0x0439:                               {size: 8, fn: (*MapServer).handleUseItem},                               // CZ_USE_ITEM2 @ 20250604 (cmd+index+AID)
-		0x0438:                               {size: 10, fn: (*MapServer).handleUseSkill2},                            // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
-		0x0af4:                               {size: 11, fn: (*MapServer).handleUseSkillToPos},                        // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
-		ropacket.HeaderCZSKILLUP:             {size: 4, fn: (*MapServer).handleSkillUp},                               // CZ_SKILLUP (skill learn)
-		ropacket.HeaderCZTRADEREQUEST:        {size: 6, fn: (*MapServer).handleTradeRequest},                          // CZ_TRADE_REQUEST 0x00e4 (cmd+targetGID)
-		ropacket.HeaderCZTRADEACK:            {size: 3, fn: (*MapServer).handleTradeAck},                              // CZ_TRADE_ACK 0x00e6 (cmd+type)
-		ropacket.HeaderCZADDEXCHANGEITEM:     {size: 8, fn: (*MapServer).handleAddExchangeItem},                       // CZ_ADD_EXCHANGE_ITEM 0x00e8 (cmd+index+amount)
-		ropacket.HeaderCZTRADEOK:             {size: 2, fn: (*MapServer).handleTradeOK},                               // CZ_TRADE_OK 0x00eb (cmd only)
-		ropacket.HeaderCZTRADECANCEL:         {size: 2, fn: (*MapServer).handleTradeCancel},                           // CZ_TRADE_CANCEL 0x00ed (cmd only)
-		ropacket.HeaderCZREQWEAREQUIPV5:      {size: 8, fn: (*MapServer).handleReqWearEquip},                          // CZ_REQ_WEAR_EQUIP_V5 0x0998 (cmd+index+position)
-		ropacket.HeaderCZREQTAKEOFFEQUIP:     {size: 4, fn: (*MapServer).handleReqTakeoffEquip},                       // CZ_REQ_TAKEOFF_EQUIP 0x00ab (cmd+index)
-		ropacket.HeaderCZWHISPER:             {frameSize: variableFrameSize, fn: (*MapServer).handleWhisper},          // CZ_WHISPER 0x0096 (variable)
-		ropacket.HeaderCZGLOBALMESSAGE:       {frameSize: variableFrameSize, fn: (*MapServer).handleGlobalMessage},    // CZ_GLOBAL_MESSAGE 0x008c (variable)
-		ropacket.HeaderCZGETCHARNAMEREQUEST:  {size: 6, fn: (*MapServer).handleGetCharNameRequest},                    // CZ_GETCHARNAMEREQUEST 0x0094
-		ropacket.HeaderCZREQUESTTIME:         {size: 6, fn: (*MapServer).handleRequestTime},                           // CZ_REQUEST_TIME 0x007e (clock ping)
-		ropacket.HeaderCZREQEMOTION:          {size: 3, fn: (*MapServer).handleReqEmotion},                            // CZ_REQ_EMOTION 0x00bf (emotion icon)
-		ropacket.HeaderCZCHANGEDIR:           {size: 5, fn: (*MapServer).handleChangeDir},                             // CZ_CHANGE_DIR 0x009b (facing)
-		ropacket.HeaderCZPMIGNORE:            {size: 27, fn: (*MapServer).handlePMIgnore},                             // CZ_PMIgnore 0x00cf (/ex /in)
-		ropacket.HeaderCZSETTINGWHISPERSTATE: {size: 3, fn: (*MapServer).handleSettingWhisperState},                   // CZ_SETTING_WHISPER_STATE 0x00d0 (/exall /inall)
-		ropacket.HeaderCZREQWHISPERLIST:      {size: 2, fn: (*MapServer).handleReqWhisperList},                        // CZ_REQ_WHISPER_LIST 0x00d3 (/wl)
+		0x0089:                               {size: 7, fn: (*MapServer).handleActionRequest},                                  // CZ_ACTION_REQUEST
+		0x0090:                               {size: 7, fn: (*MapServer).handleContactNPC},                                     // CZ_CONTACT_NPC (NPC click)
+		ropacket.HeaderCZRESTART:             {size: 3, fn: (*MapServer).handleRestart},                                        // CZ_RESTART (respawn / return to char-select)
+		ropacket.HeaderCZSTATUSCHANGE:        {size: 5, fn: (*MapServer).handleStatusChange},                                   // CZ_STATUS_CHANGE (stat allocation)
+		0x00b8:                               {size: 7, fn: (*MapServer).handleChooseMenu},                                     // CZ_CHOOSE_MENU
+		0x00b9:                               {size: 6, fn: (*MapServer).handleReqNextScript},                                  // CZ_REQ_NEXT_SCRIPT
+		0x0143:                               {size: 10, fn: (*MapServer).handleInputEditDlg},                                  // CZ_INPUT_EDITDLG
+		0x01d5:                               {frameSize: variableFrameSize, fn: (*MapServer).handleInputEditDlgStr},           // CZ_INPUT_EDITDLGSTR (variable length)
+		0x0146:                               {size: 6, fn: (*MapServer).handleCloseDialog},                                    // CZ_CLOSE_DIALOG
+		ropacket.HeaderCZACKSELECTDEALTYPE:   {size: 7, fn: (*MapServer).handleAckSelectDealtype},                              // CZ_ACK_SELECT_DEALTYPE (NPC shop open)
+		ropacket.HeaderCZPCPURCHASEITEMLIST:  {frameSize: variableFrameSize, fn: (*MapServer).handlePurchaseItemList},          // CZ_PC_PURCHASE_ITEMLIST (variable)
+		ropacket.HeaderCZPCSELLITEMLIST:      {frameSize: variableFrameSize, fn: (*MapServer).handleSellItemList},              // CZ_PC_SELL_ITEMLIST (variable)
+		0x0362:                               {size: 6, fn: (*MapServer).handleItemPickup},                                     // CZ_ITEM_PICKUP @ 20250604
+		0x0363:                               {size: 6, fn: (*MapServer).handleItemDrop},                                       // CZ_ITEM_DROP @ 20250604
+		0x0439:                               {size: 8, fn: (*MapServer).handleUseItem},                                        // CZ_USE_ITEM2 @ 20250604 (cmd+index+AID)
+		0x0438:                               {size: 10, fn: (*MapServer).handleUseSkill2},                                     // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
+		0x0af4:                               {size: 11, fn: (*MapServer).handleUseSkillToPos},                                 // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
+		ropacket.HeaderCZSKILLUP:             {size: 4, fn: (*MapServer).handleSkillUp},                                        // CZ_SKILLUP (skill learn)
+		ropacket.HeaderCZTRADEREQUEST:        {size: 6, fn: (*MapServer).handleTradeRequest},                                   // CZ_TRADE_REQUEST 0x00e4 (cmd+targetGID)
+		ropacket.HeaderCZTRADEACK:            {size: 3, fn: (*MapServer).handleTradeAck},                                       // CZ_TRADE_ACK 0x00e6 (cmd+type)
+		ropacket.HeaderCZADDEXCHANGEITEM:     {size: 8, fn: (*MapServer).handleAddExchangeItem},                                // CZ_ADD_EXCHANGE_ITEM 0x00e8 (cmd+index+amount)
+		ropacket.HeaderCZTRADEOK:             {size: 2, fn: (*MapServer).handleTradeOK},                                        // CZ_TRADE_OK 0x00eb (cmd only)
+		ropacket.HeaderCZTRADECANCEL:         {size: 2, fn: (*MapServer).handleTradeCancel},                                    // CZ_TRADE_CANCEL 0x00ed (cmd only)
+		ropacket.HeaderCZREQWEAREQUIPV5:      {size: 8, fn: (*MapServer).handleReqWearEquip},                                   // CZ_REQ_WEAR_EQUIP_V5 0x0998 (cmd+index+position)
+		ropacket.HeaderCZREQTAKEOFFEQUIP:     {size: 4, fn: (*MapServer).handleReqTakeoffEquip},                                // CZ_REQ_TAKEOFF_EQUIP 0x00ab (cmd+index)
+		ropacket.HeaderCZWHISPER:             {frameSize: variableFrameSize, fn: (*MapServer).handleWhisper},                   // CZ_WHISPER 0x0096 (variable)
+		ropacket.HeaderCZGLOBALMESSAGE:       {frameSize: variableFrameSize, fn: (*MapServer).handleGlobalMessage},             // CZ_GLOBAL_MESSAGE 0x008c (variable)
+		ropacket.HeaderCZGETCHARNAMEREQUEST:  {size: 6, fn: (*MapServer).handleGetCharNameRequest},                             // CZ_GETCHARNAMEREQUEST 0x0094
+		ropacket.HeaderCZREQUESTTIME:         {size: 6, fn: (*MapServer).handleRequestTime},                                    // CZ_REQUEST_TIME 0x007e (clock ping)
+		ropacket.HeaderCZREQEMOTION:          {size: 3, fn: (*MapServer).handleReqEmotion},                                     // CZ_REQ_EMOTION 0x00bf (emotion icon)
+		ropacket.HeaderCZCHANGEDIR:           {size: 5, fn: (*MapServer).handleChangeDir},                                      // CZ_CHANGE_DIR 0x009b (facing)
+		ropacket.HeaderCZPMIGNORE:            {size: 27, fn: (*MapServer).handlePMIgnore},                                      // CZ_PMIgnore 0x00cf (/ex /in)
+		ropacket.HeaderCZSETTINGWHISPERSTATE: {size: 3, fn: (*MapServer).handleSettingWhisperState},                            // CZ_SETTING_WHISPER_STATE 0x00d0 (/exall /inall)
+		ropacket.HeaderCZREQWHISPERLIST:      {size: 2, fn: (*MapServer).handleReqWhisperList},                                 // CZ_REQ_WHISPER_LIST 0x00d3 (/wl)
+		ropacket.HeaderCZREQOPENSTORE2:       {size: ropacket.SizeCZReqOpenStore2, fn: (*MapServer).handleReqOpenStore2},       // CZ_REQ_OPENSTORE2 0x07e4 (cmd+accountName)
+		ropacket.HeaderCZCLOSESTORE:          {size: 2, fn: (*MapServer).handleCloseStore},                                     // CZ_CLOSE_STORE 0x07e5 (cmd only)
+		ropacket.HeaderCZMOVEITEMTOSTORE2:    {size: ropacket.SizeCZMoveItemToStore2, fn: (*MapServer).handleMoveItemToStore2}, // CZ_MOVE_ITEM_TO_STORE2 0x07e6 (cmd+index+amount)
+		ropacket.HeaderCZMOVEITEMTOBODY2:     {size: ropacket.SizeCZMoveItemToBody2, fn: (*MapServer).handleMoveItemToBody2},   // CZ_MOVE_ITEM_TO_BODY2 0x07e7 (cmd+index+amount)
 	}
 }
 
@@ -1788,6 +1794,160 @@ func tradeItemAddResult(err error) uint8 {
 	default:
 		return ropacket.TradeItemAddStackExceed
 	}
+}
+
+// --- storage handlers (M9 warehouse) ---
+
+// handleReqOpenStore2 opens the warehouse UI (CZ_REQ_OPENSTORE2 0x07e4). The
+// server sends the warehouse's current contents as ZC_STORE_NORMALITEMLIST +
+// ZC_STORE_EQUIPMENTITEMLIST so the client can populate the warehouse grid.
+//
+// Without the storage service wired, the handler is a no-op (matches the trade
+// nil-tolerant pattern). With it wired, the handler reads the account's
+// warehouse rows and emits the two list frames.
+func (s *MapServer) handleReqOpenStore2(c gnet.Conn, auth *mapAuth, _ []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_REQ_OPENSTORE2 from unauthed conn")
+		return
+	}
+	if s.storage == nil {
+		s.log.Debug("map: storage not wired, ignoring CZ_REQ_OPENSTORE2")
+		return
+	}
+	rows, err := s.storage.LoadWarehouse(context.Background(), auth.accountID)
+	if err != nil {
+		s.log.Error("map: load warehouse for init burst", "aid", auth.accountID, "err", err)
+		return
+	}
+	s.writeStorageLists(c, rows)
+}
+
+// handleCloseStore closes the warehouse (CZ_CLOSE_STORE 0x07e5). Today the
+// warehouse state is server-side (no per-conn flag) — close is informational
+// and the handler is a no-op. Mirrors rAthena's clif_parse_CloseStore which
+// only clears the per-conn storage flag (clif.cpp:7990-7997).
+func (s *MapServer) handleCloseStore(_ gnet.Conn, auth *mapAuth, _ []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_CLOSE_STORE from unauthed conn")
+		return
+	}
+	// No state to clear today; the warehouse is a per-account store.
+}
+
+// handleMoveItemToStore2 moves an item from the player's bag to the warehouse
+// (CZ_MOVE_ITEM_TO_STORE2 0x07e6). The wire index is the bag slot (server row
+// + 2). On success, emits ZC_STOREITEMLISTRESULT with result=0 (success);
+// on failure, result=1.
+func (s *MapServer) handleMoveItemToStore2(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_MOVE_ITEM_TO_STORE2 from unauthed conn")
+		return
+	}
+	if s.storage == nil {
+		s.log.Debug("map: storage not wired, ignoring CZ_MOVE_ITEM_TO_STORE2")
+		return
+	}
+	req, err := ropacket.ParseCZMoveItemToStore2(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_MOVE_ITEM_TO_STORE2", "err", err)
+		return
+	}
+	_, mErr := s.storage.MoveToStorage(context.Background(), auth.accountID, auth.charID, uint32(req.Index), int(req.Amount)) //nolint:gosec // G115: amount fits int.
+	s.writeStorageItemListResult(c, mErr)
+}
+
+// handleMoveItemToBody2 moves an item from the warehouse to the player's bag
+// (CZ_MOVE_ITEM_TO_BODY2 0x07e7). The wire index is the warehouse slot
+// (server row + 2). On success, emits ZC_STOREITEMLISTRESULT with result=0
+// (success); on failure, result=1.
+func (s *MapServer) handleMoveItemToBody2(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_MOVE_ITEM_TO_BODY2 from unauthed conn")
+		return
+	}
+	if s.storage == nil {
+		s.log.Debug("map: storage not wired, ignoring CZ_MOVE_ITEM_TO_BODY2")
+		return
+	}
+	req, err := ropacket.ParseCZMoveItemToBody2(frame)
+	if err != nil {
+		s.log.Warn("map: parse CZ_MOVE_ITEM_TO_BODY2", "err", err)
+		return
+	}
+	_, mErr := s.storage.MoveFromStorage(context.Background(), auth.accountID, auth.charID, uint32(req.Index), int(req.Amount)) //nolint:gosec // G115: amount fits int.
+	s.writeStorageItemListResult(c, mErr)
+}
+
+// writeStorageLists emits ZC_STORE_NORMALITEMLIST + ZC_STORE_EQUIPMENTITEMLIST
+// to populate the warehouse grid on CZ_REQ_OPENSTORE2. The shape mirrors
+// the inventory init burst but without an invType byte (rAthena's
+// clif_storageList emits the bare NORMALITEM_INFO / EQUIPITEM_INFO lists).
+func (s *MapServer) writeStorageLists(c gnet.Conn, rows []storagedomain.StorageItem) {
+	normal := make([]ropacket.InventoryNormalItem, 0, len(rows))
+	equipped := make([]ropacket.InventoryEquipItem, 0, len(rows))
+	for i, it := range rows {
+		//nolint:gosec // G115: warehouse row count bounded by MAX_STORAGE (600).
+		clientIdx := uint16(i) + 2
+		entry := s.itemEntry(it.NameID)
+		wireType := uint8(0) // default IT_ETC when item_db is absent
+		if entry != nil {
+			wireType = uint8(itemdb.WireType(entry.Type) & 0xff) //nolint:gosec // G115: IT_* values are small.
+		}
+		common := ropacket.InventoryNormalItem{
+			Index: clientIdx,
+			ITID:  uint16(it.NameID), //nolint:gosec // G115: item_db ids are registered well below 2^16 in this corpus.
+			Type:  wireType,
+			Count: uint16(it.Amount), //nolint:gosec // G115: storage stacks are bounded far below 2^16.
+			Card: [4]uint16{ //nolint:gosec // G115: card ids are item_db ids, same bound as ITID.
+				uint16(it.Card0), uint16(it.Card1), uint16(it.Card2), uint16(it.Card3), //nolint:gosec // G115: ditto.
+			},
+		}
+		if it.Identify != 0 {
+			common.Flag = 1 // bit 0 = IsIdentified
+		}
+		if !it.IsEquipped() {
+			normal = append(normal, common)
+			continue
+		}
+		eq := ropacket.InventoryEquipItem{
+			Index:         clientIdx,
+			ITID:          common.ITID,
+			Type:          wireType,
+			Location:      it.Equip,
+			RefiningLevel: it.Refine,
+			Card:          common.Card,
+			Flag:          common.Flag,
+		}
+		if entry != nil && entry.View > 0 && entry.View <= 0xffff && it.Equip&equip.EquipVisible != 0 {
+			eq.ItemSpriteNumber = uint16(entry.View) //nolint:gosec // G115: range-checked above.
+		}
+		equipped = append(equipped, eq)
+	}
+	var buf bytes.Buffer
+	if err := (ropacket.StorageListNormalResponse{Items: normal}).Encode(&buf); err != nil {
+		s.log.Error("map: encode ZC_STORE_NORMALITEMLIST", "err", err)
+		return
+	}
+	if err := (ropacket.StorageListEquipResponse{Items: equipped}).Encode(&buf); err != nil {
+		s.log.Error("map: encode ZC_STORE_EQUIPMENTITEMLIST", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// writeStorageItemListResult emits ZC_STOREITEMLISTRESULT (0x07eb, 6 bytes).
+// result=0 on success (nil err); result=1 on any failure.
+func (s *MapServer) writeStorageItemListResult(c gnet.Conn, mErr error) {
+	resp := ropacket.StorageItemListResult{Result: 0}
+	if mErr != nil {
+		resp.Result = 1
+	}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_STOREITEMLISTRESULT", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
 }
 
 // authFromConn extracts the cached mapAuth from a gnet connection, or nil if the

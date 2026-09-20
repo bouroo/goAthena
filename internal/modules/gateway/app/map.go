@@ -69,6 +69,10 @@ type MapServer struct {
 	itemDB *itemdb.Registry
 	shops  *shopapp.ShopService
 	trade  *worldapp.TradeService
+	// storage wires the bag↔warehouse orchestrator (M9). Optional: nil leaves
+	// the storage dispatch entries as no-ops (the handlers log + skip). Set
+	// post-construction by DI root via SetStorage.
+	storage *worldapp.StorageService
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
 	// DEALTYPE carries an NPC id, not a shop name).
 	shopStore contentdomain.ShopStore
@@ -941,6 +945,14 @@ func (s *MapServer) writeRefuseEnter(c gnet.Conn) {
 // sprite stays 0.
 func (s *MapServer) SetItemDB(db *itemdb.Registry) {
 	s.itemDB = db
+}
+
+// SetStorage attaches the world StorageService after construction so the DI
+// root can wire it without churning NewMapServer's many call sites. nil keeps
+// the pre-M9 behaviour: the storage dispatch entries log + skip rather than
+// disconnect (matches the trade service's nil-tolerant pattern in NewMapServer).
+func (s *MapServer) SetStorage(st *worldapp.StorageService) {
+	s.storage = st
 }
 
 // Start runs the map listener in a goroutine.

@@ -157,5 +157,9 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	// keep NewMapServer's positional signature stable; unresolved leaves the
 	// burst's entries typed IT_ETC with a 0 sprite rather than refusing startup.
 	ms.SetItemDB(resolveOptional[*itemdb.Registry](inj, log, "itemdb"))
+	// Storage service wires the bag↔warehouse verb (M9b). Optional so harnesses
+	// without a configured storage service still build (the storage dispatch
+	// entries log + skip rather than disconnect).
+	ms.SetStorage(resolveOptional[*worldapp.StorageService](inj, log, "storage"))
 	return ms, nil
 }

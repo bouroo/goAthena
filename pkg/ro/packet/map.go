@@ -290,6 +290,20 @@ const (
 	// TODO(B1): resolve via PacketRegistry (packetdb N1.1).
 	HeaderZCINVENTORYSTART uint16 = 0x0b08 // ZC_INVENTORY_START — packets_struct.hpp PACKET_ZC_INVENTORY_START
 	HeaderZCINVENTORYEND   uint16 = 0x0b0b // ZC_INVENTORY_END — packets_struct.hpp PACKET_ZC_INVENTORY_END
+	// Storage packet family (warehouse / M9). Sources:
+	//   - third_party/rathenaThailand/src/map/packets_struct.hpp storage section
+	//   - third_party/rathenaThailand/src/map/clif.cpp:7801-8035 (clif_storageList /
+	//     clif_storageItemListResult / clif_storageOpen)
+	//   - third_party/rathenaThailand/src/map/clif_packetdb.hpp (length bindings)
+	// The 0x07e3-0x07eb range is the rAthena storage sub-range.
+	HeaderCZREQOPENSTORE2          uint16 = 0x07e4 // CZ_REQ_OPENSTORE2 — clif_parse_NpcSelectDeposit / clif_storageOpen
+	HeaderCZCLOSESTORE             uint16 = 0x07e5 // CZ_CLOSE_STORE — clif_parse_CloseStore
+	HeaderCZMOVEITEMTOSTORE2       uint16 = 0x07e6 // CZ_MOVE_ITEM_TO_STORE2 — clif_parse_MoveToStore
+	HeaderCZMOVEITEMTOBODY2        uint16 = 0x07e7 // CZ_MOVE_ITEM_TO_BODY2 — clif_parse_MoveFromStore
+	HeaderZCACCEPTENTER2           uint16 = 0x07e3 // ZC_ACCEPT_ENTER2 — clif_storageOpen (server→client on warehouse open)
+	HeaderZCSTORENORMALITEMLIST    uint16 = 0x07e9 // ZC_STORE_NORMALITEMLIST — clif_storageList stackable branch
+	HeaderZCSTOREEQUIPMENTITEMLIST uint16 = 0x07ea // ZC_STORE_EQUIPMENTITEMLIST — clif_storageList equipment branch
+	HeaderZCSTOREITEMLISTRESULT    uint16 = 0x07eb // ZC_STOREITEMLISTRESULT — clif_storageItemListResult (deposit/withdraw ack)
 	// P2A: ZC_REQ_WEAR_EQUIP_ACK_V5 (0x0999) — server ack for
 	// CZ_REQ_WEAR_EQUIP_V5. rathena/src/map/packets_struct.hpp:1269-1276
 	// (PACKETVER_MAIN_NUM >= 20121205 branch). Fixed 11 bytes:
@@ -522,6 +536,13 @@ const (
 	// (packet_itemlist_normal carries invType when MAIN_NUM>=20181002).
 	// TODO(B1): resolve per-PACKETVER via PacketRegistry (packetdb N1.1).
 	sizeEmptyInventoryListNormal = 5
+	// sizeStorageListHeader = int16 packetType + int16 packetLength = 2+2 = 4
+	// for ZC_STORE_NORMALITEMLIST (0x07e9) and ZC_STORE_EQUIPMENTITEMLIST
+	// (0x07ea). The warehouse list packets carry NO invType byte — the storage
+	// uses the bare NORMALITEM_INFO / EQUIPITEM_INFO layout, unlike the
+	// inventory init burst which adds the trailing invType byte at
+	// PACKETVER >= 20181002 (clif_storageList, packets_struct.hpp:418-507).
+	sizeStorageListHeader = 4
 	// sizeZCShortcutKeyList = int16 packetType + int8 rotate +
 	// int16 tab + 38 * hotkey_data = 2 + 1 + 2 + 38*(int8 isSkill +
 	// uint32 id + int16 count) = 5 + 38*7 = 271

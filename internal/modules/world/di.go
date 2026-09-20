@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	storageapp "github.com/bouroo/goAthena/internal/modules/commerce/storage/app"
 	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
@@ -143,6 +144,13 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		combatSvc := do.MustInvoke[*app.CombatService](i)
 		log := do.MustInvoke[*slog.Logger](i)
 		return app.NewMobAIService(world, mobs, combatSvc, log), nil
+	})
+	// M9 storage orchestrator: bag↔warehouse atomic moves. Inventory and
+	// storage both register before world (composition.go), so both resolve here.
+	do.Provide(inj, func(i do.Injector) (*app.StorageService, error) {
+		inv := do.MustInvoke[*invapp.InventoryService](i)
+		sto := do.MustInvoke[*storageapp.StorageService](i)
+		return app.NewStorageService(inv, sto), nil
 	})
 
 	// ScriptInventory adapter: bridges the content module's script VM

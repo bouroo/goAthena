@@ -1558,6 +1558,27 @@ func writeNameField(buf []byte, off int, name string) {
 	copy(buf[off:off+sizeZCAckReqNameName], name)
 }
 
+// readNameField extracts a fixed-width NUL-padded name from buf starting at
+// off with the given width. Truncates at the first NUL byte so callers see the
+// logical string rather than the trailing zero padding — mirrors how rAthena
+// reads names with safestrnlen+1 on the wire.
+func readNameField(buf []byte, off int, width int) string {
+	if off >= len(buf) {
+		return ""
+	}
+	end := off + width
+	if end > len(buf) {
+		end = len(buf)
+	}
+	raw := buf[off:end]
+	for i, b := range raw {
+		if b == 0 {
+			return string(raw[:i])
+		}
+	}
+	return string(raw)
+}
+
 // ReqNameAll2Response encodes ZC_ACK_REQNAMEALL2 (command 0x0a30, 106 bytes
 // fixed) — the full PC name reply rAthena's clif_name sends at PACKETVER >=
 // 20150225 (ClientROThailand 20250604). Wire shape (packets_struct.hpp:3564-3572):
