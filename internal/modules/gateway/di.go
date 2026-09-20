@@ -18,6 +18,7 @@ import (
 	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	"github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
+	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
@@ -161,5 +162,9 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	// without a configured storage service still build (the storage dispatch
 	// entries log + skip rather than disconnect).
 	ms.SetStorage(resolveOptional[*worldapp.StorageService](inj, log, "storage"))
+	// Party service wires the group verbs (M11). Optional for the same reason as
+	// storage: a harness without a party service still builds, and the party
+	// dispatch entries log + skip rather than disconnect.
+	ms.SetParty(resolveOptional[*partyapp.PartyService](inj, log, "party"))
 	return ms, nil
 }

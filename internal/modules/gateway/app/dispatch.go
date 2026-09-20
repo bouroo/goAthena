@@ -13,6 +13,7 @@ import (
 	storagedomain "github.com/bouroo/goAthena/internal/modules/commerce/storage/domain"
 	dialogdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
+	partydomain "github.com/bouroo/goAthena/internal/modules/social/party/domain"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
@@ -100,6 +101,15 @@ func mapHandlers() map[uint16]mapHandler {
 		ropacket.HeaderCZCLOSESTORE:          {size: 2, fn: (*MapServer).handleCloseStore},                                     // CZ_CLOSE_STORE 0x07e5 (cmd only)
 		ropacket.HeaderCZMOVEITEMTOSTORE2:    {size: ropacket.SizeCZMoveItemToStore2, fn: (*MapServer).handleMoveItemToStore2}, // CZ_MOVE_ITEM_TO_STORE2 0x07e6 (cmd+index+amount)
 		ropacket.HeaderCZMOVEITEMTOBODY2:     {size: ropacket.SizeCZMoveItemToBody2, fn: (*MapServer).handleMoveItemToBody2},   // CZ_MOVE_ITEM_TO_BODY2 0x07e7 (cmd+index+amount)
+		// M11: party (group) family. Both create variants are dispatched because
+		// the client picks one by build; CZ_CHANGE_GROUPEXPOPTION is leader-only.
+		ropacket.HeaderCZMAKEGROUP:           {size: 26, fn: (*MapServer).handleMakeGroup},           // CZ_MAKE_GROUP 0x00f9 (cmd+name)
+		ropacket.HeaderCZMAKEGROUP2:          {size: 28, fn: (*MapServer).handleMakeGroup},           // CZ_MAKE_GROUP2 0x01e8 (cmd+name+pickup+share)
+		ropacket.HeaderCZREQJOINGROUP:        {size: 6, fn: (*MapServer).handleReqJoinGroup},         // CZ_REQ_JOIN_GROUP 0x00fc (cmd+AID)
+		ropacket.HeaderCZJOINGROUP:           {size: 10, fn: (*MapServer).handleJoinGroup},           // CZ_JOIN_GROUP 0x00ff (cmd+partyID+flag)
+		ropacket.HeaderCZREQLEAVEGROUP:       {size: 2, fn: (*MapServer).handleLeaveGroup},           // CZ_REQ_LEAVE_GROUP 0x0100 (cmd only)
+		ropacket.HeaderCZCHANGEGROUPEXPOPT:   {size: 6, fn: (*MapServer).handleChangeGroupExpOption}, // CZ_CHANGE_GROUPEXPOPTION 0x0102 (cmd+expflag)
+		ropacket.HeaderCZREQEXPELGROUPMEMBER: {size: 30, fn: (*MapServer).handleExpelGroupMember},    // CZ_REQ_EXPEL_GROUP_MEMBER 0x0103 (cmd+AID+name)
 	}
 }
 
@@ -571,6 +581,20 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	burst = append(burst, ropacket.EncodeInventoryEnd()...)
 	if e, err := s.world.Get(worlddomain.EntityID(auth.charID)); err == nil {
 		burst = s.writeSkillInfoList(burst, e)
+	}
+	// Party restore, mirroring rAthena's LoadEndAck tail: it sends
+	// ZC_PARTY_CONFIG (clif_partyinvitationstate) unconditionally, then — only
+	// when the char is in a party — the roster and option frames via
+	// party_send_movemap (src/map/clif.cpp:11014, :10819-10823). Without the
+	// roster a client that entered the map already grouped shows an empty
+	// party window until the next membership change.
+	burst = append(burst, encodePartyConfig(0)...)
+	if s.party != nil {
+		if p, perr := s.party.GetByMember(context.Background(), auth.charID); perr == nil {
+			if members, merr := s.party.Members(context.Background(), p.ID); merr == nil {
+				burst = s.appendGroupList(burst, p, members)
+			}
+		}
 	}
 	_ = c.AsyncWrite(burst, nil)
 	s.log.Debug("map: client load complete (inventory + skill init sent)", "aid", auth.accountID, "gid", auth.charID)
@@ -1266,19 +1290,69 @@ func (s *MapServer) handleMobDeath(c gnet.Conn, killerCharID uint32, mobGID uint
 	// who already received burst above). burst is immutable after this point, so
 	// fanning the same buffer to multiple connections is safe.
 	s.broadcast(burst, defender.Map, defender.Pos, killerCharID)
-	// EXP reward: grant the mob's mob_db BaseExp/JobExp to the killer. Best-effort
-	// — a mob with no mob_db entry (MobExp returns 0,0) earns nothing, and a killer
-	// that left between the hit and the grant surfaces ErrEntityNotFound, logged
-	// not fatal (the vanish/drop broadcast already completed). Party EXP split is
-	// deferred; the full reward goes to the solo killer. GrantExp fires
+	// EXP reward: grant the mob's mob_db BaseExp/JobExp. Best-effort — a mob with
+	// no mob_db entry (MobExp returns 0,0) earns nothing, and a killer that left
+	// between the hit and the grant surfaces ErrEntityNotFound, logged not fatal
+	// (the vanish/drop broadcast already completed). GrantExp fires
 	// OnExpChange, which emits the killer's two ZC_LONGLONGPAR_CHANGE frames.
 	base, job := s.spawn.MobExp(defender.Class)
 	if base == 0 && job == 0 {
 		return
 	}
-	if _, _, err := s.world.GrantExp(context.Background(), killerCharID, base, job); err != nil {
-		s.log.Warn("map: grant exp on mob death", "killer", killerCharID, "class", defender.Class, "err", err)
+	s.grantMobExp(killerCharID, defender.Map, base, job)
+}
+
+// grantMobExp pays a mob-kill reward to the killer and, when the killer is in a
+// party whose members share EXP, to the rest of that party.
+//
+// Eligibility is computed by the party module from the roster (online AND on the
+// killer's map), mirroring rAthena's party_exp_share member filter. Death is
+// runtime state the party module does not own, so dead members are filtered here
+// from the world registry before the split runs.
+//
+// A solo killer, a killer with no party, or any party error falls back to paying
+// the full reward to the killer — the pre-M11 behavior, and the same reward the
+// killer would have earned alone, so a party failure can never cost EXP.
+func (s *MapServer) grantMobExp(killerCharID uint32, killerMap string, base, job uint64) {
+	ctx := context.Background()
+	if s.party != nil {
+		if awards, err := s.party.SplitExp(ctx, s.killerPartyID(ctx, killerCharID), killerMap, base, job); err == nil && awards != nil {
+			awards = s.dropDeadSharers(awards)
+			for charID, gain := range awards {
+				if _, _, err := s.world.GrantExp(ctx, charID, gain[0], gain[1]); err != nil {
+					s.log.Warn("map: grant party exp", "char", charID, "err", err)
+				}
+			}
+			return
+		}
 	}
+	if _, _, err := s.world.GrantExp(ctx, killerCharID, base, job); err != nil {
+		s.log.Warn("map: grant exp on mob death", "killer", killerCharID, "err", err)
+	}
+}
+
+// killerPartyID resolves the killer's party, or 0 when they have none (SplitExp
+// then reports ErrPartyNotFound and the caller falls back to the solo reward).
+func (s *MapServer) killerPartyID(ctx context.Context, charID uint32) partydomain.PartyID {
+	p, err := s.party.GetByMember(ctx, charID)
+	if err != nil {
+		return 0
+	}
+	return p.ID
+}
+
+// dropDeadSharers removes any award whose recipient is currently dead. rAthena
+// excludes dead members from the share (src/map/party.cpp:1257 pc_isdead); a dead
+// member's award is simply not paid. Death is HP <= 0 (the world tracks no
+// separate flag), and a recipient missing from the registry counts as dead.
+func (s *MapServer) dropDeadSharers(awards map[uint32][2]uint64) map[uint32][2]uint64 {
+	for charID := range awards {
+		e, err := s.world.Get(worlddomain.EntityID(charID))
+		if err != nil || e.HP <= 0 {
+			delete(awards, charID)
+		}
+	}
+	return awards
 }
 
 // handleUseSkill2 handles CZ_USE_SKILL2 (0x0438, 10B): cast a single-target

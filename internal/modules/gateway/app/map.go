@@ -19,6 +19,7 @@ import (
 	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
 	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
+	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
@@ -73,6 +74,17 @@ type MapServer struct {
 	// the storage dispatch entries as no-ops (the handlers log + skip). Set
 	// post-construction by DI root via SetStorage.
 	storage *worldapp.StorageService
+	// party wires the group verb (M11). Optional: nil leaves the party dispatch
+	// entries as no-ops. Set post-construction by DI root via SetParty.
+	party *partyapp.PartyService
+	// partyMu guards partyInvites. Party handlers run off the reactor goroutine
+	// (they touch the DB), so the invite map needs its own lock.
+	partyMu sync.RWMutex
+	// partyInvites holds one pending invitation per invitee char id. rAthena
+	// keeps this on the session (sd.party_invite / sd.party_invite_account) and
+	// never persists it; a second invite simply replaces the first, which the
+	// one-entry-per-target map gives for free.
+	partyInvites map[uint32]pendingInvite
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
 	// DEALTYPE carries an NPC id, not a shop name).
 	shopStore contentdomain.ShopStore
@@ -108,27 +120,28 @@ type MapServer struct {
 // skillDB is optional (may be nil) so existing callers are not broken.
 func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, mobAI *worldapp.MobAIService, equip *worldapp.EquipService, itemUse *worldapp.ItemUseService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, skillDB *skilldb.Registry, log *slog.Logger) (*MapServer, error) {
 	s := &MapServer{
-		world:       world,
-		spawn:       spawn,
-		combat:      combat,
-		mobAI:       mobAI,
-		equip:       equip,
-		itemUse:     itemUse,
-		inv:         inv,
-		content:     content,
-		skills:      skills,
-		skillDB:     skillDB,
-		shops:       shops,
-		shopStore:   shopStore,
-		trade:       trade,
-		sess:        sess,
-		log:         log,
-		handlers:    mapHandlers(),
-		conns:       make(map[uint32]gnet.Conn),
-		ignores:     make(map[uint32]map[string]bool),
-		ignoreAll:   make(map[uint32]bool),
-		db:          ropacket.NewMapServerDB(),
-		openedShops: make(map[uint32]string),
+		world:        world,
+		spawn:        spawn,
+		combat:       combat,
+		mobAI:        mobAI,
+		equip:        equip,
+		itemUse:      itemUse,
+		inv:          inv,
+		content:      content,
+		skills:       skills,
+		skillDB:      skillDB,
+		shops:        shops,
+		shopStore:    shopStore,
+		trade:        trade,
+		sess:         sess,
+		log:          log,
+		handlers:     mapHandlers(),
+		conns:        make(map[uint32]gnet.Conn),
+		ignores:      make(map[uint32]map[string]bool),
+		ignoreAll:    make(map[uint32]bool),
+		db:           ropacket.NewMapServerDB(),
+		openedShops:  make(map[uint32]string),
+		partyInvites: make(map[uint32]pendingInvite),
 	}
 	// Regen advances server-side on the world tick loop; this sink bridges the
 	// changed vitals back to the player's client as ZC_PAR_CHANGE (mirrors the
@@ -395,6 +408,9 @@ func (s *MapServer) unregisterConn(charID uint32) {
 	s.shopMu.Lock()
 	delete(s.openedShops, charID)
 	s.shopMu.Unlock()
+	// A disconnected player can neither answer an invitation addressed to them
+	// nor be answered if they were the inviter, so both directions go.
+	s.clearPartyInvitesFor(charID)
 }
 
 // OnClose prunes the disconnecting connection from the char-indexed registries

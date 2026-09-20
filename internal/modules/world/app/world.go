@@ -299,6 +299,23 @@ func (w *WorldService) PlayerByName(name string) (domain.Entity, bool) {
 	return domain.Entity{}, false
 }
 
+// PlayerByAccount resolves an online player-character's entity by its account
+// id. CZ_REQ_JOIN_GROUP carries the invite target's account id (rAthena
+// clif_parse_PartyInvite resolves it with map_id2sd), and an account owns
+// several chars, so this reports the online one. Same RLock scan as
+// PlayerByName; an offline target resolves false, which the caller reports as
+// PARTY_REPLY_OFFLINE.
+func (w *WorldService) PlayerByAccount(accountID uint32) (domain.Entity, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	for _, e := range w.entities {
+		if e.Type == domain.EntityTypePC && e.Account == accountID {
+			return *e, true
+		}
+	}
+	return domain.Entity{}, false
+}
+
 // StartTick runs the periodic game loop. Each tick fires update and blocks until
 // ctx is cancelled or Stop is called. The composition root passes a regen
 // callback (RegenTick); spawn runs on SpawnService's own timers and combat is

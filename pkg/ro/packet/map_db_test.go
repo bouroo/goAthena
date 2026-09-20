@@ -109,6 +109,22 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCADDEXCHANGEITEM, "ZC_ADD_EXCHANGE_ITEM", sizeZCAddExchangeItem, DirectionServerToClient},
 		{HeaderZCACKADDEXCHANGEITEM, "ZC_ACK_ADD_EXCHANGE_ITEM", sizeZCAckAddExchange, DirectionServerToClient},
 		{HeaderZCCONCLUDEEXCHANGEITEM, "ZC_CONCLUDE_EXCHANGE_ITEM", sizeZCConcludeExchange, DirectionServerToClient},
+		// M11: party (group) family. C→S from clif_packetdb.hpp:98-106; S→C
+		// roster/member opcodes are the >=20171207 pair (packets_struct.hpp:274-276).
+		{HeaderCZMAKEGROUP, "CZ_MAKE_GROUP", sizeCZMakeGroup, DirectionClientToServer},
+		{HeaderCZMAKEGROUP2, "CZ_MAKE_GROUP2", sizeCZMakeGroup2, DirectionClientToServer},
+		{HeaderCZREQJOINGROUP, "CZ_REQ_JOIN_GROUP", sizeCZReqJoinGroup, DirectionClientToServer},
+		{HeaderCZJOINGROUP, "CZ_JOIN_GROUP", sizeCZJoinGroup, DirectionClientToServer},
+		{HeaderCZREQLEAVEGROUP, "CZ_REQ_LEAVE_GROUP", sizeCZReqLeaveGroup, DirectionClientToServer},
+		{HeaderCZCHANGEGROUPEXPOPT, "CZ_CHANGE_GROUPEXPOPTION", sizeCZChangeGroupExp, DirectionClientToServer},
+		{HeaderCZREQEXPELGROUPMEMBER, "CZ_REQ_EXPEL_GROUP_MEMBER", sizeCZReqExpelMember, DirectionClientToServer},
+		{HeaderZCACKMAKEGROUP, "ZC_ACK_MAKE_GROUP", sizeZCAckMakeGroup, DirectionServerToClient},
+		{HeaderZCPARTYJOINREQ, "ZC_PARTY_JOIN_REQ", sizeZCPartyJoinReq, DirectionServerToClient},
+		{HeaderZCPARTYJOINREQACK, "ZC_PARTY_JOIN_REQ_ACK", sizeZCPartyJoinReqAck, DirectionServerToClient},
+		{HeaderZCPARTYCONFIG, "ZC_PARTY_CONFIG", sizeZCPartyConfig, DirectionServerToClient},
+		{HeaderZCGROUPLIST, "ZC_GROUP_LIST", sizeZCGroupListHeader, DirectionServerToClient},
+		{HeaderZCADDMEMBERTOGROUP, "ZC_ADD_MEMBER_TO_GROUP", sizeZCAddMemberToGroup, DirectionServerToClient},
+		{HeaderZCDELETEMEMBERFROMGRP, "ZC_DELETE_MEMBER_FROM_GROUP", sizeZCDeleteMember, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -170,8 +186,9 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// ZC_NPCACK_MAPMOVE (0x0091), the warp-portal relocation directive the
 	// server had always emitted but never declared in the DB → 106. Phase 44
 	// registers ZC_DELETE_ITEM_FROM_BODY (0x07fa), the inventory-removal frame
-	// a shop sale needs to re-sync the bag grid → 107.
-	const want = 107
+	// a shop sale needs to re-sync the bag grid → 107. M11 registers the 14
+	// party (group) family packets → 121.
+	const want = 121
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

@@ -1562,6 +1562,96 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCDeleteItemFromBody,
 		Direction: DirectionServerToClient,
 	})
+	// M11: the party (group) family. Both C→S create variants are registered
+	// because the client picks one by build (clif_packetdb.hpp:98,:243); the S→C
+	// roster/member opcodes are the >=20171207 pair 0x0ae5/0x0ae4 active at
+	// 20250604 (packets_struct.hpp:274-276). ZC_GROUP_LIST is variable-length, so
+	// its registered Length is the empty-roster header size and the real frame
+	// length travels in its own packetLen field.
+	db.Register(Definition{
+		ID:        HeaderCZMAKEGROUP,
+		Name:      "CZ_MAKE_GROUP",
+		Length:    sizeCZMakeGroup,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZMAKEGROUP2,
+		Name:      "CZ_MAKE_GROUP2",
+		Length:    sizeCZMakeGroup2,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQJOINGROUP,
+		Name:      "CZ_REQ_JOIN_GROUP",
+		Length:    sizeCZReqJoinGroup,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZJOINGROUP,
+		Name:      "CZ_JOIN_GROUP",
+		Length:    sizeCZJoinGroup,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQLEAVEGROUP,
+		Name:      "CZ_REQ_LEAVE_GROUP",
+		Length:    sizeCZReqLeaveGroup,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZCHANGEGROUPEXPOPT,
+		Name:      "CZ_CHANGE_GROUPEXPOPTION",
+		Length:    sizeCZChangeGroupExp,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQEXPELGROUPMEMBER,
+		Name:      "CZ_REQ_EXPEL_GROUP_MEMBER",
+		Length:    sizeCZReqExpelMember,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCACKMAKEGROUP,
+		Name:      "ZC_ACK_MAKE_GROUP",
+		Length:    sizeZCAckMakeGroup,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCPARTYJOINREQ,
+		Name:      "ZC_PARTY_JOIN_REQ",
+		Length:    sizeZCPartyJoinReq,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCPARTYJOINREQACK,
+		Name:      "ZC_PARTY_JOIN_REQ_ACK",
+		Length:    sizeZCPartyJoinReqAck,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCPARTYCONFIG,
+		Name:      "ZC_PARTY_CONFIG",
+		Length:    sizeZCPartyConfig,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCGROUPLIST,
+		Name:      "ZC_GROUP_LIST",
+		Length:    sizeZCGroupListHeader,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCADDMEMBERTOGROUP,
+		Name:      "ZC_ADD_MEMBER_TO_GROUP",
+		Length:    sizeZCAddMemberToGroup,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCDELETEMEMBERFROMGRP,
+		Name:      "ZC_DELETE_MEMBER_FROM_GROUP",
+		Length:    sizeZCDeleteMember,
+		Direction: DirectionServerToClient,
+	})
 
 	return db
 }
