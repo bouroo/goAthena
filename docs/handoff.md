@@ -347,15 +347,18 @@ deferred — each is its own commit-sized effort.
 | Friend list (add/reply/remove + online toggles) | `social/friend/*` + `gateway/app/friend.go` + migration `000009_friend` | ✅ |
 | Party | `social/party/*` + `gateway/app/party.go` + migration `000008_party` | ✅ |
 | Guild (create/invite/reply/leave/ban/break/chat + menuinterface, LoadEndAck burst) | `pkg/ro/packet/guild.go` + `social/guild/*` + `gateway/app/guild.go` + migration `000010_guild` | ✅ |
+| Mail (RODEX: send with zeny/item attachments, inbox, read, delete, collect, recipient check) | `pkg/ro/packet/mail.go` + `social/mail/*` + `gateway/app/mail.go` + migration `000011_mail` | ✅ |
 
 **Remaining:**
 
-- **Mail** — send/receive/attachment (`CZ_MAIL_*`, `ZC_MAIL_*`).
+- *(none for the M11 core)*
 
 **Plan in this session:** ✅ shipped — party end-to-end (`51e26f8`), friend
-list end-to-end (`06fb692`), guild first slice end-to-end (this session);
-mail remains as the follow-up ticket. Guild deferred: alliances, positions/skills,
-exp donation, emblem, storage (needs M9 guild storage).
+list end-to-end (`06fb692`), guild first slice end-to-end (`767c283`), mail
+end-to-end (`375aa87`). Guild deferred: alliances, positions/skills,
+exp donation, emblem, storage (needs M9 guild storage). Mail deferred:
+account/returned inbox tabs + expiry cron, random options/enchantgrade on
+attachment rows (upgrades with the inventory row-preserving insert).
 ---
 
 ### M12 — Transit
@@ -443,7 +446,7 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | M10: Rung B–E | L | Rung A done (`556a8ee`); Rung B done (`b7f8ab7`); Rungs C–E queued. |
 | M11: friend list | ✅ done | Wire codecs + dispatch + `friends` table + online toggles (`gateway/app/friend.go`, migration `000009_friend`). |
 | M11: guild | ✅ done | First slice end-to-end: codecs + service + gateway + `000010_guild`; alliances/positions/skills/exp/emblem deferred. |
-| M11: mail | L | Large. |
+| M11: mail | ✅ done | RODEX end-to-end: codecs + service + gateway + `000011_mail` (`375aa87`); account/returned tabs + expiry cron deferred. |
 | M12: Agones fleet adapter | L | M13 prereq. |
 | M13: Agones SDK | L | Architecture-defining. |
 | M14: threat model | M | One-shot. |
@@ -467,3 +470,4 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-20 | goAthena agent | `cfd8cb1` | build: CI job ordering (integration after lint+unit, build last) + pre-push gate gains L3 test-integration (runtime-gated, GATE_SKIP override) + fix `.` sentinel silently skipping new-branch pushes + fix set -e exempting gate_run in && list (L3 red exited 0) |
 | 2026-09-20 | goAthena agent | `06fb692` | M11 friend list end-to-end — `CZ_ADD_FRIENDS`/`CZ_DELETE_FRIENDS`/`CZ_ACK_REQ_ADD_FRIENDS` wire codecs + dispatch, `friends` table (rAthena shape, one row per direction) + GORM repo, bidirectional accept/remove in one tx, online/offline `ZC_FRIENDS_STATE` toggles both directions, `ZC_FRIENDS_LIST` in LoadEndAck burst; unit+GORM integration+gateway e2e (two conns, add→accept→remove, restore) |
 | 2026-09-20 | goAthena agent | `767c283` | M11 guild first slice end-to-end — CZ create/invite/reply/leave/ban/break/chat/menuinterface codecs + 9 dispatch entries, `guild` table + `char.guild_id` (`000010_guild`), memory+GORM repos (guild dies with last member out), invite acks 0/1/2/3 to inviter, LoadEndAck belong/info/roster tail, master-only invite/expel, break=master+key+empty; wire-verified: ZC_UPDATE_GDID 0x02f7/47B (>=20220216, masterGID), ZC_GUILD_INFO 0x0b7b/118B |
+| 2026-09-21 | goAthena agent | `375aa87` | M11 mail (RODEX) end-to-end — 18 C→S + 9 S→C codecs (DB 121→148), `social/mail` module (domain/app/infra/di), gateway `mail.go` + 19 dispatch entries + per-char staging & op mutex, `mail`+`mail_attachments` tables (`000011_mail`), fee math (2% + 2500/item) with ledger reasons, saga compensation on failed send, claim-first collect; rAthena-anchored wire fixes: attachment sub 60B / add-item ack 64B (uint32 cards + 25B options), MAIL_TYPE bits 0x2/0x4/0x8, newest-first inbox; L3 caught GORM `mails` pluralization + reserved-word `Order("index")`; gateway e2e ×5 + GORM round-trip/cap on MariaDB+postgres |
