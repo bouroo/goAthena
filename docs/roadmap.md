@@ -27,7 +27,7 @@ and concurrency in idiomatic Go designed for horizontal scale-out.
 | Repo `develop` tip | **Wiped greenfield** — `6a79d64 refactor: re-init project` removed 435 files / 78k lines, leaving only `README.md`, `LICENSE`, `docs/`, `third_party/` | `git show 6a79d64 --stat` |
 | Proven prior build | **Fully recoverable**, one commit back at `cea42f8` (442 tracked files) | `git ls-tree cea42f8` |
 | Upstream `main` | **M0–M7 merged** — `56d280b Greenfield modular-monolith rebuild + playable combat slice (M0–M7)` | `git log main` |
-| Third-party refs | Present as **git submodules** (`rathena`, `rathenaThailand`, `ClientROThailand`, `ignore = all`) | `.gitmodules` at HEAD |
+| Third-party refs | Present as **git submodules** (`rathena`, `rathenaThailand`, `ignore = all`) | `.gitmodules` at HEAD |
 
 The re-init cleared the tree. The **verified `pkg/ro` kernel survives intact at
 `cea42f8`** (the prior app-layer modules, build config, and migrations also
