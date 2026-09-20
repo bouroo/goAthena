@@ -127,6 +127,10 @@ jobs:
 
   integration:
     name: Integration tests
+    # Gate the slow service-backed jobs behind the fast static ones: a lint or
+    # unit failure fails the run in ~30s instead of burning a runner + four
+    # service containers for four minutes first.
+    needs: [lint, unit]
     runs-on: ubuntu-latest
     services:
       mariadb:
@@ -200,6 +204,7 @@ jobs:
   # push/PR. Run in parallel with the mariadb job.
   postgres-integration:
     name: Integration tests (postgres)
+    needs: [lint, unit]
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -263,7 +268,8 @@ jobs:
 
   build:
     name: Build image
-    needs: [lint, unit]
+    # Only package an image the trees that ran against it have validated.
+    needs: [lint, unit, integration, postgres-integration]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

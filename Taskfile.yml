@@ -103,7 +103,7 @@ tasks:
         fi
 
   test-integration:
-    desc: Integration tests against real MariaDB/Valkey/NATS (needs compose)
+    desc: Integration tests against real MariaDB/Postgres via testcontainers (needs a container runtime)
     cmds:
       - go test -race -tags=integration ./...
 

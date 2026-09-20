@@ -47,10 +47,22 @@ gate_run() {
 	gate_green "✔ $label"
 }
 
+# Can the integration suite run? It provisions its own MariaDB/Postgres with
+# testcontainers, so a live container runtime is the whole requirement — no
+# compose stack, no exported connection env.
+gate_has_container_runtime() {
+	docker info >/dev/null 2>&1 || podman info >/dev/null 2>&1
+}
+
 # Is this a file whose change should trigger the Go gate? (Hook-side mirror of
 # the CI path filter.)
+#
+# `.` is the sentinel gate_pushed_files emits for a new remote branch, where
+# there is no base to diff against. It must count as relevant: it means "assume
+# everything changed", and without this alternative the conservative fallback
+# matched nothing, so a new-branch push silently skipped the entire gate.
 gate_is_relevant_path() {
-	grep -qE '(\.(go|mod|sum|sql|ya?ml)$)|(^Taskfile)|(^\.golangci)|(^Containerfile)|(^compose\.yml)|(^\.github/)|(^\.githook/)'
+	grep -qE '(^[.]$)|(\.(go|mod|sum|sql|ya?ml)$)|(^Taskfile)|(^[.]golangci)|(^Containerfile)|(^compose[.]yml)|(^[.]github/)|(^[.]githook/)'
 }
 
 # Change set for a pre-commit (staged) run.

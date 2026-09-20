@@ -466,3 +466,5 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-20 | goAthena agent | `1a2b848` | M9 storage first slice — warehouse aggregate + rAthena `storage` schema + GORM repo + service tests (gateway wiring next) |
 | 2026-09-20 | goAthena agent | `c33c242` | M9 storage second slice — gateway wiring (packet codecs + dispatch handlers + world orchestrator) — storage end-to-end |
 | 2026-09-20 | goAthena agent | `b7f8ab7` | M10 Rung B — quest engine (persistent NPC vars + `getvariableofnpc` / `setquestvar` builtins) |
+| 2026-09-20 | goAthena agent | `f1d96a8` | test: LoadEndAck burst drain by frame not byte count — fixes CI TestMap_SeededShopClickOpensDealType (0x02c9 leftover) |
+| 2026-09-20 | goAthena agent | pending | build: CI job ordering (integration after lint+unit, build last) + pre-push gate gains L3 test-integration (runtime-gated, GATE_SKIP override) + fix `.` sentinel silently skipping new-branch pushes + fix set -e exempting gate_run in && list (L3 red exited 0) |
