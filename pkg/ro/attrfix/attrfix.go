@@ -108,10 +108,7 @@ func (t *RateTable) levelTable(defenderEleLevel int) levelTable {
 	if len(t.byLevel) == 0 {
 		return identityLevelTable()
 	}
-	lvl := defenderEleLevel
-	if lvl < 1 {
-		lvl = 1
-	}
+	lvl := max(defenderEleLevel, 1)
 	if t.maxLevel > 0 && lvl > t.maxLevel {
 		lvl = t.maxLevel
 	}

@@ -9,6 +9,9 @@ type AccountRepository interface {
 	// FindByUserID loads the account for the given login name, or an error
 	// (ErrAccountNotFound when absent).
 	FindByUserID(ctx context.Context, userID string) (Account, error)
+	// FindByAccountID loads the account by its account_id. Returns
+	// ErrAccountNotFound when absent.
+	FindByAccountID(ctx context.Context, id AccountID) (Account, error)
 	// RecordLogin stamps logincount/lastlogin/last_ip for telemetry.
 	RecordLogin(ctx context.Context, id AccountID, ip string) error
 }

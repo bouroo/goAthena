@@ -217,9 +217,17 @@ func DefaultBuiltins() map[string]BuiltinFunc {
 		"select":      builtinSelect,
 		// prompt() is select()'s paginated ("Prev/Next") sibling — same
 		// return-the-index semantics, no label jump.
-		"prompt": builtinSelect, //nolint:goconst
-		"menu":   builtinMenu,   //nolint:goconst
-		"input":  builtinInput,  //nolint:goconst
+		"prompt":           builtinSelect, //nolint:goconst
+		"menu":             builtinMenu,   //nolint:goconst
+		"input":            builtinInput,  //nolint:goconst
+		"getitem":          builtinGetItem,
+		"getitem2":         builtinGetItem2,
+		"delitem":          builtinDelItem,
+		"countitem":        builtinCountItem,
+		"equip":            builtinEquip,
+		"unequip":          builtinUnequip,
+		"getvariableofnpc": builtinGetVariableOfNPC,
+		"setquestvar":      builtinSetQuestVar,
 	}
 }
 
@@ -229,4 +237,149 @@ func argStr(args []Value, i int) string {
 		return ""
 	}
 	return args[i].String()
+}
+
+// argInt returns args[i] as int, or 0 when i is out of range.
+func argInt(args []Value, i int) int {
+	if i < 0 || i >= len(args) {
+		return 0
+	}
+	return int(args[i].asInt())
+}
+
+// argUint returns args[i] as a uint32, or 0 when i is out of range. Used by
+// item-script builtins where nameID and equip slots are non-negative.
+func argUint(args []Value, i int) uint32 {
+	if i < 0 || i >= len(args) {
+		return 0
+	}
+	v := args[i].asInt()
+	if v < 0 {
+		return 0
+	}
+	return uint32(v) //nolint:gosec // G115: clamped non-negative at the source.
+}
+
+// Item-script builtins. These mirror rAthena's script.cpp BUILDIN_DEF entries:
+// getitem/delitem/countitem return 0/1; equip/unequip return 0/1. The boolean
+// is the same shape the dialog builtins use for control flow (a script author
+// can branch on the return value), and matches rAthena's script-configured
+// max heap / weight checks at script.cpp:12732+.
+//
+// M10 Rung A (item scripts): these are the first non-dialog builtins. Each
+// delegates to the Host which carries the inventory port the world module
+// injects. The Host does the actual mutation; the builtin only translates the
+// stack arguments to typed parameters and surfaces the result.
+
+// builtinGetItem implements getitem(<nameID>, <amount>). rAthena adds the item
+// and returns 1 on success, 0 on a weight/capacity rejection (script.cpp
+// BUILDIN_DEF(getitem,"ii")). The Host's GetItem carries the bag-side check.
+func builtinGetItem(vm *VM, args []Value) (Value, control) {
+	nameID := argUint(args, 0)
+	amount := argInt(args, 1)
+	if amount <= 0 {
+		// rAthena treats amount<=0 as a no-op + return 0; the script author
+		// who passed a non-positive quantity almost certainly has a bug, but
+		// matching the upstream behavior keeps ported scripts working.
+		return IntVal(0), ctrlContinue
+	}
+	if vm.host.GetItem(nameID, amount) {
+		return IntVal(1), ctrlContinue
+	}
+	return IntVal(0), ctrlContinue
+}
+
+// builtinGetItem2 is getitem2's success flag — same shape as getitem but with
+// an extra identify/refine/arg list (BUILDIN_DEF(getitem2,"iiiiiiiii")). We
+// support the (nameID, amount) overload only; the identify/refine overloads
+// are deferred. On success returns 1, otherwise 0.
+func builtinGetItem2(vm *VM, args []Value) (Value, control) {
+	nameID := argUint(args, 0)
+	amount := argInt(args, 1)
+	if amount <= 0 {
+		return IntVal(0), ctrlContinue
+	}
+	if vm.host.GetItem(nameID, amount) {
+		return IntVal(1), ctrlContinue
+	}
+	return IntVal(0), ctrlContinue
+}
+
+// builtinDelItem implements delitem(<nameID>, <amount>). rAthena removes up to
+// `amount` units and returns 1 on success, 0 if the player did not have that
+// many (BUILDIN_DEF(delitem,"ii")). The Host's DelItem implements the same
+// "all-or-nothing" rule.
+func builtinDelItem(vm *VM, args []Value) (Value, control) {
+	nameID := argUint(args, 0)
+	amount := argInt(args, 1)
+	if amount <= 0 {
+		return IntVal(0), ctrlContinue
+	}
+	if vm.host.DelItem(nameID, amount) {
+		return IntVal(1), ctrlContinue
+	}
+	return IntVal(0), ctrlContinue
+}
+
+// builtinCountItem implements countitem(<nameID>) (BUILDIN_DEF(countitem,"i"))
+// — returns the player's count. A non-positive arg returns 0 (no inventory
+// row can match it).
+func builtinCountItem(vm *VM, args []Value) (Value, control) {
+	nameID := argUint(args, 0)
+	return IntVal(int64(vm.host.CountItem(nameID))), ctrlContinue
+}
+
+// builtinEquip implements equip(<index>, <slot>) — equips the item at the
+// inventory index to the given slot bitmask. rAthena validates the slot
+// against the item's type; we let the Host perform that check and just relay
+// the result. Returns 1 on success, 0 on a bad index / wrong slot.
+func builtinEquip(vm *VM, args []Value) (Value, control) {
+	index := argInt(args, 0)
+	slot := argUint(args, 1)
+	if vm.host.Equip(index, slot) {
+		return IntVal(1), ctrlContinue
+	}
+	return IntVal(0), ctrlContinue
+}
+
+// builtinUnequip implements unequip(<index>) — clears the equip bitmask of
+// the inventory row at the given index. Returns 1 on success, 0 on a bad
+// index or a row that wasn't equipped.
+func builtinUnequip(vm *VM, args []Value) (Value, control) {
+	index := argInt(args, 0)
+	if vm.host.Unequip(index) {
+		return IntVal(1), ctrlContinue
+	}
+	return IntVal(0), ctrlContinue
+}
+
+// builtinGetVariableOfNPC implements `getvariableofnpc(npcName, varName)`:
+// reads another NPC's persistent variable for the dialog's player. rAthena
+// source: script.cpp buildin_getvariableofnpc (script_command_getvariableofnpc).
+// An unset variable reads as 0 — matches rAthena's get_val fallback.
+func builtinGetVariableOfNPC(vm *VM, args []Value) (Value, control) {
+	if len(args) < 2 {
+		return IntVal(0), ctrlContinue
+	}
+	return IntVal(vm.host.GetQuestVar(args[0].String(), args[1].String())), ctrlContinue
+}
+
+// builtinSetQuestVar implements `setquestvar(npcName, varName, value)`: persists
+// a NPC-scoped variable for the dialog's player. rAthena equivalent is the
+// built-in `set` writing to a name that matches one of the script-variable
+// mirrors — here we expose persistence explicitly so the script author is
+// never surprised by an implicit DB write.
+//
+// Set errors are surfaced to the log but the script continues — matches
+// rAthena's "log and continue" behaviour for a quest-table failure rather
+// than a hard abort.
+func builtinSetQuestVar(vm *VM, args []Value) (Value, control) {
+	if len(args) < 3 {
+		return IntVal(0), ctrlContinue
+	}
+	value := args[2].asInt()
+	if err := vm.host.SetQuestVar(args[0].String(), args[1].String(), value); err != nil {
+		return IntVal(0), ctrlContinue
+	}
+	return IntVal(value), ctrlContinue
 }

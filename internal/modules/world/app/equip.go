@@ -43,31 +43,31 @@ var (
 	ErrNotEquippable = errors.New("equip: item is not equippable")
 	// ErrWrongSlot means the item is equippable but not into the requested position.
 	ErrWrongSlot = errors.New("equip: item cannot go in that slot")
-	// ErrItemNotFound means the 1-based inventory index is out of range.
-	ErrItemNotFound = errors.New("equip: inventory index out of range")
+	// ErrItemNotFound means the inventory row is out of range.
+	ErrItemNotFound = errors.New("equip: inventory row out of range")
 )
 
 // maxItemID bounds the uint32→int32 cast for item_db id lookup. item_db ids are
 // < 2^31; anything larger is not a real id and resolves to "not found".
 const maxItemID = uint32(1<<31 - 1)
 
-// Equip wears the item at the 1-based inventory index invIndex into position, the
-// EQP_* bitmask the client requested.
+// Equip wears the item at server row serverRow (0-based, an index into the
+// LoadByChar list) into position, the EQP_* bitmask the client requested.
 //
 // Validation: an item with no equip locations (EquipLocations == 0) yields
 // ErrNotEquippable; an equippable item whose allowed locations do not overlap
 // position yields ErrWrongSlot. On a slot conflict — another equipped item already
 // occupying any bit of position — the conflicting item is unequipped first, then
 // the requested item is worn.
-func (s *EquipService) Equip(ctx context.Context, accountID, charID uint32, invIndex int, position uint32) error {
+func (s *EquipService) Equip(ctx context.Context, accountID, charID uint32, serverRow int, position uint32) error {
 	items, err := s.inv.LoadByChar(ctx, accountID, charID)
 	if err != nil {
 		return fmt.Errorf("equip: load inventory: %w", err)
 	}
-	if invIndex < 1 || invIndex > len(items) {
+	if serverRow < 0 || serverRow >= len(items) {
 		return ErrItemNotFound
 	}
-	target := items[invIndex-1]
+	target := items[serverRow]
 	entry := s.itemEntry(target.NameID)
 	if entry == nil || entry.EquipLocations == 0 {
 		return ErrNotEquippable
@@ -92,16 +92,16 @@ func (s *EquipService) Equip(ctx context.Context, accountID, charID uint32, invI
 	return nil
 }
 
-// Unequip removes the item at the 1-based inventory index from its slot.
-func (s *EquipService) Unequip(ctx context.Context, accountID, charID uint32, invIndex int) error {
+// Unequip removes the item at server row serverRow (0-based) from its slot.
+func (s *EquipService) Unequip(ctx context.Context, accountID, charID uint32, serverRow int) error {
 	items, err := s.inv.LoadByChar(ctx, accountID, charID)
 	if err != nil {
 		return fmt.Errorf("unequip: load inventory: %w", err)
 	}
-	if invIndex < 1 || invIndex > len(items) {
+	if serverRow < 0 || serverRow >= len(items) {
 		return ErrItemNotFound
 	}
-	target := items[invIndex-1]
+	target := items[serverRow]
 	if err := s.inv.SetEquip(ctx, target.ID, 0); err != nil {
 		return fmt.Errorf("unequip: clear item %d: %w", target.ID, err)
 	}

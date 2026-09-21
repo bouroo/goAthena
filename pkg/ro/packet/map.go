@@ -49,6 +49,20 @@ const (
 	// at rathena/src/map/packets.hpp:1406-1409.
 	HeaderCZREQEMOTION uint16 = 0x00bf
 
+	// CZ_PMIgnore (0x00cf) — add/remove one name from this player's whisper
+	// ignore list (/ex and /in). rathena/src/map/clif_packetdb.hpp:78
+	// (`parseable_packet(0x00cf,27,clif_parse_PMIgnore,2,26)`).
+	// Fixed 27 bytes: [2:cmd][24:name char[24]][1:type 0=block 1=unblock].
+	HeaderCZPMIGNORE uint16 = 0x00cf
+	// CZ_SETTING_WHISPER_STATE (0x00d0) — allow/deny ALL whispers (/exall and
+	// /inall). rathena/src/map/clif_packetdb.hpp:79. Fixed 3 bytes:
+	// [2:cmd][1:type 0=deny-all 1=allow-all].
+	HeaderCZSETTINGWHISPERSTATE uint16 = 0x00d0
+	// CZ_REQ_WHISPER_LIST (0x00d3) — request this player's ignore list (/wl).
+	// rathena/src/map/clif_packetdb.hpp:80 (`parseable_packet(0x00d3,2,...)`).
+	// Fixed 2 bytes: [2:cmd].
+	HeaderCZREQWHISPERLIST uint16 = 0x00d3
+
 	// S→C — map server → client.
 	HeaderZCACCEPTENTER      uint16 = 0x02eb // rathena/src/map/packets.hpp:571 (ZC_ACCEPT_ENTER, PACKETVER >= 20160330 branch)
 	HeaderZCREFUSEENTER      uint16 = 0x0074 // rathena/src/map/packets.hpp:590 (ZC_REFUSE_ENTER)
@@ -77,6 +91,19 @@ const (
 	// (`PACKET_ZC_EMOTION { int16 packetType; int32 GID; uint8 type }`).
 	// Fixed 7 bytes: [2:cmd][4:GID int32][1:type uint8].
 	HeaderZCEMOTION uint16 = 0x00c0
+
+	// ZC_SETTING_WHISPER_PC (0x00d1) — result of /ex or /in (single-name ignore
+	// state change). rathena/src/map/packets.hpp PACKET_ZC_SETTING_WHISPER_PC.
+	// Fixed 4 bytes: [2:cmd][1:type echoing request][1:result 0=ok 1=fail 2=too-many].
+	HeaderZCSETTINGWHISPERPC uint16 = 0x00d1
+	// ZC_SETTING_WHISPER_STATE (0x00d2) — result of /exall or /inall.
+	// rathena/src/map/packets.hpp PACKET_ZC_SETTING_WHISPER_STATE.
+	// Fixed 4 bytes: [2:cmd][1:type][1:result 0=ok 1=fail].
+	HeaderZCSETTINGWHISPERSTATE uint16 = 0x00d2
+	// ZC_WHISPER_LIST (0x00d4) — the player's ignore list (/wl reply).
+	// rathena/src/map/packets.hpp PACKET_ZC_WHISPER_LIST.
+	// Variable: [2:cmd][2:packetSize]{24-byte NUL-padded names}*.
+	HeaderZCWHISPERLIST uint16 = 0x00d4
 	// CZ_GETCHARNAMEREQUEST (0x0094) — client requests a character name by GID.
 	// rathena/src/map/clif_packetdb.hpp:45 (`parseable_packet(0x0094,6,clif_parse_GetCharNameRequest,2)`).
 	// Fixed 6 bytes: [2:cmd][4:GID int32].
@@ -263,6 +290,20 @@ const (
 	// TODO(B1): resolve via PacketRegistry (packetdb N1.1).
 	HeaderZCINVENTORYSTART uint16 = 0x0b08 // ZC_INVENTORY_START — packets_struct.hpp PACKET_ZC_INVENTORY_START
 	HeaderZCINVENTORYEND   uint16 = 0x0b0b // ZC_INVENTORY_END — packets_struct.hpp PACKET_ZC_INVENTORY_END
+	// Storage packet family (warehouse / M9). Sources:
+	//   - third_party/rathenaThailand/src/map/packets_struct.hpp storage section
+	//   - third_party/rathenaThailand/src/map/clif.cpp:7801-8035 (clif_storageList /
+	//     clif_storageItemListResult / clif_storageOpen)
+	//   - third_party/rathenaThailand/src/map/clif_packetdb.hpp (length bindings)
+	// The 0x07e3-0x07eb range is the rAthena storage sub-range.
+	HeaderCZREQOPENSTORE2          uint16 = 0x07e4 // CZ_REQ_OPENSTORE2 — clif_parse_NpcSelectDeposit / clif_storageOpen
+	HeaderCZCLOSESTORE             uint16 = 0x07e5 // CZ_CLOSE_STORE — clif_parse_CloseStore
+	HeaderCZMOVEITEMTOSTORE2       uint16 = 0x07e6 // CZ_MOVE_ITEM_TO_STORE2 — clif_parse_MoveToStore
+	HeaderCZMOVEITEMTOBODY2        uint16 = 0x07e7 // CZ_MOVE_ITEM_TO_BODY2 — clif_parse_MoveFromStore
+	HeaderZCACCEPTENTER2           uint16 = 0x07e3 // ZC_ACCEPT_ENTER2 — clif_storageOpen (server→client on warehouse open)
+	HeaderZCSTORENORMALITEMLIST    uint16 = 0x07e9 // ZC_STORE_NORMALITEMLIST — clif_storageList stackable branch
+	HeaderZCSTOREEQUIPMENTITEMLIST uint16 = 0x07ea // ZC_STORE_EQUIPMENTITEMLIST — clif_storageList equipment branch
+	HeaderZCSTOREITEMLISTRESULT    uint16 = 0x07eb // ZC_STOREITEMLISTRESULT — clif_storageItemListResult (deposit/withdraw ack)
 	// P2A: ZC_REQ_WEAR_EQUIP_ACK_V5 (0x0999) — server ack for
 	// CZ_REQ_WEAR_EQUIP_V5. rathena/src/map/packets_struct.hpp:1269-1276
 	// (PACKETVER_MAIN_NUM >= 20121205 branch). Fixed 11 bytes:
@@ -303,9 +344,11 @@ const (
 	// (the older "to pos" 0x0438 variant is for earlier PACKETVERs and
 	// shares the same opcode+length but parses 4 fields). Layouts are
 	// pinned to rathena/src/map/packets_struct.hpp.
-	HeaderCZUSESKILL      uint16 = 0x0438 // CZ_USE_SKILL2 — clif_parse_UseSkillToId (clif_shuffle.hpp:4750)
-	HeaderZCNOTIFYSKILL   uint16 = 0x01de // ZC_NOTIFY_SKILL — packets_struct.hpp:4671 (PACKETVER >= 3)
-	HeaderZCACKTOUSESKILL uint16 = 0x0110 // ZC_ACK_TOUSESKILL — packets_struct.hpp:2461
+	HeaderCZSKILLUP         uint16 = 0x0112 // CZ_SKILLUP — clif_packetdb.hpp:110 (no PACKETVER guard)
+	HeaderZCSKILLINFOUPDATE uint16 = 0x010e // ZC_SKILLINFO_UPDATE — packets.hpp:489-497
+	HeaderCZUSESKILL        uint16 = 0x0438 // CZ_USE_SKILL2 — clif_parse_UseSkillToId (clif_shuffle.hpp:4750)
+	HeaderZCNOTIFYSKILL     uint16 = 0x01de // ZC_NOTIFY_SKILL — packets_struct.hpp:4671 (PACKETVER >= 3)
+	HeaderZCACKTOUSESKILL   uint16 = 0x0110 // ZC_ACK_TOUSESKILL — packets_struct.hpp:2461
 	// CZ_USE_SKILL_TOPOS (0x0AF4) — client casts a ground-target skill.
 	// rathena/src/map/clif_packetdb.hpp:1905
 	// (`#if PACKETVER >= 20180207 parseable_packet(0x0AF4,11,clif_parse_UseSkillToPos,2,4,6,8,10)`),
@@ -493,6 +536,13 @@ const (
 	// (packet_itemlist_normal carries invType when MAIN_NUM>=20181002).
 	// TODO(B1): resolve per-PACKETVER via PacketRegistry (packetdb N1.1).
 	sizeEmptyInventoryListNormal = 5
+	// sizeStorageListHeader = int16 packetType + int16 packetLength = 2+2 = 4
+	// for ZC_STORE_NORMALITEMLIST (0x07e9) and ZC_STORE_EQUIPMENTITEMLIST
+	// (0x07ea). The warehouse list packets carry NO invType byte — the storage
+	// uses the bare NORMALITEM_INFO / EQUIPITEM_INFO layout, unlike the
+	// inventory init burst which adds the trailing invType byte at
+	// PACKETVER >= 20181002 (clif_storageList, packets_struct.hpp:418-507).
+	sizeStorageListHeader = 4
 	// sizeZCShortcutKeyList = int16 packetType + int8 rotate +
 	// int16 tab + 38 * hotkey_data = 2 + 1 + 2 + 38*(int8 isSkill +
 	// uint32 id + int16 count) = 5 + 38*7 = 271
@@ -539,6 +589,19 @@ const (
 	// sizeCZReqEmotion = int16 packetType + uint8 emotion_type = 2+1 = 3
 	// (rathena/src/map/packets.hpp:1406-1410).
 	sizeCZReqEmotion = 3
+
+	// sizeCZPMIgnore = int16 packetType + char name[24] + uint8 type = 2+24+1 = 27
+	sizeCZPMIgnore = 27
+	// sizeCZSettingWhisperState = int16 packetType + uint8 type = 2+1 = 3
+	sizeCZSettingWhisperState = 3
+	// sizeZCSettingWhisperPC = ZC_SETTING_WHISPER_PC (0x00d1):
+	// int16 packetType + uint8 type + uint8 result = 2+1+1 = 4
+	sizeZCSettingWhisperPC = 4
+	// sizeZCSettingWhisperState = ZC_SETTING_WHISPER_STATE (0x00d2): same
+	// 4-byte layout as 0x00d1 (type + result).
+	sizeZCSettingWhisperState = 4
+	// sizeZCWhisperListName is the per-entry width in ZC_WHISPER_LIST (0x00d4).
+	sizeZCWhisperListName = 24
 	// sizeZCEmotion = int16 packetType + int32 GID + uint8 type = 2+4+1 = 7
 	// (rathena/src/map/packets.hpp:1973-1978).
 	sizeZCEmotion = 7
@@ -652,6 +715,14 @@ const (
 	// sizeZCNotifyVanish = int16 packetType + uint32 gid + uint8 type = 2+4+1 = 7
 	// (rathena/src/map/packets.hpp:604-608).
 	sizeZCNotifyVanish = 7
+	// sizeCZSkillUp = int16 packetType + uint16 skillID = 2+2 = 4
+	// (rathena/src/map/clif_packetdb.hpp:110, no PACKETVER guard).
+	SizeCZSkillUp = 4
+	// sizeZC_SKILLINFO_UPDATE = int16 packetType + uint16 skillId + uint16 level +
+	// uint16 sp + uint16 range2 + uint8 upgradableFlag = 2+2+2+2+2+1 = 11
+	// (rathena/src/map/packets.hpp:489-497).
+	SizeZCSkillInfoUpdate = 11
+
 	// sizeCZUseSkill2 = int16 packetType + int16 skillLv + uint16 skillID +
 	// uint32 targetID = 2+2+2+4 = 10 (clif_shuffle.hpp:4750 binds
 	// opcode 0x0438 to length 10 for PACKETVER_RE_NUM >= 20190904).
@@ -809,6 +880,43 @@ func NewMapServerDB() *DB {
 		Length:    sizeCZReqEmotion,
 		Direction: DirectionClientToServer,
 	})
+	// Phase 41: whisper ignore-list verbs — /ex /in /exall /inall /wl.
+	db.Register(Definition{
+		ID:        HeaderCZPMIGNORE,
+		Name:      "CZ_PMIgnore",
+		Length:    sizeCZPMIgnore,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZSETTINGWHISPERSTATE,
+		Name:      "CZ_SETTING_WHISPER_STATE",
+		Length:    sizeCZSettingWhisperState,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQWHISPERLIST,
+		Name:      "CZ_REQ_WHISPER_LIST",
+		Length:    2,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCSETTINGWHISPERPC,
+		Name:      "ZC_SETTING_WHISPER_PC",
+		Length:    sizeZCSettingWhisperPC,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCSETTINGWHISPERSTATE,
+		Name:      "ZC_SETTING_WHISPER_STATE",
+		Length:    sizeZCSettingWhisperState,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCWHISPERLIST,
+		Name:      "ZC_WHISPER_LIST",
+		Length:    -1, // variable: 4 + 24 per name
+		Direction: DirectionServerToClient,
+	})
 	// M13: CZ_GETCHARNAMEREQUEST (fixed 6 bytes) + CZ_RESTART (fixed 3
 	// bytes) — name lookup and respawn/char-select request.
 	db.Register(Definition{
@@ -823,6 +931,12 @@ func NewMapServerDB() *DB {
 		Length:    sizeCZRestart,
 		Direction: DirectionClientToServer,
 	})
+	db.Register(Definition{
+		ID:        HeaderCZSKILLUP,
+		Name:      "CZ_SKILLUP",
+		Length:    SizeCZSkillUp,
+		Direction: DirectionClientToServer,
+	})
 
 	// --- S→C: map server → client.
 	db.Register(Definition{
@@ -835,6 +949,17 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCACCEPTENTER,
 		Name:      "ZC_ACCEPT_ENTER",
 		Length:    sizeZCAcceptEnter,
+		Direction: DirectionServerToClient,
+	})
+	// ZC_NPCACK_MAPMOVE (0x0091) — the map-server's cross-map relocation
+	// directive, emitted on a warp portal (dispatch.go relocateThroughPortal).
+	// It was described by sizeZCNPCAckMapMove all along but never registered
+	// here, so the packet DB — the reference every frame reader resolves
+	// against — did not know a frame the server actually sends.
+	db.Register(Definition{
+		ID:        HeaderZCNPCACKMAPMOVE,
+		Name:      "ZC_NPCACK_MAPMOVE",
+		Length:    sizeZCNPCAckMapMove,
 		Direction: DirectionServerToClient,
 	})
 	db.Register(Definition{
@@ -1428,6 +1553,138 @@ func NewMapServerDB() *DB {
 		Length:    sizeZCItemPickupAck,
 		Direction: DirectionServerToClient,
 	})
+	// Phase 44: the inventory-removal counterpart. A shop sale deletes the sold
+	// row and rAthena tells the client with this frame (clif_delitem,
+	// clif.cpp:2915-2928; struct packets.hpp:825-831, 8B at every PACKETVER).
+	db.Register(Definition{
+		ID:        HeaderZCDeleteItemFromBody,
+		Name:      "ZC_DELETE_ITEM_FROM_BODY",
+		Length:    sizeZCDeleteItemFromBody,
+		Direction: DirectionServerToClient,
+	})
+	// M11: the party (group) family. Both C→S create variants are registered
+	// because the client picks one by build (clif_packetdb.hpp:98,:243); the S→C
+	// roster/member opcodes are the >=20171207 pair 0x0ae5/0x0ae4 active at
+	// 20250604 (packets_struct.hpp:274-276). ZC_GROUP_LIST is variable-length, so
+	// its registered Length is the empty-roster header size and the real frame
+	// length travels in its own packetLen field.
+	db.Register(Definition{
+		ID:        HeaderCZMAKEGROUP,
+		Name:      "CZ_MAKE_GROUP",
+		Length:    sizeCZMakeGroup,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZMAKEGROUP2,
+		Name:      "CZ_MAKE_GROUP2",
+		Length:    sizeCZMakeGroup2,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQJOINGROUP,
+		Name:      "CZ_REQ_JOIN_GROUP",
+		Length:    sizeCZReqJoinGroup,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZJOINGROUP,
+		Name:      "CZ_JOIN_GROUP",
+		Length:    sizeCZJoinGroup,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQLEAVEGROUP,
+		Name:      "CZ_REQ_LEAVE_GROUP",
+		Length:    sizeCZReqLeaveGroup,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZCHANGEGROUPEXPOPT,
+		Name:      "CZ_CHANGE_GROUPEXPOPTION",
+		Length:    sizeCZChangeGroupExp,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderCZREQEXPELGROUPMEMBER,
+		Name:      "CZ_REQ_EXPEL_GROUP_MEMBER",
+		Length:    sizeCZReqExpelMember,
+		Direction: DirectionClientToServer,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCACKMAKEGROUP,
+		Name:      "ZC_ACK_MAKE_GROUP",
+		Length:    sizeZCAckMakeGroup,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCPARTYJOINREQ,
+		Name:      "ZC_PARTY_JOIN_REQ",
+		Length:    sizeZCPartyJoinReq,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCPARTYJOINREQACK,
+		Name:      "ZC_PARTY_JOIN_REQ_ACK",
+		Length:    sizeZCPartyJoinReqAck,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCPARTYCONFIG,
+		Name:      "ZC_PARTY_CONFIG",
+		Length:    sizeZCPartyConfig,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCGROUPLIST,
+		Name:      "ZC_GROUP_LIST",
+		Length:    sizeZCGroupListHeader,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCADDMEMBERTOGROUP,
+		Name:      "ZC_ADD_MEMBER_TO_GROUP",
+		Length:    sizeZCAddMemberToGroup,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCDELETEMEMBERFROMGRP,
+		Name:      "ZC_DELETE_MEMBER_FROM_GROUP",
+		Length:    sizeZCDeleteMember,
+		Direction: DirectionServerToClient,
+	})
+
+	// --- M11 mail (RODEX, >=20150513; clif_packetdb.hpp:1738-1762) ---
+	// C→S mailbox verbs. The three refreshinbox opcodes and the two 26-byte
+	// mailbox2 variants share handlers; read and delete share a shape.
+	db.Register(Definition{ID: HeaderCZOPENMAILBOX, Name: "CZ_OPEN_MAILBOX", Length: sizeCZOpenMailbox, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQNEXTMAILLIST, Name: "CZ_REQ_NEXT_MAIL_LIST", Length: sizeCZOpenMailbox, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQREFRESHMAILL, Name: "CZ_REQ_REFRESH_MAIL_LIST", Length: sizeCZOpenMailbox, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZOPENMAILBOX2, Name: "CZ_OPEN_MAILBOX2", Length: sizeCZOpenMailbox2, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREFRESHMAILLIST, Name: "CZ_REQ_REFRESH_MAIL_LIST2", Length: sizeCZOpenMailbox2, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZCLOSEMAILBOX, Name: "CZ_CLOSE_MAILBOX", Length: sizeCZCancelWrite, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQREADMAIL, Name: "CZ_REQ_READ_MAIL", Length: sizeCZReadDeleteMail, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQDELETEMAIL, Name: "CZ_REQ_DELETE_MAIL", Length: sizeCZReadDeleteMail, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQZENYFROMMAIL, Name: "CZ_REQ_ZENY_FROM_MAIL", Length: sizeCZGetAttach, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQITEMFROMMAIL, Name: "CZ_REQ_ITEM_FROM_MAIL", Length: sizeCZGetAttach, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQCANCELWRITE, Name: "CZ_REQ_CANCEL_WRITE_MAIL", Length: sizeCZCancelWrite, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQADDITEMMAIL, Name: "CZ_REQ_ADD_ITEM_TO_MAIL", Length: sizeCZMailItem, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQREMOVEITEMMA, Name: "CZ_REQ_REMOVE_ITEM_MAIL", Length: sizeCZMailItem, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQOPENWRITEMAI, Name: "CZ_REQ_OPEN_WRITE_MAIL", Length: sizeCZOpenWriteMail, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZCHECKRECEIVENAM, Name: "CZ_CHECK_RECEIVE_CHARACTER_NAME", Length: sizeCZOpenWriteMail, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZCHECKNAME2, Name: "CZ_CHECKNAME2", Length: sizeCZCheckName2, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQWRITEMAIL, Name: "CZ_REQ_WRITE_MAIL", Length: VariableLength, Direction: DirectionClientToServer})
+	db.Register(Definition{ID: HeaderCZREQWRITEMAIL2, Name: "CZ_REQ_WRITE_MAIL2", Length: VariableLength, Direction: DirectionClientToServer})
+	// S→C fixed-size frames; the variable 0x0ac2 list and 0x0b63 read ack are
+	// emitted straight to the wire and need no inbound length.
+	db.Register(Definition{ID: HeaderZCNOTIFYUNREADMA, Name: "ZC_NOTIFY_UNREADMAIL", Length: sizeZCNotifyUnreadMail, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKMAILWRITE, Name: "ZC_ACK_WRITE_MAIL", Length: sizeZCAckWriteMail, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKZENYFROMMAI, Name: "ZC_ACK_ZENY_FROM_MAIL", Length: sizeZCAckZenyFromMail, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKITEMFROMMAI, Name: "ZC_ACK_ITEM_FROM_MAIL", Length: sizeZCAckItemFromMail, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKDELETEMAIL, Name: "ZC_ACK_DELETE_MAIL", Length: sizeZCAckDeleteMail, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKREMOVEITEMM, Name: "ZC_ACK_REMOVE_ITEM_MAIL", Length: sizeZCAckRemoveItem, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKOPENWRITE, Name: "ZC_ACK_OPEN_WRITE_MAIL", Length: sizeZCAckOpenWrite, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCCHECKNAME, Name: "ZC_CHECKNAME", Length: sizeZCCheckName, Direction: DirectionServerToClient})
+	db.Register(Definition{ID: HeaderZCACKADDITEMRODE, Name: "ZC_ACK_ADD_ITEM_RODEX", Length: sizeZCAckAddItemRodex, Direction: DirectionServerToClient})
 
 	return db
 }

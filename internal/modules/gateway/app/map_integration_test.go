@@ -5,9 +5,11 @@ package app_test
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,6 +23,7 @@ import (
 	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
 	contentinfra "github.com/bouroo/goAthena/internal/modules/content/infra"
 	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
+	economyinfra "github.com/bouroo/goAthena/internal/modules/economy/infra"
 	gwapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
@@ -30,8 +33,12 @@ import (
 	worldinfra "github.com/bouroo/goAthena/internal/modules/world/infra"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
+	"github.com/bouroo/goAthena/pkg/ro/jobbasepoints"
+	"github.com/bouroo/goAthena/pkg/ro/jobexp"
+	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
+	"github.com/bouroo/goAthena/pkg/ro/skilltree"
 )
 
 // startMapListener spins a real MapServer (gnet reactor) on a free port,
@@ -62,7 +69,47 @@ type mapTestEnv struct {
 	charRepo *charinfra.MemoryCharacterRepository
 	itemRepo *invinfra.MemoryItemRepository
 	world    *worldapp.WorldService
+	mobAI    *worldapp.MobAIService
 }
+
+// testMobAIFixture is a one-mob mob_db.yml with a single aggressive monster
+// (Ai=4 ≥ aggressive threshold 3). It backs the gateway's combat + mob AI so a
+// spawned monster resolves real stats and the aggro loop swings at the player.
+// WalkSpeed (400 ms/cell) makes it chasable: a target within ChaseRange but
+// outside AttackRange is pursued one cell per WalkSpeed of accumulated tick time.
+const testMobAIFixture = `Header:
+  Type: MOB_DB
+  Version: 5
+Body:
+  - Id: 8001
+    Name: AggroMob
+    Ai: 04
+    Level: 10
+    Attack: 50
+    Attack2: 10
+    Str: 20
+    Dex: 20
+    Defense: 0
+    Vit: 0
+    AttackRange: 2
+    ChaseRange: 12
+    WalkSpeed: 400
+  - Id: 8002
+    Name: ExpMob
+    Ai: 00
+    Level: 1
+    Attack: 0
+    Attack2: 0
+    Str: 0
+    Dex: 0
+    Defense: 0
+    Vit: 0
+    BaseExp: 150
+    JobExp: 75
+    AttackRange: 1
+    ChaseRange: 0
+    WalkSpeed: 400
+`
 
 // buildTestMapDeps constructs the MapServer's collaborators against in-memory
 // repos, wiring the shop commerce verb: a real EconomyService over a memory
@@ -75,32 +122,68 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 		ID: 150001, Account: 2000001, Map: "new_1-1",
 		Pos: worlddomain.Position{X: 53, Y: 111}, Sex: 1, Job: 0, Level: 1,
 		Name: "Hero", HP: 1000, MaxHP: 1000, SP: 100, MaxSP: 100, Speed: 150,
+		// Save point distinct from the enter cell so respawn relocate/reseat is
+		// observable (died PC respawns here, not at its death cell).
+		SaveMap: "new_1-1", SavePos: worlddomain.Position{X: 1, Y: 1},
+		// Known base stats + spendable points so the stat-allocation verb works
+		// without a kill (Str 5, 48 points).
+		Str: 5, Agi: 5, Vit: 5, Int: 5, Dex: 5, Luk: 5, StatusPoint: 48,
+		// Pre-seed one learned skill (id 5 = SM_BASH) at level 1 so the skill-list
+		// and cast tests have a known learned skill to exercise.
+		LearnedSkills: map[int32]int16{5: 1},
+		// Spendable skill points so the CZ_SKILLUP learn verb works without a
+		// job level-up first.
+		SkillPoint: 2,
 	})
 	world := worldapp.NewWorldService(wrepo, slog.Default(), 50)
-	spawn := worldapp.NewSpawnService(world, nil, nil)
+	// Leveling over a tiny Novice curve (L1→2 costs 9, L2→3 costs 16, max 3)
+	// and per-level HP/SP table (L1 100/10 … L3 220/20): a kill whose BaseExp
+	// crosses a threshold drives a level-up observable on the wire. The seeded
+	// char enters at Level 1 with MaxHP/MaxSP 1000/100 (the L1 table row is
+	// deliberately larger so a level-up SHRINKS the bars only if the table is
+	// misapplied — instead the table values apply once leveling consumes EXP).
+	world.SetLeveling(worldapp.NewLevelingService(world, mustJobExp(t), mustJobStats(t), slog.Default()))
+	// A tiny mob_db with one aggressive mob (8001, Ai=4) and one passive mob
+	// (8002, carries BaseExp/JobExp for the kill-reward test) backs combat + mob
+	// AI so a spawned monster resolves real stats and the aggro loop can swing at
+	// the player. The spawn service shares this registry so a mob's EXP is
+	// resolvable on death; drops stay inert (item_db is nil → rollDrops returns
+	// nil). Existing tests spawn mob 1002 (not in this fixture), which mob_db
+	// resolves to nil → 0 DEF, preserving their damage behaviour.
+	mobs, err := mobdb.Load(strings.NewReader(testMobAIFixture))
+	if err != nil {
+		t.Fatalf("load mob_db: %v", err)
+	}
+	spawn := worldapp.NewSpawnService(world, mobs, nil)
 	itemRepo := invinfra.NewMemoryItemRepository()
 	inv := invapp.NewInventoryService(itemRepo)
 	// A tiny item_db with one weapon (Knife 1201, ATK 50, right-hand) backs the
 	// EquipService so combat picks up WeaponATK when the player equips it.
 	items := testItemDB(t)
 	equipSvc := worldapp.NewEquipService(inv, items)
-	combat := worldapp.NewCombatService(world, nil, equipSvc)
-	content := contentapp.NewEngine(nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
+	itemUse := worldapp.NewItemUseService(inv, items, world)
+	combat := worldapp.NewCombatService(world, mobs, equipSvc)
+	mobAI := worldapp.NewMobAIService(world, mobs, combat, slog.Default())
+	content := contentapp.NewEngine(nil, nil, nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
+	skills.SetTree(testSkillTree())
 
 	// Shop commerce: a real economy over a memory character repo + the dev shop
 	// catalog, bound to its NPC GID so a CZ_ACK_SELECT_DEALTYPE on that GID opens it.
 	charRepo := charinfra.NewMemoryCharacterRepository()
 	shops := shopapp.NewShopService(devTestCatalog(), itemRepo,
-		testEconPort{svc: economyapp.NewEconomyService(charRepo)})
+		testEconPort{svc: economyapp.NewEconomyService(charRepo, economyinfra.NewMemoryLedger())})
 	shopStore := contentinfra.NewMemoryShopStore()
 	shopStore.RegisterShop(shop.DevShopGID, devTestShopName)
 
-	ms, err := gwapp.NewMapServer(world, spawn, combat, equipSvc, inv, content, skills, shops, shopStore, nil, sessions, slog.Default())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, mobAI, equipSvc, itemUse, inv, content, skills, shops, shopStore, nil, sessions, testSkillDB(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ms, mapTestEnv{spawn: spawn, charRepo: charRepo, itemRepo: itemRepo, world: world}
+	// Attach item_db the way the DI root does, so the LoadEndAck inventory burst
+	// resolves real IT_* wire types and view sprites (production wiring).
+	ms.SetItemDB(items)
+	return ms, mapTestEnv{spawn: spawn, charRepo: charRepo, itemRepo: itemRepo, world: world, mobAI: mobAI}
 }
 
 // startAndDial starts the map listener on port and dials it, failing the test if
@@ -139,10 +222,14 @@ func devTestCatalog() *shopdomain.CatalogRegistry {
 	})
 }
 
-// testEconPort adapts the real economy service to the shop EconomyPort so the
-// integration test exercises real zeny movement (production di.go uses the same
-// adapter shape; it is unexported there, so the test re-implements it).
+// testEconPort adapts the real economy service to the shop/mail EconomyPort so
+// the integration tests exercise real zeny movement (production di.go uses the
+// same adapter shape; it is unexported there, so the test re-implements it).
 type testEconPort struct{ svc *economyapp.EconomyService }
+
+func (e testEconPort) GetZeny(ctx context.Context, charID uint32) (int32, error) {
+	return e.svc.GetZeny(ctx, charID)
+}
 
 func (e testEconPort) DeductZeny(ctx context.Context, charID uint32, amount int32) error {
 	return e.svc.DeductZeny(ctx, charID, amount)
@@ -169,21 +256,61 @@ func testSkillDB() *skilldb.Registry {
 	return reg
 }
 
-// testItemDB seeds a one-entry item registry for integration tests: a Knife
-// (id 1201, ATK 50) wearable in the right hand. The Attack feeds WeaponATK into
-// combat once equipped; Locations maps to equip.HandRight so the wear request's
-// position validates.
+// testSkillTree mirrors the harness skill_db: SM_BASH learnable by Novice at
+// MaxLevel 10 so CZ_SKILLUP can raise it.
+func testSkillTree() *skilltree.Registry {
+	treeYAML := `Header:
+  Type: SKILL_TREE_DB
+  Version: 1
+Body:
+  - Job: Novice
+    Tree:
+      - Name: SM_BASH
+        MaxLevel: 10
+`
+	tree, err := skilltree.Load(strings.NewReader(treeYAML))
+	if err != nil {
+		panic("test skill tree: " + err.Error())
+	}
+	return tree
+}
+
+// testItemDB seeds a tiny item registry for integration tests: a Knife (id 1201,
+// ATK 50) wearable in the right hand (Locations → equip.HandRight so the wear
+// request's position validates), and a Red Potion (id 501, itemheal 45,0) so the
+// usable-item verb resolves a healing item. The Knife's WeaponATK folds into
+// combat once equipped; the Red Potion drives the use→heal path.
 func testItemDB(t *testing.T) *itemdb.Registry {
 	t.Helper()
 	const yaml = "Header:\n  Type: ITEM_DB\n  Version: 3\nBody:\n" +
 		"  - Id: 1201\n    AegisName: Knife\n    Name: Knife\n    Type: Weapon\n" +
-		"    SubType: Dagger\n    Attack: 50\n    Locations:\n      Right_Hand: true\n"
+		"    SubType: Dagger\n    Attack: 50\n    Locations:\n      Right_Hand: true\n" +
+		"  - Id: 501\n    AegisName: Red_Potion\n    Name: Red Potion\n    Type: Healing\n" +
+		"    Script: itemheal 45,0\n" +
+		// 502/503 are distinct healing items so the inventory-index tests can
+		// seed three rows that are individually identifiable: consuming the
+		// wrong row is then observable, which is what makes the index
+		// convention testable at all.
+		"  - Id: 502\n    AegisName: Orange_Potion\n    Name: Orange Potion\n    Type: Healing\n" +
+		"    Script: itemheal 60,0\n" +
+		"  - Id: 503\n    AegisName: Yellow_Potion\n    Name: Yellow Potion\n    Type: Healing\n" +
+		"    Script: itemheal 80,0\n" +
+		// A headgear in a VISIBLE equip position (EQP_HEAD_TOP, bit 0x100) with a
+		// non-zero View, so the equip ack's view-sprite gate can be asserted in
+		// both directions: a visible head item carries the sprite, a weapon does not.
+		"  - Id: 2201\n    AegisName: Hat\n    Name: Hat\n    Type: Armor\n" +
+		"    View: 77\n    Locations:\n      Head_Top: true\n"
 	reg, err := itemdb.Load(strings.NewReader(yaml))
 	if err != nil {
 		t.Fatalf("load test item_db: %v", err)
 	}
 	if e := reg.Get(1201); e == nil || e.Attack != 50 || e.EquipLocations != equip.HandRight {
 		t.Fatalf("test item_db knife not resolved: %+v", e)
+	}
+	if e := reg.Get(501); e == nil {
+		t.Fatalf("test item_db red potion not resolved")
+	} else if hpMin, hpMax, spMin, spMax, ok := e.Heal(); !ok || hpMin != 45 || hpMax != 45 || spMin != 0 || spMax != 0 {
+		t.Fatalf("test item_db red potion heal not parsed: hp=[%d,%d] sp=[%d,%d] ok=%v", hpMin, hpMax, spMin, spMax, ok)
 	}
 	return reg
 }
@@ -230,6 +357,200 @@ func TestMap_AcceptEnterOverTCP(t *testing.T) {
 	got := binary.LittleEndian.Uint16(hdr)
 	if got != ropacket.HeaderZCACCEPTENTER {
 		t.Fatalf("response header = 0x%04x, want ZC_ACCEPT_ENTER (0x%04x)", got, ropacket.HeaderZCACCEPTENTER)
+	}
+}
+
+// TestMap_SkillInfoListOnEnter proves that a player with a seeded LearnedSkill
+// receives a non-empty ZC_SKILLINFO_LIST (0x010f) inside the LoadEndAck init
+// burst, after the four inventory frames.
+func TestMap_SkillInfoListOnEnter(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	conn := startMapListener(t, port, sessions)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+
+	// Drain ZC_ACCEPT_ENTER (13 bytes).
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// CZ_NOTIFY_ACTORINIT (0x007d, 2B cmd-only): trigger the init burst.
+	if _, err := conn.Write([]byte{0x7d, 0x00}); err != nil {
+		t.Fatalf("send LoadEndAck: %v", err)
+	}
+	// Drain the inventory burst: START(6) + ITEMLIST_NORMAL(5) +
+	// ITEMLIST_EQUIP(5) + END(4) = 20 bytes.
+	if _, err := io.ReadFull(conn, make([]byte, 20)); err != nil {
+		t.Fatalf("drain inventory burst: %v", err)
+	}
+
+	// Read ZC_SKILLINFO_LIST (0x010f). Empty = 4 bytes; one entry = 41 bytes.
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		t.Fatalf("read skill-list header: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(header[0:2]); got != uint16(ropacket.HeaderZCSKILLINFOLIST) {
+		t.Fatalf("skill-list header = 0x%04x, want 0x010f", got)
+	}
+	packetLen := binary.LittleEndian.Uint16(header[2:4])
+	if packetLen < 4+37 {
+		t.Fatalf("skill-list len = %d, want >= 41", packetLen)
+	}
+
+	// Read the entry body (37 bytes).
+	entry := make([]byte, 37)
+	if _, err := io.ReadFull(conn, entry); err != nil {
+		t.Fatalf("read skill entry: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(entry[0:2]); got != 5 {
+		t.Fatalf("skill id = %d, want 5 (SM_BASH)", got)
+	}
+	if got := binary.LittleEndian.Uint16(entry[6:8]); got != 1 {
+		t.Fatalf("skill level = %d, want 1", got)
+	}
+}
+
+// TestMap_CastLearnedAndUnlearnedSkill proves: learned skill (5, lvl 1) casts
+// successfully; unlearned skill (9999) is silently ignored and the connection
+// remains open.
+func TestMap_CastLearnedAndUnlearnedSkill(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	conn, spawn := startMapListenerWithSpawn(t, port, sessions)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+
+	// Drain ZC_ACCEPT_ENTER (13 bytes) — the skill list rides the LoadEndAck
+	// burst now, not the enter burst.
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// Spawn a mob on the player's cell (53,111 — see buildTestMapDeps) so the
+	// cast is inside skill range.
+	if err := spawn.SpawnMob(160010, 1002, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "Poring", 50, 50, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+	drainMobAppearFrame(t, conn)
+
+	// Cast the LEARNED skill (id=5, level=1).
+	req := make([]byte, 10)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILL)
+	binary.LittleEndian.PutUint16(req[2:], 1) // skillLv
+	binary.LittleEndian.PutUint16(req[4:], 5) // SM_BASH (learned)
+	binary.LittleEndian.PutUint32(req[6:], 160010)
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send learned skill: %v", err)
+	}
+	notify := make([]byte, 33)
+	if _, err := io.ReadFull(conn, notify); err != nil {
+		t.Fatalf("read ZC_NOTIFY_SKILL: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(notify[0:2]); got != uint16(ropacket.HeaderZCNOTIFYSKILL) {
+		t.Fatalf("notify header = 0x%04x, want 0x01de", got)
+	}
+
+	// Cast an UNLEARNED skill (id=9999). The server silently ignores it (logs
+	// error). The conn must NOT close; a 300ms timeout confirms nothing was sent.
+	req2 := make([]byte, 10)
+	binary.LittleEndian.PutUint16(req2[0:], ropacket.HeaderCZUSESKILL)
+	binary.LittleEndian.PutUint16(req2[2:], 1)
+	binary.LittleEndian.PutUint16(req2[4:], 9999)
+	binary.LittleEndian.PutUint32(req2[6:], 160010)
+	conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write(req2); err != nil {
+		t.Fatalf("send unlearned skill: %v", err)
+	}
+	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	n, err := conn.Read(make([]byte, 256))
+	if err == nil && n > 0 {
+		t.Fatalf("expected no response for unlearned skill, got %d bytes", n)
+	}
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("conn should timeout on unlearned skill, got err=%v", err)
+	}
+
+	// Verify connection still alive: send a normal attack via CZ_ACTION_REQUEST
+	// (0x0089). Clear the read deadline FIRST (SetDeadline would be undone by a
+	// later SetReadDeadline(Time{})) then arm a fresh absolute deadline.
+	conn.SetReadDeadline(time.Time{})
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	attack := make([]byte, 7)
+	binary.LittleEndian.PutUint16(attack[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint32(attack[2:], 160010) // targetGID
+	attack[6] = 0                                     // action: attack
+	if _, err := conn.Write(attack); err != nil {
+		t.Fatalf("send attack after unlearned skill: %v", err)
+	}
+	// The mob may already be dead (50 HP vs one SM_BASH), so the attack may
+	// yield no ZC_NOTIFY_ACT. Any server-initiated frame (despawn broadcast,
+	// drop notification) still proves the conn is alive after the unlearned
+	// cast; per the async-frame capture discipline, tolerate interleaved
+	// frames and accept any non-empty read.
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	liveness := make([]byte, 256)
+	ln, lerr := conn.Read(liveness)
+	if lerr != nil || ln == 0 {
+		t.Fatalf("conn appears dead after unlearned cast: read %d bytes, err=%v", ln, lerr)
+	}
+}
+
+// TestMap_SkillUpLearns proves the CZ_SKILLUP (0x0112) learn verb on the wire:
+// the harness player (skill 5 learned at 1, 2 skill points, SM_BASH in the
+// Novice tree at MaxLevel 10) raises SM_BASH to 2 and receives
+// ZC_SKILLINFO_UPDATE (0x010e, 11B) followed by ParChange SPSkillPoint=1.
+func TestMap_SkillUpLearns(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	conn := startMapListener(t, port, sessions)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// CZ_SKILLUP (4B): cmd 0x0112 + uint16 skillID 5.
+	req := make([]byte, 4)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZSKILLUP)
+	binary.LittleEndian.PutUint16(req[2:], 5)
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send CZ_SKILLUP: %v", err)
+	}
+
+	// ZC_SKILLINFO_UPDATE (11B): cmd + skillId + level + sp + range + upFlag.
+	upd := make([]byte, 11)
+	if _, err := io.ReadFull(conn, upd); err != nil {
+		t.Fatalf("read ZC_SKILLINFO_UPDATE: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(upd[0:2]); got != ropacket.HeaderZCSKILLINFOUPDATE {
+		t.Fatalf("update cmd = 0x%04x, want 0x010e", got)
+	}
+	if got := binary.LittleEndian.Uint16(upd[2:4]); got != 5 {
+		t.Errorf("update skillId = %d, want 5", got)
+	}
+	if got := binary.LittleEndian.Uint16(upd[4:6]); got != 2 {
+		t.Errorf("update level = %d, want 2 (5:1 -> +1)", got)
+	}
+	// ParChange (8B): varID SPSkillPoint(12), count 1.
+	par := make([]byte, 8)
+	if _, err := io.ReadFull(conn, par); err != nil {
+		t.Fatalf("read ParChange: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(par[2:4]); got != ropacket.SPSkillPoint {
+		t.Errorf("ParChange varID = %d, want SPSkillPoint", got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(par[4:8])); got != 1 {
+		t.Errorf("ParChange count = %d, want 1 (2 points - 1)", got)
 	}
 }
 
@@ -291,10 +612,7 @@ func TestMap_Dispatch_MovementAfterEnter(t *testing.T) {
 	// 1. CZ_ENTER → ZC_ACCEPT_ENTER (drain the 13-byte response).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	enterReply := make([]byte, 13)
-	if _, err := io.ReadFull(conn, enterReply); err != nil {
-		t.Fatalf("read accept-enter: %v", err)
-	}
+	enterReply := awaitAcceptEnter(t, conn)
 	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
 		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
 	}
@@ -336,10 +654,7 @@ func TestMap_RegenEmitsParChange(t *testing.T) {
 	//    reactor has registered the conn for charID 150001 before we proceed.
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	enterReply := make([]byte, 13)
-	if _, err := io.ReadFull(conn, enterReply); err != nil {
-		t.Fatalf("read accept-enter: %v", err)
-	}
+	enterReply := awaitAcceptEnter(t, conn)
 	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
 		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
 	}
@@ -401,9 +716,7 @@ func TestMap_Dispatch_SitStandActionEcho(t *testing.T) {
 	// CZ_ENTER → ZC_ACCEPT_ENTER (drain the 13-byte accept-enter).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// CZ_ACTION_REQUEST action=2 (sit), self-targeted at the player's own GID.
 	const sitAction byte = 2
@@ -430,6 +743,477 @@ func TestMap_Dispatch_SitStandActionEcho(t *testing.T) {
 	}
 }
 
+// TestMap_MobAttacksPlayer proves the full mob→player→notify path through the
+// real gnet reactor: an aggressive mob (Ai=4) within AttackRange of the player
+// swings on MonsterTick, and the NewMapServer-wired OnMobAttack sink delivers
+// ZC_NOTIFY_ACT to the player (showing the mob's hit + damage) followed by a
+// ZC_PAR_CHANGE whose HP matches the damage dealt. MonsterTick is driven directly
+// (no real ticker) so the assertion is deterministic, not timing-fragile.
+func TestMap_MobAttacksPlayer(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	// CZ_ENTER -> ZC_ACCEPT_ENTER; draining the 13-byte reply registers the conn
+	// for charID 150001 (the PC, full HP 1000 at new_1-1 (53,111)).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// Spawn the aggressive mob one cell east of the player (Chebyshev dist 1 ≤ its
+	// AttackRange 2) so the cadence-accumulated swing lands.
+	const mobGID = 160000
+	if err := env.spawn.SpawnMob(mobGID, 8001, "new_1-1", worlddomain.Position{X: 54, Y: 111}, "AggroMob", 1000, 1000, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+	drainMobAppearFrame(t, conn)
+
+	// One cadence interval (2 s) elapsed ⇒ exactly one swing. Driving MonsterTick
+	// directly keeps this deterministic.
+	env.mobAI.MonsterTick(t.Context(), 2*time.Second)
+
+	// ZC_NOTIFY_ACT (34 B) is broadcast first, then ZC_PAR_CHANGE HP + SP (8 B
+	// each) refresh the target's own vitals.
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	act := make([]byte, (ropacket.NotifyActResponse{}).Size())
+	if _, err := io.ReadFull(conn, act); err != nil {
+		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT {
+		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT)
+	}
+	if got := binary.LittleEndian.Uint32(act[2:6]); got != mobGID {
+		t.Fatalf("ZC_NOTIFY_ACT srcID = %d, want mob GID %d", got, mobGID)
+	}
+	if got := binary.LittleEndian.Uint32(act[6:10]); got != 150001 {
+		t.Fatalf("ZC_NOTIFY_ACT targetID = %d, want player GID 150001", got)
+	}
+	dmg := int32(binary.LittleEndian.Uint32(act[22:26]))
+	if dmg <= 0 {
+		t.Fatalf("ZC_NOTIFY_ACT damage = %d, want > 0", dmg)
+	}
+
+	// The player's own HP/SP refresh follows: two 8-byte ZC_PAR_CHANGE frames. HP
+	// must equal 1000 − damage (applyDamage ran before the hook fired).
+	par := make([]byte, 16)
+	if _, err := io.ReadFull(conn, par); err != nil {
+		t.Fatalf("read ZC_PAR_CHANGE frames: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(par[0:2]); got != ropacket.HeaderZCPARCHANGE {
+		t.Fatalf("frame 0 header = 0x%04x, want ZC_PAR_CHANGE", got)
+	}
+	if got := binary.LittleEndian.Uint16(par[2:4]); got != ropacket.SPHP {
+		t.Fatalf("frame 0 varID = %d, want SPHP (%d)", got, ropacket.SPHP)
+	}
+	hpAfter := int32(binary.LittleEndian.Uint32(par[4:8]))
+	if want := int32(1000) - dmg; hpAfter != want {
+		t.Fatalf("player HP after mob hit = %d, want %d (1000 − %d damage)", hpAfter, want, dmg)
+	}
+}
+
+// TestMap_MobChasesPlayer proves the full chase→approach→swing→notify path: an
+// aggressive mob spawned within ChaseRange but outside AttackRange pursues one
+// greedy cell toward the player per WalkSpeed of accumulated tick time, the
+// NewMapServer-wired OnMobMove sink delivers a ZC_UNIT_WALKING (ObjectType=MOB)
+// frame to the player's conn each step, the mob stops at AttackRange without
+// overshooting, and the next attack-cadence tick lands a hit (HP drops). The mob
+// reaches range in (chaseCells × WalkSpeed) ms; MonsterTick is driven directly so
+// the assertions are deterministic, not timing-fragile.
+func TestMap_MobChasesPlayer(t *testing.T) {
+	const (
+		mobGID    = 160000
+		mobClass  = 8001
+		mobWalkMs = 400 // matches testMobAIFixture WalkSpeed (ms/cell)
+		// Fixture mob: AttackRange=2, ChaseRange=12. Player enters at (53,111).
+		// Spawn 7 cells east ⇒ Chebyshev dist 7 ≤ ChaseRange, > AttackRange: pursue.
+		mobStartX      = 60
+		playerX        = 53
+		attackRange    = 2 // fixture AttackRange; mob halts at dist attackRange from the player
+		attackInterval = 2 * time.Second
+		wantSteps      = mobStartX - (playerX + attackRange) // 60-55 = 5 steps to reach range
+		// mobObjType mirrors the wire object-type byte for a monster (rAthena
+		// clif_bl_type: 5=MOB); it is unexported in package app, so the test asserts
+		// the literal the production notifyMobMove writes into ZC_UNIT_WALKING[4].
+		mobObjType uint8 = 5
+	)
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	// CZ_ENTER -> ZC_ACCEPT_ENTER; draining the 13-byte reply registers the conn
+	// for charID 150001 (the PC, full HP 1000 at new_1-1 (53,111)).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// Spawn the aggressive mob 7 cells east (Chebyshev dist 7: within ChaseRange
+	// 12, outside AttackRange 2) so the chase loop pursues toward the player.
+	if err := env.spawn.SpawnMob(mobGID, mobClass, "new_1-1",
+		worlddomain.Position{X: mobStartX, Y: 111}, "AggroMob", 1000, 1000, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+	drainMobAppearFrame(t, conn)
+
+	// Drive one WalkSpeed of tick time per step: each call banks exactly one
+	// chase step (moveDue resets on a full cell), and the step's ZC_UNIT_WALKING
+	// frame lands on the player's conn. Assert the mob's world cell advances one
+	// toward the player and each frame is the MOB walk broadcast.
+	mobEntity := func() worlddomain.Entity {
+		e, err := env.world.Get(mobGID)
+		if err != nil {
+			t.Fatalf("Get mob: %v", err)
+		}
+		return e
+	}
+	unitWalkSize := (ropacket.UnitWalkingResponse{}).Size()
+	for step := 1; step <= wantSteps; step++ {
+		env.mobAI.MonsterTick(t.Context(), time.Duration(mobWalkMs)*time.Millisecond)
+		if got := int(mobEntity().Pos.X); got != mobStartX-step {
+			t.Fatalf("chase step %d: mob X = %d, want %d (one cell toward player)", step, got, mobStartX-step)
+		}
+		// One ZC_UNIT_WALKING frame per step, broadcast at the mob's new cell.
+		frame := make([]byte, unitWalkSize)
+		conn.SetDeadline(time.Now().Add(3 * time.Second))
+		if _, err := io.ReadFull(conn, frame); err != nil {
+			t.Fatalf("chase step %d: read ZC_UNIT_WALKING: %v", step, err)
+		}
+		if got := binary.LittleEndian.Uint16(frame[0:2]); got != ropacket.HeaderZCUNITWALKING {
+			t.Fatalf("chase step %d: header = 0x%04x, want ZC_UNIT_WALKING (0x%04x)", step, got, ropacket.HeaderZCUNITWALKING)
+		}
+		if frame[4] != mobObjType {
+			t.Fatalf("chase step %d: ObjectType = %d, want MOB (%d)", step, frame[4], mobObjType)
+		}
+		if got := binary.LittleEndian.Uint32(frame[9:13]); got != mobGID {
+			t.Fatalf("chase step %d: GID = %d, want mob GID %d", step, got, mobGID)
+		}
+	}
+
+	// Stop-short: the mob halted at AttackRange (dist 2), not on the player's
+	// cell. Further chase ticks must not move it (resolve switches to the attack
+	// branch at dist ≤ AttackRange).
+	finalX := int(mobEntity().Pos.X)
+	if want := playerX + attackRange; finalX != want {
+		t.Fatalf("mob stopped at X=%d, want %d (player's cell %d + AttackRange %d)", finalX, want, playerX, attackRange)
+	}
+
+	// The mob is now in range. Drive one attack-cadence tick (attackInterval) to
+	// land a swing — no move frame this tick, just the hit + HP refresh. This
+	// proves the mob both closes to range AND swings once there.
+	env.mobAI.MonsterTick(t.Context(), attackInterval)
+	if got := int(mobEntity().Pos.X); got != finalX {
+		t.Fatalf("attack tick moved the mob: X = %d, want %d (must hold at AttackRange)", got, finalX)
+	}
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	act := make([]byte, (ropacket.NotifyActResponse{}).Size())
+	if _, err := io.ReadFull(conn, act); err != nil {
+		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT {
+		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT)
+	}
+	dmg := int32(binary.LittleEndian.Uint32(act[22:26]))
+	if dmg <= 0 {
+		t.Fatalf("ZC_NOTIFY_ACT damage = %d, want > 0", dmg)
+	}
+	// The target's HP refresh: ZC_PAR_CHANGE HP frame, HP = 1000 − damage.
+	par := make([]byte, 8)
+	if _, err := io.ReadFull(conn, par); err != nil {
+		t.Fatalf("read ZC_PAR_CHANGE HP frame: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(par[2:4]); got != ropacket.SPHP {
+		t.Fatalf("PAR_CHANGE varID = %d, want SPHP (%d)", got, ropacket.SPHP)
+	}
+	if got := int32(binary.LittleEndian.Uint32(par[4:8])); got != int32(1000)-dmg {
+		t.Fatalf("player HP after mob hit = %d, want %d (1000 − %d damage)", got, int32(1000)-dmg, dmg)
+	}
+}
+
+// TestMap_MobKillsPlayerRespawns proves the full player-death → respawn path:
+// an aggressive mob kills a PC (HP→0, died=true), the PC vanishes at its death
+// cell (ZC_NOTIFY_VANISH VanishDead, seen by the dying player), then respawns at
+// its save point with HP/SP restored and relocates (ZC_ACCEPT_ENTER). The death +
+// vanish are driven by the real MonsterTick; respawn is driven deterministically
+// via RespawnPlayer (the same code the ArmRespawn timer runs), so the test is not
+// timing-fragile. The bounded goAthena model: no ghost/tomb — vanish then respawn.
+func TestMap_MobKillsPlayerRespawns(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	// Stop cancels the respawn timer armed by the death path so it does not fire
+	// spuriously after this test (respawn is driven directly below).
+	defer env.world.Stop()
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	// CZ_ENTER → ZC_ACCEPT_ENTER; draining the 13-byte reply registers the conn
+	// for charID 150001 (the PC, HP 1000 at new_1-1 (53,111), save point (1,1)).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// Re-seed the PC at 1 HP so a single mob swing is lethal (the conn stays
+	// registered: RemoveEntity does not touch ms.conns). The save point is
+	// preserved so respawn relocates to (1,1), not the death cell.
+	if err := env.world.RemoveEntity(150001); err != nil {
+		t.Fatalf("RemoveEntity: %v", err)
+	}
+	if err := env.world.AddEntity(worlddomain.Entity{
+		ID: 150001, Type: worlddomain.EntityTypePC, Account: 2000001, Map: "new_1-1",
+		Pos: worlddomain.Position{X: 53, Y: 111}, HP: 1, MaxHP: 1000,
+		SP: 100, MaxSP: 100, Speed: 150,
+		SaveMap: "new_1-1", SavePos: worlddomain.Position{X: 1, Y: 1},
+		// Known base stats + spendable points so the stat-allocation verb works
+		// without a kill (Str 5, 48 points).
+		Str: 5, Agi: 5, Vit: 5, Int: 5, Dex: 5, Luk: 5, StatusPoint: 48,
+	}); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+
+	// Spawn the aggressive mob one cell east (Chebyshev dist 1 ≤ AttackRange 2).
+	const mobGID = 160000
+	if err := env.spawn.SpawnMob(mobGID, 8001, "new_1-1", worlddomain.Position{X: 54, Y: 111}, "AggroMob", 1000, 1000, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+	drainMobAppearFrame(t, conn)
+
+	// One cadence interval (2 s) ⇒ one lethal swing: HP 1 → 0, died=true.
+	env.mobAI.MonsterTick(t.Context(), 2*time.Second)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+
+	// ZC_NOTIFY_ACT (34 B): the killing blow, srcID=mob, targetID=PC.
+	act := make([]byte, (ropacket.NotifyActResponse{}).Size())
+	if _, err := io.ReadFull(conn, act); err != nil {
+		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT {
+		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT)
+	}
+	if got := binary.LittleEndian.Uint32(act[2:6]); got != mobGID {
+		t.Fatalf("ZC_NOTIFY_ACT srcID = %d, want mob GID %d", got, mobGID)
+	}
+	if got := binary.LittleEndian.Uint32(act[6:10]); got != 150001 {
+		t.Fatalf("ZC_NOTIFY_ACT targetID = %d, want player GID 150001", got)
+	}
+
+	// ZC_PAR_CHANGE HP+SP (16 B): HP dropped to 0 on the killing blow.
+	par := make([]byte, 16)
+	if _, err := io.ReadFull(conn, par); err != nil {
+		t.Fatalf("read ZC_PAR_CHANGE after kill: %v", err)
+	}
+	if hpAfter := int32(binary.LittleEndian.Uint32(par[4:8])); hpAfter != 0 {
+		t.Fatalf("player HP after kill = %d, want 0", hpAfter)
+	}
+
+	// ZC_NOTIFY_VANISH (7 B): VanishDead at the death cell, broadcast to the
+	// dying player (exclude 0) so it sees its own death.
+	van := make([]byte, (ropacket.NotifyVanishResponse{}).Size())
+	if _, err := io.ReadFull(conn, van); err != nil {
+		t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(van[0:2]); got != ropacket.HeaderZCNOTIFYVANISH {
+		t.Fatalf("ZC_NOTIFY_VANISH header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYVANISH)
+	}
+	if got := binary.LittleEndian.Uint32(van[2:6]); got != 150001 {
+		t.Fatalf("ZC_NOTIFY_VANISH GID = %d, want player GID 150001", got)
+	}
+	if van[6] != ropacket.VanishDead {
+		t.Fatalf("ZC_NOTIFY_VANISH type = %d, want VanishDead (%d)", van[6], ropacket.VanishDead)
+	}
+
+	// Respawn deterministically (the ArmRespawn timer runs the same RespawnPlayer
+	// after playerRespawnDelay). OnRespawn fires the save-point appear burst.
+	if err := env.world.RespawnPlayer(150001); err != nil {
+		t.Fatalf("RespawnPlayer: %v", err)
+	}
+
+	// ZC_PAR_CHANGE HP+SP (16 B): vitals restored to full (respawnRevivePct=100).
+	par2 := make([]byte, 16)
+	if _, err := io.ReadFull(conn, par2); err != nil {
+		t.Fatalf("read ZC_PAR_CHANGE after respawn: %v", err)
+	}
+	if hpRestored := int32(binary.LittleEndian.Uint32(par2[4:8])); hpRestored != 1000 {
+		t.Fatalf("player HP after respawn = %d, want 1000 (full)", hpRestored)
+	}
+
+	// ZC_ACCEPT_ENTER (13 B): the player's own client relocates to the save point.
+	enter := awaitAcceptEnter(t, conn)
+	if got := binary.LittleEndian.Uint16(enter[0:2]); got != ropacket.HeaderZCACCEPTENTER {
+		t.Fatalf("ZC_ACCEPT_ENTER header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	}
+	// posDir[3] at [6:9] packs (x,y,dir); decode to confirm the save cell (1,1).
+	x := int16((uint16(enter[6]) << 2) | (uint16(enter[7]) >> 6))      //nolint:gosec // G115: wire bit layout; coords are non-negative.
+	y := int16((uint16(enter[7]&0x3f) << 4) | (uint16(enter[8]) >> 4)) //nolint:gosec // G115: wire bit layout; coords are non-negative.
+	if x != 1 || y != 1 {
+		t.Fatalf("relocate cell = (%d,%d), want save point (1,1)", x, y)
+	}
+
+	// The world is the source of truth: the PC is at its save point, alive.
+	pc, err := env.world.Get(150001)
+	if err != nil {
+		t.Fatalf("Get respawned PC: %v", err)
+	}
+	if pc.HP != 1000 {
+		t.Errorf("respawned PC HP = %d, want 1000", pc.HP)
+	}
+	if pc.Pos != (worlddomain.Position{X: 1, Y: 1}) {
+		t.Errorf("respawned PC pos = %+v, want {1,1}", pc.Pos)
+	}
+}
+
+// TestMap_Restart_Respawn drives the player-driven respawn button (CZ_RESTART
+// type=0): a dead PC (HP 0) requests respawn and is revived at its save point
+// with vitals restored and the client relocated (ZC_PAR_CHANGE + ZC_ACCEPT_ENTER).
+// No ZC_RESTART_ACK is sent — that packet is char-select-only.
+func TestMap_Restart_Respawn(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+
+	// CZ_ENTER → ZC_ACCEPT_ENTER (drain 13 B so the reactor registers the conn).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// Re-seed the PC dead (HP 0) at the death cell; the save point stays (1,1) so
+	// respawn is observable. The conn stays registered (RemoveEntity never touches it).
+	if err := env.world.RemoveEntity(150001); err != nil {
+		t.Fatalf("RemoveEntity: %v", err)
+	}
+	if err := env.world.AddEntity(worlddomain.Entity{
+		ID: 150001, Type: worlddomain.EntityTypePC, Account: 2000001, Map: "new_1-1",
+		Pos: worlddomain.Position{X: 53, Y: 111}, Sex: 1, Job: 0, Level: 1,
+		Name: "Hero", HP: 0, MaxHP: 1000, SP: 0, MaxSP: 100, Speed: 150,
+		SaveMap: "new_1-1", SavePos: worlddomain.Position{X: 1, Y: 1},
+		// Known base stats + spendable points so the stat-allocation verb works
+		// without a kill (Str 5, 48 points).
+		Str: 5, Agi: 5, Vit: 5, Int: 5, Dex: 5, Luk: 5, StatusPoint: 48,
+	}); err != nil {
+		t.Fatalf("AddEntity dead: %v", err)
+	}
+
+	// CZ_RESTART type=0 (respawn): cmd 0x00b2 + type byte.
+	restart := make([]byte, 3)
+	binary.LittleEndian.PutUint16(restart[0:], ropacket.HeaderCZRESTART)
+	restart[2] = 0 // czRestartRespawn
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write(restart); err != nil {
+		t.Fatalf("send CZ_RESTART respawn: %v", err)
+	}
+
+	// ZC_PAR_CHANGE HP+SP (16 B): vitals restored to full (0 → 1000).
+	par := make([]byte, 16)
+	if _, err := io.ReadFull(conn, par); err != nil {
+		t.Fatalf("read ZC_PAR_CHANGE after restart-respawn: %v", err)
+	}
+	if hp := int32(binary.LittleEndian.Uint32(par[4:8])); hp != 1000 {
+		t.Fatalf("player HP after restart-respawn = %d, want 1000", hp)
+	}
+
+	// ZC_ACCEPT_ENTER (13 B): the client relocates to the save point (1,1).
+	enter := awaitAcceptEnter(t, conn)
+	if got := binary.LittleEndian.Uint16(enter[0:2]); got != ropacket.HeaderZCACCEPTENTER {
+		t.Fatalf("ZC_ACCEPT_ENTER header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	}
+	x := int16((uint16(enter[6]) << 2) | (uint16(enter[7]) >> 6))      //nolint:gosec // G115: wire bit layout; coords are non-negative.
+	y := int16((uint16(enter[7]&0x3f) << 4) | (uint16(enter[8]) >> 4)) //nolint:gosec // G115: wire bit layout; coords are non-negative.
+	if x != 1 || y != 1 {
+		t.Fatalf("relocate cell = (%d,%d), want save point (1,1)", x, y)
+	}
+
+	// No ZC_RESTART_ACK: the conn stays alive and readable without a pending frame.
+	conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	if _, err := conn.Read(make([]byte, 3)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("after restart-respawn, read = %v, want deadline-exceeded (no RestartAck, conn alive)", err)
+	}
+	conn.SetReadDeadline(time.Time{})
+
+	// The world is the source of truth: the PC is alive at its save point.
+	pc, err := env.world.Get(150001)
+	if err != nil {
+		t.Fatalf("Get respawned PC: %v", err)
+	}
+	if pc.HP != 1000 {
+		t.Errorf("respawned PC HP = %d, want 1000", pc.HP)
+	}
+	if pc.Pos != (worlddomain.Position{X: 1, Y: 1}) {
+		t.Errorf("respawned PC pos = %+v, want {1,1}", pc.Pos)
+	}
+}
+
+// TestMap_Restart_ReturnToCharSelect drives the graceful return-to-char-select
+// (CZ_RESTART type=1): the live PC is persisted + despawned (LeaveMap), the server
+// sends ZC_RESTART_ACK type=1 so the client leaves for the char-server, and the
+// conn closes. OnClose re-enters LeaveMap — a clean no-op (idempotent).
+func TestMap_Restart_ReturnToCharSelect(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+
+	// CZ_ENTER → ZC_ACCEPT_ENTER (drain 13 B so the reactor registers the conn).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// CZ_RESTART type=1 (return to char-select).
+	restart := make([]byte, 3)
+	binary.LittleEndian.PutUint16(restart[0:], ropacket.HeaderCZRESTART)
+	restart[2] = 1 // czRestartReturnToSelect
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write(restart); err != nil {
+		t.Fatalf("send CZ_RESTART return: %v", err)
+	}
+
+	// ZC_RESTART_ACK (3 B): type=1 (leave-for-char-select).
+	ack := make([]byte, 3)
+	if _, err := io.ReadFull(conn, ack); err != nil {
+		t.Fatalf("read ZC_RESTART_ACK: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCRESTARTACK {
+		t.Fatalf("ZC_RESTART_ACK header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCRESTARTACK)
+	}
+	if ack[2] != 1 {
+		t.Fatalf("ZC_RESTART_ACK type = %d, want 1 (leave-for-char-select)", ack[2])
+	}
+
+	// The conn is closed server-side: a follow-up read returns EOF within a deadline.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("follow-up read succeeded, want EOF (conn should be closed)")
+	}
+	conn.SetReadDeadline(time.Time{})
+
+	// LeaveMap despawned the PC: it is gone from the in-memory registry.
+	if _, err := env.world.Get(150001); !errors.Is(err, worlddomain.ErrEntityNotFound) {
+		t.Errorf("after restart-return, Get err = %v, want ErrEntityNotFound", err)
+	}
+
+	// OnClose re-enters LeaveMap on the already-removed entity: a clean no-op.
+	if err := env.world.LeaveMap(t.Context(), 150001); err != nil {
+		t.Errorf("second LeaveMap (OnClose path) = %v, want nil (idempotent)", err)
+	}
+}
+
 // TestMap_Dispatch_AttackMob exercises the combat slice of the playable surface:
 // CZ_ACTION_REQUEST action=0x07 resolves melee damage against a spawned mob via
 // CombatService and echoes ZC_ACTION_RESPONSE with the mob's GID as target.
@@ -444,15 +1228,14 @@ func TestMap_Dispatch_AttackMob(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Spawn a mob in the same map; its GID is the attack target.
 	const mobGID = 160000
 	if err := spawn.SpawnMob(mobGID, 1002, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "Poring", 50, 50, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	// CZ_ACTION_REQUEST action=0x07 (attack) targeting the mob.
 	req := make([]byte, 7)
@@ -475,6 +1258,134 @@ func TestMap_Dispatch_AttackMob(t *testing.T) {
 	}
 }
 
+// TestMap_KillMobGrantsEXP proves the mob-kill reward flow end-to-end: when a
+// player kills a mob, the mob's mob_db BaseExp/JobExp accrue to the player
+// (WorldService.GrantExp via SpawnService.MobExp in handleMobDeath), the killer's
+// client receives two ZC_LONGLONGPAR_CHANGE frames (SP_BASEEXP then SP_JOBEXP)
+// so its EXP bar rises, and the accrued EXP persists across a LeaveMap/reload
+// (the disconnect path). The mob is spawned at 1 HP on the player's tile; a
+// connecting melee hit floors at 1 damage (combat kernel's battle_min_damage),
+// so a single CZ_ACTION_REQUEST kills it deterministically — no combat RNG (the
+// harness CombatService has no Dice → every hit connects). Leveling (threshold
+// crossing, stat recalc) is out of scope: only EXP accrual + notify + persist.
+func TestMap_KillMobGrantsEXP(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// Spawn a 1-HP passive mob on the player's tile. A connecting hit floors at 1
+	// damage, so the first attack kills it deterministically. mob 8002 carries the
+	// known EXP the kill grants.
+	// The harness wires leveling (Novice curve: 1→2 costs 9, 2→3 costs 16), so
+	// the 150-EXP kill levels the char twice and consumes 25 — the granted EXP
+	// the client sees and the world holds is the NET 125, sent after the
+	// level-up consumption (GrantExp fires OnExpChange post-leveling).
+	const (
+		mobGID  = 160020
+		mobClas = 8002
+		baseExp = uint64(125) // 150 granted − 25 consumed by 2 level-ups
+		jobExp  = uint64(75)
+		expRaw  = uint64(150)
+		_       = expRaw
+	)
+	if err := env.spawn.SpawnMob(mobGID, mobClas, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "ExpMob", 1, 1, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+	drainMobAppearFrame(t, conn)
+
+	// CZ_ACTION_REQUEST action=0x07 (attack) targeting the mob.
+	req := make([]byte, 7)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint32(req[2:], mobGID)
+	req[6] = 0x07
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send CZ_ACTION_REQUEST: %v", err)
+	}
+
+	// ZC_ACTION_RESPONSE (11B): the attack echo.
+	if _, err := io.ReadFull(conn, make([]byte, 11)); err != nil {
+		t.Fatalf("read ZC_ACTION_RESPONSE: %v", err)
+	}
+	// ZC_NOTIFY_VANISH (7B): the dead mob leaves the map.
+	if _, err := io.ReadFull(conn, make([]byte, 7)); err != nil {
+		t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
+	}
+	// With leveling wired, the level-up ZC_PAR_CHANGE burst (6×8B: level,
+	// maxima, healed vitals, status points) lands FIRST — GrantExp consumes the
+	// thresholds before reporting the net EXP — followed by the two
+	// ZC_LONGLONGPAR_CHANGE frames (12B each): SP_BASEEXP, SP_JOBEXP.
+	const parFrame = 8
+	burst := make([]byte, 6*parFrame)
+	if _, err := io.ReadFull(conn, burst); err != nil {
+		t.Fatalf("read level-up burst: %v", err)
+	}
+	if varID := binary.LittleEndian.Uint16(burst[2:4]); varID != ropacket.SPBaseLevel {
+		t.Errorf("level-up frame0 varID = %d, want SPBaseLevel", varID)
+	}
+	if varID := binary.LittleEndian.Uint16(burst[5*parFrame+2 : 5*parFrame+4]); varID != ropacket.SPStatusPoint {
+		t.Errorf("level-up frame5 varID = %d, want SPStatusPoint", varID)
+	}
+	exp := make([]byte, 24)
+	if _, err := io.ReadFull(conn, exp); err != nil {
+		t.Fatalf("read EXP frames: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(exp[0:2]); got != ropacket.HeaderZCLONGLONGPARCHANGE {
+		t.Errorf("base-exp frame header = 0x%04x, want ZC_LONGLONGPAR_CHANGE (0x0acb)", got)
+	}
+	if got := binary.LittleEndian.Uint16(exp[2:4]); got != ropacket.SPBaseExp {
+		t.Errorf("base-exp varID = %d, want SPBaseExp (%d)", got, ropacket.SPBaseExp)
+	}
+	if got := binary.LittleEndian.Uint64(exp[4:12]); got != baseExp {
+		t.Errorf("base-exp amount = %d, want %d", got, baseExp)
+	}
+	if got := binary.LittleEndian.Uint16(exp[12:14]); got != ropacket.HeaderZCLONGLONGPARCHANGE {
+		t.Errorf("job-exp frame header = 0x%04x, want ZC_LONGLONGPAR_CHANGE (0x0acb)", got)
+	}
+	if got := binary.LittleEndian.Uint16(exp[14:16]); got != ropacket.SPJobExp {
+		t.Errorf("job-exp varID = %d, want SPJobExp (%d)", got, ropacket.SPJobExp)
+	}
+	if got := binary.LittleEndian.Uint64(exp[16:24]); got != jobExp {
+		t.Errorf("job-exp amount = %d, want %d", got, jobExp)
+	}
+
+	// EXP accrued in the world registry.
+	pc, err := env.world.Get(150001)
+	if err != nil {
+		t.Fatalf("get killer: %v", err)
+	}
+	if pc.BaseExp != baseExp {
+		t.Errorf("killer BaseExp = %d, want %d", pc.BaseExp, baseExp)
+	}
+	if pc.JobExp != jobExp {
+		t.Errorf("killer JobExp = %d, want %d", pc.JobExp, jobExp)
+	}
+
+	// Persist proof: LeaveMap (disconnect path) writes base_exp/job_exp via
+	// SaveState; re-entering reloads via LoadEnterState. The accrued EXP survives.
+	if err := env.world.LeaveMap(t.Context(), 150001); err != nil {
+		t.Fatalf("leave map: %v", err)
+	}
+	reloaded, err := env.world.EnterMap(t.Context(), 150001)
+	if err != nil {
+		t.Fatalf("re-enter map: %v", err)
+	}
+	if reloaded.BaseExp != baseExp {
+		t.Errorf("reloaded BaseExp = %d, want %d (not persisted)", reloaded.BaseExp, baseExp)
+	}
+	if reloaded.JobExp != jobExp {
+		t.Errorf("reloaded JobExp = %d, want %d (not persisted)", reloaded.JobExp, jobExp)
+	}
+}
+
 // TestMap_Dispatch_CastAttackSkill exercises CZ_USE_SKILL2 (0x0438 @ 20250604):
 // the player casts an enemy-targeted attack skill onto a mob. The cast is
 // validated (skill known, level/range/SP), SP is spent, and the resolved
@@ -491,15 +1402,14 @@ func TestMap_Dispatch_CastAttackSkill(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil { // drain accept-enter
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Spawn a mob on the player's tile (Chebyshev distance 0 <= skill range 1).
 	const mobGID = 160010
 	if err := spawn.SpawnMob(mobGID, 1002, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "Poring", 50, 50, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	// CZ_USE_SKILL2 (0x0438, 10B): cmd + int16 skillLv + uint16 skillID + uint32 targetID.
 	const skillID = 5
@@ -585,9 +1495,7 @@ func TestMap_Dispatch_EquipIncreasesDamage(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil { // drain accept-enter
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// High-HP mob on the player's tile so it survives both hits (no death burst
 	// interleaving the reads).
@@ -596,6 +1504,7 @@ func TestMap_Dispatch_EquipIncreasesDamage(t *testing.T) {
 		worlddomain.Position{X: 53, Y: 111}, "Poring", 200, 200, 0); err != nil {
 		t.Fatalf("spawn mob: %v", err)
 	}
+	drainMobAppearFrame(t, conn)
 
 	// 1. Bare-handed hit.
 	bareDmg := castSkillHit(t, conn, mobGID)
@@ -603,7 +1512,7 @@ func TestMap_Dispatch_EquipIncreasesDamage(t *testing.T) {
 	// 2. Equip the Knife: CZ_REQ_WEAR_EQUIP_V5 (0x0998, index 1, right hand).
 	wear := make([]byte, 8)
 	binary.LittleEndian.PutUint16(wear[0:], ropacket.HeaderCZREQWEAREQUIPV5)
-	binary.LittleEndian.PutUint16(wear[2:], 1)               // inventory index
+	binary.LittleEndian.PutUint16(wear[2:], 2)               // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint32(wear[4:], equip.HandRight) // EQP position
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := conn.Write(wear); err != nil {
@@ -631,6 +1540,117 @@ func TestMap_Dispatch_EquipIncreasesDamage(t *testing.T) {
 	}
 }
 
+// TestMap_Dispatch_UseItemHeals proves the usable-item verb end-to-end through
+// the real gnet reactor: a player drinks a Red Potion (itemheal 45,0), the server
+// consumes one unit, applies the flat heal, and emits the client-visible result.
+// The world tick loop is idle in tests (no StartTick), so the only frames on the
+// wire are the ones from this use. AddVitals runs the NewMapServer-wired
+// OnStatChange hook synchronously inside the use, so ZC_PAR_CHANGE (HP then SP)
+// arrives before ZC_USE_ITEM_ACK2; the handler emits only the ack to avoid a
+// duplicate stat-change frame. The single-unit stack must then be consumed.
+func TestMap_Dispatch_UseItemHeals(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	// 1. CZ_ENTER -> ZC_ACCEPT_ENTER (drain 13 bytes so the reactor has the conn).
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// 2. Seed one Red Potion (id 501) at inventory slot 1 and drop the player to
+	//    HP 500/1000 so the +45 heal lands at 545 (not clamped). RemoveEntity does
+	//    not touch ms.conns, so the live wire stays registered.
+	if _, err := env.itemRepo.Add(t.Context(), 150001, 501, 1); err != nil {
+		t.Fatalf("seed red potion: %v", err)
+	}
+	if err := env.world.RemoveEntity(150001); err != nil {
+		t.Fatalf("RemoveEntity: %v", err)
+	}
+	if err := env.world.AddEntity(worlddomain.Entity{
+		ID: 150001, Type: worlddomain.EntityTypePC, Map: "new_1-1",
+		Pos: worlddomain.Position{X: 53, Y: 111}, HP: 500, MaxHP: 1000,
+		SP: 100, MaxSP: 100, Speed: 150,
+	}); err != nil {
+		t.Fatalf("AddEntity at HP 500: %v", err)
+	}
+
+	// 3. Send CZ_USE_ITEM2 (0x0439, 8B): cmd + inventory index 1 + AID.
+	useReq := make([]byte, 8)
+	binary.LittleEndian.PutUint16(useReq[0:], ropacket.HeaderCZUSEITEM2)
+	binary.LittleEndian.PutUint16(useReq[2:], 2)       // client index (server row 0 + 2)
+	binary.LittleEndian.PutUint32(useReq[4:], 2000001) // AID
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write(useReq); err != nil {
+		t.Fatalf("send CZ_USE_ITEM2: %v", err)
+	}
+
+	// 4. Expected wire order: ZC_PAR_CHANGE HP (8B), ZC_PAR_CHANGE SP (8B), then
+	//    ZC_USE_ITEM_ACK2 (13B). PAR_CHANGE fires first because AddVitals runs the
+	//    OnStatChange hook synchronously inside the use before the ack is emitted.
+	out := make([]byte, 29)
+	if _, err := io.ReadFull(conn, out); err != nil {
+		t.Fatalf("read use-item response: %v", err)
+	}
+	// PAR_CHANGE HP: 500 + 45 = 545.
+	if got := binary.LittleEndian.Uint16(out[0:2]); got != ropacket.HeaderZCPARCHANGE {
+		t.Fatalf("frame 0 header = 0x%04x, want ZC_PAR_CHANGE", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[2:4]); got != ropacket.SPHP {
+		t.Fatalf("frame 0 varID = %d, want SPHP (%d)", got, ropacket.SPHP)
+	}
+	if got := binary.LittleEndian.Uint32(out[4:8]); got != 545 {
+		t.Fatalf("HP after potion = %d, want 545", got)
+	}
+	// PAR_CHANGE SP: the potion heals 0 SP, so SP echoes its unchanged value (100).
+	if got := binary.LittleEndian.Uint16(out[8:10]); got != ropacket.HeaderZCPARCHANGE {
+		t.Fatalf("frame 1 header = 0x%04x, want ZC_PAR_CHANGE", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[10:12]); got != ropacket.SPSP {
+		t.Fatalf("frame 1 varID = %d, want SPSP (%d)", got, ropacket.SPSP)
+	}
+	if got := binary.LittleEndian.Uint32(out[12:16]); got != 100 {
+		t.Fatalf("SP after potion = %d, want 100 (potion heals 0 SP)", got)
+	}
+	// ZC_USE_ITEM_ACK2: index=2 (the client index we sent, echoed back verbatim
+	// — rAthena emits client_index(serverRow), clif.cpp:4484), itemID=501,
+	// AID=2000001, amount=0, result=1 (success).
+	if got := binary.LittleEndian.Uint16(out[16:18]); got != ropacket.HeaderZCUSEITEMACK2 {
+		t.Fatalf("ack header = 0x%04x, want ZC_USE_ITEM_ACK2 (0x01c8)", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[18:20]); got != 2 {
+		t.Fatalf("ack index = %d, want 2 (the client index we sent, echoed)", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[20:22]); got != 501 {
+		t.Fatalf("ack itemID = %d, want 501", got)
+	}
+	if got := binary.LittleEndian.Uint32(out[22:26]); got != 2000001 {
+		t.Fatalf("ack AID = %d, want 2000001", got)
+	}
+	if got := binary.LittleEndian.Uint16(out[26:28]); got != 0 {
+		t.Fatalf("ack amount = %d, want 0 (stack consumed)", got)
+	}
+	if got := out[28]; got != 1 {
+		t.Fatalf("ack result = %d, want 1 (success)", got)
+	}
+
+	// 5. The single-unit stack must be deleted from the inventory.
+	remaining, err := env.itemRepo.LoadByChar(t.Context(), 0, 150001)
+	if err != nil {
+		t.Fatalf("load inventory after use: %v", err)
+	}
+	for _, it := range remaining {
+		if it.NameID == 501 {
+			t.Fatalf("red potion not consumed: %+v", it)
+		}
+	}
+}
+
 // TestMap_Dispatch_CastGroundSkill exercises CZ_USE_SKILL_TOPOS (0x0AF4 @
 // 20250604): the player casts a ground-target skill onto a tile. The handler
 // must emit ZC_NOTIFY_GROUNDSKILL (0x0117) placing the cast visual on the tile
@@ -649,9 +1669,7 @@ func TestMap_Dispatch_CastGroundSkill(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil { // drain accept-enter
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// CZ_USE_SKILL_TOPOS (0x0AF4, 11B): cmd + int16 skillLv + uint16 skillID +
 	// uint16 xPos + uint16 yPos + uint8 moreinfo (server-ignored).
@@ -717,6 +1735,13 @@ func TestMap_Dispatch_CastGroundSkill(t *testing.T) {
 // TestMap_Dispatch_PickupFloorItem exercises the loot slice of the playable
 // surface: CZ_ITEM_PICKUP (0x0362 @ 20250604) resolves a dropped floor item,
 // moves it into the player's inventory, and replies ZC_ITEM_PICKUP_ACK (0x0b41).
+//
+// It picks up twice on purpose. The ack's index field names the slot the item
+// landed in (rAthena writes packet.index = client_index(n) for the row
+// pc_additem chose, clif.cpp:2897), and the first grant always goes to server
+// row 0 — so a single pickup cannot distinguish a tracked slot from a constant.
+// The second grant lands in row 1, whose client index is 3: a handler that left
+// Index at its zero value reports 0 there, and the assert reads that field.
 func TestMap_Dispatch_PickupFloorItem(t *testing.T) {
 	port := freePort(t)
 	sessions := charinfra.NewMemorySessionStore()
@@ -728,27 +1753,46 @@ func TestMap_Dispatch_PickupFloorItem(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
+	awaitAcceptEnter(t, conn)
+
+	// pickup drops a floor item of nameID and returns the ZC_ITEM_PICKUP_ACK
+	// frame the server replied with.
+	pickup := func(nameID uint32) []byte {
+		t.Helper()
+		fi := spawn.DropItem(nameID, 1, "new_1-1", worlddomain.Position{X: 53, Y: 111}, 0)
+		// CZ_ITEM_PICKUP (0x0362, 6B), targeting the dropped GroundID.
+		req := make([]byte, 6)
+		binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZITEMTAKE0362)
+		binary.LittleEndian.PutUint32(req[2:], fi.GroundID)
+		if _, err := conn.Write(req); err != nil {
+			t.Fatalf("send CZ_ITEM_PICKUP: %v", err)
+		}
+		cmd, frame := nextServerFrame(t, conn, 3*time.Second)
+		if cmd != ropacket.HeaderZCItemPickupAck {
+			t.Fatalf("pickup-ack opcode = 0x%04x, want ZC_ITEM_PICKUP_ACK (0x%04x)", cmd, ropacket.HeaderZCItemPickupAck)
+		}
+		if len(frame) != 70 {
+			t.Fatalf("pickup-ack length = %d, want 70", len(frame))
+		}
+		return frame
 	}
 
-	// Drop a floor item; the returned GroundID is what the pickup targets.
-	fi := spawn.DropItem(512, 1, "new_1-1", worlddomain.Position{X: 53, Y: 111}, 0)
-
-	// CZ_ITEM_PICKUP (0x0362, 6B), targeting the dropped GroundID.
-	req := make([]byte, 6)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZITEMTAKE0362)
-	binary.LittleEndian.PutUint32(req[2:], fi.GroundID)
-	if _, err := conn.Write(req); err != nil {
-		t.Fatalf("send CZ_ITEM_PICKUP: %v", err)
+	first := pickup(512)
+	if got := binary.LittleEndian.Uint16(first[2:4]); got != 2 {
+		t.Fatalf("first pickup-ack index = %d, want 2 (server row 0 → client index 2)", got)
+	}
+	if got := binary.LittleEndian.Uint32(first[6:10]); got != 512 {
+		t.Fatalf("first pickup-ack nameid = %d, want 512", got)
 	}
 
-	ack := make([]byte, 70) // sizeZCItemPickupAck
-	if _, err := io.ReadFull(conn, ack); err != nil {
-		t.Fatalf("read ZC_ITEM_PICKUP_ACK: %v", err)
+	// The bag now holds one row, so the second grant lands in server row 1 →
+	// client index 3. This is the assert a hardcoded zero cannot pass.
+	second := pickup(513)
+	if got := binary.LittleEndian.Uint16(second[2:4]); got != 3 {
+		t.Fatalf("second pickup-ack index = %d, want 3 (server row 1 → client index 3) — the ack is not reporting the slot the item landed in", got)
 	}
-	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCItemPickupAck {
-		t.Fatalf("pickup-ack header = 0x%04x, want ZC_ITEM_PICKUP_ACK (0x%04x)", got, ropacket.HeaderZCItemPickupAck)
+	if got := binary.LittleEndian.Uint32(second[6:10]); got != 513 {
+		t.Fatalf("second pickup-ack nameid = %d, want 513", got)
 	}
 }
 
@@ -770,9 +1814,7 @@ func TestMap_Dispatch_DropItem(t *testing.T) {
 
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// Seed the bag via the pickup path: drop a floor item server-side, then
 	// CZ_ITEM_PICKUP it into the player's inventory (slot 1).
@@ -790,7 +1832,7 @@ func TestMap_Dispatch_DropItem(t *testing.T) {
 	// CZ_ITEM_DROP (0x0363, 6B): drop 1 unit from inventory slot 1.
 	dropReq := make([]byte, 6)
 	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
-	binary.LittleEndian.PutUint16(dropReq[2:], 1) // inventory index (1-based)
+	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint16(dropReq[4:], 1) // amount
 	if _, err := conn.Write(dropReq); err != nil {
 		t.Fatalf("send CZ_ITEM_DROP: %v", err)
@@ -804,8 +1846,8 @@ func TestMap_Dispatch_DropItem(t *testing.T) {
 	if got := binary.LittleEndian.Uint16(throwAck[0:2]); got != ropacket.HeaderZCItemThrowAck {
 		t.Fatalf("throw-ack header = 0x%04x, want ZC_ITEM_THROW_ACK (0x%04x)", got, ropacket.HeaderZCItemThrowAck)
 	}
-	if got := binary.LittleEndian.Uint16(throwAck[2:4]); got != 1 {
-		t.Fatalf("throw-ack index = %d, want 1", got)
+	if got := binary.LittleEndian.Uint16(throwAck[2:4]); got != 2 {
+		t.Fatalf("throw-ack index = %d, want 2 (the client index we sent, echoed)", got)
 	}
 	if got := binary.LittleEndian.Uint16(throwAck[4:6]); got != 1 {
 		t.Fatalf("throw-ack count = %d, want 1", got)
@@ -851,15 +1893,13 @@ func TestMap_Dispatch_DropOutOfRangeKeepsConnection(t *testing.T) {
 	// 1. CZ_ENTER → ZC_ACCEPT_ENTER (drain the 13-byte response).
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// 2. CZ_ITEM_DROP (0x0363, 6B) against slot 1, which the player does not own
 	//    (no items seeded) → handler logs + returns; no reply, connection kept.
 	dropReq := make([]byte, 6)
 	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
-	binary.LittleEndian.PutUint16(dropReq[2:], 1) // inventory index
+	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint16(dropReq[4:], 1) // amount
 	if _, err := conn.Write(dropReq); err != nil {
 		t.Fatalf("send CZ_ITEM_DROP: %v", err)
@@ -906,9 +1946,7 @@ func TestMap_Dispatch_InputEditDlgStrVariableFrameKeepsConnection(t *testing.T) 
 	// 1. CZ_ENTER → drain the 13-byte ZC_ACCEPT_ENTER.
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, make([]byte, 13)); err != nil {
-		t.Fatalf("drain accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn)
 
 	// 2. CZ_INPUT_EDITDLGSTR (0x01d5): int16 cmd | uint16 pktLen | uint32 NpcID |
 	//    char[] value+NUL. A multi-byte value makes the frame longer than the
@@ -950,9 +1988,10 @@ func TestMap_Dispatch_InputEditDlgStrVariableFrameKeepsConnection(t *testing.T) 
 // TestMap_Dispatch_ShopBuyRoundTrip exercises the NPC shop commerce verb (#15):
 // CZ_ACK_SELECT_DEALTYPE (Buy) opens the shop and the server replies with
 // ZC_PC_PURCHASE_ITEMLIST carrying the catalog; then CZ_PC_PURCHASE_ITEMLIST buys
-// one Red Potion and the server replies ZC_PC_PURCHASE_RESULT(success). The
-// transaction is real — zeny is deducted (1000 → 950) and the item lands in
-// inventory — proving the full buy round-trip through ShopService.
+// one Red Potion and the server re-syncs the bag grid with ZC_ITEM_PICKUP_ACK
+// before it replies ZC_PC_PURCHASE_RESULT(success). The transaction is real —
+// zeny is deducted (1000 → 950) and the item lands in inventory — proving the
+// full buy round-trip through ShopService.
 func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	port := freePort(t)
 	sessions := charinfra.NewMemorySessionStore()
@@ -978,10 +2017,7 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	// 1. CZ_ENTER → ZC_ACCEPT_ENTER (13B): drain the full reply.
 	sendCZEnter(t, conn, 2000001, gid, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	enterReply := make([]byte, 13)
-	if _, err := io.ReadFull(conn, enterReply); err != nil {
-		t.Fatalf("read accept-enter: %v", err)
-	}
+	enterReply := awaitAcceptEnter(t, conn)
 	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
 		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
 	}
@@ -1027,15 +2063,44 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	if _, err := conn.Write(pur); err != nil {
 		t.Fatalf("send CZ_PC_PURCHASE_ITEMLIST: %v", err)
 	}
-	res := make([]byte, 3) // ZC_PC_PURCHASE_RESULT: cmd + result byte
-	if _, err := io.ReadFull(conn, res); err != nil {
-		t.Fatalf("read purchase-result: %v", err)
+
+	// 3a. The grant re-syncs the bag grid FIRST: ZC_ITEM_PICKUP_ACK naming the
+	// slot the potion landed in. The bag was empty, so the granted row is server
+	// row 0 → client index 2. Read it through the framing authority rather than a
+	// bare 70-byte read: the frame is fixed-length, so bytes [2:4] are the index
+	// field, not a length slot, and a reader that mistook them for one would
+	// desync here. rAthena's order is clif_additem per grant (clif.cpp:2836-2901)
+	// and only then the result byte.
+	addCmd, addFrame := nextServerFrame(t, conn, 3*time.Second)
+	if addCmd != ropacket.HeaderZCItemPickupAck {
+		t.Fatalf("buy frame 1 opcode = 0x%04x, want 0x%04x (ZC_ITEM_PICKUP_ACK) — the grant did not re-sync the bag grid", addCmd, ropacket.HeaderZCItemPickupAck)
 	}
-	if got := binary.LittleEndian.Uint16(res[0:2]); got != ropacket.HeaderZCPCPURCHASERESULT {
-		t.Fatalf("purchase-result header = 0x%04x, want ZC_PC_PURCHASE_RESULT (0x%04x)", got, ropacket.HeaderZCPCPURCHASERESULT)
+	if len(addFrame) != 70 {
+		t.Fatalf("buy frame 1 length = %d, want 70", len(addFrame))
 	}
-	if res[2] != 0 {
-		t.Fatalf("purchase-result = %d, want 0 (success)", res[2])
+	if got := binary.LittleEndian.Uint16(addFrame[2:4]); got != 2 {
+		t.Fatalf("buy frame 1 index = %d, want 2 (server row 0 → client index 2)", got)
+	}
+	if got := binary.LittleEndian.Uint16(addFrame[4:6]); got != 1 {
+		t.Fatalf("buy frame 1 count = %d, want 1", got)
+	}
+	if got := binary.LittleEndian.Uint32(addFrame[6:10]); got != 501 {
+		t.Fatalf("buy frame 1 nameid = %d, want 501 (Red Potion)", got)
+	}
+	if addFrame[33] != 0 {
+		t.Fatalf("buy frame 1 result = %d, want 0 (success)", addFrame[33])
+	}
+
+	// 3b. ...and only then the purchase result byte.
+	resCmd, resFrame := nextServerFrame(t, conn, 3*time.Second)
+	if resCmd != ropacket.HeaderZCPCPURCHASERESULT {
+		t.Fatalf("buy frame 2 opcode = 0x%04x, want 0x%04x (ZC_PC_PURCHASE_RESULT)", resCmd, ropacket.HeaderZCPCPURCHASERESULT)
+	}
+	if len(resFrame) != 3 {
+		t.Fatalf("buy frame 2 length = %d, want 3", len(resFrame))
+	}
+	if resFrame[2] != 0 {
+		t.Fatalf("purchase-result = %d, want 0 (success)", resFrame[2])
 	}
 
 	// 4. Real transaction: zeny deducted (1000 - 50 = 950) and the potion added.
@@ -1058,6 +2123,130 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	}
 	if potionAmount != 1 {
 		t.Fatalf("potion amount after buy = %d, want 1", potionAmount)
+	}
+}
+
+// TestMap_Dispatch_ShopSellRoundTrip exercises the sell half of the NPC shop
+// verb: CZ_ACK_SELECT_DEALTYPE(Sell) renders the priced sell list, then
+// CZ_PC_SELL_ITEMLIST sells one Red Potion. The server re-syncs the bag grid
+// with ZC_DELETE_ITEM_FROM_BODY (deleteType 6 = "Item sold", the client slot the
+// request carried, the amount removed) BEFORE the ZC_PC_SELL_RESULT byte. That
+// frame is what actually removes the slot from the client's grid — without it
+// the sold potion stays in the bag until some other verb re-sends a list. The
+// transaction is real: the row leaves the DB and the shop pays its SellPrice
+// (25z) into the balance.
+func TestMap_Dispatch_ShopSellRoundTrip(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	conn, env := startMapListenerWithShopEnv(t, port, sessions)
+	defer conn.Close()
+
+	const gid uint32 = 150001
+	hero, err := env.charRepo.Create(t.Context(), chardomain.Character{
+		AccountID: 2000001, Name: "Hero", Zeny: 0,
+	})
+	if err != nil {
+		t.Fatalf("seed character: %v", err)
+	}
+	if uint32(hero.ID) != gid {
+		t.Fatalf("seeded character id = %d, want %d (world entity)", hero.ID, gid)
+	}
+	// One sellable row. It is the only row, so it is server row 0 and the client
+	// addresses it as index 2.
+	if _, err := env.itemRepo.Add(t.Context(), gid, 501, 1); err != nil {
+		t.Fatalf("seed inventory: %v", err)
+	}
+
+	// 1. CZ_ENTER → ZC_ACCEPT_ENTER.
+	sendCZEnter(t, conn, 2000001, gid, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// 2. CZ_ACK_SELECT_DEALTYPE (Sell) → ZC_PC_SELL_ITEMLIST.
+	ack := make([]byte, 7)
+	binary.LittleEndian.PutUint16(ack[0:], ropacket.HeaderCZACKSELECTDEALTYPE)
+	binary.LittleEndian.PutUint32(ack[2:], shop.DevShopGID)
+	ack[6] = 1 // type = Sell
+	if _, err := conn.Write(ack); err != nil {
+		t.Fatalf("send CZ_ACK_SELECT_DEALTYPE: %v", err)
+	}
+	listCmd, listFrame := nextServerFrame(t, conn, 3*time.Second)
+	if listCmd != ropacket.HeaderZCPCSELLITEMLIST {
+		t.Fatalf("sell-list opcode = 0x%04x, want ZC_PC_SELL_ITEMLIST (0x%04x)", listCmd, ropacket.HeaderZCPCSELLITEMLIST)
+	}
+	// The list must offer the seeded row at client index 2 with the shop's
+	// SellPrice (25z); otherwise the sell request below would address a slot the
+	// client was never offered (index 0 — the very bug the re-sync frame fixes).
+	if len(listFrame) != 14 { // 4 header + one 10-byte entry
+		t.Fatalf("sell-list length = %d, want 14 (one entry)", len(listFrame))
+	}
+	if got := binary.LittleEndian.Uint16(listFrame[4:6]); got != 2 {
+		t.Fatalf("sell-list index = %d, want 2 (server row 0 → client index 2)", got)
+	}
+	if got := binary.LittleEndian.Uint32(listFrame[6:10]); got != 25 {
+		t.Fatalf("sell-list price = %d, want 25 (Tool Shop SellPrice)", got)
+	}
+
+	// 3. CZ_PC_SELL_ITEMLIST: sell 1 unit from client index 2 (4 header + one
+	// 4-byte entry: uint16 index + uint16 amount).
+	sell := make([]byte, 8)
+	binary.LittleEndian.PutUint16(sell[0:], ropacket.HeaderCZPCSELLITEMLIST)
+	binary.LittleEndian.PutUint16(sell[2:], 8) // packet length
+	binary.LittleEndian.PutUint16(sell[4:], 2) // client index
+	binary.LittleEndian.PutUint16(sell[6:], 1) // amount
+	if _, err := conn.Write(sell); err != nil {
+		t.Fatalf("send CZ_PC_SELL_ITEMLIST: %v", err)
+	}
+
+	// 3a. ZC_DELETE_ITEM_FROM_BODY first: 8B fixed (cmd + int16 deleteType +
+	// uint16 index + int16 count), deleteType 6 = "Item sold", index echoed from
+	// the request, count = the amount removed.
+	delCmd, delFrame := nextServerFrame(t, conn, 3*time.Second)
+	if delCmd != ropacket.HeaderZCDeleteItemFromBody {
+		t.Fatalf("sell frame 1 opcode = 0x%04x, want 0x%04x (ZC_DELETE_ITEM_FROM_BODY) — the sale did not re-sync the bag grid", delCmd, ropacket.HeaderZCDeleteItemFromBody)
+	}
+	if len(delFrame) != 8 {
+		t.Fatalf("sell frame 1 length = %d, want 8", len(delFrame))
+	}
+	if got := int16(binary.LittleEndian.Uint16(delFrame[2:4])); got != ropacket.DeleteTypeItemSold {
+		t.Fatalf("sell frame 1 deleteType = %d, want %d (Item sold)", got, ropacket.DeleteTypeItemSold)
+	}
+	if got := binary.LittleEndian.Uint16(delFrame[4:6]); got != 2 {
+		t.Fatalf("sell frame 1 index = %d, want 2 (the client slot the request carried)", got)
+	}
+	if got := int16(binary.LittleEndian.Uint16(delFrame[6:8])); got != 1 {
+		t.Fatalf("sell frame 1 count = %d, want 1", got)
+	}
+
+	// 3b. ...then the sell result byte.
+	resCmd, resFrame := nextServerFrame(t, conn, 3*time.Second)
+	if resCmd != ropacket.HeaderZCPCSELLRESULT {
+		t.Fatalf("sell frame 2 opcode = 0x%04x, want 0x%04x (ZC_PC_SELL_RESULT)", resCmd, ropacket.HeaderZCPCSELLRESULT)
+	}
+	if len(resFrame) != 3 {
+		t.Fatalf("sell frame 2 length = %d, want 3", len(resFrame))
+	}
+	if resFrame[2] != 0 {
+		t.Fatalf("sell-result = %d, want 0 (success)", resFrame[2])
+	}
+
+	// 4. Real transaction: the row is gone and the shop paid 25z.
+	after, err := env.charRepo.FindByID(t.Context(), hero.ID)
+	if err != nil {
+		t.Fatalf("reload character: %v", err)
+	}
+	if after.Zeny != 25 {
+		t.Fatalf("zeny after sell = %d, want 25", after.Zeny)
+	}
+	items, err := env.itemRepo.LoadByChar(t.Context(), 2000001, gid)
+	if err != nil {
+		t.Fatalf("load inventory after sell: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("inventory rows after sell = %d, want 0 (the sold stack was the whole row)", len(items))
 	}
 }
 
@@ -1084,13 +2273,14 @@ func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*g
 	combat := worldapp.NewCombatService(world, nil, nil)
 	itemRepo := invinfra.NewMemoryItemRepository()
 	inv := invapp.NewInventoryService(itemRepo)
-	content := contentapp.NewEngine(nil, nil, nil, slog.Default())
+	content := contentapp.NewEngine(nil, nil, nil, nil, nil, slog.Default())
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
+	skills.SetTree(testSkillTree())
 	charRepo := charinfra.NewMemoryCharacterRepository()
-	econ := economyapp.NewEconomyService(charRepo)
+	econ := economyapp.NewEconomyService(charRepo, economyinfra.NewMemoryLedger())
 	trade := worldapp.NewTradeService(world, inv, econ)
 
-	ms, err := gwapp.NewMapServer(world, spawn, combat, nil, inv, content, skills, nil, nil, trade, sessions, slog.Default())
+	ms, err := gwapp.NewMapServer(world, spawn, combat, nil, nil, nil, inv, content, skills, nil, nil, trade, sessions, testSkillDB(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1116,20 +2306,18 @@ func startAndDialTwo(t *testing.T, ms *gwapp.MapServer, port int) (net.Conn, net
 	return dial(), dial()
 }
 
-// readTradeFrame reads exactly size bytes and asserts the leading header. Trade
-// responses are fixed-length and the conn is quiescent between steps (no tick
-// broadcasts in the test harness), so an exact read is reliable.
+// readTradeFrame reads the next frame and asserts it is exactly the wanted
+// opcode and size. Trade responses are fixed-length and the conn is quiescent
+// between steps (no tick broadcasts in the test harness), so an exact read is
+// reliable — and asserting the *next* frame is the point here: a frame arriving
+// out of order is a failure, not something to scan past.
 func readTradeFrame(t *testing.T, c net.Conn, want uint16, size int) []byte {
 	t.Helper()
-	c.SetDeadline(time.Now().Add(3 * time.Second))
-	buf := make([]byte, size)
-	if _, err := io.ReadFull(c, buf); err != nil {
-		t.Fatalf("read frame 0x%04x: %v", want, err)
+	cmd, frame := nextServerFrame(t, c, 3*time.Second)
+	if cmd != want || len(frame) != size {
+		t.Fatalf("next frame = 0x%04x (%dB), want 0x%04x (%dB)", cmd, len(frame), want, size)
 	}
-	if got := binary.LittleEndian.Uint16(buf[0:2]); got != want {
-		t.Fatalf("frame header = 0x%04x, want 0x%04x", got, want)
-	}
-	return buf
+	return frame
 }
 
 // sendRaw writes frame bytes to conn with a deadline.
@@ -1139,6 +2327,15 @@ func sendRaw(t *testing.T, c net.Conn, frame []byte) {
 	if _, err := c.Write(frame); err != nil {
 		t.Fatalf("send frame 0x%04x: %v", binary.LittleEndian.Uint16(frame), err)
 	}
+}
+
+// drainMobAppearFrame consumes the ZC_SPAWN_UNIT that SpawnMob's OnMobSpawn
+// hook broadcasts to in-range players. Every test that spawns a mob after the
+// player entered must drain it before reading later frames, or the stream
+// desyncs (the appear frame precedes attack/AI frames).
+func drainMobAppearFrame(t *testing.T, c net.Conn) {
+	t.Helper()
+	readTradeFrame(t, c, ropacket.HeaderZCSPAWNUNIT, 107)
 }
 
 // packMoveDest encodes (x, y) into the kRO 3-byte packed position carried by
@@ -1178,13 +2375,9 @@ func TestMap_Dispatch_TradeItemSwap(t *testing.T) {
 
 	// 1. Both players enter (each drains its 13-byte ZC_ACCEPT_ENTER).
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p1 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
-	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p2 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn2)
 	// Player 1 also receives player 2's spawn (ZC_SPAWN_UNIT): the enter handler
 	// now broadcasts the newcomer to neighbors. Drain it off conn1 so the
 	// subsequent trade frames read cleanly.
@@ -1216,7 +2409,7 @@ func TestMap_Dispatch_TradeItemSwap(t *testing.T) {
 	//    partner gets the staged view.
 	addFrame := make([]byte, 8)
 	binary.LittleEndian.PutUint16(addFrame[0:], ropacket.HeaderCZADDEXCHANGEITEM)
-	binary.LittleEndian.PutUint16(addFrame[2:], 1) // index (slot 1)
+	binary.LittleEndian.PutUint16(addFrame[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint32(addFrame[4:], 1) // amount
 	sendRaw(t, conn1, addFrame)
 	selfAck := readTradeFrame(t, conn1, ropacket.HeaderZCACKADDEXCHANGEITEM, 5)
@@ -1300,13 +2493,9 @@ func TestMap_Dispatch_SharedWorld_Visibility(t *testing.T) {
 	// 1. Both enter. Each drains its 13-byte accept-enter; A's conn also receives
 	//    B's spawn (B's enter broadcasts the newcomer to neighbors) and drains it.
 	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
-	if _, err := io.ReadFull(conn1, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p1 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn1)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
-	if _, err := io.ReadFull(conn2, make([]byte, 13)); err != nil {
-		t.Fatalf("drain p2 accept-enter: %v", err)
-	}
+	awaitAcceptEnter(t, conn2)
 	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107) // A sees B spawn in.
 	// B also sees A: the Phase-11 enter-sight back-fill sends one ZC_SPAWN_UNIT
 	// per existing nearby PC to the newcomer's own conn on enter. Drain it before
@@ -1335,12 +2524,376 @@ func TestMap_Dispatch_SharedWorld_Visibility(t *testing.T) {
 	//    A's own conn gets the throw-ack+fall burst (not asserted here).
 	dropReq := make([]byte, 6)
 	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
-	binary.LittleEndian.PutUint16(dropReq[2:], 1) // inventory index (1-based)
+	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint16(dropReq[4:], 1) // amount
 	sendRaw(t, conn1, dropReq)
 
 	drop := readTradeFrame(t, conn2, ropacket.HeaderZCItemFallEntry, 24)
 	if got := binary.LittleEndian.Uint32(drop[6:10]); got != 501 {
 		t.Fatalf("drop broadcast nameID = %d, want Red Potion 501", got)
+	}
+}
+
+// levelingCurveYAML and levelingStatsYAML back the harness's LevelingService:
+// a Novice curve where 1→2 costs 9 EXP, 2→3 costs 16, max 3; and a per-level
+// maxima table. The kill-reward mob 8002 carries BaseExp 150 — far past the
+// first threshold — so one kill takes the level-1 seed char to max.
+const levelingCurveYAML = `
+Header:
+  Type: JOB_STATS
+  Version: 4
+Body:
+  - Jobs:
+      Novice: true
+    MaxBaseLevel: 3
+    BaseExp:
+      - Level: 1
+        Exp: 9
+      - Level: 2
+        Exp: 16
+`
+
+const levelingStatsYAML = `
+Header:
+  Type: JOB_STATS
+  Version: 4
+Body:
+  - Jobs:
+      Novice: true
+    BaseHp:
+      - Level: 1
+        Hp: 1200
+      - Level: 2
+        Hp: 1300
+      - Level: 3
+        Hp: 1400
+    BaseSp:
+      - Level: 1
+        Sp: 120
+      - Level: 2
+        Sp: 130
+      - Level: 3
+        Sp: 140
+`
+
+func mustJobExp(t *testing.T) *jobexp.Registry {
+	t.Helper()
+	reg, err := jobexp.Load(strings.NewReader(levelingCurveYAML))
+	if err != nil {
+		t.Fatalf("load leveling curve: %v", err)
+	}
+	return reg
+}
+
+func mustJobStats(t *testing.T) *jobbasepoints.Registry {
+	t.Helper()
+	reg, err := jobbasepoints.Load(strings.NewReader(levelingStatsYAML))
+	if err != nil {
+		t.Fatalf("load leveling stats: %v", err)
+	}
+	return reg
+}
+
+// TestMap_KillMobLevelsUp proves the full reward-to-power loop end-to-end over
+// real gnet: killing the EXP mob crosses the level threshold, the char levels
+// up with recalculated maxima + full heal, and the conn receives the level-up
+// ZC_PAR_CHANGE burst (base level, maxima, healed vitals) after the EXP frames.
+func TestMap_KillMobLevelsUp(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	const (
+		mobGID  = 160030
+		mobClas = 8002 // BaseExp 150 ≥ the whole curve (9+16)
+	)
+	if err := env.spawn.SpawnMob(mobGID, mobClas, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "LvlMob", 1, 1, 0); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+	drainMobAppearFrame(t, conn)
+
+	req := make([]byte, 7)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint32(req[2:], mobGID)
+	req[6] = 0x07
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send attack: %v", err)
+	}
+
+	// Drain in order: attack echo, vanish, the level-up burst (6×8B ZC_PAR_CHANGE:
+	// level, maxima, healed vitals, status points — 2 level-ups × 3 points = 6),
+	// then the two EXP frames (12B each).
+	if _, err := io.ReadFull(conn, make([]byte, 11)); err != nil {
+		t.Fatalf("read ZC_ACTION_RESPONSE: %v", err)
+	}
+	if _, err := io.ReadFull(conn, make([]byte, 7)); err != nil {
+		t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
+	}
+	const parFrame = 8
+	burst := make([]byte, 6*parFrame)
+	if _, err := io.ReadFull(conn, burst); err != nil {
+		t.Fatalf("read level-up burst: %v", err)
+	}
+	if _, err := io.ReadFull(conn, make([]byte, 24)); err != nil {
+		t.Fatalf("read EXP frames: %v", err)
+	}
+	readPar := func(i int) (uint16, int32) {
+		base := i * parFrame
+		return binary.LittleEndian.Uint16(burst[base+2 : base+4]), int32(binary.LittleEndian.Uint32(burst[base+4 : base+8]))
+	}
+	if varID, v := readPar(0); varID != ropacket.SPBaseLevel || v != 3 {
+		t.Errorf("frame0 = SPBaseLevel %d, want level 3 (curve max; 150 EXP crosses 9+16)", v)
+	}
+	if varID, v := readPar(1); varID != ropacket.SPMaxHP || v != 1400 {
+		t.Errorf("frame1 = SPMaxHP %d, want 1400 (table L3)", v)
+	}
+	if varID, v := readPar(2); varID != ropacket.SPMaxSP || v != 140 {
+		t.Errorf("frame2 = SPMaxSP %d, want 140 (table L3)", v)
+	}
+	if varID, v := readPar(3); varID != ropacket.SPHP || v != 1400 {
+		t.Errorf("frame3 = SPHP %d, want 1400 (full heal)", v)
+	}
+	if varID, v := readPar(4); varID != ropacket.SPSP || v != 140 {
+		t.Errorf("frame4 = SPSP %d, want 140 (full heal)", v)
+	}
+	// frame5: the points total after two level-ups: 48 seeded + 2×3 granted = 54.
+	if varID, v := readPar(5); varID != ropacket.SPStatusPoint || v != 54 {
+		t.Errorf("frame5 = SPStatusPoint %d, want 54 (48 seed + 2 level-ups × 3)", v)
+	}
+
+	// World state agrees: max level, recalculated maxima, full heal.
+	pc, err := env.world.Get(150001)
+	if err != nil {
+		t.Fatalf("get killer: %v", err)
+	}
+	if pc.Level != 3 || pc.MaxHP != 1400 || pc.MaxSP != 140 || pc.HP != 1400 || pc.SP != 140 {
+		t.Errorf("post-kill pc = level %d max %d/%d vitals %d/%d, want 3 1400/140 1400/140",
+			pc.Level, pc.MaxHP, pc.MaxSP, pc.HP, pc.SP)
+	}
+}
+
+// TestMap_StatusChangeAllocates proves the stat-allocation verb end-to-end over
+// real gnet: the seeded player (Str 5, 48 points — see buildTestMapDeps) sends
+// CZ_STATUS_CHANGE targeting SP_STR, and the conn receives ZC_STATUS_CHANGE_ACK
+// (result 0, value 6) followed by ZC_PAR_CHANGE frames for the raised stat and
+// the remaining points; the world's entity carries Str 6 / points 46 (kernel
+// rate 2 for cur=5).
+func TestMap_StatusChangeAllocates(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// CZ_STATUS_CHANGE (5B): cmd 0x00bb + SP_STR(13) + amount 1.
+	req := make([]byte, 5)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZSTATUSCHANGE)
+	binary.LittleEndian.PutUint16(req[2:], ropacket.SPStr)
+	req[4] = 1
+	if _, err := conn.Write(req); err != nil {
+		t.Fatalf("send CZ_STATUS_CHANGE: %v", err)
+	}
+
+	// ZC_STATUS_CHANGE_ACK (6B): cmd 0x00bc + statusID + result 0 + value 6.
+	ack := make([]byte, 6)
+	if _, err := io.ReadFull(conn, ack); err != nil {
+		t.Fatalf("read ack: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCSTATUSCHANGEACK {
+		t.Fatalf("ack cmd = 0x%04x, want 0x00bc", got)
+	}
+	if got := binary.LittleEndian.Uint16(ack[2:4]); got != ropacket.SPStr {
+		t.Errorf("ack statusID = %d, want SPStr", got)
+	}
+	if ack[4] != 0 {
+		t.Errorf("ack result = %d, want 0 (success)", ack[4])
+	}
+	if ack[5] != 6 {
+		t.Errorf("ack value = %d, want 6 (Str 5→6)", ack[5])
+	}
+
+	// ParChange burst: SPStr=6, then SPStatusPoint=46, then HP/SP vitals.
+	const parFrame = 8
+	frames := make([]byte, 4*parFrame)
+	if _, err := io.ReadFull(conn, frames); err != nil {
+		t.Fatalf("read par burst: %v", err)
+	}
+	readPar := func(i int) (uint16, int32) {
+		b := i * parFrame
+		return binary.LittleEndian.Uint16(frames[b+2 : b+4]), int32(binary.LittleEndian.Uint32(frames[b+4 : b+8]))
+	}
+	if varID, v := readPar(0); varID != ropacket.SPStr || v != 6 {
+		t.Errorf("frame0 = varID %d val %d, want SPStr 6", varID, v)
+	}
+	if varID, v := readPar(1); varID != ropacket.SPStatusPoint || v != 46 {
+		t.Errorf("frame1 = varID %d val %d, want SPStatusPoint 46 (48−2 cost)", varID, v)
+	}
+
+	// World state agrees.
+	pc, err := env.world.Get(150001)
+	if err != nil {
+		t.Fatalf("get player: %v", err)
+	}
+	if pc.Str != 6 || pc.StatusPoint != 46 {
+		t.Errorf("pc str/points = %d/%d, want 6/46", pc.Str, pc.StatusPoint)
+	}
+}
+
+// TestMap_NeighborSeesPickup proves the Phase-34 pickup broadcast: when B picks
+// up a floor item, B's conn gets ZC_ITEM_PICKUP_ACK and A's conn ALSO gets
+// ZC_ITEM_DISAPPEAR (0x00a1) carrying the item's GroundID — without it, A keeps
+// a ghost loot sprite at the tile and any click on it dead-ends.
+func TestMap_NeighborSeesPickup(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	ms, env := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+
+	if _, err := env.itemRepo.Add(t.Context(), 150002, 501, 1); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+
+	// Both enter; drain accept-enter + the mutual back-fill spawns.
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	awaitAcceptEnter(t, conn1)
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	awaitAcceptEnter(t, conn2)
+	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107)
+	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT, 107)
+
+	// B drops (1 Red Potion) so a floor item exists at B's cell.
+	dropReq := make([]byte, 6)
+	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
+	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
+	binary.LittleEndian.PutUint16(dropReq[4:], 1)
+	sendRaw(t, conn2, dropReq)
+	// B gets the throw-ack + fall-entry burst; A gets the fall-entry broadcast.
+	readTradeFrame(t, conn2, ropacket.HeaderZCItemThrowAck, 6)
+	fallA := readTradeFrame(t, conn1, ropacket.HeaderZCItemFallEntry, 24)
+	_ = readTradeFrame(t, conn2, ropacket.HeaderZCItemFallEntry, 24)
+	groundID := binary.LittleEndian.Uint32(fallA[2:6])
+
+	// B picks it up.
+	pick := make([]byte, 6)
+	binary.LittleEndian.PutUint16(pick[0:], ropacket.HeaderCZITEMTAKE0362)
+	binary.LittleEndian.PutUint32(pick[2:], groundID)
+	sendRaw(t, conn2, pick)
+	// B's own ack.
+	readTradeFrame(t, conn2, ropacket.HeaderZCItemPickupAck, 70)
+	// A sees the item leave the ground.
+	dis := readTradeFrame(t, conn1, ropacket.HeaderZCItemDisappear, 6)
+	if got := binary.LittleEndian.Uint32(dis[2:6]); got != groundID {
+		t.Fatalf("disappear AID = %d, want %d", got, groundID)
+	}
+}
+
+// TestMap_EnterShowsExistingFloorItems proves the enter sweep: a player who
+// enters a map where a floor item is already on the ground receives
+// ZC_ITEM_ENTRY (0x009d) for it, so the item is visible AND pickable without
+// ever having observed the drop's 0x0ADD landing frame.
+func TestMap_EnterShowsExistingFloorItems(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, Sex: 1})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	fi := env.spawn.DropItem(501, 3, "new_1-1", worlddomain.Position{X: 53, Y: 111}, 150001)
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+	entry := make([]byte, 19)
+	if _, err := io.ReadFull(conn, entry); err != nil {
+		t.Fatalf("read ZC_ITEM_ENTRY: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(entry[0:2]); got != ropacket.HeaderZCItemEntry {
+		t.Fatalf("entry header = 0x%04x, want 0x009d", got)
+	}
+	if got := binary.LittleEndian.Uint32(entry[2:6]); got != fi.GroundID {
+		t.Fatalf("entry AID = %d, want %d", got, fi.GroundID)
+	}
+	if got := binary.LittleEndian.Uint32(entry[6:10]); got != 501 {
+		t.Fatalf("entry nameID = %d, want Red Potion 501", got)
+	}
+
+	// And the swept item is actually pickable through the normal verb.
+	pick := make([]byte, 6)
+	binary.LittleEndian.PutUint16(pick[0:], ropacket.HeaderCZITEMTAKE0362)
+	binary.LittleEndian.PutUint32(pick[2:], fi.GroundID)
+	sendRaw(t, conn, pick)
+	readTradeFrame(t, conn, ropacket.HeaderZCItemPickupAck, 70)
+}
+
+// TestMap_MobRespawnVisible proves the mob-respawn appear broadcast: after a
+// mob with a respawn delay dies (despawns), a nearby player's conn receives the
+// mob's ZC_SPAWN_UNIT (ObjectType=5) when the timer revives it — the respawn is
+// visible without any action from the mob. Frame sequence after the killing
+// attack mirrors TestMap_KillMobGrantsEXP: ZC_ACTION_RESPONSE (11B), then
+// ZC_NOTIFY_VANISH (7B); mob 8002 carries EXP so the level-up burst also
+// arrives — drain it before waiting on the respawn frame.
+func TestMap_MobRespawnVisible(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// 1-HP mob with a 300ms respawn; the killing blow arms the timer.
+	if err := env.spawn.SpawnMob(160050, 8002, "new_1-1", worlddomain.Position{X: 53, Y: 111}, "RespMob", 1, 1, 300*time.Millisecond); err != nil {
+		t.Fatalf("spawn mob: %v", err)
+	}
+	drainMobAppearFrame(t, conn)
+
+	// Killing attack.
+	req := make([]byte, 7)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint32(req[2:], 160050)
+	req[6] = 0x07
+	sendRaw(t, conn, req)
+
+	readTradeFrame(t, conn, ropacket.HeaderZCACTIONRESPONSE, 11)
+	readTradeFrame(t, conn, ropacket.HeaderZCNOTIFYVANISH, 7)
+	// Level-up burst (6x8B) + 2 EXP frames (12B each), as in the EXP test.
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	leftover := make([]byte, 6*8+2*12)
+	if _, err := io.ReadFull(conn, leftover); err != nil {
+		t.Fatalf("drain level-up/EXP burst: %v", err)
+	}
+
+	// The respawn timer fires within 300ms; the revived mob's ZC_SPAWN_UNIT
+	// (107B) arrives without any mob action or client request.
+	respawn := readTradeFrame(t, conn, ropacket.HeaderZCSPAWNUNIT, 107)
+	if got := binary.LittleEndian.Uint32(respawn[9:13]); got != 160050 {
+		t.Fatalf("respawn spawn-unit GID = %d, want mob GID 160050", got)
 	}
 }

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# pre-commit: fast local check on the staged set.
+#
+# fmt-check + vet. Deliberately a *check*, not a formatter, and deliberately
+# staged-files-only: running `task fmt` here would rewrite the worktree and any
+# re-stage could sweep in unstaged edits to the same files. Lint and the unit
+# suite are deferred to pre-push (and CI) because golangci-lint is the slowest
+# step and a commit is cheap to amend. Docs-only staging sets skip entirely.
+#
+# Override: GATE_SKIP=1 git commit ...            (skip everything)
+#           GATE_SKIP=fmt-check,vet git commit ... (skip named steps)
+set -euo pipefail
+. "$(dirname "$0")/_lib.sh"
+
+gate_skipped && exit 0
+
+cd "$(gate_root)"
+
+staged="$(gate_staged_files)"
+[ -n "$staged" ] || exit 0
+printf '%s\n' "$staged" | gate_is_relevant_path || exit 0
+
+gate_skip_reason fmt-check || gate_run "L1 fmt" task fmt-check
+gate_skip_reason vet || gate_run "L1 vet" task vet

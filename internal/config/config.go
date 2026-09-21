@@ -129,13 +129,20 @@ type NATSConfig struct {
 
 // GatewayConfig holds the game-protocol listeners. The client only knows the
 // login port statically; char/map ports are advertised during the handoff.
+//
+// LoginRateBurst and LoginRatePerSec throttle brute-force login attempts
+// per source IP via a token bucket (see gateway/app/ratelimit.go). A zero
+// value disables the limiter; the defaults (5 attempts burst, 1/sec refill)
+// match common SSH-style fail2ban defaults.
 type GatewayConfig struct {
-	LoginHost string `yaml:"login_host" env:"GATEWAY_LOGIN_HOST"` // bind host for all listeners
-	LoginPort int    `yaml:"login_port" env:"GATEWAY_LOGIN_PORT" validate:"min=1,max=65535"`
-	CharHost  string `yaml:"char_host"  env:"GATEWAY_CHAR_HOST"` // advertised char-server host (client-facing)
-	CharPort  int    `yaml:"char_port"  env:"GATEWAY_CHAR_PORT" validate:"min=1,max=65535"`
-	MapHost   string `yaml:"map_host"   env:"GATEWAY_MAP_HOST"` // advertised map-server host (client-facing)
-	MapPort   int    `yaml:"map_port"   env:"GATEWAY_MAP_PORT" validate:"min=1,max=65535"`
+	LoginHost       string  `yaml:"login_host"       env:"GATEWAY_LOGIN_HOST"` // bind host for all listeners
+	LoginPort       int     `yaml:"login_port"       env:"GATEWAY_LOGIN_PORT"     validate:"min=1,max=65535"`
+	CharHost        string  `yaml:"char_host"        env:"GATEWAY_CHAR_HOST"` // advertised char-server host (client-facing)
+	CharPort        int     `yaml:"char_port"        env:"GATEWAY_CHAR_PORT"      validate:"min=1,max=65535"`
+	MapHost         string  `yaml:"map_host"         env:"GATEWAY_MAP_HOST"` // advertised map-server host (client-facing)
+	MapPort         int     `yaml:"map_port"         env:"GATEWAY_MAP_PORT"       validate:"min=1,max=65535"`
+	LoginRateBurst  float64 `yaml:"login_rate_burst" env:"GATEWAY_LOGIN_RATE_BURST" validate:"min=0"`     // per-IP login burst (0 disables)
+	LoginRatePerSec float64 `yaml:"login_rate_per_sec" env:"GATEWAY_LOGIN_RATE_PER_SEC" validate:"min=0"` // per-IP login refill/sec (0 disables)
 }
 
 // IdentityConfig holds the login/char-server identity knobs rAthena .conf files
@@ -148,9 +155,11 @@ type IdentityConfig struct {
 
 // ZoneConfig holds the game-world loop parameters.
 type ZoneConfig struct {
-	TickRateHz     int    `yaml:"tick_rate_hz"     env:"ZONE_TICK_RATE_HZ" validate:"min=1,max=200"`
-	ViewRangeCells int    `yaml:"view_range_cells" env:"ZONE_VIEW_RANGE_CELLS" validate:"min=1"`
-	DBPath         string `yaml:"db_path"          env:"ZONE_DB_PATH"`
+	TickRateHz         int           `yaml:"tick_rate_hz"        env:"ZONE_TICK_RATE_HZ"        validate:"min=1,max=200"`
+	ViewRangeCells     int           `yaml:"view_range_cells"    env:"ZONE_VIEW_RANGE_CELLS"    validate:"min=1"`
+	DBPath             string        `yaml:"db_path"             env:"ZONE_DB_PATH"`
+	ScriptPath         string        `yaml:"script_path"         env:"ZONE_SCRIPT_PATH"` // NPC .txt files (single file or directory); empty = dev catalog only
+	CheckpointInterval time.Duration `yaml:"checkpoint_interval" env:"ZONE_CHECKPOINT_INTERVAL" validate:"min_duration"`
 }
 
 // LogConfig selects the structured logger (log/slog).
@@ -232,9 +241,14 @@ func defaults() *Config {
 			LoginHost: "0.0.0.0", LoginPort: 6900,
 			CharHost: "127.0.0.1", CharPort: 6121,
 			MapHost: "127.0.0.1", MapPort: 5121,
+			// 5 attempts per IP per burst, refilling at 1/sec — matches the
+			// default fail2ban posture for SSH. Operators with stricter
+			// requirements lower the burst via env or yaml.
+			LoginRateBurst:  5,
+			LoginRatePerSec: 1,
 		},
 		Identity: IdentityConfig{UseMD5Passwords: true, MaxChars: 9},
-		Zone:     ZoneConfig{TickRateHz: 50, ViewRangeCells: 20, DBPath: "db"},
+		Zone:     ZoneConfig{TickRateHz: 50, ViewRangeCells: 20, DBPath: "db", CheckpointInterval: 5 * time.Minute},
 		Log:      LogConfig{Level: "info", Format: "json"},
 		OTel:     OTelConfig{Exporter: "none", ServiceName: "goathena", Sampling: 1.0},
 	}
@@ -324,7 +338,7 @@ func setField(field reflect.Value, raw, name string) error {
 		field.SetBool(b)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		// time.Duration is an int64 but parsed from its string form ("30s").
-		if field.Type() == reflect.TypeOf(time.Duration(0)) {
+		if field.Type() == reflect.TypeFor[time.Duration]() {
 			d, err := time.ParseDuration(raw)
 			if err != nil {
 				return fmt.Errorf("env %s=%q: %w", name, raw, err)

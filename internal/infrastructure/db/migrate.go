@@ -101,7 +101,11 @@ func openMigrateDB(cfg config.DBConfig) (migratedb.Driver, *sql.DB, error) {
 	drv := normalize(cfg.Driver)
 	dsn := ""
 	if drv == "mariadb" {
-		dsn = dsnMariaDB(cfg)
+		// multiStatements lets one migration file hold several DDL statements
+		// (000008_party is CREATE TABLE + ALTER TABLE). It is scoped to the
+		// migrator connection only — the GORM DSN deliberately omits it so
+		// application queries cannot be amplified into multi-statement ones.
+		dsn = dsnMariaDB(cfg) + "&multiStatements=true"
 	} else {
 		dsn = dsnPostgres(cfg)
 	}

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# pre-push: the full merge-blocking gate (L1 static + L2 hermetic unit + L3
+# integration).
+#
+# Only runs when the push actually touches build-relevant files. A docs-only or
+# handoff-only push is the common case in this repo, and re-running lint + the
+# race suite for a Markdown edit is pure latency, so those pushes exit in
+# milliseconds. CI still runs the same gate on the remote for every push, so the
+# hook is a fast feedback loop, not the source of truth.
+#
+# L3 runs here rather than only in CI because it is the layer that has actually
+# caught regressions (M11's LoadEndAck burst), and it costs ~66s locally against
+# a ~4min CI round trip. It skips itself, rather than failing, when no container
+# runtime is up — a machine without Docker should not be blocked by a gate it
+# cannot satisfy.
+#
+# Override: GATE_SKIP=1 git push ...
+#           GATE_SKIP=lint,scan-vuln,scan-sec git push ...
+#           GATE_SKIP=test-unit git push ...
+#           GATE_SKIP=test-integration git push ...
+set -euo pipefail
+. "$(dirname "$0")/_lib.sh"
+
+gate_skipped && exit 0
+
+cd "$(gate_root)"
+
+pushed="$(gate_pushed_files)"
+if [ -z "$pushed" ] || ! printf '%s\n' "$pushed" | gate_is_relevant_path; then
+	gate_yellow "pre-push: no build-relevant changes — skipping L1/L2"
+	exit 0
+fi
+
+trap 'gate_red "pre-push: gate failed — push blocked (fix, or GATE_SKIP=1 to override)"' ERR
+
+gate_skip_reason fmt-check || gate_run "L1 fmt" task fmt-check
+gate_skip_reason lint || gate_run "L1 lint" task lint
+gate_skip_reason vet || gate_run "L1 vet" task vet
+gate_skip_reason scan-vuln || gate_run "L1 scan-vuln" task scan-vuln
+gate_skip_reason scan-sec || gate_run "L1 scan-sec" task scan-sec
+gate_skip_reason test-unit || gate_run "L2 test-unit" task test-unit
+
+# gate_run must be the *last* command in its branch: `set -e` exempts every
+# command of an &&/|| list except the final one, so `gate_run ... && l3=...`
+# would report a red L3 and still let the push through.
+l3=""
+if gate_skip_reason test-integration; then
+	gate_yellow "SKIP L3 test-integration — GATE_SKIP"
+elif ! gate_has_container_runtime; then
+	gate_yellow "SKIP L3 test-integration — no container runtime (start docker or podman)"
+else
+	gate_run "L3 test-integration" task test-integration
+	l3=" + L3"
+fi
+
+trap - ERR
+gate_green "pre-push: L1 + L2${l3} green"

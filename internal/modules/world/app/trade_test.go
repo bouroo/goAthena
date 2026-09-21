@@ -133,6 +133,18 @@ func (f *fakeEcon) CreditZeny(_ context.Context, charID uint32, amount int32) er
 	return nil
 }
 
+// DeductZenyWithPeer / CreditZenyWithPeer mirror the legacy methods in the
+// trade port's trade-specific entry points. The fake ignores the peer charID;
+// the production adapter in world/di.go translates it into a ReasonTrade +
+// peer ledger row.
+func (f *fakeEcon) DeductZenyWithPeer(_ context.Context, charID uint32, amount int32, _ uint32) error {
+	return f.DeductZeny(context.Background(), charID, amount)
+}
+
+func (f *fakeEcon) CreditZenyWithPeer(_ context.Context, charID uint32, amount int32, _ uint32) error {
+	return f.CreditZeny(context.Background(), charID, amount)
+}
+
 func (f *fakeEcon) balance(charID uint32) int32 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -217,7 +229,7 @@ func TestTradeRejectCancels(t *testing.T) {
 	// Both sessions gone: a fresh request succeeds again.
 	wantNoErr(t, svc.Request(ctx, gidA, gidB))
 	// Staging now (pending, not active) fails.
-	_, err := svc.AddItem(ctx, gidA, 1, 1)
+	_, err := svc.AddItem(ctx, gidA, 0, 2, 1)
 	wantErrIs(t, err, worldapp.ErrTradeNotActive)
 }
 
@@ -228,7 +240,7 @@ func TestTradeCancelCancels(t *testing.T) {
 	wantNoErr(t, svc.Ack(ctx, gidB, true))
 	svc.Cancel(ctx, gidA)
 	// Both sessions gone: staging fails and a fresh request works.
-	_, err := svc.AddItem(ctx, gidA, 1, 1)
+	_, err := svc.AddItem(ctx, gidA, 0, 2, 1)
 	wantErrIs(t, err, worldapp.ErrTradeNotActive)
 	wantNoErr(t, svc.Request(ctx, gidA, gidB))
 }
@@ -241,15 +253,15 @@ func TestTradeAddItemValidation(t *testing.T) {
 
 	t.Run("not active before handshake", func(t *testing.T) {
 		s2, _, _ := newTradeEnv()
-		_, err := s2.AddItem(ctx, gidA, 1, 1)
+		_, err := s2.AddItem(ctx, gidA, 0, 2, 1)
 		wantErrIs(t, err, worldapp.ErrTradeNotActive)
 	})
 	t.Run("out of range", func(t *testing.T) {
-		_, err := svc.AddItem(ctx, gidA, 99, 1)
+		_, err := svc.AddItem(ctx, gidA, 99, 101, 1)
 		wantErrIs(t, err, worldapp.ErrTradeItemOutOfRange)
 	})
 	t.Run("insufficient stack", func(t *testing.T) {
-		_, err := svc.AddItem(ctx, gidA, 1, 999)
+		_, err := svc.AddItem(ctx, gidA, 0, 2, 999)
 		wantErrIs(t, err, worldapp.ErrTradeItemInsufficient)
 	})
 	t.Run("equipped rejected", func(t *testing.T) {
@@ -261,21 +273,23 @@ func TestTradeAddItemValidation(t *testing.T) {
 		s2 := worldapp.NewTradeService(w, inv, newFakeEcon())
 		wantNoErr(t, s2.Request(ctx, gidA, gidB))
 		wantNoErr(t, s2.Ack(ctx, gidB, true))
-		_, err := s2.AddItem(ctx, gidA, 1, 1)
+		_, err := s2.AddItem(ctx, gidA, 0, 2, 1)
 		wantErrIs(t, err, worldapp.ErrTradeItemEquipped)
 	})
 	t.Run("insufficient zeny", func(t *testing.T) {
-		_, err := svc.AddItem(ctx, gidA, 0, 99999)
+		_, err := svc.AddZeny(ctx, gidA, 99999)
 		wantErrIs(t, err, worldapp.ErrTradeItemInsufficient)
 	})
 	t.Run("ok item staging does not move inventory", func(t *testing.T) {
 		s3, inv, _ := newTradeEnv()
 		wantNoErr(t, s3.Request(ctx, gidA, gidB))
 		wantNoErr(t, s3.Ack(ctx, gidB, true))
-		res, err := s3.AddItem(ctx, gidA, 1, 2)
+		res, err := s3.AddItem(ctx, gidA, 0, 2, 2)
 		wantNoErr(t, err)
-		if res.Index != 1 || res.Item.NameID != 501 {
-			t.Fatalf("AddItemResult = %+v, want Index=1 NameID=501", res)
+		// Index echoes the CLIENT index the caller passed (the wire value the ack
+		// must carry back), not the server row.
+		if res.Index != 2 || res.Item.NameID != 501 || res.IsZeny {
+			t.Fatalf("AddItemResult = %+v, want Index=2 NameID=501 IsZeny=false", res)
 		}
 		// Nothing removed yet: full stack still present.
 		if got := inv.amountOf(gidA, 501); got != 5 {
@@ -289,7 +303,7 @@ func TestTradeOKWaitsForPartner(t *testing.T) {
 	ctx := context.Background()
 	wantNoErr(t, svc.Request(ctx, gidA, gidB))
 	wantNoErr(t, svc.Ack(ctx, gidB, true))
-	_, err := svc.AddItem(ctx, gidA, 1, 2)
+	_, err := svc.AddItem(ctx, gidA, 0, 2, 2)
 	wantNoErr(t, err)
 
 	concluded, err := svc.OK(ctx, gidA)
@@ -298,7 +312,7 @@ func TestTradeOKWaitsForPartner(t *testing.T) {
 		t.Fatalf("concluded = true, want false (partner not locked)")
 	}
 	// Once locked, the side can no longer change its offer.
-	_, err = svc.AddItem(ctx, gidA, 1, 1)
+	_, err = svc.AddItem(ctx, gidA, 0, 2, 1)
 	wantErrIs(t, err, worldapp.ErrTradeLocked)
 }
 
@@ -309,13 +323,13 @@ func TestTradeConcludeSwapsItemsAndZeny(t *testing.T) {
 	wantNoErr(t, svc.Ack(ctx, gidB, true))
 
 	// A stages 2 of item 501 + 200 zeny; B stages 1 of item 502 + 100 zeny.
-	_, err := svc.AddItem(ctx, gidA, 1, 2)
+	_, err := svc.AddItem(ctx, gidA, 0, 2, 2)
 	wantNoErr(t, err)
-	_, err = svc.AddItem(ctx, gidA, 0, 200)
+	_, err = svc.AddZeny(ctx, gidA, 200)
 	wantNoErr(t, err)
-	_, err = svc.AddItem(ctx, gidB, 1, 1)
+	_, err = svc.AddItem(ctx, gidB, 0, 2, 1)
 	wantNoErr(t, err)
-	_, err = svc.AddItem(ctx, gidB, 0, 100)
+	_, err = svc.AddZeny(ctx, gidB, 100)
 	wantNoErr(t, err)
 
 	concluded, err := svc.OK(ctx, gidA)
@@ -351,7 +365,7 @@ func TestTradeConcludeSwapsItemsAndZeny(t *testing.T) {
 		t.Errorf("B zeny = %d, want 600", got)
 	}
 	// Sessions torn down.
-	_, err = svc.AddItem(ctx, gidA, 1, 1)
+	_, err = svc.AddItem(ctx, gidA, 0, 2, 1)
 	wantErrIs(t, err, worldapp.ErrTradeNotActive)
 }
 
@@ -366,9 +380,9 @@ func TestTradeConcludeRollbackOnRemoveFailure(t *testing.T) {
 
 	wantNoErr(t, svc.Request(ctx, gidA, gidB))
 	wantNoErr(t, svc.Ack(ctx, gidB, true))
-	_, err := svc.AddItem(ctx, gidA, 1, 2)
+	_, err := svc.AddItem(ctx, gidA, 0, 2, 2)
 	wantNoErr(t, err)
-	_, err = svc.AddItem(ctx, gidB, 1, 1)
+	_, err = svc.AddItem(ctx, gidB, 0, 2, 1)
 	wantNoErr(t, err)
 
 	concluded, err := svc.OK(ctx, gidA)
@@ -403,7 +417,7 @@ func TestTradeConcludeRollbackOnRemoveFailure(t *testing.T) {
 		t.Errorf("rollback B zeny = %d, want 500", got)
 	}
 	// Sessions torn down despite failure.
-	_, err = svc.AddItem(ctx, gidA, 1, 1)
+	_, err = svc.AddItem(ctx, gidA, 0, 2, 1)
 	wantErrIs(t, err, worldapp.ErrTradeNotActive)
 }
 
@@ -418,11 +432,11 @@ func TestTradeConcludeRollbackOnZenyFailure(t *testing.T) {
 
 	wantNoErr(t, svc.Request(ctx, gidA, gidB))
 	wantNoErr(t, svc.Ack(ctx, gidB, true))
-	_, err := svc.AddItem(ctx, gidA, 1, 2)
+	_, err := svc.AddItem(ctx, gidA, 0, 2, 2)
 	wantNoErr(t, err)
-	_, err = svc.AddItem(ctx, gidA, 0, 200)
+	_, err = svc.AddZeny(ctx, gidA, 200)
 	wantNoErr(t, err)
-	_, err = svc.AddItem(ctx, gidB, 1, 1)
+	_, err = svc.AddItem(ctx, gidB, 0, 2, 1)
 	wantNoErr(t, err)
 
 	concluded, err := svc.OK(ctx, gidA)
@@ -463,9 +477,9 @@ func TestTradeConcludeVerifyAbortsClean(t *testing.T) {
 	ctx := context.Background()
 	wantNoErr(t, svc.Request(ctx, gidA, gidB))
 	wantNoErr(t, svc.Ack(ctx, gidB, true))
-	_, err := svc.AddItem(ctx, gidA, 1, 2)
+	_, err := svc.AddItem(ctx, gidA, 0, 2, 2)
 	wantNoErr(t, err)
-	_, err = svc.AddItem(ctx, gidB, 1, 1)
+	_, err = svc.AddItem(ctx, gidB, 0, 2, 1)
 	wantNoErr(t, err)
 
 	// Race: A drops the staged item out from under the trade between staging and
@@ -515,18 +529,18 @@ func TestTradeZenyRestageReplaces(t *testing.T) {
 	wantNoErr(t, svc.Request(ctx, gidA, gidB))
 	wantNoErr(t, svc.Ack(ctx, gidB, true))
 
-	res, err := svc.AddItem(ctx, gidA, 0, 200)
+	res, err := svc.AddZeny(ctx, gidA, 200)
 	wantNoErr(t, err)
 	if res.Zeny != 200 {
 		t.Fatalf("first stage zeny = %d, want 200", res.Zeny)
 	}
 	// Restage a smaller amount; the offer replaces (not accumulates).
-	res, err = svc.AddItem(ctx, gidA, 0, 50)
+	res, err = svc.AddZeny(ctx, gidA, 50)
 	wantNoErr(t, err)
 	if res.Zeny != 50 {
 		t.Fatalf("restage zeny = %d, want 50", res.Zeny)
 	}
-	_, err = svc.AddItem(ctx, gidB, 1, 1)
+	_, err = svc.AddItem(ctx, gidB, 0, 2, 1)
 	wantNoErr(t, err)
 	concluded, err := svc.OK(ctx, gidA)
 	wantNoErr(t, err)
@@ -553,11 +567,11 @@ func TestTradeStageSameRowTwiceExceedsStack(t *testing.T) {
 	wantNoErr(t, svc.Request(ctx, gidA, gidB))
 	wantNoErr(t, svc.Ack(ctx, gidB, true))
 	// A has 5 of 501. Stage 3, then 3 again -> second exceeds the 5 stack.
-	_, err := svc.AddItem(ctx, gidA, 1, 3)
+	_, err := svc.AddItem(ctx, gidA, 0, 2, 3)
 	wantNoErr(t, err)
-	_, err = svc.AddItem(ctx, gidA, 1, 3)
+	_, err = svc.AddItem(ctx, gidA, 0, 2, 3)
 	wantErrIs(t, err, worldapp.ErrTradeItemInsufficient)
 	// Staging 2 more (3+2=5) is fine.
-	_, err = svc.AddItem(ctx, gidA, 1, 2)
+	_, err = svc.AddItem(ctx, gidA, 0, 2, 2)
 	wantNoErr(t, err)
 }

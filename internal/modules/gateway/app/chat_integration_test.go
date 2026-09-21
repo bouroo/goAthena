@@ -1,0 +1,616 @@
+//go:build integration
+
+package app_test
+
+// Phase-36 L3: CZ_WHISPER over TCP between two live connections — the target
+// receives ZC_WHISPER (0x09de) naming the sender, and the sender receives the
+// fixed ZC_ACK_WHISPER (0x09df) success frame. A whisper to a name nobody
+// carries answers result=1 (target offline).
+
+import (
+	"bytes"
+	"encoding/binary"
+	"io"
+	"net"
+	"testing"
+	"time"
+
+	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	charinfra "github.com/bouroo/goAthena/internal/modules/character/infra"
+	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
+	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
+)
+
+// (Whisper tests reuse buildTradeMapDeps — a two-player "Hero"/"Partner"
+// world. Whisper routing is name-based, not proximity-based, so the exact
+// cells don't matter.)
+
+// whisperFrame builds a raw CZ_WHISPER frame:
+// [2:cmd][2:len][24:target NUL-padded][n:message + NUL].
+func whisperFrame(target, message string) []byte {
+	total := 4 + 24 + len(message) + 1
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZWHISPER)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	copy(buf[4:], target)
+	copy(buf[28:], message)
+	return buf
+}
+
+// drainToWhisper consumes queued ZC_SPAWN_UNIT (0x09fe, 107B) frames off the
+// target's connection until the ZC_WHISPER (0x09de) frame arrives, then parses
+// it and returns (senderName, message). The two enters run on concurrent
+// dispatch goroutines, so a connection may carry one spawn-unit per neighbor
+// from BOTH the broadcast path and the AOI back-fill path — the exact count
+// interleaves. Scanning forward to the whisper (rather than draining a fixed
+// count) keeps the test insensitive to that ordering; each skipped frame is
+// framed by its real size, so the scan cannot desync.
+func drainToWhisper(t *testing.T, c net.Conn) (string, string) {
+	t.Helper()
+	frame := scanServerFrame(t, c, ropacket.HeaderZCWHISPER, 3*time.Second)
+	body := frame[4:] // skip the 4-byte header
+	// body: [4:senderGID][24:senderName][1:isAdmin][n:message+null]
+	name := body[4:28]
+	if idx := bytes.IndexByte(name, 0); idx >= 0 {
+		name = name[:idx]
+	}
+	msg := body[29:]
+	if idx := bytes.IndexByte(msg, 0); idx >= 0 {
+		msg = msg[:idx]
+	}
+	return string(name), string(msg)
+}
+
+// drainQuiescent consumes every buffered frame until the connection goes
+// quiet (200ms without bytes), tolerating any interleaved spawn-unit count.
+// Used on the sender's conn, where the next expected frame is the 7B ack.
+//
+// Every frame it passes is framed by its real size (readServerFrame →
+// serverFrameSize, driven by the map server's own packet DB). The earlier
+// version trusted bytes [2:4] as a length slot, which only variable-length
+// frames carry — a fixed frame's bytes there are payload, so the drain
+// consumed the wrong byte count and desynced the rest of the test.
+func drainQuiescent(t *testing.T, c net.Conn) {
+	t.Helper()
+	for {
+		if _, _, err := readServerFrame(t, c, 200*time.Millisecond); err != nil {
+			return // quiescent
+		}
+	}
+}
+
+func TestMap_WhisperBetweenPlayers(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	// Reuse the shared two-player harness, entering both players first.
+	ms, env := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+	_ = env
+
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	// Each enter's reply: 13B accept-enter, then the other's 107B spawn-unit
+	// (same drain sequence the trade test uses).
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
+	drainQuiescent(t, conn1)
+	drainQuiescent(t, conn2)
+
+	// Player 1 whispers Player 2 by name.
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(whisperFrame("Partner", "psst over here")); err != nil {
+		t.Fatalf("send CZ_WHISPER: %v", err)
+	}
+
+	name, msg := drainToWhisper(t, conn2)
+	if name != "Hero" {
+		t.Fatalf("whisper sender = %q, want Hero", name)
+	}
+	if msg != "psst over here" {
+		t.Fatalf("whisper text = %q, want %q", msg, "psst over here")
+	}
+
+	// Sender's ack: fixed 7B ZC_ACK_WHISPER, result 0, CID = sender charID.
+	ack := readTradeFrame(t, conn1, ropacket.HeaderZCACKWHISPER, 7)
+	if ack[2] != 0 {
+		t.Fatalf("whisper ack result = %d, want 0 (success)", ack[2])
+	}
+	if got := binary.LittleEndian.Uint32(ack[3:]); got != 150001 {
+		t.Fatalf("whisper ack CID = %d, want 150001", got)
+	}
+}
+
+func TestMap_WhisperTargetOffline(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, Sex: 1})
+
+	ms, _ := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	conn2.Close() // only player 1 stays
+
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	awaitAcceptEnter(t, conn1)
+	drainQuiescent(t, conn1)
+
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(whisperFrame("Nobody", "hello?")); err != nil {
+		t.Fatalf("send CZ_WHISPER: %v", err)
+	}
+	ack := readTradeFrame(t, conn1, ropacket.HeaderZCACKWHISPER, 7)
+	if ack[2] != 1 {
+		t.Fatalf("offline ack result = %d, want 1 (target offline)", ack[2])
+	}
+}
+
+// TestMap_GlobalMessageBroadcastsToNeighbor: public say chat reaches the
+// OTHER player's client as ZC_NOTIFY_CHAT (0x008d) with "<name> : <text>",
+// and the speaker's own conn stays silent (its client renders locally).
+func TestMap_GlobalMessageBroadcastsToNeighbor(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	ms, _ := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
+	drainQuiescent(t, conn1)
+	drainQuiescent(t, conn2)
+
+	// Player 1 says something publicly.
+	var gbuf bytes.Buffer
+	_ = ropacket.CZGlobalMessageRequest{Message: "hello world"}.Encode(&gbuf) //nolint:errcheck // buffer write cannot fail
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(gbuf.Bytes()); err != nil {
+		t.Fatalf("send CZ_GLOBAL_MESSAGE: %v", err)
+	}
+
+	// The neighbor scans forward to the 0x008d frame and reads GID + text.
+	cid, text := drainToNotifyChat(t, conn2)
+	if text != "Hero : hello world" {
+		t.Fatalf("neighbor chat = %q, want %q", text, "Hero : hello world")
+	}
+	if cid != 2000001 {
+		t.Fatalf("chat GID = %d, want speaker AID 2000001", cid)
+	}
+
+	// The speaker's own conn must NOT have received the broadcast.
+	conn1.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if n, err := conn1.Read(make([]byte, 64)); err == nil && n > 0 {
+		t.Fatalf("speaker received own broadcast (%d bytes), want silence", n)
+	}
+}
+
+// drainToNotifyChat scans queued frames until ZC_NOTIFY_CHAT (0x008d) and
+// returns its GID and message text. Same scan-forward discipline as
+// drainToWhisper: enter-time frame counts interleave.
+func drainToNotifyChat(t *testing.T, c net.Conn) (uint32, string) {
+	t.Helper()
+	for {
+		c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		head := make([]byte, 4)
+		if _, err := io.ReadFull(c, head); err != nil {
+			t.Fatalf("read frame header: %v", err)
+		}
+		cmd := binary.LittleEndian.Uint16(head[0:2])
+		plen := int(binary.LittleEndian.Uint16(head[2:4]))
+		body := make([]byte, plen-4)
+		if _, err := io.ReadFull(c, body); err != nil {
+			t.Fatalf("read frame body (0x%04x): %v", cmd, err)
+		}
+		if cmd != ropacket.HeaderZCNOTIFYCHAT {
+			continue
+		}
+		msg := body[4:]
+		if idx := bytes.IndexByte(msg, 0); idx >= 0 {
+			msg = msg[:idx]
+		}
+		return binary.LittleEndian.Uint32(body[0:4]), string(msg)
+	}
+}
+
+// nameFrame builds a raw CZ_GETCHARNAMEREQUEST: [2:cmd=0x0094][4:GID].
+func nameFrame(gid uint32) []byte {
+	buf := make([]byte, 6)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZGETCHARNAMEREQUEST)
+	binary.LittleEndian.PutUint32(buf[2:], gid)
+	return buf
+}
+
+// TestMap_GetCharNameResolvesPCAndNPC: a name request for a nearby PC answers
+// ZC_ACK_REQNAMEALL2 (0x0a30, 106B) with the name; for an NPC it answers
+// ZC_ACK_REQNAMEALL_NPC (0x0adf, 58B); for an unknown GID nothing comes back.
+func TestMap_GetCharNameResolvesPCAndNPC(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	ms, env := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+
+	// An NPC entity on the same map near the asker.
+	if err := env.world.AddEntity(worlddomain.Entity{
+		ID: 0x70000001, Type: worlddomain.EntityTypeNPC, Map: "new_1-1",
+		Pos: worlddomain.Position{X: 52, Y: 111}, Name: "Portal Keeper",
+	}); err != nil {
+		t.Fatalf("seed npc: %v", err)
+	}
+
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
+	drainQuiescent(t, conn1)
+	drainQuiescent(t, conn2)
+
+	// Ask for the other PC's name: expect 0x0a30 (106B) with "Hero" at [6:30].
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(nameFrame(150001)); err != nil {
+		t.Fatalf("send name request (self PC): %v", err)
+	}
+	pc := drainFixed(t, conn1, ropacket.HeaderZCACKREQNAMEALL2, 106)
+	if got := trimNul(pc[6:30]); got != "Hero" {
+		t.Fatalf("PC name = %q, want Hero", got)
+	}
+	if got := binary.LittleEndian.Uint32(pc[2:6]); got != 150001 {
+		t.Fatalf("PC name GID = %d, want 150001", got)
+	}
+
+	// Ask for the NPC's name: expect 0x0adf (58B) with the name at [10:34].
+	if _, err := conn1.Write(nameFrame(0x70000001)); err != nil {
+		t.Fatalf("send name request (NPC): %v", err)
+	}
+	npc := drainFixed(t, conn1, ropacket.HeaderZCACKREQNAMEALLNPC, 58)
+	if got := trimNul(npc[10:34]); got != "Portal Keeper" {
+		t.Fatalf("NPC name = %q, want Portal Keeper", got)
+	}
+
+	// Ask for an unknown GID: no frame comes back (silence within the window).
+	if _, err := conn1.Write(nameFrame(999999)); err != nil {
+		t.Fatalf("send name request (unknown): %v", err)
+	}
+	conn1.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if n, err := conn1.Read(make([]byte, 64)); err == nil && n > 0 {
+		t.Fatalf("unknown GID answered with %d bytes, want silence", n)
+	}
+}
+
+// drainFixed scans queued frames until one carries the wanted opcode, asserts
+// its size against the caller's expectation (the wire fact the test documents)
+// and returns it whole.
+//
+// Skipped frames are framed by their real size from the map server's own packet
+// DB (nextServerFrame → serverFrameSize). The hand-maintained skip table this
+// replaced knew six opcodes and had already drifted from the wire; an opcode
+// the DB does not know now fails loudly here instead of mis-skipping silently.
+func drainFixed(t *testing.T, c net.Conn, want uint16, size int) []byte {
+	t.Helper()
+	for {
+		cmd, frame := nextServerFrame(t, c, 3*time.Second)
+		if cmd != want {
+			continue
+		}
+		if len(frame) != size {
+			t.Fatalf("frame 0x%04x length = %d, want %d", cmd, len(frame), size)
+		}
+		return frame
+	}
+}
+
+func trimNul(b []byte) string {
+	if idx := bytes.IndexByte(b, 0); idx >= 0 {
+		b = b[:idx]
+	}
+	return string(b)
+}
+
+// TestMap_RequestTimePing: CZ_REQUEST_TIME (0x007e) answers ZC_NOTIFY_TIME
+// (0x007f, 6B) with a nonzero server tick — the keep-alive the stock client
+// needs to hold the connection.
+func TestMap_RequestTimePing(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+
+	ms, _ := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	conn2.Close()
+
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	awaitAcceptEnter(t, conn1)
+	drainQuiescent(t, conn1)
+
+	ping := make([]byte, 6)
+	binary.LittleEndian.PutUint16(ping[0:], ropacket.HeaderCZREQUESTTIME)
+	binary.LittleEndian.PutUint32(ping[2:], 123456) // client tick (echoed only)
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(ping); err != nil {
+		t.Fatalf("send CZ_REQUEST_TIME: %v", err)
+	}
+
+	reply := drainFixed(t, conn1, ropacket.HeaderZCNOTIFYTIME, 6)
+	if got := binary.LittleEndian.Uint32(reply[2:6]); got == 0 {
+		t.Fatalf("server tick = 0, want nonzero")
+	}
+}
+
+// emotionFrame builds a raw CZ_REQ_EMOTION: [2:cmd=0x00bf][1:type].
+func emotionFrame(t uint8) []byte {
+	buf := make([]byte, 3)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQEMOTION)
+	buf[2] = t
+	return buf
+}
+
+// TestMap_ReqEmotionBroadcastsToNeighbor: the neighbor receives ZC_EMOTION
+// (0x00c0, 7B) naming the emoting player's GID and carrying the icon byte
+// verbatim; the emoter's own conn stays silent (client renders locally).
+func TestMap_ReqEmotionBroadcastsToNeighbor(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	ms, _ := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
+	drainQuiescent(t, conn1)
+	drainQuiescent(t, conn2)
+
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(emotionFrame(6)); err != nil { // 6 = /heh icon
+		t.Fatalf("send CZ_REQ_EMOTION: %v", err)
+	}
+	em := drainFixed(t, conn2, ropacket.HeaderZCEMOTION, 7)
+	if got := binary.LittleEndian.Uint32(em[2:6]); got != 150001 {
+		t.Fatalf("emotion GID = %d, want emoter charID 150001", got)
+	}
+	if em[6] != 6 {
+		t.Fatalf("emotion type = %d, want 6", em[6])
+	}
+
+	conn1.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if n, err := conn1.Read(make([]byte, 64)); err == nil && n > 0 {
+		t.Fatalf("emoter received own emotion (%d bytes), want silence", n)
+	}
+}
+
+// TestMap_ChangeDirBroadcastsAndPersists: the neighbor receives ZC_CHANGE_DIR
+// (0x009c, 9B) with the new head+body facing; the facing is committed on the
+// world entity (a world.Get read-back sees it); the actor's conn stays silent.
+func TestMap_ChangeDirBroadcastsAndPersists(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+
+	ms, env := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	defer conn1.Close()
+	defer conn2.Close()
+	_ = env
+
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
+	drainQuiescent(t, conn1)
+	drainQuiescent(t, conn2)
+
+	var dbuf bytes.Buffer
+	_ = ropacket.CZChangeDirRequest{HeadDir: 1, Dir: 4}.Encode(&dbuf) //nolint:errcheck // buffer write cannot fail
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(dbuf.Bytes()); err != nil {
+		t.Fatalf("send CZ_CHANGE_DIR: %v", err)
+	}
+	cd := drainFixed(t, conn2, ropacket.HeaderZCCHANGEDIR, 9)
+	if got := binary.LittleEndian.Uint32(cd[2:6]); got != 150001 {
+		t.Fatalf("changedir GID = %d, want actor charID 150001", got)
+	}
+	if got := binary.LittleEndian.Uint16(cd[6:8]); got != 1 {
+		t.Fatalf("changedir headDir = %d, want 1", got)
+	}
+	if cd[8] != 4 {
+		t.Fatalf("changedir dir = %d, want 4", cd[8])
+	}
+
+	if e, err := env.world.Get(worlddomain.EntityID(150001)); err == nil {
+		if e.Dir != 4 || e.Head != 1 {
+			t.Fatalf("persisted facing dir=%d head=%d, want 4/1", e.Dir, e.Head)
+		}
+	} else {
+		t.Fatalf("world.Get after changedir: %v", err)
+	}
+
+	conn1.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if n, err := conn1.Read(make([]byte, 64)); err == nil && n > 0 {
+		t.Fatalf("actor received own changedir (%d bytes), want silence", n)
+	}
+}
+
+// pmIgnoreFrame builds a raw CZ_PMIgnore: [2:cmd=0x00cf][24:name][1:type].
+func pmIgnoreFrame(name string, t uint8) []byte {
+	buf := make([]byte, 27)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZPMIGNORE)
+	copy(buf[2:], name)
+	buf[26] = t
+	return buf
+}
+
+// whisperStateFrame builds a raw CZ_SETTING_WHISPER_STATE: [2:cmd=0x00d0][1:type].
+func whisperStateFrame(t uint8) []byte {
+	buf := make([]byte, 3)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZSETTINGWHISPERSTATE)
+	buf[2] = t
+	return buf
+}
+
+// reqWhisperListFrame is the bare 2-byte CZ_REQ_WHISPER_LIST.
+func reqWhisperListFrame() []byte {
+	buf := make([]byte, 2)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQWHISPERLIST)
+	return buf
+}
+
+// enterTwoBoth runs the standard two-player enter handshake and returns the
+// quiesced connections.
+func enterTwoBoth(t *testing.T, conn1, conn2 net.Conn) {
+	t.Helper()
+	sendCZEnter(t, conn1, 2000001, 150001, 0x11111111)
+	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
+	awaitAcceptEnter(t, conn1)
+	awaitAcceptEnter(t, conn2)
+	drainQuiescent(t, conn1)
+	drainQuiescent(t, conn2)
+}
+
+// twoPlayerWorld is the shared session+server+conns scaffold for whisper-list
+// tests (Hero = AID 2000001/CID 150001, Partner = AID 2000002/CID 150002).
+func twoPlayerWorld(t *testing.T) (net.Conn, net.Conn) {
+	t.Helper()
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000002, LoginID1: 0x33333333, Sex: 1})
+	ms, _ := buildTradeMapDeps(t, sessions)
+	conn1, conn2 := startAndDialTwo(t, ms, port)
+	t.Cleanup(func() { conn1.Close(); conn2.Close() })
+	enterTwoBoth(t, conn1, conn2)
+	return conn1, conn2
+}
+
+// TestMap_PMIgnoreVerbsMatrix exercises /ex, /in, /exall, /inall, /wl replies:
+// add (result 0), duplicate add (result 0, idempotent), remove (0), remove
+// missing (1), /wl lists remaining names, /exall (0) then repeat /exall (1),
+// /inall clears (0) then repeat on clean state (1).
+func TestMap_PMIgnoreVerbsMatrix(t *testing.T) {
+	conn1, _ := twoPlayerWorld(t)
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+
+	send := func(frame []byte, want uint16, size int, resultIdx int, wantResult uint8) {
+		if _, err := conn1.Write(frame); err != nil {
+			t.Fatalf("send frame 0x%04x: %v", binary.LittleEndian.Uint16(frame), err)
+		}
+		reply := drainFixed(t, conn1, want, size)
+		if reply[resultIdx] != wantResult {
+			t.Fatalf("reply 0x%04x result byte = %d, want %d", want, reply[resultIdx], wantResult)
+		}
+	}
+
+	// /ex Hero-add on Partner's behalf: block "Somebody".
+	send(pmIgnoreFrame("Somebody", 0), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 0)
+	// duplicate block → success, still one entry.
+	send(pmIgnoreFrame("Somebody", 0), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 0)
+	// /wl: one 24-byte entry.
+	if _, err := conn1.Write(reqWhisperListFrame()); err != nil {
+		t.Fatalf("send /wl: %v", err)
+	}
+	list := readWantVarFrame(t, conn1, ropacket.HeaderZCWHISPERLIST)
+	if len(list) != 4+24 {
+		t.Fatalf("/wl length = %d, want %d", len(list), 4+24)
+	}
+	if got := trimNul(list[4:28]); got != "Somebody" {
+		t.Fatalf("/wl first name = %q, want Somebody", got)
+	}
+	// /in Somebody → 0.
+	send(pmIgnoreFrame("Somebody", 1), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 0)
+	// /in Ghost (not on list) → 1.
+	send(pmIgnoreFrame("Ghost", 1), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 1)
+
+	// /exall → 0; repeat → 1 (already denying).
+	send(whisperStateFrame(0), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 0)
+	send(whisperStateFrame(0), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 1)
+	// /inall while denying → 0 (clears flag+list).
+	send(whisperStateFrame(1), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 0)
+	// /inall on clean state (no flag, empty list) → 1.
+	send(whisperStateFrame(1), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 1)
+}
+
+// readWantVarFrame scans queued frames for a wanted opcode and returns it whole.
+// The wanted frame is variable-length (it carries its own length slot); the
+// frames it scans past are framed by their real size, fixed or variable.
+func readWantVarFrame(t *testing.T, c net.Conn, want uint16) []byte {
+	t.Helper()
+	return scanServerFrame(t, c, want, 3*time.Second)
+}
+
+// TestMap_WhisperIgnoredByList: Partner /ex blocks "Hero", then Hero's whisper
+// gets ack result 2 (ignored) and Partner's conn stays silent.
+func TestMap_WhisperIgnoredByList(t *testing.T) {
+	conn1, conn2 := twoPlayerWorld(t)
+
+	conn2.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn2.Write(pmIgnoreFrame("Hero", 0)); err != nil {
+		t.Fatalf("send /ex Hero: %v", err)
+	}
+	ack := drainFixed(t, conn2, ropacket.HeaderZCSETTINGWHISPERPC, 4)
+	if ack[3] != 0 {
+		t.Fatalf("/ex result = %d, want 0", ack[3])
+	}
+
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(whisperFrame("Partner", "can you hear me?")); err != nil {
+		t.Fatalf("send whisper: %v", err)
+	}
+	wack := drainFixed(t, conn1, ropacket.HeaderZCACKWHISPER, 7)
+	if wack[2] != 2 {
+		t.Fatalf("whisper ack = %d, want 2 (ignored by list)", wack[2])
+	}
+
+	conn2.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if n, err := conn2.Read(make([]byte, 64)); err == nil && n > 0 {
+		t.Fatalf("ignored target received %d bytes, want silence", n)
+	}
+}
+
+// TestMap_WhisperDeniedByExall: Partner /exall, then Hero's whisper acks
+// result 3 (all ignored) and nothing is delivered.
+func TestMap_WhisperDeniedByExall(t *testing.T) {
+	conn1, conn2 := twoPlayerWorld(t)
+
+	conn2.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn2.Write(whisperStateFrame(0)); err != nil {
+		t.Fatalf("send /exall: %v", err)
+	}
+	ack := drainFixed(t, conn2, ropacket.HeaderZCSETTINGWHISPERSTATE, 4)
+	if ack[3] != 0 {
+		t.Fatalf("/exall result = %d, want 0", ack[3])
+	}
+
+	conn1.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn1.Write(whisperFrame("Partner", "hello?")); err != nil {
+		t.Fatalf("send whisper: %v", err)
+	}
+	wack := drainFixed(t, conn1, ropacket.HeaderZCACKWHISPER, 7)
+	if wack[2] != 3 {
+		t.Fatalf("whisper ack = %d, want 3 (all ignored)", wack[2])
+	}
+
+	conn2.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if n, err := conn2.Read(make([]byte, 64)); err == nil && n > 0 {
+		t.Fatalf("deny-all target received %d bytes, want silence", n)
+	}
+}

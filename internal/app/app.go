@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/bouroo/goAthena/internal/config"
+	"github.com/bouroo/goAthena/internal/shared/safe"
 )
 
 // App is the assembled modular monolith.
@@ -70,12 +71,27 @@ func (a *App) Run(ctx context.Context) error {
 		mapAddr := fmt.Sprintf("tcp://%s:%d", a.cfg.Gateway.LoginHost, a.cfg.Gateway.MapPort)
 		a.deps.mapSrv.Start(mapAddr)
 	}
-	// The world tick loop drives natural HP/SP regen at the configured rate.
+	// The world tick loop drives natural HP/SP regen at the configured rate and
+	// advances mob AI (aggro + attack) on the same cadence, chained as a second
+	// update call so mobs and regen share one consistent snapshot per tick.
 	if a.deps.tick != nil {
 		tick := a.deps.tick
-		go tick.StartTick(ctx, func(_ context.Context, dt time.Duration) { //nolint:contextcheck // lifecycle tied to ctx via select
+		mobAI := a.deps.mobAI
+		go tick.StartTick(ctx, func(ctx context.Context, dt time.Duration) { //nolint:contextcheck // lifecycle tied to ctx via select
+			// One panicking tick must not end the world loop (and with it every
+			// player's session): recover inside the callback, so the loop's next
+			// tick still runs.
+			defer safe.Guard(a.log, "world.tick")
 			tick.RegenTick(dt)
+			if mobAI != nil {
+				mobAI.MonsterTick(ctx, dt)
+			}
 		})
+		// Periodic vital checkpoint: bounds hard-crash loss (SIGKILL/panic/power
+		// loss between disconnects) to one interval of in-session HP/SP/EXP
+		// change. StartCheckpoint spawns its own goroutine and drains on ctx
+		// cancellation (graceful shutdown); SaveAll remains the final flush.
+		tick.StartCheckpoint(ctx, a.cfg.Zone.CheckpointInterval) //nolint:contextcheck // lifecycle tied to ctx via select
 	}
 
 	errCh := make(chan error, 1)

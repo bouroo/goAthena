@@ -597,6 +597,46 @@ func (r CZRestartRequest) Encode(w io.Writer) error {
 	return nil
 }
 
+// CZSkillUpRequest is the decoded form of a client → map-server CZ_SKILLUP
+// packet (header 0x0112, 4 bytes on the wire). Source:
+// rathena/src/map/clif_packetdb.hpp:110
+// (`parseable_packet(0x0112,4,clif_parse_SkillUp,2,4)`).
+//
+// The on-wire shape is `<skillID>.W` — the client sends the skill name-id
+// it wants to level up.
+type CZSkillUpRequest struct {
+	// SkillID is the skill's name-id (NAMED_SKILL id, not the list-id).
+	SkillID int32
+}
+
+// ParseCZSkillUp decodes a CZ_SKILLUP frame. The frame must be exactly
+// SizeCZSkillUp (4) bytes. The opcode is NOT validated here because
+// dispatch has already selected this parser by opcode.
+func ParseCZSkillUp(frame []byte) (CZSkillUpRequest, error) {
+	if len(frame) != SizeCZSkillUp {
+		return CZSkillUpRequest{}, fmt.Errorf(
+			"packet: parse CZ_SKILLUP: want %d bytes, got %d",
+			SizeCZSkillUp, len(frame),
+		)
+	}
+	return CZSkillUpRequest{
+		SkillID: int32(binary.LittleEndian.Uint16(frame[2:4])),
+	}, nil
+}
+
+// Encode writes the CZ_SKILLUP packet to w. Mirrors the on-wire
+// layout: [2:cmd=0x0112][4:skillID uint16 LE].
+func (r CZSkillUpRequest) Encode(w io.Writer) error {
+	skillID := uint16(r.SkillID) //nolint:gosec // skill ids fit uint16 (bounded by skill_db)
+	var buf [SizeCZSkillUp]byte
+	binary.LittleEndian.PutUint16(buf[0:2], HeaderCZSKILLUP)
+	binary.LittleEndian.PutUint16(buf[2:4], skillID)
+	if _, err := w.Write(buf[:]); err != nil {
+		return fmt.Errorf("packet: write CZ_SKILLUP: %w", err)
+	}
+	return nil
+}
+
 // CZContactNPCRequest is the decoded form of a client → map-server
 // CZ_CONTACTNPC packet (header 0x0090, 7 bytes on the wire). Source:
 // rathena/src/map/clif_packetdb.hpp:42
@@ -1242,4 +1282,45 @@ func (r CZDropItemRequest) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: write CZ_DROP_ITEM: %w", err)
 	}
 	return nil
+}
+
+// CZPMIgnoreRequest is the decoded form of CZ_PMIgnore (0x00cf) — /ex (block)
+// or /in (unblock) one name. Wire: [2:cmd][24:name char[24]][1:type] = 27B
+// (rathena/src/map/clif_packetdb.hpp:78, clif.cpp:15134).
+type CZPMIgnoreRequest struct {
+	Name string
+	Type uint8 // 0 = add to ignore list, 1 = remove
+}
+
+// ParseCZPMIgnore decodes a fixed 27-byte CZ_PMIgnore frame.
+func ParseCZPMIgnore(frame []byte) (CZPMIgnoreRequest, error) {
+	if len(frame) != sizeCZPMIgnore {
+		return CZPMIgnoreRequest{}, fmt.Errorf("packet: parse CZ_PMIgnore: want %d bytes, got %d", sizeCZPMIgnore, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZPMIGNORE {
+		return CZPMIgnoreRequest{}, fmt.Errorf("packet: parse CZ_PMIgnore: unexpected cmd 0x%04x", cmd)
+	}
+	name := frame[2:26]
+	if idx := bytes.IndexByte(name, 0); idx >= 0 {
+		name = name[:idx]
+	}
+	return CZPMIgnoreRequest{Name: string(name), Type: frame[26]}, nil
+}
+
+// CZSettingWhisperStateRequest is the decoded form of CZ_SETTING_WHISPER_STATE
+// (0x00d0) — /exall (deny all) or /inall (allow all). Wire: [2:cmd][1:type] = 3B
+// (rathena/src/map/clif.cpp:15188).
+type CZSettingWhisperStateRequest struct {
+	Type uint8 // 0 = deny all, 1 = allow all
+}
+
+// ParseCZSettingWhisperState decodes a fixed 3-byte CZ_SETTING_WHISPER_STATE frame.
+func ParseCZSettingWhisperState(frame []byte) (CZSettingWhisperStateRequest, error) {
+	if len(frame) != sizeCZSettingWhisperState {
+		return CZSettingWhisperStateRequest{}, fmt.Errorf("packet: parse CZ_SETTING_WHISPER_STATE: want %d bytes, got %d", sizeCZSettingWhisperState, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZSETTINGWHISPERSTATE {
+		return CZSettingWhisperStateRequest{}, fmt.Errorf("packet: parse CZ_SETTING_WHISPER_STATE: unexpected cmd 0x%04x", cmd)
+	}
+	return CZSettingWhisperStateRequest{Type: frame[2]}, nil
 }

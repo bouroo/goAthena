@@ -193,6 +193,86 @@ func (r NotifyZoneServerResponse) validate() error {
 	return nil
 }
 
+// CharDeleteReservedResponse encodes HC_DELETE_CHAR3_RESERVED (command 0x0828,
+// 14 bytes on wire). Source: rathena/src/common/packets.hpp:477-482.
+//
+// Wire layout: [2:cmd=0x0828][4:CID][4:result][4:date] = 14 bytes.
+// result: 0 = already queued (date=0), 1 = OK (date = remaining seconds until
+// deletion), 3 = character not found on this account. We have no party/guild
+// so 2/4/5 are never emitted.
+type CharDeleteReservedResponse struct {
+	CID    uint32
+	Result int32
+	Date   uint32 // remaining seconds; 0 when already queued (result=0).
+}
+
+// Size returns on-wire byte length Encode will write (always 14).
+func (r CharDeleteReservedResponse) Size() int { return sizeHCCharDeleteReserved }
+
+// Encode writes HC_DELETE_CHAR3_RESERVED packet w.
+func (r CharDeleteReservedResponse) Encode(w io.Writer) error {
+	buf := make([]byte, sizeHCCharDeleteReserved)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCDELETECHAR3RESERVED)
+	binary.LittleEndian.PutUint32(buf[2:], r.CID)
+	binary.LittleEndian.PutUint32(buf[6:], uint32(r.Result)) //nolint:gosec // wire is int32; r.Result is int32.
+	binary.LittleEndian.PutUint32(buf[10:], r.Date)
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write HC_DELETE_CHAR3_RESERVED: %w", err)
+	}
+	return nil
+}
+
+// CharDeleteResponse encodes HC_DELETE_CHAR3 (command 0x082a, 10 bytes on wire).
+// Source: rathena/src/common/packets.hpp:487-492.
+//
+// Wire layout: [2:cmd=0x082a][4:CID][4:result] = 10 bytes.
+// result: 1 = deleted, 3 = not found, 4 = never reserved (delay not passed),
+// 5 = birthdate mismatch.
+type CharDeleteResponse struct {
+	CID    uint32
+	Result int32
+}
+
+// Size returns on-wire byte length Encode will write (always 10).
+func (r CharDeleteResponse) Size() int { return sizeHCCharDelete }
+
+// Encode writes HC_DELETE_CHAR3 packet w.
+func (r CharDeleteResponse) Encode(w io.Writer) error {
+	buf := make([]byte, sizeHCCharDelete)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCDELETECHAR3)
+	binary.LittleEndian.PutUint32(buf[2:], r.CID)
+	binary.LittleEndian.PutUint32(buf[6:], uint32(r.Result)) //nolint:gosec // wire is int32; r.Result is int32.
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write HC_DELETE_CHAR3: %w", err)
+	}
+	return nil
+}
+
+// CharDeleteCancelResponse encodes HC_DELETE_CHAR3_CANCEL (command 0x082c,
+// 10 bytes on wire). Source: rathena/src/common/packets.hpp:497-502.
+//
+// Wire layout: [2:cmd=0x082c][4:CID][4:result] = 10 bytes.
+// result: 1 = cancelled, 2 = character not found.
+type CharDeleteCancelResponse struct {
+	CID    uint32
+	Result int32
+}
+
+// Size returns on-wire byte length Encode will write (always 10).
+func (r CharDeleteCancelResponse) Size() int { return sizeHCCharDeleteCancel }
+
+// Encode writes HC_DELETE_CHAR3_CANCEL packet w.
+func (r CharDeleteCancelResponse) Encode(w io.Writer) error {
+	buf := make([]byte, sizeHCCharDeleteCancel)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCDELETECHAR3CANCEL)
+	binary.LittleEndian.PutUint32(buf[2:], r.CID)
+	binary.LittleEndian.PutUint32(buf[6:], uint32(r.Result)) //nolint:gosec // wire is int32; r.Result is int32.
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write HC_DELETE_CHAR3_CANCEL: %w", err)
+	}
+	return nil
+}
+
 // AcceptEnterResponse encodes an HC_ACCEPT_ENTER packet (command 0x006b,
 // used for PACKETVER >= 20100413). Layout source:
 //

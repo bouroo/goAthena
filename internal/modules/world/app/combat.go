@@ -133,7 +133,7 @@ func (c *CombatService) Attack(attackerID, defenderID domain.EntityID) (int32, b
 	if err != nil {
 		return 0, false, fmt.Errorf("attacker: %w", err)
 	}
-	base := attackerBase(attacker)
+	base := c.attackerBase(attacker)
 	def := defenderProfile(c.mobs, defender)
 	roll := c.roll(base, def)
 	result := combat.NormalMelee(
@@ -181,12 +181,17 @@ func (c *CombatService) roll(base statcalc.Base, def combat.Defender) combat.Rol
 	return combat.Roll{Hit: hit, Crit: crit}
 }
 
-// attackerEquipment resolves a PC attacker's equipped-gear contributions. A mob
-// attacker has no inventory and resolves zero; a nil profiler (the naked
-// baseline) also resolves zero. A load failure is propagated so the caller can
-// surface it rather than silently degrading the hit to a naked swing.
+// attackerEquipment resolves an attacker's right-side ATK contributions. A PC
+// attacker folds its equipped WeaponATK via the injected profiler; a mob
+// attacker has no inventory and instead resolves its mob_db Attack (the monster's
+// melee damage range, used as weapon ATK). A nil profiler (the naked baseline)
+// resolves zero for a PC. A load failure is propagated so the caller can surface
+// it rather than silently degrading the hit to a naked swing.
 func (c *CombatService) attackerEquipment(e domain.Entity) (statcalc.Equipment, error) {
-	if c.equip == nil || e.Type != domain.EntityTypePC {
+	if e.Type == domain.EntityTypeMob {
+		return mobAttackerEquipment(c.mobs, e), nil
+	}
+	if c.equip == nil {
 		return statcalc.Equipment{}, nil
 	}
 	eq, err := c.equip.EquipmentProfile(context.Background(), e.Account, uint32(e.ID))
@@ -196,14 +201,45 @@ func (c *CombatService) attackerEquipment(e domain.Entity) (statcalc.Equipment, 
 	return eq, nil
 }
 
-// attackerBase maps a world entity's base stats to the kernel's stat base. Mob
-// base stats stay zero (mob-vs-mob attacking is not wired), so a PC's char-table
-// stats are the only non-zero source feeding BaseATK.
-func attackerBase(e domain.Entity) statcalc.Base {
+// attackerBase maps a world entity's base stats to the kernel's stat base. A PC
+// feeds its char-table stats directly; a mob resolves Str/Agi/Dex/Luk/Level from
+// mob_db by Class (its BaseATK and Hit/Flee come from there, not the entity, so
+// a mob attacker can actually hit and damage a player). A missing mob_db entry
+// or zero class yields the zero base — no damage.
+func (c *CombatService) attackerBase(e domain.Entity) statcalc.Base {
+	if e.Type == domain.EntityTypeMob && e.Class != 0 {
+		if mob := c.mobs.Get(e.Class); mob != nil {
+			return statcalc.Base{
+				Level: uint16(mob.Level), //nolint:gosec // G115: level bounded by game values
+				Str:   uint16(mob.Str),   //nolint:gosec // G115: mob stats bounded by game values
+				Agi:   uint16(mob.Agi),   //nolint:gosec // G115: mob stats bounded by game values
+				Vit:   uint16(mob.Vit),   //nolint:gosec // G115: mob stats bounded by game values
+				Int:   uint16(mob.Int),   //nolint:gosec // G115: mob stats bounded by game values
+				Dex:   uint16(mob.Dex),   //nolint:gosec // G115: mob stats bounded by game values
+				Luk:   uint16(mob.Luk),   //nolint:gosec // G115: mob stats bounded by game values
+			}
+		}
+	}
 	return statcalc.Base{
 		Level: uint16(e.Level), //nolint:gosec // G115: level bounded by game values
 		Str:   e.Str, Agi: e.Agi, Vit: e.Vit, Int: e.Int, Dex: e.Dex, Luk: e.Luk,
 	}
+}
+
+// mobAttackerEquipment resolves a mob attacker's weapon ATK from mob_db. The
+// monster's Attack column is its raw damage range, used directly as the
+// right-side (weapon) ATK the kernel adds to BaseATK — there is no inventory.
+// Attack2 is the secondary range and folds into WeaponATK as well so the mob's
+// full damage spread applies. A nil registry or missing entry resolves zero.
+func mobAttackerEquipment(mobs *mobdb.Registry, e domain.Entity) statcalc.Equipment {
+	if mobs == nil || e.Class == 0 {
+		return statcalc.Equipment{}
+	}
+	mob := mobs.Get(e.Class)
+	if mob == nil {
+		return statcalc.Equipment{}
+	}
+	return statcalc.Equipment{WeaponATK: mob.Attack + mob.Attack2}
 }
 
 // defenderProfile builds the defensive profile for one hit. A mob defender

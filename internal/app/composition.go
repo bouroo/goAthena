@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/samber/do/v2"
@@ -17,11 +18,19 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/account"
 	"github.com/bouroo/goAthena/internal/modules/character"
 	shopmod "github.com/bouroo/goAthena/internal/modules/commerce/shop"
+	storagemod "github.com/bouroo/goAthena/internal/modules/commerce/storage"
 	"github.com/bouroo/goAthena/internal/modules/content"
+	questmod "github.com/bouroo/goAthena/internal/modules/content/quest"
 	"github.com/bouroo/goAthena/internal/modules/economy"
+	economydomain "github.com/bouroo/goAthena/internal/modules/economy/domain"
+	economyinfra "github.com/bouroo/goAthena/internal/modules/economy/infra"
 	"github.com/bouroo/goAthena/internal/modules/gateway"
 	"github.com/bouroo/goAthena/internal/modules/inventory"
 	"github.com/bouroo/goAthena/internal/modules/social"
+	friendmod "github.com/bouroo/goAthena/internal/modules/social/friend"
+	guildmod "github.com/bouroo/goAthena/internal/modules/social/guild"
+	mailmod "github.com/bouroo/goAthena/internal/modules/social/mail"
+	partymod "github.com/bouroo/goAthena/internal/modules/social/party"
 	"github.com/bouroo/goAthena/internal/modules/transit"
 	"github.com/bouroo/goAthena/internal/modules/world"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
@@ -45,11 +54,14 @@ type deps struct {
 	char   protoListener
 	mapSrv protoListener
 	tick   tickStarter
+	mobAI  *worldapp.MobAIService
 }
 
-// tickStarter is the lifecycle surface for the world tick loop.
+// tickStarter is the lifecycle surface for the world tick loop and the periodic
+// vital-checkpoint loop.
 type tickStarter interface {
 	StartTick(ctx context.Context, update func(ctx context.Context, dt time.Duration))
+	StartCheckpoint(ctx context.Context, interval time.Duration)
 	RegenTick(dt time.Duration)
 	Stop()
 }
@@ -92,6 +104,16 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 		do.ProvideValue(inj, gdb)
 		closers = append(closers, func() { _ = db.Close(gdb) })
 
+		// The zeny ledger is the GORM-backed append-only audit trail behind
+		// every balance movement. Wiring it in composition keeps the economy
+		// module independent of GORM (the only place that knows about GORM is
+		// the composition root). economy.Register resolves the port lazily,
+		// so a down DB simply leaves the ledger nil and the service refuses
+		// movements with ErrLedgerAppendFailed — matching the readiness state.
+		do.Provide(inj, func(i do.Injector) (economydomain.LedgerRepository, error) {
+			return economyinfra.NewGORMLedger(do.MustInvoke[*gorm.DB](i)), nil
+		})
+
 		// Apply the embedded rAthena schema at boot so a fresh volume reaches
 		// readiness without a manual `goathena migrate up`. Bounded retry
 		// tolerates a slow-to-accept DB; a persistent failure leaves /readyz
@@ -117,16 +139,46 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	inventory.Register(inj)
 	economy.Register(inj)
 	shopmod.Register(inj)
+	storagemod.Register(inj)
 	social.Register(inj)
-	content.Register(inj)
+	partymod.Register(inj)
+	friendmod.Register(inj)
+	guildmod.Register(inj)
+	mailmod.Register(inj)
+	content.Register(inj, cfg)
+	questmod.Register(inj)
 	transit.Register(inj)
 	world.Register(inj, cfg.Zone.TickRateHz, cfg.Zone.DBPath)
+
+	// Seed the world from the compiled script corpus: dialog NPCs, shop NPCs,
+	// and mob spawns become live entities. Best-effort — a corpus failure
+	// leaves an unseeded but bootable world.
+	content.SeedWorld(inj, log)
 
 	// Resolve the world service so App.Run can start/stop its tick loop.
 	if ws, err := do.Invoke[*worldapp.WorldService](inj); err != nil {
 		log.Error("world service resolve failed; tick loop will not run", "err", err)
 	} else {
 		d.tick = ws
+		// Graceful-shutdown save-all: appended before the listeners so the reverse
+		// close order stops the listeners first (their OnClose handlers persist
+		// per-conn), then this flushes any remaining online PCs (vitals + offline)
+		// before the DB connection is closed. Best-effort and bounded; a slow DB
+		// cannot hang shutdown beyond the timeout.
+		closers = append(closers, func() {
+			sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			ws.SaveAll(sctx)
+		})
+	}
+
+	// Resolve the mob AI service so the tick loop can chain MonsterTick after
+	// RegenTick. Best-effort: a resolve failure leaves d.mobAI nil and mobs stay
+	// passive, but the server still boots (regen runs).
+	if mobAI, err := do.Invoke[*worldapp.MobAIService](inj); err != nil {
+		log.Error("mob AI service resolve failed; mobs will stay passive", "err", err)
+	} else {
+		d.mobAI = mobAI
 	}
 
 	// Listeners resolve their ports from the injector. Best-effort: a build
@@ -151,8 +203,8 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	}
 
 	closeAll := func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i]()
+		for _, closer := range slices.Backward(closers) {
+			closer()
 		}
 	}
 	return inj, d, closeAll

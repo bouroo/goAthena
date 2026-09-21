@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/bouroo/goAthena/actions/workflows/ci.yml/badge.svg)](https://github.com/bouroo/goAthena/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/bouroo/goAthena)](https://goreportcard.com/report/github.com/bouroo/goAthena)
-[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/doc/go1.26)
+[![Go Version](https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go&logoColor=white)](https://go.dev/doc/go1.27)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
 
 A Go re-implementation of the **Ragnarok Online** server, built as a modular
@@ -60,7 +60,7 @@ implemented**.
 
 | Layer | Choice | Why |
 |---|---|---|
-| Language | **Go 1.26+** | Concurrency, single-static-binary deploy, GC fit for a game loop |
+| Language | **Go 1.27+** | Concurrency, single-static-binary deploy, GC fit for a game loop |
 | Primary DB | **MariaDB 11.4** (PostgreSQL supported, not yet on CI) | MariaDB is the rAthena-compatible, CI-tested default; both engines run the same embedded migrations |
 | Cache / sessions | **Valkey** (Redis-fork) | Session keys, hot state, rate-limit counters |
 | Inter-service eventing | **NATS** *(planned)* | Configured (`config.yaml`, compose sidecar); no `nats.Connect` in the binary yet. The scale-out bus when modules extract into separate binaries |
@@ -72,7 +72,7 @@ implemented**.
 
 ## Prerequisites
 
-- **Go 1.26+**
+- **Go 1.27+**
 - **Docker** (or Podman)
 - **[Task](https://taskfile.dev/installation/)** — the build runner used throughout
 - A running **MariaDB 11.4+** and **Valkey 9+** — easiest via `docker compose`. (A **NATS 2.x** container is in `compose.yml` for the planned event bus; the binary does not yet require it.)

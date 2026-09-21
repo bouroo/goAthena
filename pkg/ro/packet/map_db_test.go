@@ -86,6 +86,8 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCItemDisappear, "ZC_ITEM_DISAPPEAR", sizeZCItemDisappear, DirectionServerToClient},
 		{HeaderZCItemThrowAck, "ZC_ITEM_THROW_ACK", sizeZCItemThrowAck, DirectionServerToClient},
 		{HeaderZCItemPickupAck, "ZC_ITEM_PICKUP_ACK", sizeZCItemPickupAck, DirectionServerToClient},
+		// Phase 44: the removal counterpart (clif.cpp:2915-2928, packets.hpp:825-831).
+		{HeaderZCDeleteItemFromBody, "ZC_DELETE_ITEM_FROM_BODY", sizeZCDeleteItemFromBody, DirectionServerToClient},
 		// M14c: NPC input dialogs (clif.cpp:13378/13397, packets.hpp:769/775/1837/1844).
 		{HeaderCZINPUTEDITDLG, "CZ_INPUT_EDITDLG", sizeCZInputEditDlg, DirectionClientToServer},
 		{HeaderCZINPUTEDITDLGSTR, "CZ_INPUT_EDITDLGSTR", VariableLength, DirectionClientToServer},
@@ -107,6 +109,22 @@ func TestNewMapServerDB_HasAllEntries(t *testing.T) {
 		{HeaderZCADDEXCHANGEITEM, "ZC_ADD_EXCHANGE_ITEM", sizeZCAddExchangeItem, DirectionServerToClient},
 		{HeaderZCACKADDEXCHANGEITEM, "ZC_ACK_ADD_EXCHANGE_ITEM", sizeZCAckAddExchange, DirectionServerToClient},
 		{HeaderZCCONCLUDEEXCHANGEITEM, "ZC_CONCLUDE_EXCHANGE_ITEM", sizeZCConcludeExchange, DirectionServerToClient},
+		// M11: party (group) family. C→S from clif_packetdb.hpp:98-106; S→C
+		// roster/member opcodes are the >=20171207 pair (packets_struct.hpp:274-276).
+		{HeaderCZMAKEGROUP, "CZ_MAKE_GROUP", sizeCZMakeGroup, DirectionClientToServer},
+		{HeaderCZMAKEGROUP2, "CZ_MAKE_GROUP2", sizeCZMakeGroup2, DirectionClientToServer},
+		{HeaderCZREQJOINGROUP, "CZ_REQ_JOIN_GROUP", sizeCZReqJoinGroup, DirectionClientToServer},
+		{HeaderCZJOINGROUP, "CZ_JOIN_GROUP", sizeCZJoinGroup, DirectionClientToServer},
+		{HeaderCZREQLEAVEGROUP, "CZ_REQ_LEAVE_GROUP", sizeCZReqLeaveGroup, DirectionClientToServer},
+		{HeaderCZCHANGEGROUPEXPOPT, "CZ_CHANGE_GROUPEXPOPTION", sizeCZChangeGroupExp, DirectionClientToServer},
+		{HeaderCZREQEXPELGROUPMEMBER, "CZ_REQ_EXPEL_GROUP_MEMBER", sizeCZReqExpelMember, DirectionClientToServer},
+		{HeaderZCACKMAKEGROUP, "ZC_ACK_MAKE_GROUP", sizeZCAckMakeGroup, DirectionServerToClient},
+		{HeaderZCPARTYJOINREQ, "ZC_PARTY_JOIN_REQ", sizeZCPartyJoinReq, DirectionServerToClient},
+		{HeaderZCPARTYJOINREQACK, "ZC_PARTY_JOIN_REQ_ACK", sizeZCPartyJoinReqAck, DirectionServerToClient},
+		{HeaderZCPARTYCONFIG, "ZC_PARTY_CONFIG", sizeZCPartyConfig, DirectionServerToClient},
+		{HeaderZCGROUPLIST, "ZC_GROUP_LIST", sizeZCGroupListHeader, DirectionServerToClient},
+		{HeaderZCADDMEMBERTOGROUP, "ZC_ADD_MEMBER_TO_GROUP", sizeZCAddMemberToGroup, DirectionServerToClient},
+		{HeaderZCDELETEMEMBERFROMGRP, "ZC_DELETE_MEMBER_FROM_GROUP", sizeZCDeleteMember, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -160,8 +178,18 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// ZC_ACK_EXCHANGE_ITEM 0x01f5, ZC_CANCEL_EXCHANGE_ITEM 0x00ee) → 93. S2 adds
 	// the staging family (CZ_ADD_EXCHANGE_ITEM 0x00e8, CZ_TRADE_OK 0x00eb,
 	// ZC_ADD_EXCHANGE_ITEM 0x0b42, ZC_ACK_ADD_EXCHANGE_ITEM 0x00ea,
-	// ZC_CONCLUDE_EXCHANGE_ITEM 0x00ec) → 98.
-	const want = 98
+	// ZC_CONCLUDE_EXCHANGE_ITEM 0x00ec) → 98. S3 adds CZ_SKILLUP (0x0112) → 99.
+	// Phase 40 adds the expression pair (CZ_CHANGE_DIRECTION, CZ_REQ_EMOTION)
+	// → 101; Phase 41 adds the whisper ignore-list family (CZ_PMIgnore,
+	// CZ_SETTING_WHISPER_STATE, CZ_REQ_WHISPER_LIST, ZC_SETTING_WHISPER_PC,
+	// ZC_SETTING_WHISPER_STATE, ZC_WHISPER_LIST) → 105. Phase 43 registers
+	// ZC_NPCACK_MAPMOVE (0x0091), the warp-portal relocation directive the
+	// server had always emitted but never declared in the DB → 106. Phase 44
+	// registers ZC_DELETE_ITEM_FROM_BODY (0x07fa), the inventory-removal frame
+	// a shop sale needs to re-sync the bag grid → 107. M11 registers the 14
+	// party (group) family packets → 121, then the 27 RODEX mail packets
+	// (18 C→S + 9 S→C) → 148.
+	const want = 148
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}
@@ -238,6 +266,8 @@ func TestNewMapServerDB_LengthLookup(t *testing.T) {
 		{HeaderZCItemDisappear, sizeZCItemDisappear},
 		{HeaderZCItemThrowAck, sizeZCItemThrowAck},
 		{HeaderZCItemPickupAck, sizeZCItemPickupAck},
+		// Phase 44: shop-sale bag re-sync.
+		{HeaderZCDeleteItemFromBody, sizeZCDeleteItemFromBody},
 	}
 	for _, c := range cases {
 		got, ok := db.Length(c.cmd)

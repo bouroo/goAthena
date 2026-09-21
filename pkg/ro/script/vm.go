@@ -39,6 +39,32 @@ type Host interface {
 	Warp(mapName string, x, y int)
 	// PercentHeal restores HP/SP by the given percentages (0–100).
 	PercentHeal(hpPct, spPct int)
+	// GetItem grants amount units of nameID. Returns false when the bag is
+	// full / the item cannot be added.
+	GetItem(nameID uint32, amount int) bool
+	// DelItem removes amount units of nameID. Returns false when the player
+	// does not hold at least `amount` of it.
+	DelItem(nameID uint32, amount int) bool
+	// CountItem returns the player's count of nameID.
+	CountItem(nameID uint32) int
+	// Equip equips the item at the inventory index to the given slot bitmask.
+	// Returns false when the index is invalid.
+	Equip(index int, slot uint32) bool
+	// Unequip clears the equip bitmask of the item at the inventory index.
+	// Returns false when the index is invalid or the item is not equipped.
+	Unequip(index int) bool
+	// GetQuestVar returns the persistent NPC-variable value (npcName, varName)
+	// for the dialog's player. An unset variable reads as 0 — matches
+	// rAthena's "unset integer reads as 0". The persistence port is implemented
+	// by the content bounded context's QuestService; nil disables the
+	// getvariableofnpc builtin (returns 0).
+	GetQuestVar(npcName, varName string) int64
+	// SetQuestVar stores the persistent NPC-variable value (npcName, varName)
+	// for the dialog's player. A write error is returned to the caller; the VM
+	// stops with ctrlEnd on a hard write failure (mismatching the rAthena
+	// behaviour where a quest-table failure logs but does not abort the
+	// script). nil disables the persistence side of the builtin.
+	SetQuestVar(npcName, varName string, value int64) error
 }
 
 // control tells the VM how a builtin affected script flow after it returns.

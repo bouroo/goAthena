@@ -42,6 +42,18 @@ const (
 	Arms        = HandRight | HandLeft           // EQP_ARMS (34): both hands (two-handed weapon)
 	Helm        = HeadLow | HeadMid | HeadTop    // EQP_HELM (769)
 	Accessories = AccessoryRight | AccessoryLeft // EQP_ACC (136)
+
+	// Costume is the EQP_COSTUME composite (pc.hpp:1142) — the four costume
+	// slots, which are cosmetic overlays rather than stat-bearing gear.
+	Costume = CostumeHeadTop | CostumeHeadMid | CostumeHeadLow | CostumeGarment
+
+	// EquipVisible is EQP_VISIBLE for this client era (pc.hpp:1152): the equip
+	// positions whose item_db.View sprite the client actually renders. rAthena
+	// writes the view sprite into the equip ack only for items overlapping this
+	// mask (clif.cpp:4316-4322) and 0 otherwise, which is exactly what the
+	// gateway's equip-ack path reproduces. The pre-20110111 branch (EQP_HELM
+	// alone) does not apply: PACKETVER 20250604 is far past that cutoff.
+	EquipVisible = Helm | Garment | Costume
 )
 
 // locationBits maps a lowercased item_db_equip.yml Locations key to its EQP_* bit.

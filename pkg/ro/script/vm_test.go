@@ -10,20 +10,36 @@ import (
 // effects without a network. Next returns true (advance) so dialog scripts
 // proceed; a future test can flip nextOK to model a cancelled dialog.
 type fakeHost struct {
-	mes            []string
-	nexts          int
-	closed         bool
-	warps          []warpCall
-	heals          []healCall
-	selects        [][]string
-	inputs         int
-	inputStrs      int
-	nextOK         bool
-	selectChoice   int
-	inputResult    int64
-	inputOK        bool
-	inputStrResult string
-	inputStrOK     bool
+	mes             []string
+	nexts           int
+	closed          bool
+	warps           []warpCall
+	heals           []healCall
+	selects         [][]string
+	inputs          int
+	inputStrs       int
+	getItems        []itemCall
+	delItems        []itemCall
+	countItems      []uint32
+	equips          []equipCall
+	unequips        []int
+	questReads      []questCall
+	questWrites     []questWriteCall
+	nextOK          bool
+	selectChoice    int
+	inputResult     int64
+	inputOK         bool
+	inputStrResult  string
+	inputStrOK      bool
+	getItemOK       bool
+	delItemOK       bool
+	countItemResult int
+	equipOK         bool
+	unequipOK       bool
+	// questReads maps npcName -> varName -> value. An unset pair returns 0.
+	questVars map[string]map[string]int64
+	// questSetErr makes the next SetQuestVar return an error.
+	questSetErr error
 }
 
 type warpCall struct {
@@ -32,6 +48,27 @@ type warpCall struct {
 }
 
 type healCall struct{ hp, sp int }
+
+type itemCall struct {
+	nameID uint32
+	amount int
+}
+
+type equipCall struct {
+	index int
+	slot  uint32
+}
+
+type questCall struct {
+	npcName string
+	varName string
+}
+
+type questWriteCall struct {
+	npcName string
+	varName string
+	value   int64
+}
 
 func newFakeHost() *fakeHost {
 	return &fakeHost{nextOK: true, inputOK: true, inputStrOK: true}
@@ -55,6 +92,63 @@ func (h *fakeHost) Input() (int64, bool) {
 func (h *fakeHost) InputStr() (string, bool) {
 	h.inputStrs++
 	return h.inputStrResult, h.inputStrOK
+}
+
+// Item-script Host methods. They record into slices so a test can assert what
+// the VM called. Default behaviour: getitem/delitem succeed, countitem
+// reports whatever countItemResult holds, equip/unequip succeed.
+func (h *fakeHost) GetItem(nameID uint32, amount int) bool {
+	h.getItems = append(h.getItems, itemCall{nameID, amount})
+	return h.getItemOK
+}
+
+func (h *fakeHost) DelItem(nameID uint32, amount int) bool {
+	h.delItems = append(h.delItems, itemCall{nameID, amount})
+	return h.delItemOK
+}
+
+func (h *fakeHost) CountItem(nameID uint32) int {
+	h.countItems = append(h.countItems, nameID)
+	return h.countItemResult
+}
+
+func (h *fakeHost) Equip(index int, slot uint32) bool {
+	h.equips = append(h.equips, equipCall{index, slot})
+	return h.equipOK
+}
+
+func (h *fakeHost) Unequip(index int) bool {
+	h.unequips = append(h.unequips, index)
+	return h.unequipOK
+}
+
+// Quest variable Host methods. The fake keeps an in-memory map (npcName ->
+// varName -> value) so test scripts can round-trip through getvariableofnpc /
+// setquestvar without wiring a real QuestService.
+func (h *fakeHost) GetQuestVar(npcName, varName string) int64 {
+	h.questReads = append(h.questReads, questCall{npcName, varName})
+	if h.questVars == nil {
+		return 0
+	}
+	if v, ok := h.questVars[npcName]; ok {
+		return v[varName]
+	}
+	return 0
+}
+
+func (h *fakeHost) SetQuestVar(npcName, varName string, value int64) error {
+	h.questWrites = append(h.questWrites, questWriteCall{npcName, varName, value})
+	if h.questSetErr != nil {
+		return h.questSetErr
+	}
+	if h.questVars == nil {
+		h.questVars = make(map[string]map[string]int64)
+	}
+	if h.questVars[npcName] == nil {
+		h.questVars[npcName] = make(map[string]int64)
+	}
+	h.questVars[npcName][varName] = value
+	return nil
 }
 
 // runFirstScript compiles src, takes the first script in the set, and runs it
@@ -616,5 +710,166 @@ func TestVMInputDefaultClampsNegative(t *testing.T) {
 	vars := runFirstScript(t, src, h, nil)
 	if vars[".@amt"].Int != 0 {
 		t.Errorf(".@amt = %d, want 0 (default min clamps negative)", vars[".@amt"].Int)
+	}
+}
+
+// Item-script builtin tests. These pin the wire shape of the M10 Rung A
+// builtins (getitem/delitem/countitem/equip/unequip/getitem2) — the script
+// side compiles and calls them; the Host side records the call so the test
+// can assert the VM lowered arguments correctly.
+
+func TestVMGetItemBuiltinReturnsOne(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@ok = getitem(501, 5);\n" +
+		"}\n"
+	h := newFakeHost()
+	h.getItemOK = true
+	vars := runFirstScript(t, src, h, nil)
+	if vars[".@ok"].Int != 1 {
+		t.Errorf(".@ok = %d, want 1 (success)", vars[".@ok"].Int)
+	}
+	if len(h.getItems) != 1 || h.getItems[0] != (itemCall{501, 5}) {
+		t.Errorf("getItems = %v, want [{501 5}]", h.getItems)
+	}
+}
+
+func TestVMGetItemBuiltinReturnsZeroOnRejection(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@ok = getitem(501, 5);\n" +
+		"}\n"
+	h := newFakeHost()
+	h.getItemOK = false // bag full / capacity exceeded
+	vars := runFirstScript(t, src, h, nil)
+	if vars[".@ok"].Int != 0 {
+		t.Errorf(".@ok = %d, want 0 (rejection)", vars[".@ok"].Int)
+	}
+}
+
+func TestVMGetItem2Builtin(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@ok = getitem2(501, 1);\n" +
+		"}\n"
+	h := newFakeHost()
+	h.getItemOK = true
+	vars := runFirstScript(t, src, h, nil)
+	if vars[".@ok"].Int != 1 {
+		t.Errorf(".@ok = %d, want 1", vars[".@ok"].Int)
+	}
+	if len(h.getItems) != 1 {
+		t.Errorf("getItems len = %d, want 1", len(h.getItems))
+	}
+}
+
+func TestVMDelItemBuiltinRoundTrip(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@ok = delitem(501, 3);\n" +
+		"}\n"
+	h := newFakeHost()
+	h.delItemOK = true
+	vars := runFirstScript(t, src, h, nil)
+	if vars[".@ok"].Int != 1 {
+		t.Errorf(".@ok = %d, want 1", vars[".@ok"].Int)
+	}
+	if len(h.delItems) != 1 || h.delItems[0] != (itemCall{501, 3}) {
+		t.Errorf("delItems = %v, want [{501 3}]", h.delItems)
+	}
+}
+
+func TestVMCountItemBuiltin(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@c = countitem(501);\n" +
+		"}\n"
+	h := newFakeHost()
+	h.countItemResult = 7
+	vars := runFirstScript(t, src, h, nil)
+	if vars[".@c"].Int != 7 {
+		t.Errorf(".@c = %d, want 7", vars[".@c"].Int)
+	}
+	if len(h.countItems) != 1 || h.countItems[0] != 501 {
+		t.Errorf("countItems = %v, want [501]", h.countItems)
+	}
+}
+
+func TestVMEquipBuiltin(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@ok = equip(2, 2);\n" + // EQP_HAND_R = 2 in rAthena
+		"}\n"
+	h := newFakeHost()
+	h.equipOK = true
+	vars := runFirstScript(t, src, h, nil)
+	if vars[".@ok"].Int != 1 {
+		t.Errorf(".@ok = %d, want 1", vars[".@ok"].Int)
+	}
+	if len(h.equips) != 1 || h.equips[0] != (equipCall{2, 2}) {
+		t.Errorf("equips = %v, want [{2 2}]", h.equips)
+	}
+}
+
+func TestVMUnequipBuiltin(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		".@ok = unequip(2);\n" +
+		"}\n"
+	h := newFakeHost()
+	h.unequipOK = true
+	vars := runFirstScript(t, src, h, nil)
+	if vars[".@ok"].Int != 1 {
+		t.Errorf(".@ok = %d, want 1", vars[".@ok"].Int)
+	}
+	if len(h.unequips) != 1 || h.unequips[0] != 2 {
+		t.Errorf("unequips = %v, want [2]", h.unequips)
+	}
+}
+
+func TestVMGetVariableOfNPCBuiltin(t *testing.T) {
+	// `getvariableofnpc("QuestGiver", "Step")` reads another NPC's persistent
+	// variable for the dialog's player. An unset variable reads as 0.
+	const src = "-\tscript\tN\t-1,{\n" +
+		`getvariableofnpc("QuestGiver", "Step");` + "\n" +
+		`getvariableofnpc("OtherNPC", "Var");` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	h.questVars = map[string]map[string]int64{
+		"OtherNPC": {"Var": 42},
+	}
+	runFirstScript(t, src, h, nil)
+	if len(h.questReads) != 2 {
+		t.Fatalf("quest reads = %d, want 2", len(h.questReads))
+	}
+	if h.questReads[0] != (questCall{"QuestGiver", "Step"}) {
+		t.Errorf("read[0] = %+v, want {QuestGiver Step}", h.questReads[0])
+	}
+	if h.questReads[1] != (questCall{"OtherNPC", "Var"}) {
+		t.Errorf("read[1] = %+v, want {OtherNPC Var}", h.questReads[1])
+	}
+}
+
+func TestVMSetQuestVarBuiltin(t *testing.T) {
+	// `setquestvar("QuestGiver", "Step", 3)` persists a value through the
+	// Host: (npcName, varName, value).
+	const src = "-\tscript\tN\t-1,{\n" +
+		`setquestvar("QuestGiver", "Step", 3);` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.questWrites) != 1 {
+		t.Fatalf("quest writes = %d, want 1", len(h.questWrites))
+	}
+	if h.questWrites[0] != (questWriteCall{"QuestGiver", "Step", 3}) {
+		t.Errorf("write = %+v, want {QuestGiver Step 3}", h.questWrites[0])
+	}
+	if v := h.questVars["QuestGiver"]["Step"]; v != 3 {
+		t.Errorf("stored value = %d, want 3", v)
+	}
+}
+
+func TestVMSetQuestVarBuiltin_ShortArgList(t *testing.T) {
+	// A builtin with < 2 args should no-op without crashing the VM.
+	const src = "-\tscript\tN\t-1,{\n" +
+		`setquestvar("Step");` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.questWrites) != 0 {
+		t.Errorf("writes = %d, want 0 (short arg list)", len(h.questWrites))
 	}
 }

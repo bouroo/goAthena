@@ -40,6 +40,17 @@ func (r *MemoryAccountRepository) FindByUserID(_ context.Context, userID string)
 	return r.byID[id], nil
 }
 
+// FindByAccountID loads the account by account_id.
+func (r *MemoryAccountRepository) FindByAccountID(_ context.Context, id domain.AccountID) (domain.Account, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	a, ok := r.byID[id]
+	if !ok {
+		return domain.Account{}, domain.ErrAccountNotFound
+	}
+	return a, nil
+}
+
 // RecordLogin bumps logincount and stamps lastlogin/last_ip in memory.
 func (r *MemoryAccountRepository) RecordLogin(_ context.Context, id domain.AccountID, ip string) error {
 	r.mu.Lock()

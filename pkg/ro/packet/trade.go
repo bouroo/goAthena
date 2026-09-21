@@ -289,7 +289,9 @@ func (r CZAddExchangeItem) Encode(w io.Writer) error {
 // AckAddExchangeItem encodes ZC_ACK_ADD_EXCHANGE_ITEM (0x00ea, 5 bytes) — the
 // per-add result sent to SELF (the adder): whether the staged item was accepted
 // (success) or rejected (overweight/full/etc.). Index is the bag slot the adder
-// tried to stage (rAthena's client_index of the server index). Source:
+// tried to stage, in CLIENT index form: rAthena's clif_tradeitemok writes
+// client_index(serverRow) (clif.cpp:4819), which equals the index the client
+// itself sent. Source:
 // packets.hpp:405 PACKET_ZC_ACK_ADD_EXCHANGE_ITEM.
 type AckAddExchangeItem struct {
 	Index  uint16

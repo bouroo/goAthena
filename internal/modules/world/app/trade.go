@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
@@ -44,20 +45,37 @@ type TradeInventoryPort interface {
 // TradeEconPort is the narrow economy surface trade needs: read a balance (to
 // validate staged zeny) and move zeny at conclude. economy.EconomyService
 // satisfies it directly.
+//
+// Trade legs are tagged with ReasonTrade and the partner's charID, so the
+// ledger shows the "who paid whom" pair on both sides. The peer parameter on
+// the *WithPeer variants lets the trade service stamp each leg without
+// coupling to the economy domain type; the DI adapter translates it into a
+// LedgerEntry.
 type TradeEconPort interface {
 	GetZeny(ctx context.Context, charID uint32) (int32, error)
 	DeductZeny(ctx context.Context, charID uint32, amount int32) error
 	CreditZeny(ctx context.Context, charID uint32, amount int32) error
+	DeductZenyWithPeer(ctx context.Context, charID uint32, amount int32, peer uint32) error
+	CreditZenyWithPeer(ctx context.Context, charID uint32, amount int32, peer uint32) error
 }
 
-// AddItemResult carries what the gateway emits after a successful stage: the
-// self-ack index, the staged zeny (Index==0), or the resolved item (Index>0) for
-// the partner's ZC_ADD_EXCHANGE_ITEM. Exactly one of Zeny/Item is meaningful per
-// the wire convention (Index==0 is zeny).
+// AddItemResult carries what the gateway emits after a successful stage: the wire
+// index to echo in the self-ack, the staged zeny, or the resolved item for the
+// partner's ZC_ADD_EXCHANGE_ITEM. IsZeny selects which of Zeny/Item is meaningful.
 type AddItemResult struct {
+	// Index is the WIRE index to echo in the ack (the client index the adder
+	// sent), NOT a server row: the gateway echoes it verbatim so the client can
+	// match the ack to its own row. A zeny stage leaves it at the sent value.
 	Index uint16
 	Zeny  int32
 	Item  invdomain.Item
+	// IsZeny distinguishes a zeny stage from an item stage. It replaces the old
+	// `Index == 0` test, which became ambiguous once inventory row 0 became
+	// addressable (Phase 42) and which never matched rAthena anyway: ZC_ADD_
+	// EXCHANGE_ITEM carries no index, and rAthena signals zeny by sending an
+	// all-zero item (clif_tradeadditem `if(index){...}else{ p = {}; }`,
+	// clif.cpp:4773-4798) with the amount set.
+	IsZeny bool
 }
 
 // Trade state-machine errors are distinct sentinels so the gateway maps each to a
@@ -171,14 +189,15 @@ func (s *TradeService) Ack(_ context.Context, charID uint32, accept bool) error 
 	return nil
 }
 
-// AddItem stages an item (invIndex>0) or zeny (invIndex==0) on charID's side of
-// an active, unlocked trade. The inventory is not mutated; staging only records
-// the intent. It validates the slot is in range, the item is not equipped, the
-// staged amount (across prior stages of the same row) does not exceed the stack,
-// and for zeny that the balance covers it. On success the gateway emits
-// ZC_ACK_ADD_EXCHANGE_ITEM to the adder and ZC_ADD_EXCHANGE_ITEM to the partner.
-func (s *TradeService) AddItem(ctx context.Context, charID uint32, invIndex, amount int) (AddItemResult, error) {
-	if invIndex < 0 || amount <= 0 {
+// AddItem stages an ITEM (server row, 0-based) on charID's side of an active,
+// unlocked trade. Zeny goes through AddZeny instead — see that method for why the
+// zeny branch cannot be expressed as a server row. The inventory is not mutated;
+// staging only records the intent. It validates the row is in range, the item is
+// not equipped, and the staged amount (across prior stages of the same row) does
+// not exceed the stack. On success the gateway emits ZC_ACK_ADD_EXCHANGE_ITEM to
+// the adder and ZC_ADD_EXCHANGE_ITEM to the partner.
+func (s *TradeService) AddItem(ctx context.Context, charID uint32, serverRow, clientIndex, amount int) (AddItemResult, error) {
+	if serverRow < 0 || amount <= 0 {
 		return AddItemResult{}, ErrTradeItemInsufficient
 	}
 	s.mu.Lock()
@@ -190,10 +209,29 @@ func (s *TradeService) AddItem(ctx context.Context, charID uint32, invIndex, amo
 	if sess.locked {
 		return AddItemResult{}, ErrTradeLocked
 	}
-	if invIndex == 0 {
-		return s.stageZeny(ctx, charID, amount)
+	return s.stageItem(ctx, charID, serverRow, clientIndex, amount, sess)
+}
+
+// AddZeny stages an amount of zeny on charID's side of the trade. It is the
+// separate entry point for rAthena's zeny branch: clif_parse_AddExchangeItem
+// tests the WIRE index for 0 before any conversion and calls trade_tradeaddzeny
+// (clif.cpp:12565). That raw-wire test cannot be reproduced by a server row,
+// because wire index 0 is below the client offset and converts to a wrapped
+// row — so the gateway dispatches on the wire value and calls this instead.
+func (s *TradeService) AddZeny(ctx context.Context, charID uint32, amount int) (AddItemResult, error) {
+	if amount <= 0 {
+		return AddItemResult{}, ErrTradeItemInsufficient
 	}
-	return s.stageItem(ctx, charID, invIndex, amount, sess)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessions[charID]
+	if !ok || sess.state != stateActive {
+		return AddItemResult{}, ErrTradeNotActive
+	}
+	if sess.locked {
+		return AddItemResult{}, ErrTradeLocked
+	}
+	return s.stageZeny(ctx, charID, amount)
 }
 
 // OK locks charID's side. When both sides are locked it runs the atomic conclude
@@ -280,20 +318,20 @@ func (s *TradeService) stageZeny(ctx context.Context, charID uint32, amount int)
 		return AddItemResult{}, ErrTradeItemInsufficient
 	}
 	sess.zeny = want
-	return AddItemResult{Index: 0, Zeny: want}, nil
+	return AddItemResult{IsZeny: true, Zeny: want}, nil
 }
 
 // stageItem records an item offer after validating the slot, equipped state, and
 // stack availability across prior stages of the same row.
-func (s *TradeService) stageItem(ctx context.Context, charID uint32, invIndex, amount int, sess *tradeSession) (AddItemResult, error) {
+func (s *TradeService) stageItem(ctx context.Context, charID uint32, serverRow, clientIndex, amount int, sess *tradeSession) (AddItemResult, error) {
 	items, err := s.inv.LoadByChar(ctx, sess.accountID, charID)
 	if err != nil {
 		return AddItemResult{}, fmt.Errorf("trade: load inventory: %w", err)
 	}
-	if invIndex > len(items) {
+	if serverRow >= len(items) {
 		return AddItemResult{}, ErrTradeItemOutOfRange
 	}
-	item := items[invIndex-1]
+	item := items[serverRow]
 	if item.IsEquipped() {
 		return AddItemResult{}, ErrTradeItemEquipped
 	}
@@ -312,7 +350,7 @@ func (s *TradeService) stageItem(ctx context.Context, charID uint32, invIndex, a
 		nameID: item.NameID,
 		amount: want,
 	})
-	return AddItemResult{Index: uint16(invIndex), Item: item}, nil //nolint:gosec // G115: invIndex bounded by len(items).
+	return AddItemResult{Index: uint16(clientIndex), Item: item}, nil //nolint:gosec // G115: client index bounded by the wire uint16 it came from.
 }
 
 // conclude verifies both sides' offers are still satisfiable, then atomically
@@ -425,22 +463,24 @@ func (s *TradeService) grantOffered(ctx context.Context, charID uint32, offered 
 }
 
 // moveZeny deducts amount from fromID and credits it to toID, pushing undos for
-// each step. A zero amount is a no-op.
+// each step. A zero amount is a no-op. Both legs are tagged with ReasonTrade
+// and the partner's charID so the ledger shows "fromID paid toID" on both
+// sides, which is what an audit query needs to reconstruct any P2P transfer.
 func (s *TradeService) moveZeny(ctx context.Context, fromID uint32, amount int32, toID uint32, undos *undoStack) error {
 	if amount == 0 {
 		return nil
 	}
-	if err := s.econ.DeductZeny(ctx, fromID, amount); err != nil {
+	if err := s.econ.DeductZenyWithPeer(ctx, fromID, amount, toID); err != nil {
 		return fmt.Errorf("deduct zeny %d: %w", fromID, err)
 	}
 	undos.push(func(ctx context.Context) error {
-		return fmt.Errorf("undo zeny credit %d: %w", fromID, s.econ.CreditZeny(ctx, fromID, amount))
+		return fmt.Errorf("undo zeny credit %d: %w", fromID, s.econ.CreditZenyWithPeer(ctx, fromID, amount, toID))
 	})
-	if err := s.econ.CreditZeny(ctx, toID, amount); err != nil {
+	if err := s.econ.CreditZenyWithPeer(ctx, toID, amount, fromID); err != nil {
 		return fmt.Errorf("credit zeny %d: %w", toID, err)
 	}
 	undos.push(func(ctx context.Context) error {
-		return fmt.Errorf("undo zeny deduct %d: %w", toID, s.econ.DeductZeny(ctx, toID, amount))
+		return fmt.Errorf("undo zeny deduct %d: %w", toID, s.econ.DeductZenyWithPeer(ctx, toID, amount, fromID))
 	})
 	return nil
 }
@@ -460,7 +500,7 @@ type undoStack []func(context.Context) error
 func (u *undoStack) push(f func(context.Context) error) { *u = append(*u, f) }
 
 func (u undoStack) apply(ctx context.Context) {
-	for i := len(u) - 1; i >= 0; i-- {
-		_ = u[i](ctx)
+	for _, v := range slices.Backward(u) {
+		_ = v(ctx)
 	}
 }

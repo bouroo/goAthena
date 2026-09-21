@@ -61,6 +61,53 @@ func TestParsePlacedHeader(t *testing.T) {
 	}
 }
 
+func TestParseShopNPC(t *testing.T) {
+	// Real rAthena syntax: header fields separated by tab, then "shop", name,
+	// sprite, then comma + item table. Price -1 means "use item_db default".
+	// Note: the NPC name is a single token (no # suffix in this test).
+	src := "cave,76,39,5\tshop\tCaveGirl\t62,712:-1,502:-1,501:50\n"
+	files := parseOrFail(t, src)
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+	h := files[0].Header()
+	if h.MapName != "cave" {
+		t.Errorf("MapName = %q, want cave", h.MapName)
+	}
+	if h.X != 76 || h.Y != 39 || h.Facing != 5 {
+		t.Errorf("pos = (%d,%d,facing %d), want (76,39,5)", h.X, h.Y, h.Facing)
+	}
+	if h.Type != "shop" {
+		t.Errorf("Type = %q, want shop", h.Type)
+	}
+	if h.Name != "CaveGirl" {
+		t.Errorf("Name = %q, want CaveGirl", h.Name)
+	}
+	if h.SpriteID != 62 {
+		t.Errorf("SpriteID = %d, want 62", h.SpriteID)
+	}
+	items := files[0].Items()
+	if len(items) != 3 {
+		t.Fatalf("got %d items, want 3", len(items))
+	}
+	// 712:-1  →  price -1 means "use item_db default"
+	if items[0].ItemID != 712 || items[0].Price != -1 {
+		t.Errorf("item[0] = (%d, %d), want (712, -1)", items[0].ItemID, items[0].Price)
+	}
+	// 502:-1
+	if items[1].ItemID != 502 || items[1].Price != -1 {
+		t.Errorf("item[1] = (%d, %d), want (502, -1)", items[1].ItemID, items[1].Price)
+	}
+	// 501:50
+	if items[2].ItemID != 501 || items[2].Price != 50 {
+		t.Errorf("item[2] = (%d, %d), want (501, 50)", items[2].ItemID, items[2].Price)
+	}
+	// Body must be empty (no dialog for shop NPCs)
+	if len(files[0].Body) != 0 {
+		t.Errorf("body len = %d, want 0 for shop NPC", len(files[0].Body))
+	}
+}
+
 func TestParseFunctionScript(t *testing.T) {
 	files := parseOrFail(t, "function script F_InsertComma {\nreturn;\n}\n")
 	if len(files) != 1 {

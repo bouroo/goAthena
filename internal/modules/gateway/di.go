@@ -18,11 +18,19 @@ import (
 	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	"github.com/bouroo/goAthena/internal/modules/gateway/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
+	friendapp "github.com/bouroo/goAthena/internal/modules/social/friend/app"
+	guildapp "github.com/bouroo/goAthena/internal/modules/social/guild/app"
+	mailapp "github.com/bouroo/goAthena/internal/modules/social/mail/app"
+	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
 
 // NewLoginServer resolves the Authenticator + SessionStore and builds the login
 // listener. Called from the composition root after account + character register.
+// The login rate limiter is built from cfg.Gateway.LoginRateLimit (capacity +
+// per-second refill); a zero capacity or rate returns nil and disables limiting.
 func NewLoginServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.LoginServer, error) {
 	auth, err := do.Invoke[domain.Authenticator](inj)
 	if err != nil {
@@ -32,9 +40,11 @@ func NewLoginServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.
 	if err != nil {
 		return nil, fmt.Errorf("resolve session store: %w", err)
 	}
+	limiter := app.NewLoginRateLimiter(cfg.Gateway.LoginRateBurst, cfg.Gateway.LoginRatePerSec)
 	ls, err := app.NewLoginServer(
 		auth,
 		sess,
+		limiter,
 		log,
 		cfg.Gateway.CharHost,
 		cfg.App.Name,
@@ -46,14 +56,19 @@ func NewLoginServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.
 	return ls, nil
 }
 
-// NewCharServer resolves the CharService and builds the char-select listener.
+// NewCharServer resolves the CharService + AccountRepo and builds the char-select listener.
 func NewCharServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.CharServer, error) {
 	chars, err := do.Invoke[*charapp.CharService](inj)
 	if err != nil {
 		return nil, fmt.Errorf("resolve char service: %w", err)
 	}
+	accRepo, err := do.Invoke[domain.AccountRepository](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve account repository: %w", err)
+	}
 	cs, err := app.NewCharServer(
 		chars,
+		accRepo,
 		log,
 		cfg.Gateway.MapHost,
 		uint16(cfg.Gateway.MapPort), //nolint:gosec // G115: MapPort operator-set (default 5121).
@@ -62,6 +77,19 @@ func NewCharServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.C
 		return nil, fmt.Errorf("char server: %w", err)
 	}
 	return cs, nil
+}
+
+// resolveOptional invokes an optional dependency, downgrading a resolve
+// failure to a warn + nil so a missing registry degrades feature quality
+// instead of refusing startup.
+func resolveOptional[T any](inj do.Injector, log *slog.Logger, name string) T {
+	v, err := do.Invoke[T](inj)
+	if err != nil {
+		log.Warn("optional dependency unresolved", "dep", name, "err", err)
+		var zero T
+		return zero
+	}
+	return v
 }
 
 // NewMapServer resolves the WorldService + SessionStore and builds the map listener.
@@ -82,6 +110,10 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve equip service: %w", err)
 	}
+	itemUse, err := do.Invoke[*worldapp.ItemUseService](inj)
+	if err != nil {
+		return nil, fmt.Errorf("resolve item-use service: %w", err)
+	}
 	inv, err := do.Invoke[*invapp.InventoryService](inj)
 	if err != nil {
 		return nil, fmt.Errorf("resolve inventory service: %w", err)
@@ -98,6 +130,7 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve skill service: %w", err)
 	}
+	skillDB := resolveOptional[*skilldb.Registry](inj, log, "skilldb")
 	shops, err := do.Invoke[*shopapp.ShopService](inj)
 	if err != nil {
 		return nil, fmt.Errorf("resolve shop service: %w", err)
@@ -110,9 +143,38 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve trade service: %w", err)
 	}
-	ms, err := app.NewMapServer(world, spawn, combat, equip, inv, content, skills, shops, shopStore, trade, sess, log)
+	// Mob AI is best-effort: a resolve failure (no MobAIService provided) leaves
+	// mobs passive — the map server still boots, only the aggro/attack loop is
+	// inert. Matches the tick-loop's own nil-tolerant resolve of MobAIService.
+	var mobAI *worldapp.MobAIService
+	if svc, mobErr := do.Invoke[*worldapp.MobAIService](inj); mobErr != nil {
+		log.Error("mob AI service resolve failed; mobs will stay passive", "err", mobErr)
+	} else {
+		mobAI = svc
+	}
+	ms, err := app.NewMapServer(world, spawn, combat, mobAI, equip, itemUse, inv, content, skills, shops, shopStore, trade, sess, skillDB, log)
 	if err != nil {
 		return nil, fmt.Errorf("map server: %w", err)
 	}
+	attachOptionalServices(ms, inj, log)
 	return ms, nil
+}
+
+// attachOptionalServices wires the optional post-construction services.
+// Each is optional so harnesses without it still build — the matching
+// dispatch entries log + skip rather than disconnect.
+func attachOptionalServices(ms *app.MapServer, inj do.Injector, log *slog.Logger) {
+	// item_db resolves the IT_* wire type and View sprite the LoadEndAck
+	// inventory burst writes. Attached post-construction (like skillDB above) to
+	// keep NewMapServer's positional signature stable; unresolved leaves the
+	// burst's entries typed IT_ETC with a 0 sprite rather than refusing startup.
+	ms.SetItemDB(resolveOptional[*itemdb.Registry](inj, log, "itemdb"))
+	ms.SetStorage(resolveOptional[*worldapp.StorageService](inj, log, "storage"))
+	ms.SetParty(resolveOptional[*partyapp.PartyService](inj, log, "party"))
+	ms.SetFriend(resolveOptional[*friendapp.FriendService](inj, log, "friend"))
+	ms.SetGuild(resolveOptional[*guildapp.GuildService](inj, log, "guild"))
+	// Mail wires the RODEX verbs (M11). The char repository backs the
+	// staged-zeny balance check (the same source EconomyService.GetZeny reads).
+	ms.SetMail(resolveOptional[*mailapp.MailService](inj, log, "mail"))
+	ms.SetCharRepo(resolveOptional[chardomain.CharacterRepository](inj, log, "charRepo"))
 }

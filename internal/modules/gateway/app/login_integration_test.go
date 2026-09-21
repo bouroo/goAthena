@@ -55,7 +55,7 @@ func startLoginListener(t *testing.T, port int) (*gwapp.LoginServer, net.Conn) {
 	})
 	auth := app.NewAuthService(repo, true)
 	sessions := charinfra.NewMemorySessionStore()
-	ls, err := gwapp.NewLoginServer(auth, sessions, slog.Default(), "127.0.0.1", "goathena-test", 6121)
+	ls, err := gwapp.NewLoginServer(auth, sessions, nil, slog.Default(), "127.0.0.1", "goathena-test", 6121)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,12 +8,15 @@ package app
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
+	"github.com/bouroo/goAthena/internal/shared/safe"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
@@ -24,20 +27,25 @@ const dialogTimeout = 30 * time.Second
 
 // Engine loads NPC scripts and runs them on click, coordinating dialog sessions.
 type Engine struct {
-	scripts *script.CompiledScriptSet
-	npcs    domain.NPCStore
-	world   domain.ScriptWorld
-	log     *slog.Logger
+	scripts   *script.CompiledScriptSet
+	npcs      domain.NPCStore
+	world     domain.ScriptWorld
+	inventory domain.ScriptInventory
+	quest     domain.ScriptQuest
+	log       *slog.Logger
 
 	mu       sync.Mutex
 	sessions map[uint32]*domain.DialogSession // key = accountID
 }
 
-// NewEngine builds an Engine from compiled scripts, an NPC store, and the world
-// port used by effect builtins (warp/heal). scripts and world may be nil: clicks
-// are then a no-op and effect builtins drop their frames.
-func NewEngine(scripts *script.CompiledScriptSet, npcs domain.NPCStore, world domain.ScriptWorld, log *slog.Logger) *Engine {
-	return &Engine{scripts: scripts, npcs: npcs, world: world, log: log, sessions: make(map[uint32]*domain.DialogSession)}
+// NewEngine builds an Engine from compiled scripts, an NPC store, the world
+// port used by effect builtins (warp/heal), and the inventory port used by
+// item-script builtins (getitem/delitem/countitem/equip/unequip). scripts,
+// world, and inventory may each be nil: clicks are then a no-op and effect
+// builtins drop their frames / return 0 respectively. quest may be nil: the
+// getvariableofnpc / setquestvar builtins then read 0 / silently no-op.
+func NewEngine(scripts *script.CompiledScriptSet, npcs domain.NPCStore, world domain.ScriptWorld, inventory domain.ScriptInventory, quest domain.ScriptQuest, log *slog.Logger) *Engine {
+	return &Engine{scripts: scripts, npcs: npcs, world: world, inventory: inventory, quest: quest, log: log, sessions: make(map[uint32]*domain.DialogSession)}
 }
 
 // StartDialog resolves the NPC's script, creates a dialog session, and runs the
@@ -63,8 +71,11 @@ func (e *Engine) StartDialog(accountID, charID, npcGID uint32, writer domain.Pac
 	}
 	sess := &domain.DialogSession{NpcID: npcGID, CharID: charID, Writer: writer, Signal: make(chan domain.DialogSignal, 1)}
 	e.put(accountID, sess)
-	host := &ScriptHost{session: sess, world: e.world, log: e.log}
-	go e.runScript(accountID, cs, host)
+	host := &ScriptHost{session: sess, world: e.world, inventory: e.inventory, quest: e.quest, log: e.log}
+	// The VM runs scripts reached from the client (NPC clicks, dialog input), so
+	// a panic inside it must cost this one player's dialog — runScript's own
+	// defer still unregisters the session — rather than the process.
+	safe.Go(e.log, "content.runScript", func() { e.runScript(accountID, cs, host) })
 }
 
 // runScript runs the VM and always unregisters the session on completion.
@@ -121,11 +132,16 @@ func (e *Engine) end(accountID uint32) {
 
 // ScriptHost implements script.Host, bridging the VM's blocking dialog calls to
 // the game's ZC_/CZ_ dialog packets. Blocking calls receive the client's reply
-// via the session's Signal channel.
+// via the session's Signal channel. Inventory effects (getitem/delitem/countitem/
+// equip/unequip) flow through the injected ScriptInventory port — the engine
+// passes a world-owned adapter; nil disables the item-script builtins (the
+// builtin returns 0 and the script continues).
 type ScriptHost struct {
-	session *domain.DialogSession
-	world   domain.ScriptWorld
-	log     *slog.Logger
+	session   *domain.DialogSession
+	world     domain.ScriptWorld
+	inventory domain.ScriptInventory
+	quest     domain.ScriptQuest
+	log       *slog.Logger
 }
 
 // Mes sends a ZC_SAY_DIALOG2 dialog line. Non-blocking.
@@ -147,15 +163,15 @@ func (h *ScriptHost) Next() bool {
 // Select sends the menu option list (ZC_MENU_LIST) and blocks until the client
 // chooses. Returns the 1-based index, or 255 for cancel.
 func (h *ScriptHost) Select(options []string) int {
-	items := ""
+	var items strings.Builder
 	for i, o := range options {
 		if i > 0 {
-			items += ":"
+			items.WriteString(":")
 		}
-		items += o
+		items.WriteString(o)
 	}
 	var buf bytes.Buffer
-	_ = ropacket.MenuListResponse{NpcID: h.session.NpcID, Items: items}.Encode(&buf)
+	_ = ropacket.MenuListResponse{NpcID: h.session.NpcID, Items: items.String()}.Encode(&buf)
 	h.session.Writer.WritePacket(buf.Bytes())
 	return h.waitChoice()
 }
@@ -217,6 +233,76 @@ func (h *ScriptHost) PercentHeal(hpPct, spPct int) {
 	_ = ropacket.ParChangeResponse{VarID: ropacket.SPHP, Count: hp}.Encode(&buf)
 	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: sp}.Encode(&buf)
 	h.session.Writer.WritePacket(buf.Bytes())
+}
+
+// GetItem grants amount units of nameID. The world port handles the bag-side
+// validation (weight/capacity) and emits the ZC_ITEM_PICKUP_ACK the client
+// needs. No-op when no inventory port is wired.
+func (h *ScriptHost) GetItem(nameID uint32, amount int) bool {
+	if h.inventory == nil {
+		return false
+	}
+	return h.inventory.GetItem(h.session.CharID, nameID, amount)
+}
+
+// DelItem removes amount units of nameID. The world port rejects partial
+// removals (returns false when the player doesn't hold enough), matching
+// rAthena's all-or-nothing delitem contract.
+func (h *ScriptHost) DelItem(nameID uint32, amount int) bool {
+	if h.inventory == nil {
+		return false
+	}
+	return h.inventory.DelItem(h.session.CharID, nameID, amount)
+}
+
+// CountItem returns the player's count of nameID. A nil port reports zero.
+func (h *ScriptHost) CountItem(nameID uint32) int {
+	if h.inventory == nil {
+		return 0
+	}
+	return h.inventory.CountItem(h.session.CharID, nameID)
+}
+
+// Equip equips the item at the given LoadByChar index to slot. The world port
+// resolves index → row, applies the bitmask, and persists.
+func (h *ScriptHost) Equip(index int, slot uint32) bool {
+	if h.inventory == nil {
+		return false
+	}
+	return h.inventory.Equip(h.session.CharID, index, slot)
+}
+
+// Unequip clears the equip bitmask of the item at the given index.
+func (h *ScriptHost) Unequip(index int) bool {
+	if h.inventory == nil {
+		return false
+	}
+	return h.inventory.Unequip(h.session.CharID, index)
+}
+
+// GetQuestVar reads a persistent NPC-scoped variable for the dialog's player.
+// Returns 0 when no quest port is wired or the variable is unset — matches
+// rAthena's "unset integer reads as 0" (script.cpp get_val).
+func (h *ScriptHost) GetQuestVar(npcName, varName string) int64 {
+	if h.quest == nil {
+		return 0
+	}
+	v := h.quest.GetVar(h.session.CharID, npcName, varName)
+	return v
+}
+
+// SetQuestVar stores a persistent NPC-scoped variable for the dialog's
+// player. Returns the wrapped error to the VM; a nil quest port returns
+// nil (the script continues as if the write succeeded).
+func (h *ScriptHost) SetQuestVar(npcName, varName string, value int64) error {
+	if h.quest == nil {
+		return nil
+	}
+	if err := h.quest.SetVar(h.session.CharID, npcName, varName, value); err != nil {
+		h.log.Debug("content: quest set failed", "charID", h.session.CharID, "npc", npcName, "var", varName, "val", value, "err", err)
+		return fmt.Errorf("quest set: %w", err)
+	}
+	return nil
 }
 
 // waitAdvance blocks for a Next/OK signal. Cancel/close/timeout → false.

@@ -36,3 +36,33 @@ func decodePos(src []byte) (x, y int16, dir uint8) {
 
 	return x, y, dir
 }
+
+// ClientIndex converts an inventory server row (0-based) to the index the
+// rAthena client uses on the wire (server row + 2). Every S→C inventory packet
+// that echoes a slot uses this form, and every C→S request carries it.
+// Source: rathena/src/map/clif.cpp:122-124 (client_index).
+//
+// The +2 offset is a fixed client convention for this PACKETVER; the client's
+// own grid slots 0/1 are reserved, so server row 0 is client index 2.
+func ClientIndex(serverRow uint16) uint16 {
+	return serverRow + clientInventoryIndexOffset
+}
+
+// ServerIndex converts the inventory index a client sent on the wire to the
+// server's 0-based row in the LoadByChar list (client index − 2). Source:
+// rathena/src/map/clif.cpp:126-128 (server_index), applied by every C→S
+// inventory parser: clif_parse_UseItem (clif.cpp:12121), clif_parse_DropItem
+// (clif.cpp:12063), clif_parse_EquipItem (clif.cpp:12139), takeoff
+// (clif.cpp:12201), clif_parse_AddExchangeItem (clif.cpp:12568).
+//
+// A client index below the offset wraps around to a huge uint16 rather than
+// going negative, so callers MUST range-check the result against the row count
+// before indexing — a wrapped value fails a `>= len(rows)` bound as intended.
+func ServerIndex(clientIndex uint16) uint16 {
+	return clientIndex - clientInventoryIndexOffset
+}
+
+// clientInventoryIndexOffset is the fixed gap between an inventory server row
+// and the index the rAthena client sends/receives (clif.cpp:122-128). It is NOT
+// the storage offset (client_storage_index uses +1, clif.cpp:130-132).
+const clientInventoryIndexOffset uint16 = 2

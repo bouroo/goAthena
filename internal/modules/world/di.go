@@ -10,15 +10,21 @@ import (
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
 
+	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	storageapp "github.com/bouroo/goAthena/internal/modules/commerce/storage/app"
+	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	"github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/internal/modules/world/infra"
 	"github.com/bouroo/goAthena/pkg/ro/attrfix"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
+	"github.com/bouroo/goAthena/pkg/ro/jobbasepoints"
+	"github.com/bouroo/goAthena/pkg/ro/jobexp"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/sizefix"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
+	"github.com/bouroo/goAthena/pkg/ro/skilltree"
 )
 
 // Register provisions the world module. The repo resolves the process-wide
@@ -35,6 +41,23 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		repo := do.MustInvoke[*infra.GORMWorldRepository](i)
 		log := do.MustInvoke[*slog.Logger](i)
 		return app.NewWorldService(repo, log, tickRateHz), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*jobexp.Registry, error) {
+		log := do.MustInvoke[*slog.Logger](i)
+		return loadJobExp(dbPath, log), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*jobbasepoints.Registry, error) {
+		log := do.MustInvoke[*slog.Logger](i)
+		return loadJobBasePoints(dbPath, log), nil
+	})
+	do.Provide(inj, func(i do.Injector) (*app.LevelingService, error) {
+		world := do.MustInvoke[*app.WorldService](i)
+		curve := do.MustInvoke[*jobexp.Registry](i)
+		stats := do.MustInvoke[*jobbasepoints.Registry](i)
+		log := do.MustInvoke[*slog.Logger](i)
+		svc := app.NewLevelingService(world, curve, stats, log)
+		world.SetLeveling(svc)
+		return svc, nil
 	})
 	do.Provide(inj, func(i do.Injector) (*mobdb.Registry, error) {
 		log := do.MustInvoke[*slog.Logger](i)
@@ -75,6 +98,15 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		items := do.MustInvoke[*itemdb.Registry](i)
 		return app.NewEquipService(inv, items), nil
 	})
+	do.Provide(inj, func(i do.Injector) (*app.ItemUseService, error) {
+		// inventory registers before world (composition.go), so its service
+		// resolves here and satisfies the ItemUseService's inventory port. The
+		// *WorldService satisfies the vitals port via AddVitals.
+		inv := do.MustInvoke[*invapp.InventoryService](i)
+		items := do.MustInvoke[*itemdb.Registry](i)
+		world := do.MustInvoke[*app.WorldService](i)
+		return app.NewItemUseService(inv, items, world), nil
+	})
 	do.Provide(inj, func(i do.Injector) (*skilldb.Registry, error) {
 		log := do.MustInvoke[*slog.Logger](i)
 		return loadSkillDB(dbPath, log), nil
@@ -91,7 +123,12 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		world := do.MustInvoke[*app.WorldService](i)
 		combatSvc := do.MustInvoke[*app.CombatService](i)
 		skills := do.MustInvoke[*skilldb.Registry](i)
-		return app.NewSkillService(world, combatSvc, skills), nil
+		dbPath := do.MustInvoke[string](i)
+		log := do.MustInvoke[*slog.Logger](i)
+		tree := loadSkillTree(dbPath, log)
+		svc := app.NewSkillService(world, combatSvc, skills)
+		svc.SetTree(tree)
+		return svc, nil
 	})
 	do.Provide(inj, func(i do.Injector) (*app.TradeService, error) {
 		// inventory and economy register before world (composition.go), so their
@@ -101,6 +138,56 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		econ := do.MustInvoke[*economyapp.EconomyService](i)
 		return app.NewTradeService(world, inv, econ), nil
 	})
+	do.Provide(inj, func(i do.Injector) (*app.MobAIService, error) {
+		world := do.MustInvoke[*app.WorldService](i)
+		mobs := do.MustInvoke[*mobdb.Registry](i)
+		combatSvc := do.MustInvoke[*app.CombatService](i)
+		log := do.MustInvoke[*slog.Logger](i)
+		return app.NewMobAIService(world, mobs, combatSvc, log), nil
+	})
+	// M9 storage orchestrator: bag↔warehouse atomic moves. Inventory and
+	// storage both register before world (composition.go), so both resolve here.
+	do.Provide(inj, func(i do.Injector) (*app.StorageService, error) {
+		inv := do.MustInvoke[*invapp.InventoryService](i)
+		sto := do.MustInvoke[*storageapp.StorageService](i)
+		return app.NewStorageService(inv, sto), nil
+	})
+
+	// ScriptInventory adapter: bridges the content module's script VM
+	// (getitem/delitem/countitem/equip/unequip builtins) to the world's
+	// inventory + equip services, with character-repo accountID resolution.
+	// Inventory and Equip both register above; character module registers
+	// before world in composition.go.
+	do.Provide(inj, func(i do.Injector) (contentdomain.ScriptInventory, error) {
+		inv := do.MustInvoke[*invapp.InventoryService](i)
+		equip := do.MustInvoke[*app.EquipService](i)
+		chars := do.MustInvoke[chardomain.CharacterRepository](i)
+		return app.NewScriptInventoryAdapter(inv, equip, chars), nil
+	})
+}
+
+func loadJobExp(dbPath string, log *slog.Logger) *jobexp.Registry {
+	path := filepath.Join(dbPath, "pre-re", "job_exp.yml")
+	reg, err := jobexp.LoadFile(path)
+	if err != nil {
+		log.Warn("job_exp load failed; leveling disabled", "path", path, "err", err)
+		return jobexp.NewRegistry()
+	}
+	log.Info("job_exp loaded", "path", path)
+	return reg
+}
+
+func loadJobBasePoints(dbPath string, log *slog.Logger) *jobbasepoints.Registry {
+	// jobbasepoints parses job_stats-shaped files; the pre-re tree's copy is
+	// job_basepoints.yml.
+	path := filepath.Join(dbPath, "pre-re", "job_basepoints.yml")
+	reg, err := jobbasepoints.LoadFile(path)
+	if err != nil {
+		log.Warn("job_basepoints load failed; leveling disabled", "path", path, "err", err)
+		return jobbasepoints.NewRegistry()
+	}
+	log.Info("job_basepoints loaded", "path", path)
+	return reg
 }
 
 // loadMobDB loads mob_db.yml from the pre-renewal db root. A load failure is
@@ -157,6 +244,20 @@ func loadSkillDB(dbPath string, log *slog.Logger) *skilldb.Registry {
 		return skilldb.NewRegistry()
 	}
 	log.Info("skill_db loaded", "path", path, "skills", reg.Len())
+	return reg
+}
+
+// loadSkillTree loads skill_tree.yml from the pre-renewal db root. A load
+// failure is warn-not-fatal: skill learning silently fails for unknown trees
+// until the operator provisions the file.
+func loadSkillTree(dbPath string, log *slog.Logger) *skilltree.Registry {
+	path := filepath.Join(dbPath, "pre-re", "skill_tree.yml")
+	reg, err := skilltree.LoadFile(path)
+	if err != nil {
+		log.Warn("skill_tree load failed; skill learning may silently fail", "path", path, "err", err)
+		return nil
+	}
+	log.Info("skill_tree loaded", "path", path, "jobs", reg.Len())
 	return reg
 }
 

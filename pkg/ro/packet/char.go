@@ -16,11 +16,29 @@ const (
 	// CH_MAKE_CHAR: PACKETVER >= 20151001 branch (packets.hpp:122-132), the
 	// only branch active for Thai Classic (PACKETVER 20250604).
 	HeaderCHMAKECHAR uint16 = 0x0a39
+	// CH_DELETE_CHAR3_RESERVED: PACKETVER >= 20150513 (packets.hpp:471-476).
+	// Requests a deletion slot for a character.
+	HeaderCHDELETECHAR3RESERVED uint16 = 0x0827
+	// CH_DELETE_CHAR3: PACKETVER >= 20150513 (packets.hpp:481-486). Accepts
+	// deletion after birthdate confirmation.
+	HeaderCHDELETECHAR3 uint16 = 0x0829
+	// CH_DELETE_CHAR3_CANCEL: PACKETVER >= 20150513 (packets.hpp:491-496).
+	// Cancels a pending deletion slot.
+	HeaderCHDELETECHAR3CANCEL uint16 = 0x082b
 
 	// S→C — char server → client.
 	HeaderHCACCEPTENTER   uint16 = 0x006b
 	HeaderHCREFUSEENTER   uint16 = 0x006c
 	HeaderHCNOTIFYZONESVR uint16 = 0x0ac5
+	// HC_DELETE_CHAR3_RESERVED: PACKETVER >= 20150513 (packets.hpp:477-482).
+	// Server reply to CH_DELETE_CHAR3_RESERVED.
+	HeaderHCDELETECHAR3RESERVED uint16 = 0x0828
+	// HC_DELETE_CHAR3: PACKETVER >= 20150513 (packets.hpp:487-492).
+	// Server reply to CH_DELETE_CHAR3 (final delete confirm).
+	HeaderHCDELETECHAR3 uint16 = 0x082a
+	// HC_DELETE_CHAR3_CANCEL: PACKETVER >= 20150513 (packets.hpp:497-502).
+	// Server reply to CH_DELETE_CHAR3_CANCEL.
+	HeaderHCDELETECHAR3CANCEL uint16 = 0x082c
 	// HC_ACCEPT_MAKECHAR: PACKETVER_MAIN_NUM >= 20201007 (packets.hpp:259-264).
 	// 20250604 is on the MAIN path (src/config/packets.hpp:28; PACKETVER_RE is
 	// unset because 20250604 is outside the RE ranges), so the opcode is 0x0b6f,
@@ -63,6 +81,15 @@ const (
 	// char mapname[MAP_NAME_LENGTH_EXT] + uint32 ip + uint16 port +
 	// char domain[128] = 2+4+16+4+2+128 = 156.
 	sizeHCNotifyZone = 156
+	// sizeHCCharDeleteReserved = int16 packetType + uint32 CID +
+	// int32 result + uint32 date = 2+4+4+4 = 14.
+	sizeHCCharDeleteReserved = 14
+	// sizeHCCharDelete = int16 packetType + uint32 CID + int32 result =
+	// 2+4+4 = 10.
+	sizeHCCharDelete = 10
+	// sizeHCCharDeleteCancel = int16 packetType + uint32 CID + int32 result =
+	// 2+4+4 = 10.
+	sizeHCCharDeleteCancel = 10
 
 	// mapNameExtSlot is the fixed byte width of the mapname[16] field
 	// in HC_NOTIFY_ZONESVR (MAP_NAME_LENGTH_EXT = 16).
@@ -143,6 +170,24 @@ func NewCharServerDB() *DB {
 		ID:        HeaderHCREFUSEMAKECHAR,
 		Name:      "HC_REFUSE_MAKECHAR",
 		Length:    sizeHCRefuseMakeChar,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderHCDELETECHAR3RESERVED,
+		Name:      "HC_DELETE_CHAR3_RESERVED",
+		Length:    sizeHCCharDeleteReserved,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderHCDELETECHAR3,
+		Name:      "HC_DELETE_CHAR3",
+		Length:    sizeHCCharDelete,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderHCDELETECHAR3CANCEL,
+		Name:      "HC_DELETE_CHAR3_CANCEL",
+		Length:    sizeHCCharDeleteCancel,
 		Direction: DirectionServerToClient,
 	})
 

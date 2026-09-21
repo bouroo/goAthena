@@ -3,6 +3,7 @@
 package app_test
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	accountdomain "github.com/bouroo/goAthena/internal/modules/account/domain"
 	charapp "github.com/bouroo/goAthena/internal/modules/character/app"
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
 	charinfra "github.com/bouroo/goAthena/internal/modules/character/infra"
@@ -18,27 +20,52 @@ import (
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
+// testAccountRepo is a minimal in-memory account repository stub for char integration tests.
+type testAccountRepo struct {
+	accounts map[accountdomain.AccountID]accountdomain.Account
+}
+
+func (r *testAccountRepo) FindByAccountID(_ context.Context, id accountdomain.AccountID) (accountdomain.Account, error) {
+	a, ok := r.accounts[id]
+	if !ok {
+		return accountdomain.Account{}, accountdomain.ErrAccountNotFound
+	}
+	return a, nil
+}
+
+// mustTime parses "2006-01-02" and panics on error. Used only in test helpers.
+func mustTime(s string) *time.Time {
+	t, err := time.ParseInLocation("2006-01-02", s, time.UTC)
+	if err != nil {
+		panic(err)
+	}
+	return &t
+}
+
 // startCharListener spins a real CharServer (gnet reactor) on a free port,
-// backed by a memory repo + session store seeded with one character.
-func startCharListener(t *testing.T, port int, sessions *charinfra.MemorySessionStore) net.Conn {
+// backed by a memory repo + session store seeded with one character (ID=150000).
+// Returns the connection, character ID, and server address for use in tests.
+func startCharListener(t *testing.T, port int, sessions *charinfra.MemorySessionStore, accountRepo gwapp.AccountRepo) (net.Conn, chardomain.CharID, string) {
 	t.Helper()
 	repo := charinfra.NewMemoryCharacterRepository()
-	_, _ = repo.Create(t.Context(), chardomain.Character{
-		AccountID: 2000001, CharNum: 0, Name: "Hero", BaseLevel: 1, JobLevel: 1,
-		MaxHP: 1000, HP: 1000, MaxSP: 50, SP: 50, LastMap: "new_1-1",
+	_, _ = repo.CreateWithID(t.Context(), chardomain.Character{
+		ID: 150000, AccountID: 2000001, CharNum: 0, Name: "Hero",
+		BaseLevel: 1, JobLevel: 1, MaxHP: 1000, HP: 1000, MaxSP: 50, SP: 50,
+		LastMap: "new_1-1",
 	})
 	chars := charapp.NewCharService(repo, sessions, 9)
-	cs, err := gwapp.NewCharServer(chars, slog.Default(), "127.0.0.1", 5121)
+	cs, err := gwapp.NewCharServer(chars, accountRepo, slog.Default(), "127.0.0.1", 5121)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cs.Start("tcp://127.0.0.1:" + strconv.Itoa(port))
+	serverAddr := "127.0.0.1:" + strconv.Itoa(port)
+	cs.Start("tcp://" + serverAddr)
 	t.Cleanup(cs.Stop)
 
 	var conn net.Conn
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if c, derr := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 500*time.Millisecond); derr == nil {
+		if c, derr := net.DialTimeout("tcp", serverAddr, 500*time.Millisecond); derr == nil {
 			conn = c
 			break
 		}
@@ -46,7 +73,7 @@ func startCharListener(t *testing.T, port int, sessions *charinfra.MemorySession
 	if conn == nil {
 		t.Fatal("char listener never accepted")
 	}
-	return conn
+	return conn, 150000, serverAddr
 }
 
 // sendCHEnter builds and sends a 17-byte CH_ENTER (0x0065) frame.
@@ -58,7 +85,7 @@ func sendCHEnter(t *testing.T, c net.Conn, aid, id1, id2 uint32, sex uint8) {
 	binary.LittleEndian.PutUint32(buf[6:], id1)
 	binary.LittleEndian.PutUint32(buf[10:], id2)
 	buf[16] = sex
-	c.SetDeadline(time.Now().Add(3 * time.Second))
+	c.SetWriteDeadline(time.Now().Add(3 * time.Second))
 	if _, err := c.Write(buf); err != nil {
 		t.Fatalf("send CH_ENTER: %v", err)
 	}
@@ -80,10 +107,18 @@ func drainAcceptEnter(t *testing.T, c net.Conn) {
 	if n < 4 {
 		t.Fatalf("accept-enter length %d too small", n)
 	}
-	rest := make([]byte, n-4)
-	if _, err := io.ReadFull(c, rest); err != nil {
-		t.Fatalf("read accept-enter body: %v", err)
+	// Consume the full packet body so the next Read starts at a frame boundary.
+	if n > 4 {
+		rest := make([]byte, n-4)
+		if _, err := io.ReadFull(c, rest); err != nil {
+			t.Fatalf("read accept-enter body: %v", err)
+		}
 	}
+	// Drain any additional bytes that arrived while we were reading (e.g., from
+	// async writes on the same connection). Short reads on a deadline mean the
+	// buffer is empty — the next test read will block until new data arrives.
+	c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_, _ = io.Copy(io.Discard, c)
 }
 
 // sendCHMakeChar builds and sends a 36-byte CH_MAKE_CHAR (0x0a39) frame.
@@ -119,7 +154,9 @@ func TestChar_AcceptEnterOverTCP(t *testing.T) {
 	_ = sessions.PutSession(t.Context(), chardomain.Session{
 		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
 	})
-	conn := startCharListener(t, port, sessions)
+	conn, _, _ := startCharListener(t, port, sessions, &testAccountRepo{accounts: map[accountdomain.AccountID]accountdomain.Account{
+		2000001: {ID: 2000001, UserID: "testuser", Birthdate: mustTime("2000-06-15")},
+	}})
 	defer conn.Close()
 
 	sendCHEnter(t, conn, 2000001, 0x11111111, 0x22222222, 1)
@@ -142,7 +179,9 @@ func TestChar_RefuseEnterBadSessionOverTCP(t *testing.T) {
 	_ = sessions.PutSession(t.Context(), chardomain.Session{
 		AccountID: 2000001, LoginID1: 0xAAAAAAAA, LoginID2: 0, Sex: 1,
 	})
-	conn := startCharListener(t, port, sessions)
+	conn, _, _ := startCharListener(t, port, sessions, &testAccountRepo{accounts: map[accountdomain.AccountID]accountdomain.Account{
+		2000001: {ID: 2000001, UserID: "testuser", Birthdate: mustTime("2000-06-15")},
+	}})
 	defer conn.Close()
 
 	sendCHEnter(t, conn, 2000001, 0xBBBBBBBB, 0, 1)
@@ -164,7 +203,9 @@ func TestChar_MakeCharAcceptOverTCP(t *testing.T) {
 	_ = sessions.PutSession(t.Context(), chardomain.Session{
 		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
 	})
-	conn := startCharListener(t, port, sessions)
+	conn, _, _ := startCharListener(t, port, sessions, &testAccountRepo{accounts: map[accountdomain.AccountID]accountdomain.Account{
+		2000001: {ID: 2000001, UserID: "testuser", Birthdate: mustTime("2000-06-15")},
+	}})
 	defer conn.Close()
 
 	sendCHEnter(t, conn, 2000001, 0x11111111, 0x22222222, 1)
@@ -194,7 +235,9 @@ func TestChar_MakeCharRefuseNameTakenOverTCP(t *testing.T) {
 	_ = sessions.PutSession(t.Context(), chardomain.Session{
 		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
 	})
-	conn := startCharListener(t, port, sessions) // repo seeded with "Hero"
+	conn, _, _ := startCharListener(t, port, sessions, &testAccountRepo{accounts: map[accountdomain.AccountID]accountdomain.Account{
+		2000001: {ID: 2000001, UserID: "testuser", Birthdate: mustTime("2000-06-15")},
+	}}) // repo seeded with "Hero"
 	defer conn.Close()
 
 	sendCHEnter(t, conn, 2000001, 0x11111111, 0x22222222, 1)
@@ -222,7 +265,9 @@ func TestChar_SelectCharNotifyZoneOverTCP(t *testing.T) {
 	_ = sessions.PutSession(t.Context(), chardomain.Session{
 		AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1,
 	})
-	conn := startCharListener(t, port, sessions) // repo seeded with "Hero" in slot 0
+	conn, _, _ := startCharListener(t, port, sessions, &testAccountRepo{accounts: map[accountdomain.AccountID]accountdomain.Account{
+		2000001: {ID: 2000001, UserID: "testuser", Birthdate: mustTime("2000-06-15")},
+	}}) // repo seeded with "Hero" in slot 0
 	defer conn.Close()
 
 	sendCHEnter(t, conn, 2000001, 0x11111111, 0x22222222, 1)
@@ -248,5 +293,354 @@ func TestChar_SelectCharNotifyZoneOverTCP(t *testing.T) {
 	const portOff = 2 + 4 + 16 + 4
 	if got := binary.LittleEndian.Uint16(resp[portOff:]); got != 5121 {
 		t.Fatalf("advertised map port = %d, want 5121", got)
+	}
+}
+
+// --- Delete-character flow helpers ---
+
+// sendCHDeleteReserved sends a CH_DELETE_CHAR3_RESERVED frame.
+func sendCHDeleteReserved(t *testing.T, conn net.Conn, cid uint32) {
+	t.Helper()
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 6)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHDELETECHAR3RESERVED)
+	binary.LittleEndian.PutUint32(buf[2:], cid)
+	if _, err := conn.Write(buf); err != nil {
+		t.Fatalf("write CH_DELETE_CHAR3_RESERVED: %v", err)
+	}
+}
+
+// readHCDeleteReserved reads and parses an HC_DELETE_CHAR3_RESERVED response.
+func readHCDeleteReserved(t *testing.T, conn net.Conn) (cid uint32, result int32, date uint32) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	resp := make([]byte, 14)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		t.Fatalf("read HC_DELETE_CHAR3_RESERVED: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCDELETECHAR3RESERVED {
+		t.Fatalf("response header = 0x%04x, want HC_DELETE_CHAR3_RESERVED (0x%04x)", got, ropacket.HeaderHCDELETECHAR3RESERVED)
+	}
+	return binary.LittleEndian.Uint32(resp[2:6]),
+		int32(binary.LittleEndian.Uint32(resp[6:10])),
+		binary.LittleEndian.Uint32(resp[10:14])
+}
+
+// sendCHDelete sends a CH_DELETE_CHAR3 frame with the given CID and 6-byte birthdate.
+func sendCHDelete(t *testing.T, conn net.Conn, cid uint32, birthdate []byte) {
+	t.Helper()
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if len(birthdate) != 6 {
+		t.Fatalf("birthdate must be 6 bytes, got %d", len(birthdate))
+	}
+	buf := make([]byte, 12)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHDELETECHAR3)
+	binary.LittleEndian.PutUint32(buf[2:], cid)
+	copy(buf[6:], birthdate)
+	if _, err := conn.Write(buf); err != nil {
+		t.Fatalf("write CH_DELETE_CHAR3: %v", err)
+	}
+}
+
+// readHCDelete reads and parses an HC_DELETE_CHAR3 response.
+func readHCDelete(t *testing.T, conn net.Conn) (cid uint32, result int32) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	resp := make([]byte, 10)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		t.Fatalf("read HC_DELETE_CHAR3: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCDELETECHAR3 {
+		t.Fatalf("response header = 0x%04x, want HC_DELETE_CHAR3 (0x%04x)", got, ropacket.HeaderHCDELETECHAR3)
+	}
+	return binary.LittleEndian.Uint32(resp[2:6]),
+		int32(binary.LittleEndian.Uint32(resp[6:10]))
+}
+
+// sendCHDeleteCancel sends a CH_DELETE_CHAR3_CANCEL frame.
+func sendCHDeleteCancel(t *testing.T, conn net.Conn, cid uint32) {
+	t.Helper()
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 6)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHDELETECHAR3CANCEL)
+	binary.LittleEndian.PutUint32(buf[2:], cid)
+	if _, err := conn.Write(buf); err != nil {
+		t.Fatalf("write CH_DELETE_CHAR3_CANCEL: %v", err)
+	}
+}
+
+// readHCDeleteCancel reads and parses an HC_DELETE_CHAR3_CANCEL response.
+func readHCDeleteCancel(t *testing.T, conn net.Conn) (cid uint32, result int32) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	resp := make([]byte, 10)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		t.Fatalf("read HC_DELETE_CHAR3_CANCEL: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCDELETECHAR3CANCEL {
+		t.Fatalf("response header = 0x%04x, want HC_DELETE_CHAR3_CANCEL (0x%04x)", got, ropacket.HeaderHCDELETECHAR3CANCEL)
+	}
+	return binary.LittleEndian.Uint32(resp[2:6]),
+		int32(binary.LittleEndian.Uint32(resp[6:10]))
+}
+
+// drainAcceptEnterUntilCharCount reads HC_ACCEPT_ENTER frames until it has collected
+// at least n characters. Mirrors the packetLength-based parsing used by drainAcceptEnter.
+// Returns all character GIDs extracted from the received frames.
+func drainAcceptEnterUntilCharCount(t *testing.T, conn net.Conn, n int) (chars []uint32) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	for len(chars) < n {
+		// Read cmd (2 bytes) + packetLength (2 bytes) to get total frame size.
+		hdr := make([]byte, 4)
+		if _, err := io.ReadFull(conn, hdr); err != nil {
+			t.Fatalf("read HC_ACCEPT_ENTER header: %v", err)
+		}
+		if got := binary.LittleEndian.Uint16(hdr); got != ropacket.HeaderHCACCEPTENTER {
+			t.Fatalf("want HC_ACCEPT_ENTER, got 0x%04x", got)
+		}
+		pktLen := int(binary.LittleEndian.Uint16(hdr[2:4]))
+		if pktLen < 4 {
+			t.Fatalf("accept-enter length %d too small", pktLen)
+		}
+		// Read the remaining body bytes (pktLen - 4, since we already read 4 header bytes).
+		body := make([]byte, pktLen-4)
+		if _, err := io.ReadFull(conn, body); err != nil {
+			t.Fatalf("read HC_ACCEPT_ENTER body: %v", err)
+		}
+		// Parse character count from the total field at body[0], or derive from
+		// packet length: body contains 27-byte sub-header + N×175-char entries.
+		total := (pktLen - 27) / 175
+		// First CharacterInfo block starts at body[23] (packet offset 27: 27 - 4 = 23).
+		// Each CharacterInfo is 175 bytes; GID is at byte offset 0 within each block.
+		for i := 0; i < total; i++ {
+			gid := binary.LittleEndian.Uint32(body[23+i*175:])
+			chars = append(chars, gid)
+		}
+	}
+	return chars
+}
+
+// TestCharDeleteFlow_Reserve_OK verifies that reserving a deletion slot for a valid
+// character returns result=1.
+func TestCharDeleteFlow_Reserve_OK(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(context.Background(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111})
+
+	conn, _, _ := startCharListener(t, port, sessions, &testAccountRepo{accounts: map[accountdomain.AccountID]accountdomain.Account{
+		2000001: {ID: 2000001, UserID: "testuser", Birthdate: mustTime("2000-06-15")},
+	}})
+	defer conn.Close()
+
+	sendCHEnter(t, conn, 2000001, 0x11111111, 0x22222222, 1)
+	drainAcceptEnter(t, conn)
+
+	// Reserve deletion for known CID=150000.
+	sendCHDeleteReserved(t, conn, 150000)
+	cid, result, date := readHCDeleteReserved(t, conn)
+	if cid != 150000 {
+		t.Errorf("CID = %d, want 150000", cid)
+	}
+	if result != 1 {
+		t.Errorf("result = %d, want 1 (OK)", result)
+	}
+	// char_del_delay is 0 today, so the remaining-seconds date field is 0 —
+	// the wire contract at PACKETVER ≥20150513 (delete_date − now). Assert
+	// the semantics, not the epoch: result 1 + non-negative date.
+	if date != 0 {
+		t.Errorf("date = %d, want 0 (remaining seconds; delay is 0)", date)
+	}
+}
+
+// TestCharDeleteFlow_Reserve_UnknownCID verifies that reserving for an unknown
+// character ID returns result=3.
+func TestCharDeleteFlow_Reserve_UnknownCID(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(context.Background(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111})
+
+	conn, _, _ := startCharListener(t, port, sessions, &testAccountRepo{accounts: map[accountdomain.AccountID]accountdomain.Account{
+		2000001: {ID: 2000001, UserID: "testuser", Birthdate: mustTime("2000-06-15")},
+	}})
+	defer conn.Close()
+
+	sendCHEnter(t, conn, 2000001, 0x11111111, 0x22222222, 1)
+	drainAcceptEnter(t, conn)
+
+	// Reserve with unknown CID.
+	sendCHDeleteReserved(t, conn, 999999)
+	cid, result, date := readHCDeleteReserved(t, conn)
+	if cid != 999999 {
+		t.Errorf("CID = %d, want 999999", cid)
+	}
+	if result != 3 {
+		t.Errorf("result = %d, want 3 (not found)", result)
+	}
+	if date != 0 {
+		t.Errorf("date = %d, want 0", date)
+	}
+}
+
+// TestCharDeleteFlow_Accept_WrongBirthdate verifies that accepting deletion with
+// a mismatched birthdate returns result=5.
+func TestCharDeleteFlow_Accept_WrongBirthdate(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(context.Background(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111})
+
+	conn, _, _ := startCharListener(t, port, sessions, &testAccountRepo{accounts: map[accountdomain.AccountID]accountdomain.Account{
+		2000001: {ID: 2000001, UserID: "testuser", Birthdate: mustTime("2000-06-15")},
+	}})
+	defer conn.Close()
+
+	sendCHEnter(t, conn, 2000001, 0x11111111, 0x22222222, 1)
+	drainAcceptEnter(t, conn)
+
+	// Reserve deletion for known CID=150000.
+	sendCHDeleteReserved(t, conn, 150000)
+	readHCDeleteReserved(t, conn) // discard
+
+	// Accept with WRONG birthdate.
+	sendCHDelete(t, conn, 150000, []byte("010101"))
+	cid, result := readHCDelete(t, conn)
+	if cid != 150000 {
+		t.Errorf("CID = %d, want 150000", cid)
+	}
+	if result != 5 {
+		t.Errorf("result = %d, want 5 (birthdate mismatch)", result)
+	}
+}
+
+// TestCharDeleteFlow_Accept_CorrectBirthdate verifies that accepting deletion
+// with the correct birthdate returns result=1 and the character is gone.
+func TestCharDeleteFlow_Accept_CorrectBirthdate(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(context.Background(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111})
+
+	conn, _, serverAddr := startCharListener(t, port, sessions, &testAccountRepo{accounts: map[accountdomain.AccountID]accountdomain.Account{
+		2000001: {ID: 2000001, UserID: "testuser", Birthdate: mustTime("2000-06-15")},
+	}})
+	defer conn.Close()
+
+	sendCHEnter(t, conn, 2000001, 0x11111111, 0x22222222, 1)
+	drainAcceptEnter(t, conn)
+
+	// Reserve deletion for known CID=150000.
+	sendCHDeleteReserved(t, conn, 150000)
+	readHCDeleteReserved(t, conn) // discard
+
+	// Accept with CORRECT birthdate: "000615" (year=2000 → 00, month=06, day=15).
+	sendCHDelete(t, conn, 150000, []byte("000615"))
+	cid, result := readHCDelete(t, conn)
+	if cid != 150000 {
+		t.Errorf("CID = %d, want 150000", cid)
+	}
+	if result != 1 {
+		t.Errorf("result = %d, want 1 (deleted)", result)
+	}
+
+	// rAthena does NOT push a new char list after delete — open a new connection.
+	conn.Close()
+	conn2, err := net.DialTimeout("tcp", serverAddr, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial for re-enter: %v", err)
+	}
+	defer conn2.Close()
+	sendCHEnter(t, conn2, 2000001, 0x11111111, 0x22222222, 1)
+	// Expect HC_ACCEPT_ENTER with 0 characters.
+	conn2.SetDeadline(time.Now().Add(5 * time.Second))
+	hdr := make([]byte, 4)
+	if _, err := io.ReadFull(conn2, hdr); err != nil {
+		t.Fatalf("read HC_ACCEPT_ENTER: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(hdr); got != ropacket.HeaderHCACCEPTENTER {
+		t.Fatalf("want HC_ACCEPT_ENTER, got 0x%04x", got)
+	}
+	pktLen := int(binary.LittleEndian.Uint16(hdr[2:4]))
+	body := make([]byte, pktLen-4)
+	if _, err := io.ReadFull(conn2, body); err != nil {
+		t.Fatalf("read HC_ACCEPT_ENTER body: %v", err)
+	}
+	// body[2] is the Total sub-header field (max slots = maxChars = 9).
+	// Actual character count is (pktLen - 27) / 175.
+	total := (pktLen - 27) / 175
+	if total != 0 {
+		t.Errorf("remaining chars after delete = %d, want 0", total)
+	}
+}
+
+// TestCharDeleteFlow_Cancel verifies that cancelling a pending deletion
+// returns result=1 and the character remains in the list.
+func TestCharDeleteFlow_Cancel(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(context.Background(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111})
+
+	conn, _, serverAddr := startCharListener(t, port, sessions, &testAccountRepo{accounts: map[accountdomain.AccountID]accountdomain.Account{
+		2000001: {ID: 2000001, UserID: "testuser", Birthdate: mustTime("2000-06-15")},
+	}})
+	defer conn.Close()
+
+	// Enter char-select on conn (drains HC_ACCEPT_ENTER).
+	sendCHEnter(t, conn, 2000001, 0x11111111, 0x22222222, 1)
+	drainAcceptEnter(t, conn)
+
+	// Use a second connection for reserve+cancel to avoid the drainAcceptEnter
+	// buffer-draining interfering with subsequent response reads.
+	conn2, err := net.DialTimeout("tcp", serverAddr, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial conn2: %v", err)
+	}
+	defer conn2.Close()
+	// conn2 needs its own auth session.
+	_ = sessions.PutSession(context.Background(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111})
+	sendCHEnter(t, conn2, 2000001, 0x11111111, 0x22222222, 1)
+	drainAcceptEnter(t, conn2)
+
+	// Reserve deletion for known CID=150000.
+	sendCHDeleteReserved(t, conn2, 150000)
+	readHCDeleteReserved(t, conn2)
+
+	// Cancel deletion.
+	sendCHDeleteCancel(t, conn2, 150000)
+	cid, result := readHCDeleteCancel(t, conn2)
+	if cid != 150000 {
+		t.Errorf("CID = %d, want 150000", cid)
+	}
+	if result != 1 {
+		t.Errorf("result = %d, want 1 (cancelled)", result)
+	}
+
+	// rAthena does NOT push a new char list after cancel — open a third connection.
+	conn3, err := net.DialTimeout("tcp", serverAddr, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial conn3 for re-enter: %v", err)
+	}
+	defer conn3.Close()
+	_ = sessions.PutSession(context.Background(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111})
+	sendCHEnter(t, conn3, 2000001, 0x11111111, 0x22222222, 1)
+	conn3.SetDeadline(time.Now().Add(5 * time.Second))
+	hdr := make([]byte, 4)
+	if _, err := io.ReadFull(conn3, hdr); err != nil {
+		t.Fatalf("read HC_ACCEPT_ENTER: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(hdr); got != ropacket.HeaderHCACCEPTENTER {
+		t.Fatalf("want HC_ACCEPT_ENTER, got 0x%04x", got)
+	}
+	pktLen := int(binary.LittleEndian.Uint16(hdr[2:4]))
+	body := make([]byte, pktLen-4)
+	if _, err := io.ReadFull(conn3, body); err != nil {
+		t.Fatalf("read HC_ACCEPT_ENTER body: %v", err)
+	}
+	t.Logf("conn3 pktLen=%d bodyLen=%d charCount=(pktLen-27)/175=%d", pktLen, len(body), (pktLen-27)/175)
+	total := (pktLen - 27) / 175
+	if total != 1 {
+		t.Errorf("remaining chars after cancel = %d, want 1", total)
 	}
 }

@@ -123,6 +123,9 @@ func setup(driver string) (config.DBConfig, testcontainers.Container, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
+	// The image/env/port fields live on the embedded ContainerRequest — a flat
+	// literal only compiles where Go ≥ 1.27 promoted-field literals are
+	// honored, so older typecheckers (gopls on a 1.26 toolchain) reject it.
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        spec.image,
@@ -174,7 +177,7 @@ func setup(driver string) (config.DBConfig, testcontainers.Container, error) {
 func migrate(ctx context.Context, dbCfg config.DBConfig) error {
 	const attempts = 6
 	var lastErr error
-	for i := 0; i < attempts; i++ {
+	for range attempts {
 		lastErr = migrateOnce(dbCfg)
 		if lastErr == nil {
 			return nil

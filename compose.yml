@@ -1,5 +1,5 @@
 # goAthena local stack. Hobbyist tier: one goathena + MariaDB + Valkey + NATS.
-# `docker compose up -d mariadb valkey nats` starts just the backing services;
+# `podman compose up -d mariadb valkey nats` starts just the backing services;
 # the goathena service runs the app (builds from Containerfile).
 services:
   mariadb:

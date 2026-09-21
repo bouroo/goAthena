@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bouroo/goAthena/pkg/ro/aoi"
+
 	"github.com/panjf2000/gnet/v2"
 
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
@@ -17,9 +19,16 @@ import (
 	contentapp "github.com/bouroo/goAthena/internal/modules/content/app"
 	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
+	friendapp "github.com/bouroo/goAthena/internal/modules/social/friend/app"
+	guildapp "github.com/bouroo/goAthena/internal/modules/social/guild/app"
+	mailapp "github.com/bouroo/goAthena/internal/modules/social/mail/app"
+	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/pkg/ro/equip"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
+	"github.com/bouroo/goAthena/pkg/ro/skilldb"
 )
 
 // czEnterSize is the wire length of CZ_ENTER (0x0072): 2 cmd + 4 AID + 4 GID +
@@ -28,6 +37,11 @@ const czEnterSize = 19
 
 // mapRefuseRejected mirrors rAthena REFUSE_ENTER_REJECTED (0).
 const mapRefuseRejected uint8 = 0
+
+// playerRespawnDelay is how long a mob-killed PC stays vanished before respawning
+// at its save point. rAthena pre-re auto-returns a dead PC to its save point after
+// a short delay; goAthena uses a documented 5 s default — NOT derived from source.
+const playerRespawnDelay = 5 * time.Second
 
 // MapServer is the gnet TCP listener for the map protocol. It admits a fresh
 // connection on CZ_ENTER (session verified via the SessionStore), registers the
@@ -45,12 +59,71 @@ type MapServer struct {
 	world   *worldapp.WorldService
 	spawn   *worldapp.SpawnService
 	combat  *worldapp.CombatService
+	mobAI   *worldapp.MobAIService
 	equip   *worldapp.EquipService
+	itemUse *worldapp.ItemUseService
 	inv     *invapp.InventoryService
 	content *contentapp.Engine
 	skills  *worldapp.SkillService
-	shops   *shopapp.ShopService
-	trade   *worldapp.TradeService
+	skillDB *skilldb.Registry
+	// itemDB resolves item_db rows for the S→C inventory burst (IT_* wire type,
+	// item_db.View sprite) and the equip ack's view sprite. Optional: a nil
+	// registry degrades to the pre-Phase-42 empty-list behaviour, so harnesses
+	// that do not provide item_db keep working.
+	itemDB *itemdb.Registry
+	shops  *shopapp.ShopService
+	trade  *worldapp.TradeService
+	// storage wires the bag↔warehouse orchestrator (M9). Optional: nil leaves
+	// the storage dispatch entries as no-ops (the handlers log + skip). Set
+	// post-construction by DI root via SetStorage.
+	storage *worldapp.StorageService
+	// party wires the group verb (M11). Optional: nil leaves the party dispatch
+	// entries as no-ops. Set post-construction by DI root via SetParty.
+	party *partyapp.PartyService
+	// partyMu guards partyInvites. Party handlers run off the reactor goroutine
+	// (they touch the DB), so the invite map needs its own lock.
+	partyMu sync.RWMutex
+	// partyInvites holds one pending invitation per invitee char id. rAthena
+	// keeps this on the session (sd.party_invite / sd.party_invite_account) and
+	// never persists it; a second invite simply replaces the first, which the
+	// one-entry-per-target map gives for free.
+	partyInvites map[uint32]pendingInvite
+	// friend wires the friend verb (M11). Optional: nil leaves the friend
+	// dispatch entries as no-ops. Set post-construction by DI root via SetFriend.
+	friend *friendapp.FriendService
+	// friendMu guards friendReqs. Friend handlers run off the reactor goroutine
+	// (they touch the DB), so the request map needs its own lock.
+	friendMu sync.RWMutex
+	// friendReqs holds one pending friend-add request per acceptor char id
+	// (rAthena sd.friend_req, clif.cpp:15458-15459).
+	friendReqs map[uint32]pendingFriendReq
+	// guild wires the guild verb (M11). Optional: nil leaves the guild
+	// dispatch entries as no-ops. Set post-construction by DI root via
+	// SetGuild.
+	guild *guildapp.GuildService
+	// guildMu guards guildInvites for the same reason as partyMu.
+	guildMu sync.RWMutex
+	// guildInvites holds one pending invitation per invitee char id (rAthena
+	// sd.guild_invite / sd.guild_invite_account; never persisted).
+	guildInvites map[uint32]pendingGuildInvite
+	// mail wires the RODEX mail verb (M11). Optional: nil leaves the mail
+	// dispatch entries as no-ops. Set post-construction by DI root via
+	// SetMail.
+	mail *mailapp.MailService
+	// charRepo backs the staged-zeny balance check (the same source
+	// EconomyService.GetZeny reads). Optional: nil skips the check. Set
+	// post-construction by DI root via SetCharRepo.
+	charRepo chardomain.CharacterRepository
+	// mailMu guards mailStaging for the same reason as partyMu.
+	mailMu sync.RWMutex
+	// mailStaging holds the compose-window state per char (rAthena sd->mail:
+	// the writing flag, the staged zeny, the staged item rows). Never
+	// persisted; pruned on disconnect by OnClose → unregisterConn.
+	mailStaging map[uint32]mailStaging
+	// mailOps serializes a char's mail verbs (rAthena parses a session's
+	// frames on one thread; OnTraffic here runs each frame on its own
+	// goroutine). See lockMailOps.
+	mailOps sync.Map
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
 	// DEALTYPE carries an NPC id, not a shop name).
 	shopStore contentdomain.ShopStore
@@ -71,35 +144,83 @@ type MapServer struct {
 	// resolves via connFor + AsyncWrite only, never reading a peer's context.
 	conns  map[uint32]gnet.Conn
 	connMu sync.RWMutex
+	// ignoreMu guards whisper-ignore state: per-char ignored-name sets plus the
+	// per-char deny-all flag (rAthena sd.ignore[] + sd.state.ignoreAll). Handlers
+	// for /ex /in /exall /inall and the whisper-delivery gate read/write it.
+	ignoreMu  sync.RWMutex
+	ignores   map[uint32]map[string]bool
+	ignoreAll map[uint32]bool
 }
 
 // NewMapServer builds a map listener. shops and shopStore wire the NPC shop
 // commerce verb (open/buy/sell); trade wires the player-to-player trade verb.
 // shops/shopStore/trade may be nil in a reduced harness where their packets are
 // never exercised, but production wiring resolves all three.
-func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, equip *worldapp.EquipService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, log *slog.Logger) (*MapServer, error) {
+// skillDB is optional (may be nil) so existing callers are not broken.
+func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, combat *worldapp.CombatService, mobAI *worldapp.MobAIService, equip *worldapp.EquipService, itemUse *worldapp.ItemUseService, inv *invapp.InventoryService, content *contentapp.Engine, skills *worldapp.SkillService, shops *shopapp.ShopService, shopStore contentdomain.ShopStore, trade *worldapp.TradeService, sess chardomain.SessionStore, skillDB *skilldb.Registry, log *slog.Logger) (*MapServer, error) {
 	s := &MapServer{
-		world:       world,
-		spawn:       spawn,
-		combat:      combat,
-		equip:       equip,
-		inv:         inv,
-		content:     content,
-		skills:      skills,
-		shops:       shops,
-		shopStore:   shopStore,
-		trade:       trade,
-		sess:        sess,
-		log:         log,
-		handlers:    mapHandlers(),
-		conns:       make(map[uint32]gnet.Conn),
-		db:          ropacket.NewMapServerDB(),
-		openedShops: make(map[uint32]string),
+		world:        world,
+		spawn:        spawn,
+		combat:       combat,
+		mobAI:        mobAI,
+		equip:        equip,
+		itemUse:      itemUse,
+		inv:          inv,
+		content:      content,
+		skills:       skills,
+		skillDB:      skillDB,
+		shops:        shops,
+		shopStore:    shopStore,
+		trade:        trade,
+		sess:         sess,
+		log:          log,
+		handlers:     mapHandlers(),
+		conns:        make(map[uint32]gnet.Conn),
+		ignores:      make(map[uint32]map[string]bool),
+		ignoreAll:    make(map[uint32]bool),
+		db:           ropacket.NewMapServerDB(),
+		openedShops:  make(map[uint32]string),
+		partyInvites: make(map[uint32]pendingInvite),
+		friendReqs:   make(map[uint32]pendingFriendReq),
+		guildInvites: make(map[uint32]pendingGuildInvite),
+		mailStaging:  make(map[uint32]mailStaging),
 	}
 	// Regen advances server-side on the world tick loop; this sink bridges the
 	// changed vitals back to the player's client as ZC_PAR_CHANGE (mirrors the
 	// script percentheal path). A char with no live conn is a no-op.
 	world.OnStatChange = s.notifyStatChange
+	// RespawnPlayer revives a dead PC off the reactor (ArmRespawn timer); this sink
+	// bridges the revive back to the wire — ZC_SPAWN_UNIT to save-map neighbors +
+	// ZC_ACCEPT_ENTER to relocate the player's own client. Mirrors handleEnter's
+	// appear. A char whose conn dropped before the timer fires is a no-op.
+	world.OnRespawn = s.notifyRespawn
+	// GrantExp accrues mob-kill EXP to the killer; this sink bridges the new
+	// totals back to the killer's client as two ZC_LONGLONGPAR_CHANGE frames
+	// (SP_BASEEXP then SP_JOBEXP) so the EXP bar rises. A headless harness (no
+	// EXP grants) is a no-op. Leveling (threshold crossing, stat recalc) is
+	// deferred — this only relays the new EXP totals.
+	world.OnExpChange = s.notifyExpChange
+	// LevelingService converts accrued EXP to levels; this sink bridges a
+	// level-up back to the client as one ZC_PAR_CHANGE burst (base level, the
+	// recalculated maxima, and the full heal that rides a pre-re level-up) so
+	// the client's level display and bars update together. A headless harness
+	// (no leveling) is a no-op.
+	world.OnLevelUp = s.notifyLevelUp
+	// Mob AI runs on the same world tick; this sink bridges a mob's landed hit
+	// back to the player as ZC_NOTIFY_ACT so the swing is visible and the target's
+	// HP bar drops. A headless harness (no mob AI) leaves mobs passive.
+	if mobAI != nil {
+		mobAI.OnMobAttack = s.notifyMobAttack
+		mobAI.OnMobMove = s.notifyMobMove
+	}
+	// A (re)spawned mob enters the world off any client request (initial seed,
+	// respawn timer); this sink broadcasts the appear frame to the mob's AOI
+	// neighbors so a respawn does not stay invisible until the mob first acts.
+	// Players already nearby when the initial seed placed the mob learned about
+	// it through their enter back-fill, so the broadcast is idempotent for them.
+	if spawn != nil {
+		spawn.OnMobSpawn = s.notifyMobSpawn
+	}
 	return s, nil
 }
 
@@ -153,6 +274,171 @@ func (s *MapServer) notifyStatChange(charID uint32, hp, sp int32) {
 	_ = c.AsyncWrite(buf.Bytes(), nil)
 }
 
+// notifyExpChange emits the two ZC_LONGLONGPAR_CHANGE frames — SP_BASEEXP then
+// SP_JOBEXP — carrying the player's new EXP totals to its client so the EXP bar
+// rises. It is the world.GrantExp notification sink (world.OnExpChange); a char
+// with no live connection (offline, or not on this map-server) is skipped. EXP
+// totals are uint64 but the PACKETVER-20250604 wire slot is int64; no real EXP
+// total approaches math.MaxInt64, so the cast is lossless in practice. Mirrors
+// notifyStatChange's coalesced two-frame AsyncWrite.
+func (s *MapServer) notifyExpChange(charID uint32, baseExp, jobExp uint64) {
+	c, ok := s.connFor(charID)
+	if !ok {
+		return
+	}
+	var buf bytes.Buffer
+	_ = ropacket.LongLongParChangeResponse{VarID: ropacket.SPBaseExp, Amount: int64(baseExp)}.Encode(&buf) //nolint:gosec // G115: positive EXP fits int64.
+	_ = ropacket.LongLongParChangeResponse{VarID: ropacket.SPJobExp, Amount: int64(jobExp)}.Encode(&buf)   //nolint:gosec // G115: positive EXP fits int64.
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// notifyLevelUp emits the level-up burst for charID as ZC_PAR_CHANGE frames:
+// the new base level, the recalculated maxima, and the vitals healed to full
+// (pre-re convention — a level-up restores HP/SP). It is the LevelingService's
+// notification sink (world.OnLevelUp); a char with no live connection is a
+// no-op. One buffered write so the client applies the frames atomically.
+func (s *MapServer) notifyLevelUp(charID uint32, newLevel int16, maxHP, maxSP int32, statusPoint uint32) {
+	c, ok := s.connFor(charID)
+	if !ok {
+		return
+	}
+	var buf bytes.Buffer
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPBaseLevel, Count: int32(newLevel)}.Encode(&buf) //nolint:gosec // G115: level bounded by game values.
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPMaxHP, Count: maxHP}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPMaxSP, Count: maxSP}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPHP, Count: maxHP}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: maxSP}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPStatusPoint, Count: int32(statusPoint)}.Encode(&buf) //nolint:gosec // G115: points bounded by level count, far below int32.
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// notifyMobAttack is the MobAIService.OnMobAttack sink (mirrors notifyStatChange
+// for the inverse, mob→player direction). It emits ZC_NOTIFY_ACT — the damage /
+// action broadcast rAthena's clif_damage sends — to the target player and their
+// AOI neighbors so the mob's swing is visible, then refreshes the target's own
+// HP/SP bar via notifyStatChange (applyDamage mutates HP directly without firing
+// OnStatChange). dmg may be 0 (miss/block) and is still broadcast so the client
+// renders the swing. On a killing blow (died==true) against a PC, handlePlayerDeath
+// takes over: VanishDead at the death cell + an armed respawn timer. ServerTick/
+// Speed are zero: mob_db carries no amotion, so the per-hit cadence
+// (mobAttackInterval) is the only timing a first cut needs. A target that left the
+// world is a no-op.
+func (s *MapServer) notifyMobAttack(mobID, targetID worlddomain.EntityID, dmg int32, died bool) {
+	target, err := s.world.Get(targetID)
+	if err != nil {
+		return // disconnected/despawned between swing and notify: nothing to show
+	}
+	resp := ropacket.NotifyActResponse{
+		SrcID:    uint32(mobID),    //nolint:gosec // G115: EntityID wraps a uint32 GID
+		TargetID: uint32(targetID), //nolint:gosec // G115: EntityID wraps a uint32 GID
+		Damage:   dmg,
+		Div:      1,
+		Type:     ropacket.DMGNormal,
+	}
+	out := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode mob-attack notify", "err", err)
+		return
+	}
+	// Exclude 0 (no charID is 0): the target player is in the neighbor set and
+	// must see the hit land on them, alongside every AOI neighbor.
+	s.broadcast(out, target.Map, target.Pos, 0)
+	// Refresh the target's own vitals so their HP bar drops by the damage dealt.
+	s.notifyStatChange(uint32(targetID), target.HP, target.SP) //nolint:gosec // G115: EntityID wraps a uint32 GID
+	if died && target.Type == worlddomain.EntityTypePC {
+		s.handlePlayerDeath(uint32(targetID), target.Map, target.Pos) //nolint:gosec // G115: EntityID wraps a uint32 GID
+	}
+}
+
+// notifyMobMove is the MobAIService.OnMobMove sink: after a mob takes a chase
+// step (MoveEntity reseated it at `to`), broadcast ZC_UNIT_WALKING so every AOI
+// neighbor near the destination cell sees the mob walk there. Mirrors the
+// player-move observer broadcast but with ObjectType=MOB and exclude=0 — a mob
+// has no own connection, so every nearby player is told (the player move excludes
+// the mover, who receives a separate self-ack). mob_db WalkSpeed is already in
+// ms per cell, the same unit as the packet Speed field (PC default 150), so it
+// passes through unchanged. The mob's map/name resolve from the entity (Get runs
+// off the world lock, so no mutex is held here); a mob that despawned between
+// MoveEntity and the notify is a no-op.
+func (s *MapServer) notifyMobMove(mobID worlddomain.EntityID, from, to worlddomain.Position, speed int16) {
+	e, err := s.world.Get(mobID)
+	if err != nil {
+		return // despawned between step and notify: nothing to broadcast
+	}
+	resp := ropacket.UnitWalkingResponse{
+		ObjectType: objectTypeMob,
+		AID:        uint32(mobID), //nolint:gosec // G115: EntityID wraps a uint32 GID; AID=GID for mobs.
+		GID:        uint32(mobID), //nolint:gosec // G115: EntityID wraps a uint32 GID.
+		Speed:      speed,
+		SrcX:       from.X,
+		SrcY:       from.Y,
+		DestX:      to.X,
+		DestY:      to.Y,
+		Name:       e.Name,
+	}
+	out, ok := encodeUnitWalk(s, resp)
+	if !ok {
+		return
+	}
+	// Anchor at the destination cell (where the mob lands), matching the player-
+	// move observer broadcast; exclude 0 because a mob has no conn of its own.
+	s.broadcast(out, e.Map, to, 0)
+}
+
+// notifyMobSpawn is the SpawnService.OnMobSpawn sink: after a mob (re)enters
+// the world, broadcast its ZC_SPAWN_UNIT (ObjectType=MOB) to AOI neighbors at
+// the spawn cell so bystanders see it appear. The mob has no conn of its own,
+// so exclude is 0 and every nearby player is told. A mob that was removed again
+// between the AddEntity and this notify is a no-op.
+func (s *MapServer) notifyMobSpawn(mobID worlddomain.EntityID) {
+	e, err := s.world.Get(mobID)
+	if err != nil {
+		return // removed again between spawn and notify: nothing to show
+	}
+	resp := spawnUnitAny(e, objectTypeMob)
+	resp.AID = uint32(mobID) //nolint:gosec // G115: EntityID wraps a uint32 GID.
+	if sbuf, ok := encodeSpawnUnit(s, resp); ok {
+		s.broadcast(sbuf, e.Map, e.Pos, 0)
+	}
+}
+
+// handlePlayerDeath performs the bounded PC death model: broadcast ZC_NOTIFY_VANISH
+// (VanishDead) at the death cell — the dying player's own conn included so it sees
+// its own death — then arm a respawn timer that revives the PC at its save point.
+// Called from notifyMobAttack when a mob's killing blow (died==true) lands on a PC.
+// The player's connection stays alive across the delay; the bounded goAthena model
+// has no ghost/tomb/respawn-button — the PC simply vanishes then reappears.
+func (s *MapServer) handlePlayerDeath(charID uint32, deathMap string, deathPos worlddomain.Position) {
+	vanish := ropacket.NotifyVanishResponse{GID: charID, Type: ropacket.VanishDead}
+	vbuf := make([]byte, vanish.Size())
+	if err := vanish.Encode(sliceWriter(vbuf)); err != nil {
+		s.log.Error("map: encode player vanish", "err", err)
+	} else {
+		// exclude 0 so the dying player's own conn receives its death frame.
+		s.broadcast(vbuf, deathMap, deathPos, 0)
+	}
+	s.world.ArmRespawn(charID, playerRespawnDelay)
+}
+
+// notifyRespawn is the WorldService.OnRespawn sink: after a dead PC is revived at
+// its save point, broadcast ZC_SPAWN_UNIT so save-map neighbors see it appear and
+// deliver ZC_ACCEPT_ENTER so the player's own client relocates to the save cell.
+// Mirrors handleEnter's appear (spawn-unit to others + accept-enter to self).
+// RespawnPlayer settled state off the world mutex, so Get + broadcast here take no
+// held mutex; a player whose conn dropped before the timer fired is a no-op.
+func (s *MapServer) notifyRespawn(charID uint32) {
+	e, err := s.world.Get(worlddomain.EntityID(charID)) //nolint:gosec // G115: charID is a char_id (uint32).
+	if err != nil {
+		return // player left between respawn and appear: nothing to broadcast
+	}
+	if sbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(e)); ok {
+		s.broadcast(sbuf, e.Map, e.Pos, charID)
+	}
+	if c, ok := s.connFor(charID); ok {
+		s.writeAcceptEnter(c, e)
+	}
+}
+
 // unregisterConn drops a charID's live connection and its last-opened shop from
 // the registries. Called on connection close to prune the per-char entries that
 // CZ_ENTER created, closing the M4b connection-registry leak. Safe off the
@@ -164,31 +450,52 @@ func (s *MapServer) unregisterConn(charID uint32) {
 	s.shopMu.Lock()
 	delete(s.openedShops, charID)
 	s.shopMu.Unlock()
+	// A disconnected player can neither answer an invitation addressed to them
+	// nor be answered if they were the inviter, so both directions go.
+	s.clearPartyInvitesFor(charID)
+	s.clearFriendReqsFor(charID)
+	s.clearGuildInvitesFor(charID)
+	s.clearMailSlot(charID)
 }
 
 // OnClose prunes the disconnecting connection from the char-indexed registries
-// and removes the player's world entity so a disconnect is visible to others.
-// It runs on the closing connection's own eventloop goroutine, so reading its
-// cached mapAuth context is race-free here (unlike handler goroutines, which
-// must not touch c.Context()).
-func (s *MapServer) OnClose(c gnet.Conn, _ error) gnet.Action {
+// and persists the disconnect (offline flag + last position + hp/sp via
+// LeaveMap) so the player's in-session state survives a restart, then removes
+// the player's world entity so a disconnect is visible to others. It runs on
+// the closing connection's own eventloop goroutine, so reading its cached
+// mapAuth context is race-free here (unlike handler goroutines, which must not
+// touch c.Context()).
+func (s *MapServer) OnClose(c gnet.Conn, _ error) (action gnet.Action) {
+	// OnClose runs on the event loop and persists vitals + prunes registries; a
+	// panic here would unwind the reactor, so it is recovered into a teardown of
+	// the connection that is closing anyway.
+	defer closeOnPanicAction(s.log, "map.OnClose", &action)
 	a, ok := c.Context().(mapAuth)
 	if !ok {
 		return gnet.None
 	}
 	s.unregisterConn(a.charID)
-	// Resolve the player's map+pos BEFORE removing the entity (broadcast anchors
-	// on the cell the player occupied), then despawn it from the world so
-	// PlayersNear stops returning the ghost and neighbors see the departure.
+	// Snapshot the player's map+pos BEFORE removing the entity: the vanish
+	// broadcast anchors on the cell the player occupied.
 	e, err := s.world.Get(worlddomain.EntityID(a.charID))
 	if err != nil {
 		s.log.Debug("map conn closed, entity already gone", "gid", a.charID)
 		return gnet.None
 	}
-	if err := s.world.RemoveEntity(worlddomain.EntityID(a.charID)); err != nil {
-		s.log.Warn("map conn closed, remove entity", "gid", a.charID, "err", err)
-		return gnet.None
+	// Persist the disconnect through LeaveMap — the single-source persist
+	// primitive (warp + disconnect funnel here): it removes the entity from the
+	// registry + AOI grid and writes the offline flag + last position + hp/sp, so
+	// a disconnect neither leaves a stale-online row nor loses in-session vitals.
+	// Best-effort: a failure is logged, not fatal — the vanish broadcast still
+	// runs. The bounded ctx keeps a slow DB from stalling the reactor eventloop.
+	leaveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := s.world.LeaveMap(leaveCtx, a.charID); err != nil {
+		s.log.Warn("map conn closed, leave world", "gid", a.charID, "err", err)
 	}
+	cancel()
+	// Tell the player's friends they went offline (the logout toggle,
+	// unit.cpp:3978 map_foreachpc clif_friendslist_toggle_sub ... false).
+	s.notifyFriendsOnline(a.charID, e.Account, e.Name, false)
 	// Broadcast the departure to OTHER nearby players (ZC_NOTIFY_VANISH,
 	// CLR_OUTSIGHT). The disconnecting conn is already closing, so excluding it
 	// from its own goodbye is both correct and a no-op-in-practice.
@@ -239,7 +546,8 @@ func (s *MapServer) OnBoot(e gnet.Engine) gnet.Action {
 // too, the 2-byte header) so the frame is skipped and the connection stays
 // alive — a client sending a not-yet-wired playable action (drop/trade/skill)
 // must not be booted.
-func (s *MapServer) OnTraffic(c gnet.Conn) gnet.Action {
+func (s *MapServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
+	defer closeOnPanicAction(s.log, "map.OnTraffic", &action)
 	for {
 		if c.InboundBuffered() < 2 {
 			return gnet.None // need at least the 2-byte opcode header
@@ -263,7 +571,10 @@ func (s *MapServer) OnTraffic(c gnet.Conn) gnet.Action {
 			// conn's context — and pass it in. Handlers must not read c.Context()
 			// off-loop, where gnet's conn.release() races it on close.
 			auth := authFromConn(c)
-			go h.fn(s, c, auth, cp)
+			go func() {
+				defer closeOnPanic(s.log, "map.dispatch", c)
+				h.fn(s, c, auth, cp)
+			}()
 			continue
 		}
 		// Unwired opcode: skip the frame using the DB's length so the client
@@ -316,6 +627,11 @@ func (s *MapServer) unhandledSkip(c gnet.Conn, opcode uint16) (skip int, buffere
 	return n, true
 }
 
+// aoiSweepRadius bounds the enter floor-item sweep to the same viewport the
+// AOI grid broadcasts into, so a player entering a map is told only about loot
+// it could actually see.
+const aoiSweepRadius = aoi.DefaultBroadcastRadius - 1
+
 // handleEnter verifies the CZ_ENTER, admits the player into the world, and sends
 // the map-enter + self-spawn reply.
 func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
@@ -355,21 +671,30 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 	// re-verifying. AID/GID are sourced from the verified session, never the
 	// client-controlled packet fields.
 	c.SetContext(mapAuth{accountID: req.AccountID, charID: req.CharID})
+
+	// Submit this connection's own ZC_ACCEPT_ENTER before it becomes
+	// addressable. registerConn is the gate every cross-connection delivery
+	// resolves through (broadcast, trade and whisper all look their target up
+	// with connFor); registering first would let a peer's dispatch goroutine
+	// write a ZC_SPAWN_UNIT ahead of this conn's accept-enter. rAthena cannot
+	// produce that order — its map server runs one player's enter to
+	// completion (accept, then map_addblock, then the AREA broadcast) — and a
+	// client that sees a spawn-unit first has no session to attribute it to.
+	s.writeAcceptEnter(c, entity)
 	// Index the connection by charID so peer-to-peer trade and AOI-broadcast
 	// packets (whose target is on a different connection) can be delivered.
 	// Pruned on disconnect by OnClose → unregisterConn.
 	s.registerConn(req.CharID, c)
-
-	s.writeAcceptEnter(c, entity)
 	// Other players already on the map see the newcomer spawn in (ZC_SPAWN_UNIT).
 	if sbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(entity)); ok {
 		s.broadcast(sbuf, entity.Map, entity.Pos, req.CharID)
 	}
-	// AOI back-fill: the newcomer also sees every existing nearby PC, one
+	// AOI back-fill: the newcomer also sees every existing nearby entity, one
 	// ZC_SPAWN_UNIT per neighbor written to its own conn (not a broadcast). The
-	// newcomer's own entity is already in the world, so PlayersNear may list it;
-	// self is skipped by charID.
-	for _, nid := range s.world.PlayersNear(entity.Map, entity.Pos) {
+	// newcomer's own entity is already in the world, so the query may list it;
+	// self is skipped by charID. NPCs get ObjectType=6 so the client renders
+	// them as clickable static sprites.
+	for _, nid := range s.world.QueryVisible(entity.Map, int(entity.Pos.X), int(entity.Pos.Y)) {
 		if nid == worlddomain.EntityID(req.CharID) {
 			continue
 		}
@@ -378,17 +703,130 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 			s.log.Debug("map: AOI neighbor lookup skipped", "gid", nid, "err", gerr)
 			continue
 		}
-		if nbuf, ok := encodeSpawnUnit(s, spawnUnitFromEntity(neighbor)); ok {
+		builder := spawnUnitFromEntity
+		if neighbor.Type == worlddomain.EntityTypeNPC {
+			builder = spawnUnitNPC
+		}
+		if nbuf, ok := encodeSpawnUnit(s, builder(neighbor)); ok {
 			_ = c.AsyncWrite(nbuf, nil)
 		}
 	}
+	// Floor items already on the ground inside the newcomer's AOI are sent as
+	// ZC_ITEM_ENTRY (0x009d, clif_getareachar_item): the item becomes visible
+	// AND pickable — a client that only saw a drop's 0x0ADD landing frame (sent
+	// to whoever was near at drop time) cannot pick one it never learned about.
+	// Fresh drops are excluded by proximity: only items within the AOI range of
+	// the enter cell are swept.
+	s.sweepFloorItems(c, entity)
 	s.log.Info("map entered", "aid", req.AccountID, "gid", req.CharID, "map", entity.Map)
+}
+
+// sweepFloorItems sends ZC_ITEM_ENTRY (0x009d, clif_getareachar_item) for every
+// floor item already on the ground within the AOI radius of the entering
+// player's cell. The enter back-fill covers entities; this covers loot — without
+// it a newcomer cannot see or pick up items dropped before it arrived.
+func (s *MapServer) sweepFloorItems(c gnet.Conn, entity worlddomain.Entity) {
+	for _, fi := range s.spawn.FloorItems(entity.Map) {
+		if abs(int(fi.PosX)-int(entity.Pos.X)) > aoiSweepRadius || abs(int(fi.PosY)-int(entity.Pos.Y)) > aoiSweepRadius {
+			continue
+		}
+		entry := ropacket.ItemEntryResponse{
+			AID:        fi.GroundID,
+			NameID:     fi.NameID,
+			Identified: 1,
+			X:          uint16(fi.PosX),   //nolint:gosec // G115: map coords are non-negative int16.
+			Y:          uint16(fi.PosY),   //nolint:gosec // G115: map coords are non-negative int16.
+			Amount:     uint16(fi.Amount), //nolint:gosec // G115: amount bounded to small stack values.
+		}
+		ebuf := make([]byte, entry.Size())
+		if err := entry.Encode(sliceWriter(ebuf)); err != nil {
+			s.log.Error("map: encode item-entry", "err", err)
+			continue
+		}
+		_ = c.AsyncWrite(ebuf, nil)
+	}
+}
+
+// BindShop associates a seeded shop NPC's GID with a shop catalog name so
+// CZ_CONTACT_NPC resolves the shop instead of starting a dialog script.
+func (s *MapServer) BindShop(npcGID uint32, shopName string) {
+	if s.shopStore == nil {
+		return
+	}
+	s.shopStore.RegisterShop(npcGID, shopName)
 }
 
 // mapAuth is the per-connection auth cache set after a verified CZ_ENTER.
 type mapAuth struct {
 	accountID uint32
 	charID    uint32
+}
+
+// handleStatusChange processes CZ_STATUS_CHANGE (0x00bb) — the client's request to
+// spend status points on a base stat. It delegates to the world service and sends
+// ZC_STATUS_CHANGE_ACK and ZC_PAR_CHANGE back to the client.
+func (s *MapServer) handleStatusChange(c gnet.Conn, auth *mapAuth, frame []byte) {
+	if auth == nil {
+		s.log.Warn("map: CZ_STATUS_CHANGE from unauthed conn")
+		return
+	}
+	czReq, err := ropacket.ParseCZStatusChange(frame)
+	if err != nil {
+		s.log.Debug("map: parse CZ_STATUS_CHANGE", "err", err)
+		return
+	}
+
+	// Resolve the stat BEFORE spending so an unknown id is refused (ack result
+	// 1) rather than silently dropped — the client knows the click failed.
+	statName, ok := statusIDToStat[czReq.StatusID]
+	if !ok {
+		s.log.Debug("map: unknown StatusID in CZ_STATUS_CHANGE", "id", czReq.StatusID)
+		s.writeStatusChangeAck(c, ropacket.ZCStatusChangeAck{StatusID: czReq.StatusID, Result: 1})
+		return
+	}
+
+	newVal, _, _, err := s.world.AllocateStat(auth.charID, statName)
+	if err != nil {
+		// result 0x01 = insufficient points (also used for cap/unknown-stat —
+		// rAthena's clif_status_change_ack result codes).
+		s.writeStatusChangeAck(c, ropacket.ZCStatusChangeAck{StatusID: czReq.StatusID, Result: 1})
+		return
+	}
+	s.writeStatusChangeAck(c, ropacket.ZCStatusChangeAck{StatusID: czReq.StatusID, Result: 0, Value: uint8(newVal)}) //nolint:gosec // G115: stat capped at 99.
+
+	// ZC_PAR_CHANGE burst: the raised stat (so the client's stat window updates),
+	// the remaining points, and current vitals — one buffered write.
+	var buf bytes.Buffer
+	_ = ropacket.ParChangeResponse{VarID: czReq.StatusID, Count: int32(newVal)}.Encode(&buf) //nolint:gosec // G115: stat capped at 99.
+	e, err := s.world.Get(worlddomain.EntityID(auth.charID))
+	if err != nil {
+		_ = c.AsyncWrite(buf.Bytes(), nil)
+		return
+	}
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPStatusPoint, Count: int32(e.StatusPoint)}.Encode(&buf) //nolint:gosec // G115: points bounded by game values.
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPHP, Count: e.HP}.Encode(&buf)
+	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: e.SP}.Encode(&buf)
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// writeStatusChangeAck sends ZC_STATUS_CHANGE_ACK to the client.
+func (s *MapServer) writeStatusChangeAck(c gnet.Conn, ack ropacket.ZCStatusChangeAck) {
+	out := make([]byte, 6) // ZC_STATUS_CHANGE_ACK = 2(cmd) + 2(statusID) + 1(result) + 1(value)
+	if err := ack.Encode(sliceWriter(out)); err != nil {
+		s.log.Error("map: encode ZC_STATUS_CHANGE_ACK", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out, nil)
+}
+
+// statusIDToStat maps the ropacket SP_* constants to world stat field names.
+var statusIDToStat = map[uint16]string{
+	ropacket.SPStr: "Str",
+	ropacket.SPAgi: "Agi",
+	ropacket.SPVit: "Vit",
+	ropacket.SPInt: "Int",
+	ropacket.SPDex: "Dex",
+	ropacket.SPLuk: "Luk",
 }
 
 // writeAcceptEnter sends ZC_ACCEPT_ENTER (the self spawn follows in M4 via the
@@ -410,6 +848,149 @@ func (s *MapServer) writeAcceptEnter(c gnet.Conn, e worlddomain.Entity) {
 	_ = c.AsyncWrite(out, nil)
 }
 
+// writeSkillInfoList appends ZC_SKILLINFO_LIST (0x010f) — every learned skill
+// from the entity's LearnedSkills map — to the LoadEndAck init burst, matching
+// rAthena's clif.cpp skill-list-on-loadend placement. For each skill, it
+// resolves SP cost and range from the skill_db registry (if available); unknown
+// skills are listed with their id/level only. An empty LearnedSkills map
+// appends nothing (the client treats a missing list as no skills).
+// skillDataFor builds one SKILLDATA row. skill ids and levels come from the
+// persisted skill table and skill_db, both bounded well under uint16.
+func (s *MapServer) skillDataFor(skillID int32, level int16) ropacket.SkillData {
+	sd := ropacket.SkillData{
+		ID:    uint16(skillID), //nolint:gosec // skill ids fit uint16 (max ~5k)
+		Level: uint16(level),   //nolint:gosec // skill levels cap at 10
+	}
+	if s.skillDB == nil {
+		return sd
+	}
+	entry := s.skillDB.Get(skillID)
+	if entry == nil {
+		return sd
+	}
+	sd.SP = uint16(s.skillDB.SpCostAt(skillID, int(level))) //nolint:gosec // SP costs are small
+	if entry.Range.IsScalar {
+		sd.Range2 = uint16(entry.Range.Value) //nolint:gosec // ranges fit uint16
+		return sd
+	}
+	if int(level) <= len(entry.Range.Levels) {
+		sd.Range2 = uint16(entry.Range.Levels[int(level)-1].Size) //nolint:gosec // ranges fit uint16
+	}
+	return sd
+}
+
+// writeInventoryLists appends ZC_INVENTORY_ITEMLIST_NORMAL (0x0b09) and
+// ZC_INVENTORY_ITEMLIST_EQUIP (0x0b39) to the LoadEndAck init burst, carrying
+// every inventory row the character owns. This is what populates the client's
+// bag grid: rAthena initialises the grid solely from these two lists
+// (clif_inventorylist), so sending the empty form leaves a player with items in
+// the DB staring at an empty bag.
+//
+// Row → entry mapping is index-preserving: the wire Index is ClientIndex(row)
+// (server row + 2) and every row is emitted, even one whose item_db entry is
+// missing. Dropping an unknown row would shift every later row's index and make
+// the client address the wrong item — the same class of bug the index convention
+// fix in this phase removes.
+func (s *MapServer) writeInventoryLists(burst []byte, auth *mapAuth) []byte {
+	if s.inv == nil {
+		return burst
+	}
+	items, err := s.inv.LoadByChar(context.Background(), auth.accountID, auth.charID)
+	if err != nil {
+		s.log.Error("map: load inventory for init burst", "aid", auth.accountID, "gid", auth.charID, "err", err)
+		return burst
+	}
+	normal := make([]ropacket.InventoryNormalItem, 0, len(items))
+	equipped := make([]ropacket.InventoryEquipItem, 0, len(items))
+	for row, it := range items {
+		//nolint:gosec // G115: inventory row counts are bounded far below uint16.
+		clientIdx := ropacket.ClientIndex(uint16(row))
+		entry := s.itemEntry(it.NameID)
+		wireType := uint8(itemdb.WireType("") & 0xff) //nolint:gosec // G115: IT_* values are small.
+		if entry != nil {
+			wireType = uint8(itemdb.WireType(entry.Type) & 0xff) //nolint:gosec // G115: IT_* values are small.
+		}
+		common := ropacket.InventoryNormalItem{
+			Index: clientIdx,
+			ITID:  uint16(it.NameID), //nolint:gosec // G115: item_db ids are registered well below 2^16 in this corpus.
+			Type:  wireType,          //nolint:gosec // G115: IT_* values are small (see above).
+			Count: uint16(it.Amount), //nolint:gosec // G115: inventory stacks are bounded far below 2^16.
+			Card: [4]uint16{ //nolint:gosec // G115: card ids are item_db ids, same bound as ITID.
+				uint16(it.Card0), uint16(it.Card1), uint16(it.Card2), uint16(it.Card3), //nolint:gosec // G115: ditto.
+			},
+		}
+		if it.Identify != 0 {
+			common.Flag = 1 // bit 0 = IsIdentified
+		}
+		if !it.IsEquipped() {
+			normal = append(normal, common)
+			continue
+		}
+		eq := ropacket.InventoryEquipItem{
+			Index:         clientIdx,
+			ITID:          common.ITID,
+			Type:          common.Type,
+			Location:      it.Equip,
+			RefiningLevel: it.Refine,
+			Card:          common.Card,
+			Flag:          common.Flag,
+		}
+		// The equip view sprite is gated on the item occupying a visible slot,
+		// exactly as clif_equipitemack does (clif.cpp:4316-4322). Without the
+		// item_db entry there is no view to resolve, so it stays 0.
+		if entry != nil && entry.View > 0 && entry.View <= 0xffff && it.Equip&equip.EquipVisible != 0 {
+			eq.ItemSpriteNumber = uint16(entry.View) //nolint:gosec // G115: range-checked above.
+		}
+		equipped = append(equipped, eq)
+	}
+
+	normalResp := ropacket.InventoryListNormalResponse{Items: normal}
+	equipResp := ropacket.InventoryListEquipResponse{Items: equipped}
+	var buf bytes.Buffer
+	if err := normalResp.Encode(&buf); err != nil {
+		s.log.Error("map: encode inventory list normal", "err", err)
+		return burst
+	}
+	if err := equipResp.Encode(&buf); err != nil {
+		s.log.Error("map: encode inventory list equip", "err", err)
+		return burst
+	}
+	return append(burst, buf.Bytes()...)
+}
+
+// maxItemID bounds the uint32→int32 cast for item_db id lookup, matching
+// worldapp's own bound: item_db ids are < 2^31, so anything larger is not a real
+// id and resolves to "not found" rather than wrapping negative.
+const maxItemID = uint32(1<<31 - 1)
+
+// itemEntry resolves an item_db entry by nameid, tolerating a nil registry (a
+// reduced harness). Callers get nil for both an unloaded registry and an unknown
+// id, which is the correct degradation for every current caller: they fall back
+// to a zeroed wire field rather than dropping the row.
+func (s *MapServer) itemEntry(nameID uint32) *itemdb.ItemEntry {
+	if s.itemDB == nil || nameID > maxItemID {
+		return nil
+	}
+	return s.itemDB.Get(int32(nameID)) //nolint:gosec // G115: bounded by maxItemID above.
+}
+
+func (s *MapServer) writeSkillInfoList(burst []byte, e worlddomain.Entity) []byte {
+	if len(e.LearnedSkills) == 0 {
+		return burst
+	}
+	skills := make([]ropacket.SkillData, 0, len(e.LearnedSkills))
+	for skillID, level := range e.LearnedSkills {
+		skills = append(skills, s.skillDataFor(skillID, level))
+	}
+	resp := ropacket.SkillInfoListResponse{Skills: skills}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		s.log.Error("map: encode skill info list", "err", err)
+		return burst
+	}
+	return append(burst, buf.Bytes()...)
+}
+
 // writeRefuseEnter sends ZC_REFUSE_ENTER.
 func (s *MapServer) writeRefuseEnter(c gnet.Conn) {
 	resp := ropacket.MapRefuseEnterResponse{Error: mapRefuseRejected}
@@ -419,6 +1000,23 @@ func (s *MapServer) writeRefuseEnter(c gnet.Conn) {
 		return
 	}
 	_ = c.AsyncWrite(out, nil)
+}
+
+// SetItemDB attaches the item_db registry after construction so the DI root
+// (which loads item_db*.yml) can wire it without churning NewMapServer's many
+// call sites. nil (the zero value) keeps the pre-Phase-42 behaviour: the
+// LoadEndAck burst carries empty inventory lists and the equip ack's view
+// sprite stays 0.
+func (s *MapServer) SetItemDB(db *itemdb.Registry) {
+	s.itemDB = db
+}
+
+// SetStorage attaches the world StorageService after construction so the DI
+// root can wire it without churning NewMapServer's many call sites. nil keeps
+// the pre-M9 behaviour: the storage dispatch entries log + skip rather than
+// disconnect (matches the trade service's nil-tolerant pattern in NewMapServer).
+func (s *MapServer) SetStorage(st *worldapp.StorageService) {
+	s.storage = st
 }
 
 // Start runs the map listener in a goroutine.

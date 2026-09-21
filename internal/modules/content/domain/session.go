@@ -41,6 +41,39 @@ type ScriptWorld interface {
 	HealPlayer(charID uint32, hpPct, spPct int) (hp, sp int32, err error)
 }
 
+// ScriptInventory is the inventory capability the script VM bridge needs for
+// item-script builtins (getitem/delitem/countitem/equip/unequip). It is
+// implemented by the world bounded context (which already composes the
+// inventory service); isolating the port here keeps the content domain free of
+// inventory/app imports.
+//
+// Returned booleans mirror rAthena's BUILDIN_DEF(item/getitem/etc.) return
+// shape: true on success, false on rejection (full bag, missing stack, etc.).
+// The VM thread keeps running on either — the script author can branch on the
+// return value.
+type ScriptInventory interface {
+	// GetItem grants amount units of nameID to charID. Returns false when the
+	// inventory cannot accept (weight/capacity exceeded) so the caller can
+	// branch on the failure.
+	GetItem(charID uint32, nameID uint32, amount int) bool
+	// DelItem removes amount units of nameID from charID's inventory. Returns
+	// true when the requested amount was removed; false when there isn't
+	// enough. Partial removal is treated as failure (rAthena's delitem
+	// returns 0 unless the entire amount was removed).
+	DelItem(charID uint32, nameID uint32, amount int) bool
+	// CountItem returns the total count of nameID in charID's inventory
+	// (sum across all stack rows; equipment rows contribute their own amount).
+	CountItem(charID uint32, nameID uint32) int
+	// Equip sets the equip bitmask of one item row, identified by the
+	// LoadByChar index the script author supplies (the inventory port resolves
+	// index → row). Returns false when the index is out of range or the slot
+	// is invalid.
+	Equip(charID uint32, index int, equip uint32) bool
+	// Unequip clears the equip bitmask of one item row by index. Returns
+	// false when the row is out of range or not currently equipped.
+	Unequip(charID uint32, index int) bool
+}
+
 // DialogSession is one player's active NPC dialog: the writer to send dialog
 // packets to the client, and the channel the VM goroutine blocks on while
 // waiting for the client's response. CharID is the player's entity id (char_id)
@@ -53,8 +86,43 @@ type DialogSession struct {
 }
 
 // NPCStore resolves an NPC entity GID to its script name (so a click can find
-// which script to run). The world's NPC registry implements this.
+// which script to run) and registers new GID→name mappings as the world
+// seeder places NPCs. The world's NPC registry implements this.
 type NPCStore interface {
 	// ScriptForNPC returns the script name registered for the NPC GID, or false.
 	ScriptForNPC(ctx context.Context, npcGID uint32) (string, bool)
+	// Register maps an NPC GID to its script name.
+	Register(gid uint32, scriptName string)
 }
+
+// ScriptQuest is the persistent-NPC-variable capability the script VM bridge
+// needs for `getvariableofnpc` and the persistent side of `set`. It is
+// implemented by the content bounded context's QuestService; isolating the
+// port here keeps the content domain free of content/quest/app imports.
+//
+// NPC variables are per-(charID, npcName, varName): rAthena stores them in the
+// `quest` table keyed that way (sql-files/main.sql quest.sql). The values are
+// text — numeric quest state is parsed from decimal — matching rAthena's
+// shape so an existing rAthena dump loads without a transform.
+type ScriptQuest interface {
+	// GetVar returns the integer value of (charID, npcName, varName). An unset
+	// variable returns 0 — matches rAthena's "unset integer reads as 0" and
+	// the VM's GetVar fallback (script.cpp:get_val).
+	GetVar(charID uint32, npcName, varName string) int64
+	// SetVar stores the integer value of (charID, npcName, varName). The
+	// caller decides whether the new value is persisted (a `set` inside an
+	// NPC script persists; a `set` inside a temporary item script does not).
+	SetVar(charID uint32, npcName, varName string, value int64) error
+	// GetVarOfNPC returns the integer value of another NPC's variable
+	// (`getvariableofnpc(npcName, varName)`). Same semantics as GetVar but
+	// the npcName is the argument, not the current NPC.
+	GetVarOfNPC(charID uint32, npcName, varName string) int64
+}
+
+// CurrentNPCName returns the script name the current NPC dialog is running
+// under. The VM bridge uses it to scope `set` to the right (charID, npcName)
+// row when an NPC script mutates a persistent variable. It is supplied by
+// the content Engine at VM-run time; a nil function (e.g. when running an
+// item script) means "no persistent scope" and `set` falls back to in-VM
+// memory only.
+type CurrentNPCName func() string

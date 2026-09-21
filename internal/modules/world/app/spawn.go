@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/internal/shared/safe"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
+	"github.com/bouroo/goAthena/pkg/ro/script"
 )
 
 // SpawnService owns floor items (drops on the map) and mob spawning. Mob spawn
@@ -25,11 +27,20 @@ type SpawnService struct {
 	floor     map[uint32]*domain.FloorItem // by GroundID
 	groundSeq atomic.Uint32
 
+	// portals indexes the corpus warp portals by source tile. Crossing the
+	// trigger tile teleports the player; portals are invisible (no entity).
+	portals map[script.WarpKey]script.WarpDef
+
 	// spawns holds respawn templates keyed by mob EntityID, registered when a mob
 	// spawns with a non-zero respawnDelay. OnMobDeath arms a timer from the
 	// template so the mob re-spawns at its origin.
 	spawnMu sync.Mutex
 	spawns  map[domain.EntityID]spawnPoint
+
+	// OnMobSpawn, when set, is invoked after a mob (re)enters the world — the
+	// initial SpawnMob placement and every respawn-timer AddEntity — so the
+	// gateway can broadcast the appear frame to the mob's AOI neighbors.
+	OnMobSpawn func(mobID domain.EntityID)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -52,13 +63,14 @@ type spawnPoint struct {
 func NewSpawnService(world *WorldService, mobs *mobdb.Registry, items *itemdb.Registry) *SpawnService {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SpawnService{
-		world:  world,
-		mobs:   mobs,
-		items:  items,
-		floor:  make(map[uint32]*domain.FloorItem),
-		spawns: make(map[domain.EntityID]spawnPoint),
-		ctx:    ctx,
-		cancel: cancel,
+		world:   world,
+		mobs:    mobs,
+		items:   items,
+		floor:   make(map[uint32]*domain.FloorItem),
+		spawns:  make(map[domain.EntityID]spawnPoint),
+		portals: make(map[script.WarpKey]script.WarpDef),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 }
 
@@ -81,7 +93,7 @@ func (s *SpawnService) SpawnMob(mobID domain.EntityID, mobClass int32, mapName s
 		}
 		s.spawnMu.Unlock()
 	}
-	return s.world.AddEntity(domain.Entity{
+	if err := s.world.AddEntity(domain.Entity{
 		ID:    mobID,
 		Type:  domain.EntityTypeMob,
 		Class: mobClass,
@@ -90,7 +102,13 @@ func (s *SpawnService) SpawnMob(mobID domain.EntityID, mobClass int32, mapName s
 		Name:  name,
 		HP:    hp,
 		MaxHP: maxHp,
-	})
+	}); err != nil {
+		return err
+	}
+	if s.OnMobSpawn != nil {
+		s.OnMobSpawn(mobID)
+	}
+	return nil
 }
 
 // OnMobDeath generates floor-item drops from the mob's drop table, despawns the
@@ -104,6 +122,29 @@ func (s *SpawnService) OnMobDeath(mobClass int32, mapName string, pos domain.Pos
 	_ = s.world.RemoveEntity(mobID) // despawn: registry + AOI grid
 	s.scheduleRespawn(mobID)
 	return drops
+}
+
+// MobExp returns the mob_db BaseExp/JobExp awarded for killing a mob of the
+// given class — the EXP source WorldService.GrantExp accrues to the killer on
+// death. A nil mob_db or an unknown class yields (0, 0): best-effort, the killer
+// simply earns no EXP (no error). mob_db stores EXP as int32 reward counts,
+// clamped to ≥0 before widening to uint64. Party EXP split is deferred — the
+// full reward goes to the single killer.
+func (s *SpawnService) MobExp(mobClass int32) (base, job uint64) {
+	if s.mobs == nil {
+		return 0, 0
+	}
+	mob := s.mobs.Get(mobClass)
+	if mob == nil {
+		return 0, 0
+	}
+	if mob.BaseExp > 0 {
+		base = uint64(mob.BaseExp) //nolint:gosec // G115: non-negative int32 reward count.
+	}
+	if mob.JobExp > 0 {
+		job = uint64(mob.JobExp) //nolint:gosec // G115: non-negative int32 reward count.
+	}
+	return base, job
 }
 
 // rollDrops resolves the mob's drop table to NameIDs via item_db and applies the
@@ -155,6 +196,9 @@ func (s *SpawnService) scheduleRespawn(mobID domain.EntityID) {
 		return
 	}
 	go func() {
+		// A panicking respawn timer must not take the process down: the mob stays
+		// dead and the next death re-arms a timer.
+		defer safe.Guard(s.world.log, "world.mobRespawn")
 		t := time.NewTimer(sp.delay)
 		defer t.Stop()
 		select {
@@ -165,6 +209,9 @@ func (s *SpawnService) scheduleRespawn(mobID domain.EntityID) {
 				ID: mobID, Type: domain.EntityTypeMob, Class: sp.class, Map: sp.mapName,
 				Pos: sp.pos, Name: sp.name, HP: sp.hp, MaxHP: sp.maxHp,
 			})
+			if s.OnMobSpawn != nil {
+				s.OnMobSpawn(mobID)
+			}
 		}
 	}()
 }
@@ -194,6 +241,26 @@ func (s *SpawnService) PickupFloorItem(groundID uint32) (domain.FloorItem, error
 	}
 	delete(s.floor, groundID)
 	return *fi, nil
+}
+
+// RegisterPortals loads warp portals from the compiled corpus (idempotent:
+// re-registering the same tile replaces its destination).
+func (s *SpawnService) RegisterPortals(defs []script.WarpDef) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, def := range defs {
+		s.portals[def.Key()] = def
+	}
+}
+
+// PortalAt returns the warp portal anchored on (mapName, x, y), if any. The
+// gateway consults it after a successful move: landing on a trigger tile
+// teleports the player to the portal's destination.
+func (s *SpawnService) PortalAt(mapName string, x, y int) (script.WarpDef, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	def, ok := s.portals[script.WarpKey{MapName: mapName, TriggerX: x, TriggerY: y}]
+	return def, ok
 }
 
 // FloorItems returns a snapshot of floor items on a map (for the AOI broadcast

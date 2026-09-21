@@ -85,3 +85,19 @@ func (r *GORMCharacterRepository) FindByID(ctx context.Context, id domain.CharID
 	}
 	return c, nil
 }
+
+// SetDeleteDate sets the delete_date column for character id, ownership-checked.
+// Returns ErrCharacterNotFound if absent or not owned by accountID.
+func (r *GORMCharacterRepository) SetDeleteDate(ctx context.Context, id domain.CharID, accountID uint32, deleteDate uint32) error {
+	res := r.db.WithContext(ctx).
+		Table("char").
+		Where("char_id = ? AND account_id = ?", id, accountID).
+		Update("delete_date", deleteDate)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return domain.ErrCharacterNotFound
+	}
+	return nil
+}

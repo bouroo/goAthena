@@ -90,6 +90,9 @@ type CharacterRepository interface {
 	UpdateZeny(ctx context.Context, id CharID, zeny uint32) error
 	// FindByID returns the character by char_id.
 	FindByID(ctx context.Context, id CharID) (Character, error)
+	// SetDeleteDate sets the delete_date column for character id, ownership-checked
+	// via accountID. Returns ErrCharacterNotFound if absent or not owned by accountID.
+	SetDeleteDate(ctx context.Context, id CharID, accountID uint32, deleteDate uint32) error
 }
 
 // SessionStore is the port for the login session handed off from the login
