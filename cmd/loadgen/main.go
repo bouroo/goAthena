@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -221,18 +222,54 @@ func sendAndClassify(ctx context.Context, conn net.Conn, frame []byte) outcome {
 	}
 	hdr := make([]byte, 2)
 	if _, err := io.ReadFull(ctxReader(ctx, conn), hdr); err != nil {
+		// A limiter denial is SILENT by design (no reply, so an attacker
+		// cannot probe the limiter), which the client observes as a read
+		// timeout. Classify that as throttle; any other read failure is an
+		// error.
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return outcomeThrottle
+		}
 		return outcomeError
 	}
 	cmd := binary.LittleEndian.Uint16(hdr)
+	// Drain the remainder of the reply frame: the server keeps the connection
+	// open, so leftover bytes from reply N would misalign the read of reply
+	// N+1. The accept (0x0ac4) carries its total wire length at offset 2; the
+	// refuse (0x083e) is fixed-size.
+	drain := 0
 	switch cmd {
-	case 0x0ac4:
+	case ropacket.HeaderACACCEPTLOGIN: // 0x0ac4 (>=20170315)
+		lenBuf := make([]byte, 2)
+		if _, err := io.ReadFull(ctxReader(ctx, conn), lenBuf); err != nil {
+			return outcomeError
+		}
+		total := int(binary.LittleEndian.Uint16(lenBuf))
+		if total < 4 {
+			return outcomeError
+		}
+		drain = total - 4
+	case ropacket.HeaderACREFUSELOGIN: // 0x083e (>=20170315; legacy 0x006a)
+		drain = ropacket.RefuseLoginResponse{}.Size() - 4
+	default:
+		// The rate limiter drops silently (no reply at all), so an unknown
+		// opcode means the protocol answered off-script — classify as error
+		// rather than guessing (the stream is unaligned; the caller abandons
+		// the connection on the next failed exchange).
+		return outcomeError
+	}
+	if drain > 0 {
+		if _, err := io.CopyN(io.Discard, ctxReader(ctx, conn), int64(drain)); err != nil {
+			return outcomeError
+		}
+	}
+	switch cmd {
+	case ropacket.HeaderACACCEPTLOGIN:
 		return outcomeAccept
-	case 0x006a:
+	case ropacket.HeaderACREFUSELOGIN:
 		return outcomeRefuse
 	default:
-		// Could be the rate limiter silently dropping; the kernel sees no
-		// AC_REFUSE_LOGIN because the limiter sits before handleLogin.
-		return outcomeThrottle
+		return outcomeError
 	}
 }
 
@@ -257,12 +294,13 @@ func (cc ctxConn) Read(p []byte) (int, error) {
 
 func ctxReader(ctx context.Context, c net.Conn) io.Reader { return ctxConn{ctx: ctx, c: c} }
 
-// encodeCALoginFrame returns the wire bytes for CA_LOGIN (0x0064). It uses
-// the kernel's request builder so the loadgen exercises the same codec the
-// client would. The 2-byte opcode header is the only manual piece: ropacket
-// builders expect the caller to prepend it.
+// encodeCALoginFrame returns the wire bytes for CA_LOGIN. The kernel's
+// CALoginRequest.Encode writes the complete frame including the 0x0064 cmd
+// header (55 bytes) — prepending another header here produced a 57-byte
+// frame the server's fixed-size framing misread (empty username, then
+// 0x0000 garbage frames), which is exactly the class of bug this tool
+// exists to catch.
 func encodeCALoginFrame(user, pass string) []byte {
-	const cmd = 0x0064
 	req := ropacket.CALoginRequest{
 		Version:    55,
 		Username:   padOrTrunc(user, 24),
@@ -274,10 +312,7 @@ func encodeCALoginFrame(user, pass string) []byte {
 		// Encoding is a memory copy; it cannot fail in practice for sane inputs.
 		return nil
 	}
-	out := make([]byte, 2+buf.Len())
-	binary.LittleEndian.PutUint16(out[:2], cmd)
-	copy(out[2:], buf.Bytes())
-	return out
+	return buf.Bytes()
 }
 
 // padOrTrunc right-pads user/pass to n bytes with NULs (the legacy wire
