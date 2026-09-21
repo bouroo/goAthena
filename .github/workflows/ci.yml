@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       go-version:
-        description: "Go version (setup-go syntax, e.g. 'stable' or '1.26.x')"
+        description: "Go version (setup-go syntax, e.g. 'stable' or '1.27.x')"
         default: "stable"
       golangci-lint-version:
         description: "golangci-lint release tag"
@@ -64,7 +64,7 @@ permissions:
 # math/rand/v2 (... method must have no type parameters) (typecheck)` — a
 # failure naming no project file, so it reads as noise. This broke CI on
 # 2026-09-19 when `stable` moved to Go 1.27.1 while lint stayed on v2.12.2
-# (built with Go 1.26). When Go stable moves, bump this too, and confirm with a
+# (built with Go 1.27). When Go stable moves, bump this too, and confirm with a
 # local `golangci-lint run` on the same toolchain.
 env:
   GO_VERSION: ${{ inputs.go-version || 'stable' }}

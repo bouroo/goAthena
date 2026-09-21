@@ -120,7 +120,7 @@ Everything else builds on this; it is the most-verified code in the repo
 
 | Layer | Choice | Rationale |
 |---|---|---|
-| Language | **Go 1.26+** | Concurrency, single-static-binary deploy, GC fit for a game loop |
+| Language | **Go 1.27+** | Concurrency, single-static-binary deploy, GC fit for a game loop |
 | Primary DB | **PostgreSQL** (MariaDB as compatibility fallback) | PG for production durability; MariaDB keeps rAthena schema read/write compat |
 | Cache / sessions | **Valkey** (Redis-fork) | Session keys, hot state, rate-limit counters |
 | Inter-service eventing | **NATS** *(planned)* | Configured (`config.yaml`, compose sidecar); no `nats.Connect` in the binary yet. Scale-out bus for when modules extract to separate binaries |
