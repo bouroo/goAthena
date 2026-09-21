@@ -13,7 +13,7 @@ import (
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
 	storageapp "github.com/bouroo/goAthena/internal/modules/commerce/storage/app"
 	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
-	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
+	"github.com/bouroo/goAthena/internal/modules/economy"
 	invapp "github.com/bouroo/goAthena/internal/modules/inventory/app"
 	"github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/internal/modules/world/infra"
@@ -135,7 +135,7 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		// services resolve here. Both satisfy the trade ports directly.
 		world := do.MustInvoke[*app.WorldService](i)
 		inv := do.MustInvoke[*invapp.InventoryService](i)
-		econ := do.MustInvoke[*economyapp.EconomyService](i)
+		econ := do.MustInvoke[economy.Service](i)
 		return app.NewTradeService(world, inv, econ), nil
 	})
 	do.Provide(inj, func(i do.Injector) (*app.MobAIService, error) {

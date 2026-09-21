@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -172,6 +173,35 @@ func TestValidate_Valid(t *testing.T) {
 	c.DB.User = "ro"
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid config should pass Validate, got: %v", err)
+	}
+}
+
+func TestValidate_NATSRemoteRequiresUsableURL(t *testing.T) {
+	base := func() *Config {
+		c := defaults()
+		c.DB.Host, c.DB.Name, c.DB.User = "db.local", "ro", "ro"
+		c.NATS.Economy = "remote"
+		return c
+	}
+	empty := base()
+	empty.NATS.URL = "" // defaults pre-seed a local URL; the remote operator must supply their own
+	if err := empty.Validate(); err == nil || !strings.Contains(err.Error(), "nats.url is required") {
+		t.Errorf("remote without url should fail with the nats.url error, got: %v", err)
+	}
+	bad := base()
+	bad.NATS.URL = "http://wrong-scheme:4222"
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "nats:// or tls://") {
+		t.Errorf("remote with non-nats scheme should fail, got: %v", err)
+	}
+	good := base()
+	good.NATS.URL = "nats://bus:4222"
+	if err := good.Validate(); err != nil {
+		t.Errorf("remote with nats:// url should pass, got: %v", err)
+	}
+	tls := base()
+	tls.NATS.URL = "tls://bus:4222"
+	if err := tls.Validate(); err != nil {
+		t.Errorf("remote with tls:// url should pass, got: %v", err)
 	}
 }
 

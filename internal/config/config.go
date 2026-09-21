@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"reflect"
 	"strconv"
@@ -123,8 +124,20 @@ type ValkeyConfig struct {
 }
 
 // NATSConfig is the inter-service event bus (the scale-out seam).
+//
+// Transport is per-module so extraction proceeds one bounded context at a
+// time: "local" (default) keeps the module in-process, "remote" replaces its
+// in-process service with a NATS request/reply proxy and requires URL. The
+// economy module is the first extraction (goathena serve-economy hosts it).
 type NATSConfig struct {
-	URL string `yaml:"url" env:"NATS_URL"`
+	URL      string `yaml:"url"      env:"NATS_URL"`
+	User     string `yaml:"user"     env:"NATS_USER"`
+	Password string `yaml:"password" env:"NATS_PASSWORD"`
+	Economy  string `yaml:"economy"  env:"NATS_ECONOMY" validate:"oneof=local remote"`
+	// RequestTimeout bounds one proxy call when the caller's context carries
+	// no deadline. Zero (and negative) → the remote package default (5s);
+	// optional, so it carries no min_duration floor.
+	RequestTimeout time.Duration `yaml:"request_timeout" env:"NATS_REQUEST_TIMEOUT"`
 }
 
 // GatewayConfig holds the game-protocol listeners. The client only knows the
@@ -236,7 +249,7 @@ func defaults() *Config {
 		},
 		DB:     DBConfig{Driver: "mariadb", Port: 3306, SSLMode: "disable"},
 		Valkey: ValkeyConfig{Port: 6379},
-		NATS:   NATSConfig{URL: "nats://127.0.0.1:4222"},
+		NATS:   NATSConfig{URL: "nats://127.0.0.1:4222", Economy: "local"},
 		Gateway: GatewayConfig{
 			LoginHost: "0.0.0.0", LoginPort: 6900,
 			CharHost: "127.0.0.1", CharPort: 6121,
@@ -279,6 +292,18 @@ func (c *Config) Validate() error {
 	require("gateway.login_host", c.Gateway.LoginHost)
 	require("gateway.char_host", c.Gateway.CharHost)
 	require("gateway.map_host", c.Gateway.MapHost)
+
+	// A remote module has nowhere to send its calls without a usable bus
+	// address. Scheme-checking here keeps a malformed URL a fatal config error
+	// at load time instead of a mid-boot dial failure economy.Register can
+	// only log (its consumers would then resolve nothing).
+	if c.NATS.Economy == "remote" {
+		if strings.TrimSpace(c.NATS.URL) == "" {
+			errs = append(errs, fmt.Errorf("nats.url is required when nats.economy is remote"))
+		} else if u, perr := url.Parse(c.NATS.URL); perr != nil || (u.Scheme != "nats" && u.Scheme != "tls") {
+			errs = append(errs, fmt.Errorf("nats.url %q: want nats:// or tls://", c.NATS.URL))
+		}
+	}
 
 	if len(errs) == 0 {
 		return nil

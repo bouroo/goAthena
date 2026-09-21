@@ -37,6 +37,7 @@ mutated.
 | F-06 | ✅ verified | — | Auth context checked on every handler |
 | F-07 | ✅ closed | this commit | Variable-length packets read safely + capped (oversize frames close the connection) |
 | F-08 | 🟡 partial | — | No OTel-driven abuse detection yet |
+| F-09 | 🟡 partial | this commit | NATS bus carries extracted-module RPCs (economy); credentials optional, broker isolation is the standing control |
 
 ---
 
@@ -167,7 +168,32 @@ load harness exists to validate them.
 
 ---
 
-## 11. Tooling added in M14
+## 11. F-09 — NATS bus authentication (partial)
+
+With `nats.economy=remote`, the economy verbs ride bus subjects
+(`goathena.economy.v0.zeny.*`): credit, deduct, and balance reads for any
+character ID. The broker's auth domain is therefore the trust boundary —
+any process that can reach it can move zeny.
+
+**Landed with the extraction:**
+- Optional per-connection credentials (`nats.user` / `nats.password`, env
+  `NATS_USER` / `NATS_PASSWORD`) sent via `nats.UserInfo`; `tls://` URLs
+  are accepted by config validation for encrypted hops.
+- Reply sanitization: the host answers with error codes plus a fixed
+  message — wrapped driver error text never crosses the bus.
+- The monolith default (`economy=local`) never dials the bus, so the
+  default posture is unchanged.
+
+**Residual risk:** broker-side authn is operator-supplied (nkeys/JWT or
+static accounts) and network policy lives in the deployment manifests, not
+in this binary. The hobbyist Podman topology keeps the broker on the
+loopback/private network; the k8s scale-out MUST pair the fleet manifests
+with a NetworkPolicy + broker auth before exposing the bus beyond the pod
+network (tracked in Outstanding work).
+
+---
+
+## 12. Tooling added in M14
 
 - `cmd/loadgen` — minimal TCP load harness for :6900. N concurrent conns,
   R attempts/sec each. Reports success / refused / throttle / error
@@ -181,10 +207,12 @@ load harness exists to validate them.
 
 ---
 
-## 12. Outstanding work (not closed in this audit)
+## 13. Outstanding work (not closed in this audit)
 
 - F-07 follow-up: per-opcode max length cap in the packet DB.
 - F-08 follow-up: OTel spans + Grafana panels.
+- F-09 follow-up: broker-side auth (nkeys/JWT), TLS enforcement, and a
+  NetworkPolicy for the bus in the k8s fleet manifests.
 - Threat model inputs:
   - What is the cost of a successful login brute-force? (account takeover.)
   - What is the cost of a successful inventory mutation by a script?

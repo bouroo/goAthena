@@ -398,11 +398,11 @@ the remote (b) path.
 
 | Item | Evidence | Status |
 |---|---|---|
-| NATS in compose | `compose.yml` sidecar | ✅ partial — sidecar present, no `nats.Connect` in binary |
-| Subject naming convention | not yet | 📋 |
-| Versioned schema for events | not yet | 📋 |
-| One module extracted as NATS service | not yet | 📋 |
-| Agones Fleet | not yet | 📋 |
+| NATS in compose | `compose.yml` sidecar | ✅ partial — sidecar present; binary dials on demand (`natsinfra.New`) |
+| Subject naming convention | `economy/remote` (`goathena.<module>.v<wire>.<verb>`) | ✅ v0 taxonomy |
+| Versioned schema for events | subject `v0` suffix = wire-version contract (add field = compatible; remove/retype = bump verb) | ✅ |
+| One module extracted as NATS service | economy: `economy.Service` interface + `remote.Proxy`/`remote.Server` + `goathena serve-economy` host | ✅ first extraction |
+| Agones Fleet | sidecar lifecycle `agones` pkg | 🟡 Fleet manifests still open |
 
 **Plan in this session:** wire `nats.Connect` in `composition.go`; define
 subject taxonomy (`economy.zeny.*`, `social.party.*`, `transit.handoff.*`,
@@ -461,6 +461,7 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | M14: load test harness | M | One-shot. |
 | M14 F-07 frame cap | ✅ done | Packet DB `MaxLength` + gateway close-on-oversize (this commit). |
 | M13 Agones adapter | 🟡 partial | Sidecar lifecycle wired; NATS module extraction + sharding keys remain. |
+| M13 economy over NATS | ✅ done | `economy.Service` seam + `remote.Proxy`/`Server` + `serve-economy` host; sharding keys remain. |
 | Release pipeline hardening | ✅ done | Deps cleared the trivy HIGH gate (`v0.1.0-beta.6`+); gosec/govulncheck in hook+CI (`5503b26`); tags gated to main (`6a93c9c`); auto GitHub Release (`8af706e`); all live-verified through `v0.1.0-beta.8`. |
 
 ---

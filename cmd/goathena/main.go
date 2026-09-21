@@ -48,6 +48,8 @@ func run(args []string) error {
 	switch cmd {
 	case "serve":
 		return serve(rest)
+	case "serve-economy":
+		return serveEconomy(rest)
 	case "migrate":
 		return migrate(rest)
 	case "version":
@@ -171,13 +173,39 @@ func serve(args []string) error {
 	return nil
 }
 
+// serveEconomy runs the headless economy host: DB + ledger + NATS bus, no
+// game listeners. A zone process with nats.economy=remote resolves its
+// economy Service here (M13 extraction path).
+func serveEconomy(args []string) error {
+	fs := flag.NewFlagSet("serve-economy", flag.ContinueOnError)
+	configPath := fs.String("config", envOr("CONFIG_PATH", "config.yaml"), "path to config file")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	logger := log.New(cfg.Log)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	logger.Info("starting goathena economy host", "env", cfg.App.Environment, "version", app.Version)
+	if err := app.RunEconomyHost(ctx, cfg, logger); err != nil {
+		return fmt.Errorf("run economy host: %w", err)
+	}
+	return nil
+}
+
 func usage() {
 	fmt.Fprint(os.Stderr, `goathena — modular-monolith Ragnarok Online server
 
 Usage:
-  goathena serve    [-config config.yaml]            Run the server until SIGINT/SIGTERM
-  goathena migrate  up|down|version|force N|steps N  Apply the embedded SQL schema
-  goathena version                                 Print build metadata
+  goathena serve         [-config config.yaml]            Run the server until SIGINT/SIGTERM
+  goathena serve-economy [-config config.yaml]            Serve the economy module over NATS until SIGINT/SIGTERM
+  goathena migrate       up|down|version|force N|steps N  Apply the embedded SQL schema
+  goathena version                                        Print build metadata
 `)
 }
 
