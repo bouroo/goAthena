@@ -74,6 +74,11 @@ env:
   # red with no project change. Bump deliberately, in step with `task fmt`.
   GOFUMPT_VERSION: v0.11.0
   TASK_VERSION: v3.53.1
+  # Security scanners, pinned for the same reason as GOFUMPT: a new advisory
+  # or rule in an unpinned scanner reddens the tree with no project change.
+  # Bump deliberately, in step with the local `task scan-*` gate.
+  GOVULNCHECK_VERSION: v1.7.0
+  GOSEC_VERSION: v2.29.0
   MARIADB_VERSION: ${{ inputs.mariadb-version || '11.8' }}
   POSTGRES_VERSION: ${{ inputs.postgres-version || '18' }}
   VALKEY_VERSION: ${{ inputs.valkey-version || '9' }}
@@ -87,6 +92,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -99,9 +105,35 @@ jobs:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout=5m
 
+  # The local pre-push hook runs the same `task scan-*` targets, so a finding
+  # surfaces on the dev machine before it costs a CI round trip. gosec's rule
+  # exclusions are documented in the Taskfile target (shared with the hook —
+  # the two cannot drift).
+  security:
+    name: Security scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: install task + govulncheck + gosec (pinned)
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@${{ env.TASK_VERSION }}
+          go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
+          go install github.com/securego/gosec/v2/cmd/gosec@${{ env.GOSEC_VERSION }}
+      - run: go mod download
+      - name: govulncheck (reachable call paths)
+        run: task scan-vuln
+      - name: gosec (adjudicated rules excluded)
+        run: task scan-sec
+
   unit:
     name: Unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -127,11 +159,12 @@ jobs:
 
   integration:
     name: Integration tests
-    # Gate the slow service-backed jobs behind the fast static ones: a lint or
-    # unit failure fails the run in ~30s instead of burning a runner + four
-    # service containers for four minutes first.
-    needs: [lint, unit]
+    # Gate the slow service-backed jobs behind the fast static ones: a lint,
+    # unit, or security failure fails the run in ~30s instead of burning a
+    # runner + four service containers for four minutes first.
+    needs: [lint, unit, security]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       mariadb:
         # NB: the `env` context is not available in `services.image`; use
@@ -204,8 +237,9 @@ jobs:
   # push/PR. Run in parallel with the mariadb job.
   postgres-integration:
     name: Integration tests (postgres)
-    needs: [lint, unit]
+    needs: [lint, unit, security]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:${{ inputs.postgres-version || '18' }}
@@ -269,8 +303,9 @@ jobs:
   build:
     name: Build image
     # Only package an image the trees that ran against it have validated.
-    needs: [lint, unit, integration, postgres-integration]
+    needs: [lint, unit, security, integration, postgres-integration]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

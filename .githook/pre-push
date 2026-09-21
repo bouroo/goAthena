@@ -15,7 +15,8 @@
 # cannot satisfy.
 #
 # Override: GATE_SKIP=1 git push ...
-#           GATE_SKIP=lint,test-unit git push ...
+#           GATE_SKIP=lint,scan-vuln,scan-sec git push ...
+#           GATE_SKIP=test-unit git push ...
 #           GATE_SKIP=test-integration git push ...
 set -euo pipefail
 . "$(dirname "$0")/_lib.sh"
@@ -35,6 +36,8 @@ trap 'gate_red "pre-push: gate failed — push blocked (fix, or GATE_SKIP=1 to o
 gate_skip_reason fmt-check || gate_run "L1 fmt" task fmt-check
 gate_skip_reason lint || gate_run "L1 lint" task lint
 gate_skip_reason vet || gate_run "L1 vet" task vet
+gate_skip_reason scan-vuln || gate_run "L1 scan-vuln" task scan-vuln
+gate_skip_reason scan-sec || gate_run "L1 scan-sec" task scan-sec
 gate_skip_reason test-unit || gate_run "L2 test-unit" task test-unit
 
 # gate_run must be the *last* command in its branch: `set -e` exempts every

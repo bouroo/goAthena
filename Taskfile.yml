@@ -59,12 +59,43 @@ tasks:
     cmds:
       - golangci-lint run --timeout=5m ./...
 
+  scan-vuln:
+    desc: govulncheck — vulnerabilities with a reachable call path in the module graph
+    cmds:
+      - |
+        command -v govulncheck >/dev/null 2>&1 || {
+          echo "missing govulncheck"
+          echo "install: go install golang.org/x/vuln/cmd/govulncheck@latest"
+          exit 2
+        }
+        govulncheck ./...
+
+  scan-sec:
+    desc: gosec — project-wide security rules, minus the classes golangci's per-site nolints already adjudicate
+    cmds:
+      - |
+        command -v gosec >/dev/null 2>&1 || {
+          echo "missing gosec"
+          echo "install: go install github.com/securego/gosec/v2/cmd/gosec@latest"
+          exit 2
+        }
+        # Standalone gosec honors only //nosec, not the //nolint:gosec comments
+        # golangci's gosec linter enforces per-site — so the already-adjudicated
+        # classes are excluded here instead of re-flagging ~350 findings:
+        #   G115 integer conversions (wire narrowing, reviewed per site in lint)
+        #   G401/G501 MD5 (rAthena use_MD5_passwords protocol compat)
+        #   G404/G109 (game RNG; bounded Ai conversion, per-site justified)
+        #   G304 file inclusion (operator-configured rAthena data paths)
+        # No severity/confidence floor: a LOW-severity finding is still a
+        # finding (probe-verified — the floor silently dropped real classes).
+        gosec -quiet -exclude=G115,G401,G501,G404,G109,G304 ./...
+
   hooks:
     desc: Activate the repo-local git hook gate (.githook) for this clone
     cmds:
       - git config --local core.hooksPath .githook
       - echo "core.hooksPath -> .githook"
-      - echo "  pre-commit runs fmt-check + vet; pre-push runs L1 + L2"
+      - echo "  pre-commit runs fmt-check + vet; pre-push runs L1 (fmt/lint/vet/scans) + L2 + L3"
       - echo "  bypass a run with GATE_SKIP=1"
 
   hooks-off:
@@ -113,12 +144,14 @@ tasks:
       - go mod tidy
 
   verify:
-    desc: Leave the tree passing every gate (tidy + fmt-check + lint + vet + unit + coverage)
+    desc: Leave the tree passing every gate (tidy + fmt-check + lint + vet + scans + unit + coverage)
     deps: [tidy]
     cmds:
       - task: fmt-check
       - task: lint
       - task: vet
+      - task: scan-vuln
+      - task: scan-sec
       - task: coverage
 
   clean:
