@@ -29,11 +29,16 @@
 
 | Gate | Tool | Pass criterion |
 |---|---|---|
-| L1 static | `task fmt` (gofumpt + goimports) + `task lint` (golangci-lint v2) | 0 issues |
-| L1 vet | `task vet` (`go vet ./...`) | clean |
+| L1 static | `task fmt-check` (gofumpt + goimports) + `task lint` (golangci-lint v2, pinned to the Go toolchain — see ci.yml) | 0 issues |
+| L1 vet | `task vet` (`go vet ./...`) across tagless + `-tags=unit` + `-tags=integration` | clean |
+| L1 scan-vuln | `task scan-vuln` (govulncheck — reachable call paths only) | 0 reachable |
+| L1 scan-sec | `task scan-sec` (gosec minus the golangci-adjudicated rule classes — see the Taskfile target) | 0 findings |
 | L2 runtime | `task test-unit` (`go test -race -tags=unit ./internal/... ./pkg/...`) | all green; ≥60% coverage |
-| L3 e2e | compose harness (MariaDB + Valkey + goathena + client) | login → char → map → at least one gameplay verb |
+| L3 integration | `task test-integration` (`go test -race -tags=integration ./...`) — testcontainers MariaDB/Postgres + live gnet gateway TCP suites | all green |
 | L3 architecture | `arch_test.go` walks | intra-module direction enforced |
+
+All of L1 + L2 + L3 run in the pre-push hook (`.githook`, `GATE_SKIP=<names>` to
+override) and in CI; the same `task` targets back both so they cannot drift.
 
 ---
 
@@ -454,6 +459,7 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | M13: Agones SDK | L | Architecture-defining. |
 | M14: threat model | M | One-shot. |
 | M14: load test harness | M | One-shot. |
+| Release pipeline hardening | ✅ done | Deps cleared the trivy HIGH gate (`v0.1.0-beta.6`+); gosec/govulncheck in hook+CI (`5503b26`); tags gated to main (`6a93c9c`); auto GitHub Release (`8af706e`); all live-verified through `v0.1.0-beta.8`. |
 
 ---
 
@@ -474,3 +480,8 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-20 | goAthena agent | `06fb692` | M11 friend list end-to-end — `CZ_ADD_FRIENDS`/`CZ_DELETE_FRIENDS`/`CZ_ACK_REQ_ADD_FRIENDS` wire codecs + dispatch, `friends` table (rAthena shape, one row per direction) + GORM repo, bidirectional accept/remove in one tx, online/offline `ZC_FRIENDS_STATE` toggles both directions, `ZC_FRIENDS_LIST` in LoadEndAck burst; unit+GORM integration+gateway e2e (two conns, add→accept→remove, restore) |
 | 2026-09-20 | goAthena agent | `767c283` | M11 guild first slice end-to-end — CZ create/invite/reply/leave/ban/break/chat/menuinterface codecs + 9 dispatch entries, `guild` table + `char.guild_id` (`000010_guild`), memory+GORM repos (guild dies with last member out), invite acks 0/1/2/3 to inviter, LoadEndAck belong/info/roster tail, master-only invite/expel, break=master+key+empty; wire-verified: ZC_UPDATE_GDID 0x02f7/47B (>=20220216, masterGID), ZC_GUILD_INFO 0x0b7b/118B |
 | 2026-09-21 | goAthena agent | `375aa87` | M11 mail (RODEX) end-to-end — 18 C→S + 9 S→C codecs (DB 121→148), `social/mail` module (domain/app/infra/di), gateway `mail.go` + 19 dispatch entries + per-char staging & op mutex, `mail`+`mail_attachments` tables (`000011_mail`), fee math (2% + 2500/item) with ledger reasons, saga compensation on failed send, claim-first collect; rAthena-anchored wire fixes: attachment sub 60B / add-item ack 64B (uint32 cards + 25B options), MAIL_TYPE bits 0x2/0x4/0x8, newest-first inbox; L3 caught GORM `mails` pluralization + reserved-word `Order("index")`; gateway e2e ×5 + GORM round-trip/cap on MariaDB+postgres |
+| 2026-09-21 | goAthena agent | `300fe5e` | deps refresh (parallel session): otel 1.46, valkey-go 1.0.78, gorm postgres 1.6.3, x/crypto 0.57.0, grpc 1.84.0 + stdlib-modernized call sites (maps/slices) — supersedes the two open dependabot PRs |
+| 2026-09-21 | goAthena agent | `37ccb62` `75648e7` | release-scan fixes — v0.1.0-beta.4's trivy gate correctly failed on 3 HIGH CVEs; x/crypto/grpc bumps cleared two, grpc needed the CVE-2026-84445 fix pseudo-version (v1.85.0-dev.0.20260825072537 — trivy's DB tracks branch lineage: 1.84.0 predates the backport); testdb literal restored to the nested ContainerRequest form (flat form is a Go 1.27 promoted-field literal that older typecheckers reject) |
+| 2026-09-21 | goAthena agent | `5503b26` | gosec + govulncheck gates: `task scan-vuln`/`scan-sec` run in the pre-push hook and a parallel CI security job (pinned gosec v2.29.0 / govulncheck v1.7.0, shared Taskfile targets); gosec excludes only golangci-adjudicated classes, no severity floor (probe-verified a floor drops real LOW classes; G402/G306 probe fails the gate); timeout-minutes on every CI/CD job |
+| 2026-09-21 | goAthena agent | `6a93c9c` `ff21f34` | CD hardening — publish only for tags reachable from main (ancestry guard job; live-verified negative: a develop tag fails in 8s with publish+scan skipped); release cadence documented in §0 |
+| 2026-09-21 | goAthena agent | `8af706e` | CD release job — a green scan now cuts the GitHub Release from the annotated tag's message (prerelease for beta/rc/alpha/dev, full for stable, re-run safe); Releases page retro-filled beta.4–7; live-verified end-to-end with v0.1.0-beta.8 (guard ✓ publish ✓ scan ✓ release ✓ prerelease flag ✓) after merging develop→main (`16791bd`, `577c968`) |
