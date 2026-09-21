@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
@@ -499,7 +500,7 @@ type undoStack []func(context.Context) error
 func (u *undoStack) push(f func(context.Context) error) { *u = append(*u, f) }
 
 func (u undoStack) apply(ctx context.Context) {
-	for i := len(u) - 1; i >= 0; i-- {
-		_ = u[i](ctx)
+	for _, v := range slices.Backward(u) {
+		_ = v(ctx)
 	}
 }

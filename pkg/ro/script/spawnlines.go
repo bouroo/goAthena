@@ -19,7 +19,7 @@ import (
 // spawns (mirrors the tolerant-loader doctrine in ADR-0003).
 func ParseSpawnLines(src []byte) []SpawnDef {
 	var defs []SpawnDef
-	for _, line := range strings.Split(string(src), "\n") {
+	for line := range strings.SplitSeq(string(src), "\n") {
 		if d, ok := parseSpawnLine(line); ok {
 			defs = append(defs, d)
 		}

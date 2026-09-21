@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 
@@ -22,9 +23,7 @@ type fakeEconomy struct {
 
 func newFakeEconomy(seed map[uint32]int32) *fakeEconomy {
 	z := map[uint32]int32{}
-	for k, v := range seed {
-		z[k] = v
-	}
+	maps.Copy(z, seed)
 	return &fakeEconomy{zeny: z}
 }
 
@@ -234,7 +233,7 @@ func TestSendCreateFailureCompensates(t *testing.T) {
 
 func TestInboxCapAndOldestFirst(t *testing.T) {
 	f := newFixture(0)
-	for i := 0; i < domain.MaxInbox; i++ {
+	for i := range domain.MaxInbox {
 		if _, err := f.svc.Send(context.Background(), 150001, "Hero", "Partner", "t", "", 0, nil); err != nil {
 			t.Fatalf("send %d: %v", i, err)
 		}

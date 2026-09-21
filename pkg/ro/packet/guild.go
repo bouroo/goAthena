@@ -681,10 +681,7 @@ type MemberMgrInfoResponse struct {
 // Size returns the on-wire byte length Encode will write (4 + 58*N, capped at
 // MaxGuildSize).
 func (r MemberMgrInfoResponse) Size() int {
-	n := len(r.Members)
-	if n > MaxGuildSize {
-		n = MaxGuildSize
-	}
+	n := min(len(r.Members), MaxGuildSize)
 	return sizeZCMemberMgrHeader + sizeZCGuildMemberInfo*n
 }
 

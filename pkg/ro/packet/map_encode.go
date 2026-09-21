@@ -1566,10 +1566,7 @@ func readNameField(buf []byte, off int, width int) string {
 	if off >= len(buf) {
 		return ""
 	}
-	end := off + width
-	if end > len(buf) {
-		end = len(buf)
-	}
+	end := min(off+width, len(buf))
 	raw := buf[off:end]
 	for i, b := range raw {
 		if b == 0 {

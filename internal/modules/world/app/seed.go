@@ -175,10 +175,7 @@ func spawnCell(def script.SpawnDef, i int) (int, int) {
 // respawnDelay converts the corpus second pair to a Duration; zero or
 // missing falls back to the default.
 func respawnDelay(def script.SpawnDef) time.Duration {
-	secs := def.Delay1
-	if def.Delay2 > secs {
-		secs = def.Delay2
-	}
+	secs := max(def.Delay2, def.Delay1)
 	if secs <= 0 {
 		secs = defaultRespawnSeconds
 	}

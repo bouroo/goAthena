@@ -456,10 +456,7 @@ type GroupListResponse struct {
 // Size returns the on-wire byte length Encode will write for the current member
 // list (28 + 54*N, capped at MaxPartySize).
 func (r GroupListResponse) Size() int {
-	n := len(r.Members)
-	if n > MaxPartySize {
-		n = MaxPartySize
-	}
+	n := min(len(r.Members), MaxPartySize)
 	return sizeZCGroupListHeader + sizeZCGroupListSub*n
 }
 

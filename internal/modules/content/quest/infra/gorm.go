@@ -53,7 +53,7 @@ func (r *GORMQuestRepository) Set(ctx context.Context, charID uint32, npcName, v
 	// ON UPDATE CURRENT_TIMESTAMP (mariadb) or by the engine on postgres.
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "char_id"}, {Name: "npc_name"}, {Name: "var_name"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
+		DoUpdates: clause.Assignments(map[string]any{
 			"value": row.Value,
 		}),
 	}).Create(&row).Error

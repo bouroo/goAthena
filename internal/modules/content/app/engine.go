@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -162,15 +163,15 @@ func (h *ScriptHost) Next() bool {
 // Select sends the menu option list (ZC_MENU_LIST) and blocks until the client
 // chooses. Returns the 1-based index, or 255 for cancel.
 func (h *ScriptHost) Select(options []string) int {
-	items := ""
+	var items strings.Builder
 	for i, o := range options {
 		if i > 0 {
-			items += ":"
+			items.WriteString(":")
 		}
-		items += o
+		items.WriteString(o)
 	}
 	var buf bytes.Buffer
-	_ = ropacket.MenuListResponse{NpcID: h.session.NpcID, Items: items}.Encode(&buf)
+	_ = ropacket.MenuListResponse{NpcID: h.session.NpcID, Items: items.String()}.Encode(&buf)
 	h.session.Writer.WritePacket(buf.Bytes())
 	return h.waitChoice()
 }

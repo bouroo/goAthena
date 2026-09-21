@@ -283,10 +283,7 @@ type FriendsListEntry struct {
 // Size returns the on-wire byte length Encode will write (4 + 8*N, capped at
 // MaxFriends).
 func (r FriendsListResponse) Size() int {
-	n := len(r.Friends)
-	if n > MaxFriends {
-		n = MaxFriends
-	}
+	n := min(len(r.Friends), MaxFriends)
 	return sizeZCFriendsListHeader + sizeZCFriendsListSub*n
 }
 

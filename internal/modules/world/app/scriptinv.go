@@ -113,10 +113,7 @@ func (a *scriptInventoryAdapter) DelItem(charID uint32, nameID uint32, amount in
 		if it.NameID != nameID {
 			continue
 		}
-		take := int(it.Amount)
-		if take > remaining {
-			take = remaining
-		}
+		take := min(int(it.Amount), remaining)
 		if err := a.inv.Remove(ctx, it.ID, take); err != nil {
 			// Best-effort: a partial drain failure leaves the bag in a
 			// recoverable state (each Remove is itself atomic), but the

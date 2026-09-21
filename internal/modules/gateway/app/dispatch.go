@@ -1579,10 +1579,7 @@ func nearestMobID(world *worldapp.WorldService, mapName string, x, y int) worldd
 		}
 		dx := abs(x - int(e.Pos.X))
 		dy := abs(y - int(e.Pos.Y))
-		d := dx
-		if dy > dx {
-			d = dy
-		}
+		d := max(dy, dx)
 		if bestDist < 0 || d < bestDist {
 			bestDist = d
 			nearest = id

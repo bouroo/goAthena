@@ -124,13 +124,11 @@ func setup(driver string) (config.DBConfig, testcontainers.Container, error) {
 	defer cancel()
 
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        spec.image,
-			Env:          spec.env,
-			ExposedPorts: []string{spec.port},
-			WaitingFor:   wait.ForLog(spec.waitLog).WithStartupTimeout(startupTimeout),
-		},
-		Started: true,
+		Image:        spec.image,
+		Env:          spec.env,
+		ExposedPorts: []string{spec.port},
+		WaitingFor:   wait.ForLog(spec.waitLog).WithStartupTimeout(startupTimeout),
+		Started:      true,
 	})
 	if err != nil {
 		return config.DBConfig{}, nil, fmt.Errorf("testdb: start %s container: %w", norm, err)
@@ -174,7 +172,7 @@ func setup(driver string) (config.DBConfig, testcontainers.Container, error) {
 func migrate(ctx context.Context, dbCfg config.DBConfig) error {
 	const attempts = 6
 	var lastErr error
-	for i := 0; i < attempts; i++ {
+	for range attempts {
 		lastErr = migrateOnce(dbCfg)
 		if lastErr == nil {
 			return nil

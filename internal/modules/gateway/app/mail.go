@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 
 	"github.com/panjf2000/gnet/v2"
@@ -563,8 +564,8 @@ func (s *MapServer) handleWriteMail(c gnet.Conn, auth *mapAuth, frame []byte) {
 // id and clif_Mail_refreshinbox walks the array backwards onto the wire.
 func (s *MapServer) appendMailList(buf []byte, mails []maildomain.Mail) []byte {
 	entries := make([]ropacket.MailListEntry, 0, len(mails))
-	for i := len(mails) - 1; i >= 0; i-- {
-		m := mails[i]
+	for _, m := range slices.Backward(mails) {
+
 		flags := uint8(0)
 		if m.Zeny > 0 {
 			flags |= ropacket.MailTypeZeny

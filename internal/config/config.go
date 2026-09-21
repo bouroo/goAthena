@@ -338,7 +338,7 @@ func setField(field reflect.Value, raw, name string) error {
 		field.SetBool(b)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		// time.Duration is an int64 but parsed from its string form ("30s").
-		if field.Type() == reflect.TypeOf(time.Duration(0)) {
+		if field.Type() == reflect.TypeFor[time.Duration]() {
 			d, err := time.ParseDuration(raw)
 			if err != nil {
 				return fmt.Errorf("env %s=%q: %w", name, raw, err)

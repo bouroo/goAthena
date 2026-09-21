@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/samber/do/v2"
@@ -202,8 +203,8 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	}
 
 	closeAll := func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i]()
+		for _, closer := range slices.Backward(closers) {
+			closer()
 		}
 	}
 	return inj, d, closeAll
