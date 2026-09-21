@@ -459,6 +459,8 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | M13: Agones SDK | L | Architecture-defining. |
 | M14: threat model | M | One-shot. |
 | M14: load test harness | M | One-shot. |
+| M14 F-07 frame cap | ✅ done | Packet DB `MaxLength` + gateway close-on-oversize (this commit). |
+| M13 Agones adapter | 🟡 partial | Sidecar lifecycle wired; NATS module extraction + sharding keys remain. |
 | Release pipeline hardening | ✅ done | Deps cleared the trivy HIGH gate (`v0.1.0-beta.6`+); gosec/govulncheck in hook+CI (`5503b26`); tags gated to main (`6a93c9c`); auto GitHub Release (`8af706e`); all live-verified through `v0.1.0-beta.8`. |
 
 ---
@@ -485,3 +487,4 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-21 | goAthena agent | `5503b26` | gosec + govulncheck gates: `task scan-vuln`/`scan-sec` run in the pre-push hook and a parallel CI security job (pinned gosec v2.29.0 / govulncheck v1.7.0, shared Taskfile targets); gosec excludes only golangci-adjudicated classes, no severity floor (probe-verified a floor drops real LOW classes; G402/G306 probe fails the gate); timeout-minutes on every CI/CD job |
 | 2026-09-21 | goAthena agent | `6a93c9c` `ff21f34` | CD hardening — publish only for tags reachable from main (ancestry guard job; live-verified negative: a develop tag fails in 8s with publish+scan skipped); release cadence documented in §0 |
 | 2026-09-21 | goAthena agent | `8af706e` | CD release job — a green scan now cuts the GitHub Release from the annotated tag's message (prerelease for beta/rc/alpha/dev, full for stable, re-run safe); Releases page retro-filled beta.4–7; live-verified end-to-end with v0.1.0-beta.8 (guard ✓ publish ✓ scan ✓ release ✓ prerelease flag ✓) after merging develop→main (`16791bd`, `577c968`) |
+| 2026-09-21 | goAthena agent | this commit | M14 F-07 closed + M13 first slice — variable-length frames capped per the packet DB (`MaxLength`/`InboundCap()`, default 8KB): a declared length above the cap closes the connection instead of reserving buffer (`TestMap_OversizeVariableFrameCloses`, live gnet: oversize chat header closes, in-cap whisper answers); Agones SDK sidecar lifecycle wired (`internal/infrastructure/agones`: Ready/health-stream/Shutdown on `AGONES_SDK_GRPC_PORT` auto-detect, Noop otherwise) and driven from `App.Run` (ready after listeners, shutdown before drain); agones unit tests (env detect, ping loop cadence+teardown, Noop) — M13 🟡 partial, M14 F-07 ✅ |

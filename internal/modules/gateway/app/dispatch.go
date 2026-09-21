@@ -34,24 +34,28 @@ type mapHandler struct {
 	// size is the fixed frame byte count for constant-length packets. Ignored
 	// when frameSize is non-nil.
 	size int
-	// frameSize, when set, derives the full frame length for a variable-length
-	// packet from the buffered bytes (its on-wire uint16 length at offset 2) and
-	// returns false until the whole frame has buffered. nil means use size.
-	frameSize func(c gnet.Conn) (int, bool)
+	// variable marks a length-prefixed frame: frameLen derives the full length
+	// from the on-wire uint16 at offset 2 and returns false until the whole
+	// frame has buffered. A declared length above the definition's cap is a
+	// protocol violation — the caller closes the connection.
+	variable bool
 	// fn receives the authed identity resolved on the eventloop so handlers never
 	// read c.Context() off-loop, where gnet's conn.release() races on close.
 	fn func(s *MapServer, c gnet.Conn, auth *mapAuth, frame []byte)
 }
 
-// frameLen returns the full frame byte count for this opcode and whether that
-// many bytes are already buffered. Fixed-length packets compare size directly;
-// variable-length packets delegate to frameSize. Callers (OnTraffic) read this
-// once and then Next(n), keeping the size decision in one place.
-func (h mapHandler) frameLen(c gnet.Conn) (n int, ready bool) {
-	if h.frameSize != nil {
-		return h.frameSize(c)
+// frameLen returns the full frame byte count for this opcode, whether that
+// many bytes are already buffered, and whether the frame declared a length
+// above its definition's cap (oversize: the caller must close the
+// connection — the buffer reservation is the attack, not the payload).
+// Fixed-length packets compare size directly; variable-length packets
+// delegate to the server's length-prefixed reader. Callers (OnTraffic) read
+// this once and then Next(n), keeping the size decision in one place.
+func (h mapHandler) frameLen(s *MapServer, c gnet.Conn) (n int, ready bool, oversize bool) {
+	if h.variable {
+		return s.variableFrameLen(c)
 	}
-	return h.size, c.InboundBuffered() >= h.size
+	return h.size, c.InboundBuffered() >= h.size, false
 }
 
 // mapHandlers is the opcode→handler table the map server dispatches against.
@@ -70,11 +74,11 @@ func mapHandlers() map[uint16]mapHandler {
 		0x00b8:                               {size: 7, fn: (*MapServer).handleChooseMenu},                                     // CZ_CHOOSE_MENU
 		0x00b9:                               {size: 6, fn: (*MapServer).handleReqNextScript},                                  // CZ_REQ_NEXT_SCRIPT
 		0x0143:                               {size: 10, fn: (*MapServer).handleInputEditDlg},                                  // CZ_INPUT_EDITDLG
-		0x01d5:                               {frameSize: variableFrameSize, fn: (*MapServer).handleInputEditDlgStr},           // CZ_INPUT_EDITDLGSTR (variable length)
+		0x01d5:                               {variable: true, fn: (*MapServer).handleInputEditDlgStr},                         // CZ_INPUT_EDITDLGSTR (variable length)
 		0x0146:                               {size: 6, fn: (*MapServer).handleCloseDialog},                                    // CZ_CLOSE_DIALOG
 		ropacket.HeaderCZACKSELECTDEALTYPE:   {size: 7, fn: (*MapServer).handleAckSelectDealtype},                              // CZ_ACK_SELECT_DEALTYPE (NPC shop open)
-		ropacket.HeaderCZPCPURCHASEITEMLIST:  {frameSize: variableFrameSize, fn: (*MapServer).handlePurchaseItemList},          // CZ_PC_PURCHASE_ITEMLIST (variable)
-		ropacket.HeaderCZPCSELLITEMLIST:      {frameSize: variableFrameSize, fn: (*MapServer).handleSellItemList},              // CZ_PC_SELL_ITEMLIST (variable)
+		ropacket.HeaderCZPCPURCHASEITEMLIST:  {variable: true, fn: (*MapServer).handlePurchaseItemList},                        // CZ_PC_PURCHASE_ITEMLIST (variable)
+		ropacket.HeaderCZPCSELLITEMLIST:      {variable: true, fn: (*MapServer).handleSellItemList},                            // CZ_PC_SELL_ITEMLIST (variable)
 		0x0362:                               {size: 6, fn: (*MapServer).handleItemPickup},                                     // CZ_ITEM_PICKUP @ 20250604
 		0x0363:                               {size: 6, fn: (*MapServer).handleItemDrop},                                       // CZ_ITEM_DROP @ 20250604
 		0x0439:                               {size: 8, fn: (*MapServer).handleUseItem},                                        // CZ_USE_ITEM2 @ 20250604 (cmd+index+AID)
@@ -88,8 +92,8 @@ func mapHandlers() map[uint16]mapHandler {
 		ropacket.HeaderCZTRADECANCEL:         {size: 2, fn: (*MapServer).handleTradeCancel},                                    // CZ_TRADE_CANCEL 0x00ed (cmd only)
 		ropacket.HeaderCZREQWEAREQUIPV5:      {size: 8, fn: (*MapServer).handleReqWearEquip},                                   // CZ_REQ_WEAR_EQUIP_V5 0x0998 (cmd+index+position)
 		ropacket.HeaderCZREQTAKEOFFEQUIP:     {size: 4, fn: (*MapServer).handleReqTakeoffEquip},                                // CZ_REQ_TAKEOFF_EQUIP 0x00ab (cmd+index)
-		ropacket.HeaderCZWHISPER:             {frameSize: variableFrameSize, fn: (*MapServer).handleWhisper},                   // CZ_WHISPER 0x0096 (variable)
-		ropacket.HeaderCZGLOBALMESSAGE:       {frameSize: variableFrameSize, fn: (*MapServer).handleGlobalMessage},             // CZ_GLOBAL_MESSAGE 0x008c (variable)
+		ropacket.HeaderCZWHISPER:             {variable: true, fn: (*MapServer).handleWhisper},                                 // CZ_WHISPER 0x0096 (variable)
+		ropacket.HeaderCZGLOBALMESSAGE:       {variable: true, fn: (*MapServer).handleGlobalMessage},                           // CZ_GLOBAL_MESSAGE 0x008c (variable)
 		ropacket.HeaderCZGETCHARNAMEREQUEST:  {size: 6, fn: (*MapServer).handleGetCharNameRequest},                             // CZ_GETCHARNAMEREQUEST 0x0094
 		ropacket.HeaderCZREQUESTTIME:         {size: 6, fn: (*MapServer).handleRequestTime},                                    // CZ_REQUEST_TIME 0x007e (clock ping)
 		ropacket.HeaderCZREQEMOTION:          {size: 3, fn: (*MapServer).handleReqEmotion},                                     // CZ_REQ_EMOTION 0x00bf (emotion icon)
@@ -124,7 +128,7 @@ func mapHandlers() map[uint16]mapHandler {
 		ropacket.HeaderCZREQLEAVEGUILD:      {size: ropacket.SizeCZGuildLeave, fn: (*MapServer).handleGuildLeave},             // CZ_REQ_LEAVE_GUILD 0x0159 (cmd+guildID+AID+CID+reason)
 		ropacket.HeaderCZREQBANGUILD:        {size: ropacket.SizeCZGuildBan, fn: (*MapServer).handleGuildBan},                 // CZ_REQ_BAN_GUILD 0x015b (same shape)
 		ropacket.HeaderCZREQDISORGANIZEGILD: {size: ropacket.SizeCZGuildBreak, fn: (*MapServer).handleGuildBreak},             // CZ_REQ_DISORGANIZE_GUILD 0x015d (cmd+key)
-		ropacket.HeaderCZGUILDCHAT:          {frameSize: variableFrameSize, fn: (*MapServer).handleGuildChat},                 // CZ_GUILD_CHAT 0x017e (cmd+len+msg)
+		ropacket.HeaderCZGUILDCHAT:          {variable: true, fn: (*MapServer).handleGuildChat},                               // CZ_GUILD_CHAT 0x017e (cmd+len+msg)
 		ropacket.HeaderCZGUILDCHECKMASTER:   {size: ropacket.SizeCZGuildCheckMaster, fn: (*MapServer).handleGuildCheckMaster}, // CZ_REQ_GUILD_MENUINTERFACE 0x014d (cmd)
 		// M11: mail (RODEX) family. The five refreshinbox opcodes share a
 		// handler (clif_parse_Mail_refreshinbox); read/delete share a shape;
@@ -143,8 +147,8 @@ func mapHandlers() map[uint16]mapHandler {
 		ropacket.HeaderCZREQREMOVEITEMMA: {size: ropacket.SizeCZMailItem, fn: (*MapServer).handleRemoveItemFromMail},     // CZ_REQ_REMOVE_ITEM_MAIL 0x0a06 (cmd+index.W+count.W)
 		ropacket.HeaderCZREQOPENWRITEMAI: {size: ropacket.SizeCZOpenWriteMail, fn: (*MapServer).handleOpenWriteMail},     // CZ_REQ_OPEN_WRITE_MAIL 0x0a08 (cmd+name.24B)
 		ropacket.HeaderCZCHECKRECEIVENAM: {size: ropacket.SizeCZOpenWriteMail, fn: (*MapServer).handleCheckReceiverName}, // CZ_CHECK_RECEIVE_CHARACTER_NAME 0x0a13 (cmd+name.24B)
-		ropacket.HeaderCZREQWRITEMAIL:    {frameSize: variableFrameSize, fn: (*MapServer).handleWriteMail},               // CZ_REQ_WRITE_MAIL 0x09ec (variable)
-		ropacket.HeaderCZREQWRITEMAIL2:   {frameSize: variableFrameSize, fn: (*MapServer).handleWriteMail},               // CZ_REQ_WRITE_MAIL2 0x0a6e (variable)
+		ropacket.HeaderCZREQWRITEMAIL:    {variable: true, fn: (*MapServer).handleWriteMail},                             // CZ_REQ_WRITE_MAIL 0x09ec (variable)
+		ropacket.HeaderCZREQWRITEMAIL2:   {variable: true, fn: (*MapServer).handleWriteMail},                             // CZ_REQ_WRITE_MAIL2 0x0a6e (variable)
 		ropacket.HeaderCZOPENMAILBOX2:    {size: ropacket.SizeCZOpenMailbox2, fn: (*MapServer).handleOpenMailbox},        // CZ_OPEN_MAILBOX2 0x0ac0 (cmd+mail id.Q+unknown.16B)
 		ropacket.HeaderCZREFRESHMAILLIST: {size: ropacket.SizeCZOpenMailbox2, fn: (*MapServer).handleOpenMailbox},        // CZ_REQ_REFRESH_MAIL_LIST2 0x0ac1 (refreshinbox)
 		ropacket.HeaderCZCHECKNAME2:      {size: ropacket.SizeCZCheckName2, fn: (*MapServer).handleCheckReceiverName},    // CZ_CHECKNAME2 0x0b97 (cmd+name.24B+own_char.B)
@@ -221,25 +225,35 @@ func (s *MapServer) handleInputEditDlgStr(_ gnet.Conn, auth *mapAuth, frame []by
 	s.content.Signal(auth.accountID, dialogdomain.DialogSignal{Input: req.Value})
 }
 
-// variableFrameSize derives the full byte length of a length-prefixed variable
+// variableFrameLen derives the full byte length of a length-prefixed variable
 // packet by reading its uint16 total-length field at offset 2 — the rAthena
-// convention for non-constant-length frames (CZ_INPUT_EDITDLGSTR 0x01d5 today).
-// It returns false until the whole frame has buffered. A malformed length
-// smaller than its own header resyncs over the 2-byte opcode (matching
-// unhandledSkip), so the dispatcher never spins on a zero-length read.
-func variableFrameSize(c gnet.Conn) (int, bool) {
+// convention for non-constant-length frames (CZ_GLOBAL_MESSAGE, whisper,
+// mail send, purchase lists). It returns ready=false until the whole frame
+// has buffered, and oversize=true (caller closes) when the declared length
+// exceeds the packet DB's cap for the opcode: the buffer reservation itself
+// is the attack (F-07). A malformed length smaller than its own header
+// resyncs over the 2-byte opcode (matching unhandledSkip), so the dispatcher
+// never spins on a zero-length read.
+func (s *MapServer) variableFrameLen(c gnet.Conn) (n int, ready bool, oversize bool) {
 	prefix, err := c.Peek(4)
 	if err != nil {
-		return 0, false // length field not fully buffered yet
+		return 0, false, false // length field not fully buffered yet
 	}
-	n := int(binary.LittleEndian.Uint16(prefix[2:4]))
+	n = int(binary.LittleEndian.Uint16(prefix[2:4]))
+	capLen := ropacket.MaxVariableLength
+	if def, ok := s.db.Lookup(binary.LittleEndian.Uint16(prefix[0:2])); ok {
+		capLen = def.InboundCap()
+	}
+	if n > capLen {
+		return 0, false, true
+	}
 	if n < 4 {
-		return 2, true // malformed length prefix: resync over the header
+		return 2, true, false // malformed length prefix: resync over the header
 	}
 	if c.InboundBuffered() < n {
-		return 0, false // wait for the rest of the frame
+		return 0, false, false // wait for the rest of the frame
 	}
-	return n, true
+	return n, true, false
 }
 
 // handleCloseDialog cancels an active dialog (CZ_CLOSE_DIALOG 0x0146).

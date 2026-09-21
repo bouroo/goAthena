@@ -558,7 +558,15 @@ func (s *MapServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
 		}
 		opcode := binary.LittleEndian.Uint16(hdr)
 		if h, ok := s.handlers[opcode]; ok {
-			n, ready := h.frameLen(c)
+			n, ready, oversize := h.frameLen(s, c)
+			if oversize {
+				// F-07: the declared length exceeds the packet DB's cap — the
+				// buffer reservation is the attack. Close rather than wait for
+				// bytes that would over-commit the connection.
+				s.log.Warn("map: variable frame exceeds length cap — closing",
+					"cmd", fmt.Sprintf("0x%04x", opcode))
+				return gnet.Close
+			}
 			if !ready {
 				return gnet.None // wait for the full frame (fixed or variable) to arrive
 			}

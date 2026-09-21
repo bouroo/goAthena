@@ -23,6 +23,7 @@ require (
 )
 
 require (
+	agones.dev/agones v1.60.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20260917205352-e937bb47801a // indirect

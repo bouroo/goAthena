@@ -35,7 +35,7 @@ mutated.
 | F-04 | ✅ closed | this commit | Login brute-force is unthrottled |
 | F-05 | ✅ verified | — | Unknown opcodes are silently skipped (not closed) |
 | F-06 | ✅ verified | — | Auth context checked on every handler |
-| F-07 | 🟡 partial | — | Variable-length packets read on-wire length prefix safely |
+| F-07 | ✅ closed | this commit | Variable-length packets read safely + capped (oversize frames close the connection) |
 | F-08 | 🟡 partial | — | No OTel-driven abuse detection yet |
 
 ---
@@ -138,12 +138,18 @@ prefix at offset 2 and waits until the full frame has buffered. A malformed
 length (`n < 4`) is treated as a header resync (skip 2 bytes, continue).
 Verified by `frames_test.go`.
 
-**Open:** a maximum length cap. A packet claiming `n=65535` reserves 64 KB
-of buffer; a stream of such packets at high rate can pressure the
-connection. rAthena's clif_packetdb caps the longest variable packet at a
-few KB; the goAthena packet DB carries the length field but not an enforced
-cap. Recommended follow-up: a per-opcode max length in the packet DB and a
-guard in `OnTraffic` that disconnects on a length-prefix > the cap.
+**Closed — maximum length cap.** The packet DB's `Definition` gained
+`MaxLength` (default `MaxVariableLength` = 8192; the largest legitimate
+C→S variable frame — a mail send — is ~700 bytes). The gateway's
+`variableFrameLen` now checks the declared length against the definition's
+`InboundCap()` before waiting for the frame: a frame declaring more closes
+the connection (`OnTraffic` returns `gnet.Close`), because the buffer
+reservation itself is the attack — the old behavior parked the connection
+waiting for 59996 bytes that never had to arrive.
+
+**Verification:** `TestMap_OversizeVariableFrameCloses` (gateway integration,
+live gnet listener) — an oversize CZ_GLOBAL_MESSAGE header closes the
+connection; a fresh connection with in-cap frames still answers whispers.
 
 ---
 

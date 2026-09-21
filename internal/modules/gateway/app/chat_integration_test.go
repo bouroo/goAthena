@@ -614,3 +614,51 @@ func TestMap_WhisperDeniedByExall(t *testing.T) {
 		t.Fatalf("deny-all target received %d bytes, want silence", n)
 	}
 }
+
+// TestMap_OversizeVariableFrameCloses proves F-07's cap: a length-prefixed
+// frame declaring 60000 bytes (far above the packet DB's 8192 cap) is a
+// buffer-reservation attack — the server closes the connection instead of
+// waiting for bytes that would over-commit it. The control conversation
+// proves a fresh connection with in-cap frames stays live.
+func TestMap_OversizeVariableFrameCloses(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	ms, _ := buildTradeMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	awaitAcceptEnter(t, conn)
+	drainQuiescent(t, conn)
+
+	// The attack: a CZ_GLOBAL_MESSAGE header claiming a 60000-byte frame.
+	// Only the 4-byte header is sent — the old behavior would park the
+	// connection waiting for 59996 more bytes.
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write([]byte{0x8c, 0x00, 0x30, 0xea}); err != nil {
+		t.Fatalf("send oversize header: %v", err)
+	}
+	if _, err := conn.Read(make([]byte, 16)); err == nil {
+		t.Fatal("connection survived an oversize variable frame, want close")
+	}
+
+	// Control: a fresh connection with in-cap frames still works — the
+	// whisper ack proves the dispatcher is alive and unpolluted.
+	conn2, _ := buildTradeMapDeps(t, sessions)
+	c2 := startAndDial(t, conn2, freePort(t))
+	defer c2.Close()
+	sessions2 := charinfra.NewMemorySessionStore()
+	_ = sessions2.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	sendCZEnter(t, c2, 2000001, 150001, 0x11111111)
+	awaitAcceptEnter(t, c2)
+	drainQuiescent(t, c2)
+	c2.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c2.Write(whisperFrame("Nobody", "still here")); err != nil {
+		t.Fatalf("send CZ_WHISPER: %v", err)
+	}
+	ack := readTradeFrame(t, c2, ropacket.HeaderZCACKWHISPER, 7)
+	if ack[2] != 1 {
+		t.Fatalf("whisper ack result = %d, want 1 (target offline)", ack[2])
+	}
+}
