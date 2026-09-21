@@ -1,8 +1,9 @@
 name: Release
 
 # Build and push the goathena image to ghcr.io on version tags (v*) that
-# point at main's history. The image is tagged with both the git ref
-# (e.g. v1.2.3) and `latest`.
+# point at main's history, then cut the GitHub Release from the annotated
+# tag's message. The image is tagged with both the git ref (e.g. v1.2.3)
+# and `latest`.
 on:
   push:
     tags: ["v*"]
@@ -101,3 +102,34 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+
+  # A pushed tag creates a git tag, not a GitHub Release — without this job
+  # the Releases page stays empty. Runs only after the scan gate is green, so
+  # a failed release never gets a Release object. Stable semver (v1.2.3)
+  # publishes a full release; beta/rc/alpha/dev suffixes publish a pre-release.
+  release:
+    name: Publish GitHub release
+    needs: [guard, publish, scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # release objects; everything else stays read-only
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full clone carries the annotated tag object
+      - name: Create the release from the tag message
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists — nothing to do"
+            exit 0
+          fi
+          notes="$(git tag -l "$GITHUB_REF_NAME" --format='%(contents)')"
+          flags=(--verify-tag)
+          case "$GITHUB_REF_NAME" in
+            *-beta*|*-rc*|*-alpha*|*-dev*) flags+=(--prerelease) ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" --notes "$notes" "${flags[@]}"
