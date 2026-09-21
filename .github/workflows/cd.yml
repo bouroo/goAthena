@@ -1,7 +1,8 @@
 name: Release
 
-# Build and push the goathena image to ghcr.io on version tags (v*).
-# The image is tagged with both the git ref (e.g. v1.2.3) and `latest`.
+# Build and push the goathena image to ghcr.io on version tags (v*) that
+# point at main's history. The image is tagged with both the git ref
+# (e.g. v1.2.3) and `latest`.
 on:
   push:
     tags: ["v*"]
@@ -11,8 +12,32 @@ permissions:
   packages: write
 
 jobs:
+  # Releases publish from main only. A tag push carries no branch context
+  # (and GitHub cannot filter tag triggers by branch), so the rule is
+  # enforced as ancestry: the tagged commit must be reachable from
+  # origin/main. A tag cut on develop or any side branch fails here, before
+  # the image is built or pushed anywhere.
+  guard:
+    name: Tag points at main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # ancestry needs history, not just the tagged commit
+      - name: Verify the tagged commit is reachable from origin/main
+        run: |
+          git fetch origin main
+          if git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "tag ${{ github.ref_name }} points at main history — publishing"
+          else
+            echo "::error::tag ${{ github.ref_name }} does not point at a commit on main — cut release tags from main only"
+            exit 1
+          fi
+
   publish:
     name: Build & push image
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
