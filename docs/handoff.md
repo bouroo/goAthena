@@ -18,6 +18,9 @@
 - **P-prefix** = phase (P0, P-scale, P-hard).
 - **Push cadence** — each milestone ships on its own commit series on `develop`,
   rebased onto `origin/develop`, then `git push origin develop`.
+- **Release cadence** — publish (CD: image build + trivy gate) fires only for
+  `v*` tags whose commit is reachable from `origin/main`; the cd.yml guard job
+  refuses anything else. To release: merge `develop` → `main`, then tag there.
 - **Hard stop** — three failed verify cycles on the same item → stop and escalate.
 
 ---
