@@ -192,7 +192,7 @@ started.**
 | **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 chat ✅; friend/party ✅; guild/mail remain |
 | **M12** Transit | cross-map warp (SetPosition + LeaveMap) | 🟡 partial — in-zone warp landed (61 LOC); cross-zone handshake + Agones allocation open |
 | **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 🟡 partial — Agones sidecar lifecycle wired; economy extracted over NATS (`economy.Service` seam, request/reply proxy+server, `goathena serve-economy` host, env-driven local/remote switch); sharding keys + further module extractions open |
-| **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | 🟡 partial — /metrics + compose e2e + security review (F-01..F-07 closed incl. variable-frame length cap) + gosec/govulncheck gates live; OTel abuse-detection spans and load-test baseline open |
+| **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | 🟡 partial — /metrics + compose e2e + security review (F-01..F-07 closed incl. variable-frame length cap) + gosec/govulncheck gates live + login-load baseline recorded (`task loadtest`, ≈1000 logins/s zero-error); OTel abuse-detection spans open |
 
 **Effort weighting** (from `rathena-subsystem-size-risk-profile`): the protocol/
 crypto/path work is a few hundred lines and **done**; the real effort is the
