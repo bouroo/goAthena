@@ -55,7 +55,12 @@ zone:
   directory:                        # cross-zone handoff routing (M12/M13)
     mode: local                     # local|agones|static
     # agones: resolve maps against Agones GameServers (K8s API; in-cluster
-    # credentials, or KUBECONFIG for Swarm/workstation runs).
+    # credentials, or KUBECONFIG for Swarm/workstation runs). Manifests:
+    # deploy/agones/{fleet,gameserver}.yaml. In a fleet pod set namespace,
+    # selector, and self_name — self_name is the pod's own GameServer name
+    # (metadata.labels['agones.dev/gameserver'] via the downward API), so the
+    # pod answers its own maps locally instead of redirecting to itself.
+    # A non-local directory that cannot reach its source is a fatal boot error.
     # namespace: default            # GameServer namespace
     # selector: ""                  # label selector narrowing candidates
     # self_name: ""                 # THIS pod's GameServer resource name (own maps stay local)

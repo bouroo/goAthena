@@ -1,0 +1,275 @@
+# goAthena zone shards on Agones (M13).
+#
+# One Fleet per map shard: the pods in a Fleet serve the map set its
+# `goathena.dev/maps` annotation declares, and the transit MapDirectory
+# redirects a client to the shard serving the destination map (M12's
+# ZC_NPCACK_SERVERMOVE path). Agones also injects the SDK sidecar, which the
+# binary detects through AGONES_SDK_GRPC_PORT to mark itself Ready and stream
+# health pings (internal/infrastructure/agones).
+#
+# Contract with the code — both sides must agree or the redirect breaks:
+#   * the game port MUST be named `game` (transit/agones PortName); the redirect
+#     carries Status.Address:Status.Ports["game"].Port.
+#   * the served maps MUST be in `goathena.dev/maps` (CSV) or
+#     `goathena.dev/map-<name>` labels (MapsAnnotation / LabelPrefix).
+#   * zone.directory.self_name MUST be this pod's GameServer name, taken from
+#     the `agones.dev/gameserver` pod label Agones stamps on the pod — that is
+#     what makes a pod answer its own maps locally instead of redirecting to
+#     itself.
+#   * zone.directory.selector MUST narrow to the Fleets that form this world, or
+#     a second world's shards become valid redirect targets.
+#
+# Port policy is Static, not Dynamic: the container binds GATEWAY_MAP_PORT
+# (5121) at boot and nothing tells it about a dynamically assigned host port,
+# so a Dynamic policy would redirect clients to a port no process is listening
+# on. The cost is one GameServer per node (5121 is a host port); lifting it
+# means reading the allocated port from the SDK at boot and binding there —
+# open M13 work, recorded in docs/handoff.md.
+apiVersion: agones.dev/v1
+kind: Fleet
+metadata:
+  name: goathena-prontera
+  labels:
+    app.kubernetes.io/name: goathena
+    app.kubernetes.io/component: zone
+spec:
+  # One GameServer per shard. Scale by raising this for a busy map set, or by
+  # splitting the map set across more Fleets.
+  replicas: 1
+  scheduling: Packed
+  # Agones requires an explicit strategy; RollingUpdate keeps a Ready shard
+  # serving while its replacement starts.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: goathena
+        app.kubernetes.io/component: zone
+      annotations:
+        # The maps this shard serves. Comma-separated, no spaces.
+        goathena.dev/maps: "prontera,prt_fild01,prt_fild02"
+    spec:
+      ports:
+        - name: game
+          portPolicy: Static
+          containerPort: 5121
+          protocol: TCP
+      health:
+        # The app streams Health() every 5s (agones.DefaultHealthInterval).
+        # Agones evicts after failureThreshold missed periods.
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 3
+      sdkServer:
+        # Agones injects AGONES_SDK_GRPC_PORT into the pod from these settings;
+        # that variable is what switches the sidecar lifecycle on.
+        logLevel: Info
+      template:
+        spec:
+          containers:
+            - name: goathena
+              image: ghcr.io/bouroo/goathena:latest
+              args: ["serve", "-config", "/config.yaml"]
+              env:
+                # --- persistence + bus (shared by every shard) ---
+                - name: APP_ENVIRONMENT
+                  value: production
+                - name: DB_DRIVER
+                  value: postgres
+                - name: DB_HOST
+                  value: goathena-postgres
+                - name: DB_NAME
+                  value: ragnarok
+                - name: DB_USER
+                  value: ragnarok
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: goathena-db
+                      key: password
+                - name: VALKEY_HOST
+                  value: goathena-valkey
+                - name: NATS_URL
+                  value: nats://goathena-nats:4222
+                # --- this shard's identity ---
+                - name: ZONE_DIRECTORY_MODE
+                  value: agones
+                - name: ZONE_DIRECTORY_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: ZONE_DIRECTORY_SELECTOR
+                  value: app.kubernetes.io/component=zone
+                - name: ZONE_DIRECTORY_SELF_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['agones.dev/gameserver']
+                # --- observability ---
+                - name: OTEL_EXPORTER
+                  value: otlp
+                - name: OTEL_EXPORTER_OTLP_ENDPOINT
+                  value: http://goathena-otel-collector:4317
+                - name: LOG_FORMAT
+                  value: json
+              ports:
+                # The map listener binds the container port; with a Static port
+                # policy Agones reports the same value in Status.Ports["game"].
+                - name: game
+                  containerPort: 5121
+                  protocol: TCP
+                # Control plane (health/metrics/ops). Not part of the client
+                # protocol; the probes below need it.
+                - name: http
+                  containerPort: 8080
+                  protocol: TCP
+              readinessProbe:
+                httpGet:
+                  path: /readyz
+                  port: http
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                failureThreshold: 3
+              livenessProbe:
+                httpGet:
+                  path: /healthz
+                  port: http
+                initialDelaySeconds: 10
+                periodSeconds: 15
+                failureThreshold: 3
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                capabilities:
+                  drop: ["ALL"]
+---
+# A second shard, so a portal crossing between the two map sets exercises the
+# cross-zone redirect. Separate Fleets rather than one: each shard scales
+# independently, and self_name scoping stays unambiguous.
+apiVersion: agones.dev/v1
+kind: Fleet
+metadata:
+  name: goathena-geffen
+  labels:
+    app.kubernetes.io/name: goathena
+    app.kubernetes.io/component: zone
+spec:
+  replicas: 1
+  scheduling: Packed
+  # Agones requires an explicit strategy; RollingUpdate keeps a Ready shard
+  # serving while its replacement starts.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: goathena
+        app.kubernetes.io/component: zone
+      annotations:
+        goathena.dev/maps: "geffen,gef_fild01,gef_fild02"
+    spec:
+      ports:
+        - name: game
+          portPolicy: Static
+          containerPort: 5121
+          protocol: TCP
+      health:
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 3
+      sdkServer:
+        logLevel: Info
+      template:
+        spec:
+          containers:
+            - name: goathena
+              image: ghcr.io/bouroo/goathena:latest
+              args: ["serve", "-config", "/config.yaml"]
+              env:
+                - name: APP_ENVIRONMENT
+                  value: production
+                - name: DB_DRIVER
+                  value: postgres
+                - name: DB_HOST
+                  value: goathena-postgres
+                - name: DB_NAME
+                  value: ragnarok
+                - name: DB_USER
+                  value: ragnarok
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: goathena-db
+                      key: password
+                - name: VALKEY_HOST
+                  value: goathena-valkey
+                - name: NATS_URL
+                  value: nats://goathena-nats:4222
+                - name: ZONE_DIRECTORY_MODE
+                  value: agones
+                - name: ZONE_DIRECTORY_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: ZONE_DIRECTORY_SELECTOR
+                  value: app.kubernetes.io/component=zone
+                - name: ZONE_DIRECTORY_SELF_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['agones.dev/gameserver']
+                - name: OTEL_EXPORTER
+                  value: otlp
+                - name: OTEL_EXPORTER_OTLP_ENDPOINT
+                  value: http://goathena-otel-collector:4317
+                - name: LOG_FORMAT
+                  value: json
+              ports:
+                - name: game
+                  containerPort: 5121
+                  protocol: TCP
+                - name: http
+                  containerPort: 8080
+                  protocol: TCP
+              readinessProbe:
+                httpGet:
+                  path: /readyz
+                  port: http
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                failureThreshold: 3
+              livenessProbe:
+                httpGet:
+                  path: /healthz
+                  port: http
+                initialDelaySeconds: 10
+                periodSeconds: 15
+                failureThreshold: 3
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                capabilities:
+                  drop: ["ALL"]
