@@ -157,6 +157,12 @@ const (
 	// rathena/src/map/packets.hpp PACKET_ZC_NPCACK_MAPMOVE —
 	// `int16 packetType; char mapName[16]; uint16 xPos; uint16 yPos;` = 22 bytes.
 	HeaderZCNPCACKMAPMOVE uint16 = 0x0091
+	// ZC_NPCACK_SERVERMOVE (0x0ac7) — cross-map-server relocation directive
+	// (rAthena clif_changemapserver, clif.cpp:2168): like ZC_NPCACK_MAPMOVE but
+	// the client reconnects to the given ip:port zone instead of this one.
+	// At PACKETVER >= 20170315 the packet is named SERVERMOVE_DOMAIN and the
+	// opcode moves 0x0092 → 0x0ac7 (rathena/src/map/packets.hpp:700-726).
+	HeaderZCNPCACKSERVERMOVE uint16 = 0x0ac7
 	// CZ_REQNEXTSCRIPT (0x00b9) — client clicks "Next" in a dialog.
 	// rathena/src/map/clif_packetdb.hpp:60 (`parseable_packet(0x00b9,6,clif_parse_ScriptContinue,2)`).
 	// Fixed 6 bytes: [2:cmd][4:NpcID uint32].
@@ -430,6 +436,13 @@ const (
 	// sizeZCRefuseEnter = int16 packetType + uint8 errorCode = 2+1 = 3
 	// (rathena/src/map/packets.hpp:585-589, static_assert at :589).
 	sizeZCRefuseEnter = 3
+	// sizeZCNPCAckServerMove = int16 packetType + char mapName[24] +
+	// uint16 xPos + uint16 yPos + uint32 ip + uint16 port + char domain[128]
+	// = 2+24+2+2+4+2+128 = 156 (rathena/src/map/packets.hpp:706-715,
+	// PACKET_ZC_NPCACK_SERVERMOVE at PACKETVER >= 20170315; the packed struct
+	// has no padding). MAP_NAME_LENGTH_EXT is 24, not the 16 the pre-2017
+	// name slot used.
+	sizeZCNPCAckServerMove = 156
 	// sizeZCNPCAckMapMove = int16 packetType + char mapName[16] + uint16 xPos +
 	// uint16 yPos = 2+16+2+2 = 22 (rathena/src/map/packets.hpp
 	// PACKET_ZC_NPCACK_MAPMOVE).
@@ -960,6 +973,12 @@ func NewMapServerDB() *DB {
 		ID:        HeaderZCNPCACKMAPMOVE,
 		Name:      "ZC_NPCACK_MAPMOVE",
 		Length:    sizeZCNPCAckMapMove,
+		Direction: DirectionServerToClient,
+	})
+	db.Register(Definition{
+		ID:        HeaderZCNPCACKSERVERMOVE,
+		Name:      "ZC_NPCACK_SERVERMOVE",
+		Length:    sizeZCNPCAckServerMove,
 		Direction: DirectionServerToClient,
 	})
 	db.Register(Definition{

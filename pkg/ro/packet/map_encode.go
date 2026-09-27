@@ -135,6 +135,68 @@ func (r MapMoveResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// ServerMoveResponse encodes a ZC_NPCACK_SERVERMOVE packet (command 0x0ac7) —
+// the cross-map-server variant of ZC_NPCACK_MAPMOVE: the client loads the
+// named map and reconnects to ip:port (a different zone process) instead of
+// this map server. Layout source: rathena/src/map/packets.hpp
+// PACKET_ZC_NPCACK_SERVERMOVE at PACKETVER >= 20170315 (opcode 0x0ac7,
+// SERVERMOVE_DOMAIN variant; the trailing domain slot is sent empty).
+//
+// Fixed wire length: 156 bytes (int16 packetType + char mapName[24] +
+// uint16 xPos + uint16 yPos + uint32 ip + uint16 port + char domain[128]).
+// The struct is packed (no padding). ip and port are the two fields the
+// client reads big-endian — rAthena writes htonl(ip) and the byte-swapped
+// port ("ntows(htons(port))", clif.cpp:2173-2174) — so Encode stores them
+// verbatim as pre-swapped wire values.
+type ServerMoveResponse struct {
+	// MapName is the destination map name (no extension, e.g. "izlude"),
+	// zero-padded to fill the 24-byte slot (MAP_NAME_LENGTH_EXT).
+	MapName string
+	// X is the destination cell X.
+	X uint16
+	// Y is the destination cell Y.
+	Y uint16
+	// IP is the zone address in the wire (big-endian) byte order the client
+	// expects — the value of binary.BigEndian.PutUint32 over the IPv4 octets.
+	IP uint32
+	// Port is the zone port in the wire (byte-swapped) order rAthena's
+	// ntows(htons(port)) produces.
+	Port uint16
+}
+
+// Size returns the on-wire byte length that Encode will write (always 156).
+func (r ServerMoveResponse) Size() int {
+	return sizeZCNPCAckServerMove
+}
+
+// Encode writes the ZC_NPCACK_SERVERMOVE packet to w. Returns a wrapped error
+// (sentinel + %w) if MapName exceeds 24 bytes; in that case no bytes are
+// written to w.
+func (r ServerMoveResponse) Encode(w io.Writer) error {
+	const nameSlot = 24
+	if len(r.MapName) > nameSlot {
+		return fmt.Errorf("packet: encode ZC_NPCACK_SERVERMOVE: %w", ErrMapNameTooLong)
+	}
+	buf := make([]byte, sizeZCNPCAckServerMove)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNPCACKSERVERMOVE)
+	writeFixedString(buf[2:2+nameSlot], r.MapName)
+	// uint16 xPos at offset 26 (2+24).
+	binary.LittleEndian.PutUint16(buf[26:], r.X)
+	// uint16 yPos at offset 28.
+	binary.LittleEndian.PutUint16(buf[28:], r.Y)
+	// uint32 ip at offset 30 — big-endian on the wire (clif.cpp htonl).
+	binary.BigEndian.PutUint32(buf[30:], r.IP)
+	// uint16 port at offset 34 — byte-swapped on the wire (clif.cpp
+	// ntows(htons(port))).
+	binary.BigEndian.PutUint16(buf[34:], r.Port)
+	// char domain[128] at offset 36 — sent empty (rAthena safestrncpy "").
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_NPCACK_SERVERMOVE: %w", err)
+	}
+	return nil
+}
+
 // MapNotifyPlayerMoveResponse encodes a ZC_NOTIFY_PLAYERMOVE packet
 // (command 0x0087). The server broadcasts this to nearby clients every
 // time a player's path is computed, so each peer can interpolate the

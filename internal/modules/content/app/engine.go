@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	"github.com/bouroo/goAthena/internal/shared/safe"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
@@ -201,11 +202,31 @@ func (h *ScriptHost) Close() {
 	h.session.Writer.WritePacket(buf.Bytes())
 }
 
-// Warp moves the player to the named map tile: it persists the destination via
-// the world port and emits ZC_NPCACK_MAPMOVE so the client reconnects there.
-// No-ops when no world is wired or the player is not on a map.
+// Warp moves the player to the named map tile. The zone resolution (M12)
+// picks the frame: a remote zone persists the destination, tears the player
+// out of this zone's world (LeaveRemoteZone), and emits ZC_NPCACK_SERVERMOVE
+// so the client reconnects to that zone's ip:port (rAthena
+// clif_changemapserver); the local case is the pre-M12 behavior (persist via
+// the world port + ZC_NPCACK_MAPMOVE). No-ops when no world is wired or the
+// player is not on a map.
 func (h *ScriptHost) Warp(mapName string, x, y int) {
 	if h.world == nil {
+		return
+	}
+	if zone, err := h.world.ResolveZone(mapName); err == nil && zone != (transitdomain.Zone{}) {
+		// Persist the destination map+cell first (the remote zone's EnterMap
+		// loads it), so the ScriptWorld port needs no second persist verb.
+		if werr := h.world.WarpPlayer(h.session.CharID, mapName, int16(x), int16(y)); werr != nil { //nolint:gosec // G115: x/y are map-tile coords bounded by map dimensions.
+			h.log.Debug("content: warp dropped (player not on map)", "charID", h.session.CharID, "map", mapName, "err", werr)
+			return
+		}
+		if lerr := h.world.LeaveRemoteZone(context.Background(), h.session.CharID, int16(x), int16(y)); lerr != nil { //nolint:gosec // G115: x/y are map-tile coords bounded by map dimensions.
+			h.log.Debug("content: cross-zone warp dropped (player not on map)", "charID", h.session.CharID, "map", mapName, "err", lerr)
+			return
+		}
+		var sbuf bytes.Buffer
+		_ = ropacket.ServerMoveResponse{MapName: mapName, X: uint16(x), Y: uint16(y), IP: zone.IPv4, Port: zone.Port}.Encode(&sbuf) //nolint:errcheck,gosec // G115: x/y are map-tile coords; map names are bounded by data.
+		h.session.Writer.WritePacket(sbuf.Bytes())
 		return
 	}
 	if err := h.world.WarpPlayer(h.session.CharID, mapName, int16(x), int16(y)); err != nil { //nolint:gosec // G115: x/y are map-tile coords bounded by map dimensions.

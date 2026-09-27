@@ -4,6 +4,8 @@ package domain
 
 import (
 	"context"
+
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 )
 
 // DialogSignal is the value sent over a dialog session's channel when the client
@@ -35,6 +37,15 @@ type ScriptWorld interface {
 	// WarpPlayer persists the player's destination map + tile. The caller emits
 	// ZC_NPCACK_MAPMOVE; the client reconnects and re-enters there.
 	WarpPlayer(charID uint32, mapName string, x, y int16) error
+	// ResolveZone returns the zone serving mapName via the transit
+	// MapDirectory (M12). A zero Zone means "this process" — the local warp
+	// path; a non-zero Zone carries the remote ip:port the redirect frame
+	// needs. ErrUnknownMap also means "no remote zone" (stay local).
+	ResolveZone(mapName string) (transitdomain.Zone, error)
+	// LeaveRemoteZone tears the char out of THIS zone's world on a cross-zone
+	// redirect: vitals/EXP persist, the offline row records the destination
+	// cell so the remote zone's EnterMap loads the player there.
+	LeaveRemoteZone(ctx context.Context, charID uint32, x, y int16) error
 	// HealPlayer restores HP and SP by hpPct/spPct percent of the player's
 	// maximums, clamped to [0, max], and returns the resulting (HP, SP) so the
 	// caller can emit the stat-change packets.
@@ -47,10 +58,9 @@ type ScriptWorld interface {
 // inventory service); isolating the port here keeps the content domain free of
 // inventory/app imports.
 //
-// Returned booleans mirror rAthena's BUILDIN_DEF(item/getitem/etc.) return
-// shape: true on success, false on rejection (full bag, missing stack, etc.).
-// The VM thread keeps running on either — the script author can branch on the
-// return value.
+// Returned booleans mirror rAthena's BUILDIN_DEF return shape: true on
+// success, false on rejection (full bag, missing stack, etc.). The VM thread
+// keeps running on either — the script author can branch on the return value.
 type ScriptInventory interface {
 	// GetItem grants amount units of nameID to charID. Returns false when the
 	// inventory cannot accept (weight/capacity exceeded) so the caller can

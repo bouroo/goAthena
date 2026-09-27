@@ -377,20 +377,29 @@ attachment rows (upgrades with the inventory row-preserving insert).
 | Warp portals from corpus | commit `8923241` | ✅ |
 | ZC_NPCACK_MAPMOVE wire | gateway dispatch | ✅ |
 
-**Remaining:** **cross-zone handshake** — the multi-process case where the
-target map runs on a different node (Agones fleet). Without the fleet the
-monolith can also run multiple map shards, so a cross-zone handoff needs:
+**Remaining:** **remote cross-zone handshake** — the target map runs on a
+different node (Agones fleet). The v0 slice landed (this commit): a
+`transit/domain.MapDirectory` port (`Resolve` map → `Zone{IPv4, Port}`) with
+the single-zone `LocalDirectory` in production wiring (`transit.
+RegisterMapDirectory`), a `ZC_NPCACK_SERVERMOVE` (0x0ac7, 156B,
+`PACKET_ZC_NPCACK_SERVERMOVE` at PACKETVER ≥ 20170315 — the ledger's earlier
+"ZC_NOTIFY_TRANSFER" guess has no rAthena counterpart) codec + packet-DB
+entry, and the gateway/content warp paths branch local-vs-remote on the
+resolved zone: remote persists the destination, `WorldService.
+LeaveRemoteZone` tears the player out of this zone (offline row stamped at
+the destination cell so the remote zone's `EnterMap` loads it), and the
+client is redirected to the zone ip:port. World/cross-process validation of
+the reconnecting client already rides the shared Valkey session (CZ_ENTER's
+`GetSession`+`LoginID1` check), so a separate Handoff token port adds no
+security the shared session does not already provide — M13 drops in a fleet
+directory (remote = real address) and keeps the client-side seam unchanged.
 
-1. A `MapDirectory` port (name → instance addr).
-2. A `Handoff` port (sign a session token the target zone can validate).
-3. Wire the CZ_ENTER path to first resolve the map name → (zone, addr) and
-   either (a) re-enter locally if the zone is this process, or (b) emit a
-   `ZC_NOTIFY_TRANSFER`/`ZC_TRANSFER` redirect the client uses to reconnect.
-4. `Agones` adapter is M13.
-
-**Plan in this session:** ship the local cross-zone handoff (a) and the
-transfer-redirect packet framing, with the directory port stub. M13 wires
-the remote (b) path.
+1. ~~A `MapDirectory` port (name → instance addr).~~ ✅ v0 this commit
+2. ~~A `Handoff` port~~ — skipped: the shared Valkey session is the
+   cross-zone client credential (same check as same-zone CZ_ENTER).
+3. ~~Wire the CZ_ENTER/warp path to resolve map → (zone, addr).~~ ✅
+   gateway `relocateThroughPortal` + content `ScriptHost.Warp`.
+4. `Agones` fleet directory providing remote addresses — M13.
 
 ---
 
@@ -457,6 +466,7 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | M11: guild | ✅ done | First slice end-to-end: codecs + service + gateway + `000010_guild`; alliances/positions/skills/exp/emblem deferred. |
 | M11: mail | ✅ done | RODEX end-to-end: codecs + service + gateway + `000011_mail` (`375aa87`); account/returned tabs + expiry cron deferred. |
 | M12: Agones fleet adapter | L | M13 prereq. |
+| M12: cross-zone redirect v0 | ✅ done | Directory port + SERVERMOVE framing + warp-path branch (this commit); Agones fleet directory = M13 prereq. |
 | M13: Agones SDK | L | Architecture-defining. |
 | M14: threat model | M | One-shot. |
 | M14: load test harness | ✅ done | `cmd/loadgen` (wire-correct at 20250604) + `task loadtest` + recorded baseline (`28af5c3`). |
@@ -492,3 +502,4 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-21 | goAthena agent | this commit | M14 F-07 closed + M13 first slice — variable-length frames capped per the packet DB (`MaxLength`/`InboundCap()`, default 8KB): a declared length above the cap closes the connection instead of reserving buffer (`TestMap_OversizeVariableFrameCloses`, live gnet: oversize chat header closes, in-cap whisper answers); Agones SDK sidecar lifecycle wired (`internal/infrastructure/agones`: Ready/health-stream/Shutdown on `AGONES_SDK_GRPC_PORT` auto-detect, Noop otherwise) and driven from `App.Run` (ready after listeners, shutdown before drain); agones unit tests (env detect, ping loop cadence+teardown, Noop) — M13 🟡 partial, M14 F-07 ✅ |
 | 2026-09-21 | goAthena agent | `0155ada` | M13 economy extraction over NATS — `economy.Service` interface seam (7 zeny verbs; shop/mail/trade resolve the interface), `nats.economy: local\|remote` switch + `nats://\|tls://` scheme validation + optional NATS_USER/PASSWORD, request/reply Proxy+Server (`goathena.economy.v0.zeny.{get,credit,deduct}`, error codes↔sentinels incl. zeny overflow, sanitized replies, queue group, flush-before-return, bounded-drain `natsinfra.Close`), `goathena serve-economy` headless DB+NATS host; adversarial review 11 findings → 6 fixed (overflow sentinel, doubled error text, async-drain shutdown, malformed-URL fatal config, driver-error leak, bus creds) + security-audit F-09 partial; unit round-trips over in-process nats-server + L3 MariaDB/postgres (real char/zeny_ledger rows move through proxy→broker→host→DB, overdraw refuses without moving) — M13 🟡 (sharding keys open) |
 | 2026-09-21 | goAthena agent | `28af5c3` | M14 login-load baseline — `cmd/loadgen` was never wire-correct at 20250604 and the first live run caught it: double cmd header (57B on a 55B frame → empty username + 0x0000 garbage), stale refuse opcode (0x006a vs the server's 0x083e — refused logins counted as throttle), partial-frame reads misaligning reply N+1, read-timeout (silent limiter drop) now classified throttle via errors.As; `task loadtest` target (compose up limiter-off → readyz wait → idempotent DELETE+INSERT seed → loadgen → down); compose goathena service repaired (DB_NAME/DB_USER/DB_PASSWORD unset → config fatal at boot); `.gitignore` loadgen pattern root-anchored (shadowed cmd/loadgen); baseline: ≈1000 logins/s zero-error (100 conns × 10/s × 30s → 29900/29900), limiter 5-burst/1s shape verified (18 accept / 10 throttle / 0 error) — docs/loadtest-baseline.md |
+| 2026-09-27 | goAthena agent | this commit | M12 cross-zone redirect v0 — `transit/domain.MapDirectory` port (`Resolve` map → `Zone{IPv4, Port}`, wire-order address) + single-zone `LocalDirectory` provider in composition; `ZC_NPCACK_SERVERMOVE` codec (0x0ac7, 156B: mapName[24] BE-ip swapped-port empty domain[128], `PACKET_ZC_NPCACK_SERVERMOVE` ≥20170315 — clif_changemapserver) + packet-DB entry (count 148→149); gateway `relocateThroughPortal` + content `ScriptHost.Warp` branch on the resolved zone: remote persists destination, `WorldService.LeaveRemoteZone` (LeaveMap refactor over shared `leaveMap`, offline row stamped at the destination cell so the remote zone's `EnterMap` loads it), client redirected to zone ip:port; Handoff token port skipped — the shared Valkey session check in CZ_ENTER is the cross-zone client credential; L3 `TestMap_CrossZonePortalRedirects` (live gnet 156B frame) + local-warp regression green; Agones fleet directory = M13 |

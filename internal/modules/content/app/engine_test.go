@@ -3,6 +3,7 @@
 package app
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
@@ -27,20 +29,43 @@ type healCall struct {
 	hpPct, spPct int
 }
 
+// leaveCall records one ScriptHost redirect -> ScriptWorld.LeaveRemoteZone call.
+type leaveCall struct {
+	charID uint32
+	x, y   int16
+}
+
 // fakeScriptWorld is an in-memory ScriptWorld: it records effect calls and
 // returns scripted HP/SP (and err) for heals. err, when set, makes both methods
-// fail so the ScriptHost exercises its drop-frame branch.
+// fail so the ScriptHost exercises its drop-frame branch. zone, when non-nil,
+// makes ResolveZone return it (the cross-zone redirect branch); leaveErr fails
+// the redirect's LeaveRemoteZone.
 type fakeScriptWorld struct {
-	warps []warpCall
-	heals []healCall
-	hp    int32
-	sp    int32
-	err   error
+	warps    []warpCall
+	heals    []healCall
+	leaves   []leaveCall
+	hp       int32
+	sp       int32
+	err      error
+	zone     *transitdomain.Zone
+	leaveErr error
 }
 
 func (f *fakeScriptWorld) WarpPlayer(charID uint32, mapName string, x, y int16) error {
 	f.warps = append(f.warps, warpCall{charID: charID, mapName: mapName, x: x, y: y})
 	return f.err
+}
+
+func (f *fakeScriptWorld) ResolveZone(mapName string) (transitdomain.Zone, error) {
+	if f.zone == nil {
+		return transitdomain.Zone{}, nil
+	}
+	return *f.zone, nil
+}
+
+func (f *fakeScriptWorld) LeaveRemoteZone(_ context.Context, charID uint32, x, y int16) error {
+	f.leaves = append(f.leaves, leaveCall{charID: charID, x: x, y: y})
+	return f.leaveErr
 }
 
 func (f *fakeScriptWorld) HealPlayer(charID uint32, hpPct, spPct int) (int32, int32, error) {
@@ -92,6 +117,70 @@ func TestScriptHost_Warp(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint16(fr[20:]); got != 200 {
 		t.Errorf("y = %d, want 200", got)
+	}
+}
+
+// remote is a non-zero zone marker: any address means "another zone process".
+var remote = transitdomain.Zone{Name: "zone-b", IPv4: 0x7f000001, Port: 0x1401}
+
+func TestScriptHost_WarpRemoteZoneRedirects(t *testing.T) {
+	fw := &fakeScriptWorld{zone: &remote}
+	h, w := newTestHost(fw, 150001)
+
+	h.Warp("geffen", 50, 60)
+
+	// The redirect persists the destination (WarpPlayer), then tears the
+	// player out of THIS zone's world at the destination cell.
+	if len(fw.warps) != 1 {
+		t.Fatalf("warps = %d, want 1 (destination persist)", len(fw.warps))
+	}
+	if got := fw.warps[0]; got.charID != 150001 || got.mapName != "geffen" || got.x != 50 || got.y != 60 {
+		t.Errorf("warp call = %+v, want {150001 geffen 50 60}", got)
+	}
+	if len(fw.leaves) != 1 {
+		t.Fatalf("leaves = %d, want 1", len(fw.leaves))
+	}
+	if len(w.frames) != 1 {
+		t.Fatalf("frames = %d, want 1 (ZC_NPCACK_SERVERMOVE)", len(w.frames))
+	}
+	fr := w.frames[0]
+	if got := binary.LittleEndian.Uint16(fr[0:]); got != ropacket.HeaderZCNPCACKSERVERMOVE {
+		t.Errorf("header = %#x, want %#x", got, ropacket.HeaderZCNPCACKSERVERMOVE)
+	}
+	if len(fr) != 156 {
+		t.Errorf("frame len = %d, want 156", len(fr))
+	}
+	if got := strings.TrimRight(string(fr[2:26]), "\x00"); got != "geffen" {
+		t.Errorf("map name = %q, want %q (24-byte slot)", got, "geffen")
+	}
+	if got := binary.LittleEndian.Uint16(fr[26:]); got != 50 {
+		t.Errorf("x = %d, want 50", got)
+	}
+	if got := binary.LittleEndian.Uint16(fr[28:]); got != 60 {
+		t.Errorf("y = %d, want 60", got)
+	}
+	if got := binary.BigEndian.Uint32(fr[30:]); got != 0x7f000001 {
+		t.Errorf("ip = %#x, want 0x7f000001 (big-endian wire)", got)
+	}
+	if got := binary.BigEndian.Uint16(fr[34:]); got != 0x1401 {
+		t.Errorf("port = %#x, want 0x1401 (byte-swapped wire)", got)
+	}
+}
+
+func TestScriptHost_WarpRemoteLeaveFailsDropsFrame(t *testing.T) {
+	fw := &fakeScriptWorld{zone: &remote, leaveErr: errors.New("db down")}
+	h, w := newTestHost(fw, 150001)
+
+	h.Warp("geffen", 50, 60)
+
+	if len(w.frames) != 0 {
+		t.Fatalf("frames = %d, want 0 (failed leave drops the redirect)", len(w.frames))
+	}
+	// The destination persist landed but the client was never redirected: the
+	// persisted position is harmless (the player is still here, and the next
+	// successful warp or the local leave overwrites it).
+	if len(fw.warps) != 1 {
+		t.Errorf("warps = %d, want 1 (persist precedes the failed leave)", len(fw.warps))
 	}
 }
 

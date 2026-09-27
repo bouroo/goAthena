@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/internal/shared/safe"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
@@ -71,6 +72,10 @@ type WorldService struct {
 	// It provides the new level, recalculated MaxHP/MaxSP, and remaining status points.
 	// nil = leveling is silent. Invoked off the world mutex.
 	OnLevelUp func(charID uint32, newLevel int16, maxHP, maxSP int32, statusPoint uint32)
+	// zones resolves a warp destination map to the zone serving it (M12).
+	// nil = every map is local (the v0 single-zone default). Set via
+	// SetZoneDirectory.
+	zones transitdomain.MapDirectory
 }
 
 // Pre-renewal standing natural-regen intervals (rAthena status_natural_heal).
@@ -112,6 +117,12 @@ func NewWorldService(repo domain.WorldRepository, log *slog.Logger, tickRateHz i
 		respawnCancel: respawnCancel,
 		respawnTimers: make(map[uint32]*respawnTimer),
 	}
+}
+
+// SetZoneDirectory attaches the transit MapDirectory (M12). nil keeps every
+// map local.
+func (w *WorldService) SetZoneDirectory(dir transitdomain.MapDirectory) {
+	w.zones = dir
 }
 
 // ensureGrid returns the AOI grid for a map, creating it on first access. Map
@@ -533,10 +544,49 @@ func (w *WorldService) LeaveMap(ctx context.Context, charID uint32) error {
 		}
 		return err
 	}
+	return w.leaveMap(ctx, charID, e, e.Pos)
+}
+
+// LeaveRemoteZone is LeaveMap for a cross-zone redirect (M12): the char leaves
+// this zone's world and its vitals/EXP persist, but the offline row records
+// (x, y) — the DESTINATION zone's entry coordinates the redirect already
+// persisted — instead of the stale live position, so the destination zone's
+// EnterMap loads the player at its warp destination. Same idempotency
+// contract as LeaveMap.
+func (w *WorldService) LeaveRemoteZone(ctx context.Context, charID uint32, x, y int16) error {
+	e, err := w.Get(domain.EntityID(charID))
+	if err != nil {
+		if errors.Is(err, domain.ErrEntityNotFound) {
+			return nil
+		}
+		return err
+	}
+	return w.leaveMap(ctx, charID, e, domain.Position{X: x, Y: y})
+}
+
+// ResolveZone adapts the transit MapDirectory for the content ScriptWorld
+// port (M12): the script `warp` builtin resolves the destination before
+// choosing the local MAPMOVE or the remote SERVERMOVE redirect. The
+// directory is optional (SetZoneDirectory); nil answers local.
+func (w *WorldService) ResolveZone(mapName string) (transitdomain.Zone, error) {
+	if w.zones == nil {
+		return transitdomain.Zone{}, nil
+	}
+	zone, err := w.zones.Resolve(mapName)
+	if err != nil {
+		return transitdomain.Zone{}, fmt.Errorf("resolve zone: %w", err)
+	}
+	return zone, nil
+}
+
+// leaveMap is the shared persist primitive behind LeaveMap/LeaveRemoteZone:
+// remove the entity, write the offline flag at offlinePos, and save the
+// snapshot's vitals/EXP/skills.
+func (w *WorldService) leaveMap(ctx context.Context, charID uint32, e domain.Entity, offlinePos domain.Position) error {
 	if err := w.RemoveEntity(domain.EntityID(charID)); err != nil {
 		return err
 	}
-	if err := w.repo.SetOnline(ctx, charID, false, e.Pos); err != nil {
+	if err := w.repo.SetOnline(ctx, charID, false, offlinePos); err != nil {
 		return fmt.Errorf("set offline: %w", err)
 	}
 	if err := w.repo.SaveState(ctx, charID, e.Level, e.JobLevel, e.MaxHP, e.MaxSP, e.HP, e.SP, e.BaseExp, e.JobExp, e.StatusPoint, e.SkillPoint); err != nil {

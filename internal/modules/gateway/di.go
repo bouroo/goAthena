@@ -22,6 +22,7 @@ import (
 	guildapp "github.com/bouroo/goAthena/internal/modules/social/guild/app"
 	mailapp "github.com/bouroo/goAthena/internal/modules/social/mail/app"
 	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/skilldb"
@@ -177,4 +178,8 @@ func attachOptionalServices(ms *app.MapServer, inj do.Injector, log *slog.Logger
 	// staged-zeny balance check (the same source EconomyService.GetZeny reads).
 	ms.SetMail(resolveOptional[*mailapp.MailService](inj, log, "mail"))
 	ms.SetCharRepo(resolveOptional[chardomain.CharacterRepository](inj, log, "charRepo"))
+	// Zone directory resolves warp destinations to zones (M12). The v0
+	// LocalDirectory answers every map local, so the redirect branch stays
+	// dormant until a fleet directory (M13) provides remote addresses.
+	ms.SetZoneDirectory(resolveOptional[transitdomain.MapDirectory](inj, log, "zoneDirectory"))
 }

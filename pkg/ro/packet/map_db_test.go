@@ -189,7 +189,9 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// a shop sale needs to re-sync the bag grid → 107. M11 registers the 14
 	// party (group) family packets → 121, then the 27 RODEX mail packets
 	// (18 C→S + 9 S→C) → 148.
-	const want = 148
+	// M12 registers ZC_NPCACK_SERVERMOVE (0x0ac7, 156B, the cross-map-server
+	// redirect clif_changemapserver emits) → 149.
+	const want = 149
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

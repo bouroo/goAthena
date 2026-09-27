@@ -14,6 +14,7 @@ import (
 	dialogdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
 	partydomain "github.com/bouroo/goAthena/internal/modules/social/party/domain"
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
@@ -835,32 +836,77 @@ func (s *MapServer) handleRequestMove(c gnet.Conn, auth *mapAuth, frame []byte) 
 	}
 }
 
-// relocateThroughPortal moves a player through a warp portal: destination
-// persists via WarpPlayer, the source-map neighbors see the player vanish, and
-// the client receives ZC_NPCACK_MAPMOVE to relocate. The destination-side
-// appear/back-fill happens when the client re-enters through handleEnter
-// (same contract as the script `warp` builtin).
+// relocateThroughPortal moves a player through a warp portal. The zone
+// directory resolves the destination map first: a remote zone redirects the
+// client with ZC_NPCACK_SERVERMOVE (rAthena clif_changemapserver — the client
+// reconnects to that zone's ip:port); the local case is the pre-M12 behavior
+// (RelocatePlayer + ZC_NPCACK_MAPMOVE, destination-side appear/back-fill on
+// the client's re-enter through handleEnter).
 func (s *MapServer) relocateThroughPortal(c gnet.Conn, charID uint32, def script.WarpDef) {
 	e, err := s.world.Get(worlddomain.EntityID(charID)) //nolint:gosec // G115: charID is a char_id (uint32).
 	if err != nil {
 		return // left between move and portal check
 	}
 	fromMap, fromPos := e.Map, e.Pos
+	// Cross-zone redirect (M12): the destination map belongs to another zone
+	// process — persist the destination, tear the player out of this zone,
+	// and point the client at the remote ip:port. Unknown map degrades to
+	// local: a zone without the map is a directory misconfiguration, and
+	// dropping the walk is worse than relocating inside this zone.
+	if s.redirectToRemoteZone(c, charID, def, fromMap, fromPos) {
+		return
+	}
 	if err := s.world.RelocatePlayer(charID, def.DestMap, int16(def.DestX), int16(def.DestY)); err != nil { //nolint:gosec // G115: portal coords are map-tile bounds.
 		s.log.Warn("map: portal warp", "charID", charID, "dest", def.DestMap, "err", err)
 		return
 	}
 	// Source-map farewell: neighbors stop seeing the player at the trigger cell.
+	s.broadcastVanish(fromMap, fromPos, charID)
+	var buf bytes.Buffer
+	_ = ropacket.MapMoveResponse{MapName: def.DestMap, X: uint16(def.DestX), Y: uint16(def.DestY)}.Encode(&buf) //nolint:errcheck,gosec // G115: portal coords fit; encode cannot fail on a bytes.Buffer.
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// redirectToRemoteZone runs the cross-zone leg of a portal warp and reports
+// whether it handled the relocation. A nil directory, an unknown map, or a
+// zero Zone (local) all report false so the caller runs the local warp.
+func (s *MapServer) redirectToRemoteZone(c gnet.Conn, charID uint32, def script.WarpDef, fromMap string, fromPos worlddomain.Position) bool {
+	if s.zones == nil {
+		return false
+	}
+	zone, err := s.zones.Resolve(def.DestMap)
+	if err != nil || zone == (transitdomain.Zone{}) {
+		return false
+	}
+	// Persist the destination map+cell (the remote zone's EnterMap loads it
+	// from the shared char row), then tear the player out of this zone's
+	// world with the offline row stamped at the destination cell.
+	dest := worlddomain.Position{X: int16(def.DestX), Y: int16(def.DestY)} //nolint:gosec // G115: portal coords are map-tile bounds.
+	if perr := s.world.SetPosition(context.Background(), charID, def.DestMap, dest); perr != nil {
+		s.log.Warn("map: cross-zone persist", "charID", charID, "dest", def.DestMap, "err", perr)
+		return true
+	}
+	if rerr := s.world.LeaveRemoteZone(context.Background(), charID, int16(def.DestX), int16(def.DestY)); rerr != nil { //nolint:gosec // G115: portal coords are map-tile bounds.
+		s.log.Warn("map: cross-zone leave", "charID", charID, "dest", def.DestMap, "err", rerr)
+		return true
+	}
+	s.broadcastVanish(fromMap, fromPos, charID)
+	var buf bytes.Buffer
+	_ = ropacket.ServerMoveResponse{MapName: def.DestMap, X: uint16(def.DestX), Y: uint16(def.DestY), IP: zone.IPv4, Port: zone.Port}.Encode(&buf) //nolint:errcheck,gosec // G115: portal coords fit; encode cannot fail on a bytes.Buffer.
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+	return true
+}
+
+// broadcastVanish tells the source map's neighbors the player vanished
+// (ZC_NOTIFY_VANISH) — shared by the local and cross-zone portal paths.
+func (s *MapServer) broadcastVanish(fromMap string, fromPos worlddomain.Position, charID uint32) {
 	vanish := ropacket.NotifyVanishResponse{GID: charID, Type: ropacket.VanishDead}
 	vbuf := make([]byte, vanish.Size())
 	if err := vanish.Encode(sliceWriter(vbuf)); err != nil {
 		s.log.Error("map: encode portal vanish", "err", err)
-	} else {
-		s.broadcast(vbuf, fromMap, fromPos, charID)
+		return
 	}
-	var buf bytes.Buffer
-	_ = ropacket.MapMoveResponse{MapName: def.DestMap, X: uint16(def.DestX), Y: uint16(def.DestY)}.Encode(&buf) //nolint:errcheck,gosec // G115: portal coords fit; encode cannot fail on a bytes.Buffer.
-	_ = c.AsyncWrite(buf.Bytes(), nil)
+	s.broadcast(vbuf, fromMap, fromPos, charID)
 }
 
 // objectTypePC is the ZC_SPAWN_UNIT / ZC_UNIT_WALKING object-type byte for a

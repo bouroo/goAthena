@@ -3154,6 +3154,82 @@ func TestMapMoveResponse_Encode_ExactFitAndOverflow(t *testing.T) {
 	}
 }
 
+func TestServerMoveResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	if got, want := (ServerMoveResponse{}).Size(), 156; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestServerMoveResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	// IP/Port are pre-swapped wire values (see the field docs); 127.0.0.1:5121
+	// is 0x7f000001 BE / 0x1401 swapped.
+	resp := ServerMoveResponse{MapName: "izlude", X: 128, Y: 200, IP: 0x7f000001, Port: 0x1401}
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+	if len(got) != 156 {
+		t.Fatalf("len = %d, want 156", len(got))
+	}
+	if hdr := binary.LittleEndian.Uint16(got[0:]); hdr != HeaderZCNPCACKSERVERMOVE {
+		t.Errorf("header = %#x, want %#x", hdr, HeaderZCNPCACKSERVERMOVE)
+	}
+	// mapName[24] at [2:26] — "izlude" zero-padded.
+	wantMap := make([]byte, 24)
+	copy(wantMap, "izlude")
+	if nameBytes := got[2:26]; !bytes.Equal(nameBytes, wantMap) {
+		t.Errorf("mapName slot = % x, want % x", nameBytes, wantMap)
+	}
+	if x := binary.LittleEndian.Uint16(got[26:28]); x != 128 {
+		t.Errorf("xPos = %d, want 128", x)
+	}
+	if y := binary.LittleEndian.Uint16(got[28:30]); y != 200 {
+		t.Errorf("yPos = %d, want 200", y)
+	}
+	if ip := binary.BigEndian.Uint32(got[30:34]); ip != 0x7f000001 {
+		t.Errorf("ip = %#x, want 0x7f000001 (big-endian wire)", ip)
+	}
+	if port := binary.BigEndian.Uint16(got[34:36]); port != 0x1401 {
+		t.Errorf("port = %#x, want 0x1401 (byte-swapped wire)", port)
+	}
+	// char domain[128] at [36:156] — all zero.
+	for i, b := range got[36:] {
+		if b != 0 {
+			t.Fatalf("domain[%d] = %#x, want 0 (empty domain)", i, b)
+		}
+	}
+}
+
+func TestServerMoveResponse_Encode_ExactFitAndOverflow(t *testing.T) {
+	t.Parallel()
+
+	// 24-byte map name — exact fit, no error.
+	var fit bytes.Buffer
+	fitName := strings.Repeat("M", 24)
+	if err := (ServerMoveResponse{MapName: fitName}).Encode(&fit); err != nil {
+		t.Fatalf("exact-fit Encode() unexpected error: %v", err)
+	}
+	if got := fit.Bytes()[2:26]; !bytes.Equal(got, []byte(fitName)) {
+		t.Errorf("exact-fit mapName = % x, want % x", got, []byte(fitName))
+	}
+
+	// 25-byte map name — overflow, sentinel error, no bytes written.
+	var over bytes.Buffer
+	if err := (ServerMoveResponse{MapName: strings.Repeat("M", 25)}).Encode(&over); err == nil {
+		t.Errorf("overflow Encode() error = nil, want ErrMapNameTooLong")
+	} else if !errors.Is(err, ErrMapNameTooLong) {
+		t.Errorf("overflow Encode() error = %v, want ErrMapNameTooLong", err)
+	}
+	if over.Len() != 0 {
+		t.Errorf("overflow wrote %d bytes, want 0", over.Len())
+	}
+}
+
 func TestReqNameAll2Response_Size(t *testing.T) {
 	t.Parallel()
 	if got, want := (ReqNameAll2Response{}).Size(), sizeZCAckReqNameAll2; got != want {

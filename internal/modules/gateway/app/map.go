@@ -23,6 +23,7 @@ import (
 	guildapp "github.com/bouroo/goAthena/internal/modules/social/guild/app"
 	mailapp "github.com/bouroo/goAthena/internal/modules/social/mail/app"
 	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
@@ -124,6 +125,12 @@ type MapServer struct {
 	// frames on one thread; OnTraffic here runs each frame on its own
 	// goroutine). See lockMailOps.
 	mailOps sync.Map
+	// zones resolves a warp destination map to the zone process serving it
+	// (M12 cross-zone handoff). Optional: nil or a zero Zone resolve keeps the
+	// local-warp path (ZC_NPCACK_MAPMOVE); a remote zone redirects with
+	// ZC_NPCACK_SERVERMOVE. Set post-construction by DI root via
+	// SetZoneDirectory.
+	zones transitdomain.MapDirectory
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
 	// DEALTYPE carries an NPC id, not a shop name).
 	shopStore contentdomain.ShopStore
@@ -1025,6 +1032,13 @@ func (s *MapServer) SetItemDB(db *itemdb.Registry) {
 // disconnect (matches the trade service's nil-tolerant pattern in NewMapServer).
 func (s *MapServer) SetStorage(st *worldapp.StorageService) {
 	s.storage = st
+}
+
+// SetZoneDirectory attaches the transit MapDirectory after construction so
+// the DI root can wire it without churning NewMapServer's many call sites.
+// nil keeps the local-warp behavior for every destination map.
+func (s *MapServer) SetZoneDirectory(dir transitdomain.MapDirectory) {
+	s.zones = dir
 }
 
 // Start runs the map listener in a goroutine.
