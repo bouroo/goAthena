@@ -190,8 +190,9 @@ func TestNewMapServerDB_Size(t *testing.T) {
 	// party (group) family packets → 121, then the 27 RODEX mail packets
 	// (18 C→S + 9 S→C) → 148.
 	// M12 registers ZC_NPCACK_SERVERMOVE (0x0ac7, 156B, the cross-map-server
-	// redirect clif_changemapserver emits) → 149.
-	const want = 149
+	// redirect clif_changemapserver emits) → 149. M10 Rung C registers
+	// ZC_BROADCAST (0x009a, variable) for the announce/mapannounce builtins → 150.
+	const want = 150
 	if db.Size() != want {
 		t.Errorf("NewMapServerDB Size() = %d, want %d", db.Size(), want)
 	}

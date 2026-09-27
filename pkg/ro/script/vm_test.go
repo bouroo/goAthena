@@ -10,21 +10,28 @@ import (
 // effects without a network. Next returns true (advance) so dialog scripts
 // proceed; a future test can flip nextOK to model a cancelled dialog.
 type fakeHost struct {
-	mes             []string
-	nexts           int
-	closed          bool
-	warps           []warpCall
-	heals           []healCall
-	selects         [][]string
-	inputs          int
-	inputStrs       int
-	getItems        []itemCall
-	delItems        []itemCall
-	countItems      []uint32
-	equips          []equipCall
-	unequips        []int
-	questReads      []questCall
-	questWrites     []questWriteCall
+	mes          []string
+	nexts        int
+	closed       bool
+	warps        []warpCall
+	heals        []healCall
+	selects      [][]string
+	inputs       int
+	inputStrs    int
+	getItems     []itemCall
+	delItems     []itemCall
+	countItems   []uint32
+	equips       []equipCall
+	unequips     []int
+	questReads   []questCall
+	questWrites  []questWriteCall
+	announces    []announceCall
+	mapAnnounces []mapAnnounceCall
+	absHeals     []healCall
+	itemInfos    []itemInfoCall
+	// itemInfoResults maps an ITEMINFO_* code to the Value ItemInfo returns for
+	// it; a missing code answers -1 (the unknown-item result).
+	itemInfoResults map[int]Value
 	nextOK          bool
 	selectChoice    int
 	inputResult     int64
@@ -68,6 +75,22 @@ type questWriteCall struct {
 	npcName string
 	varName string
 	value   int64
+}
+
+type announceCall struct {
+	msg  string
+	flag int
+}
+
+type mapAnnounceCall struct {
+	mapName string
+	msg     string
+	flag    int
+}
+
+type itemInfoCall struct {
+	item Value
+	info int
 }
 
 func newFakeHost() *fakeHost {
@@ -149,6 +172,29 @@ func (h *fakeHost) SetQuestVar(npcName, varName string, value int64) error {
 	}
 	h.questVars[npcName][varName] = value
 	return nil
+}
+
+// Rung C Host methods: announcements record the (msg, flag) pair, heals record
+// the absolute amounts, and iteminfo answers from itemInfoResults keyed by the
+// requested column (a missing column is -1, the unknown-item answer).
+func (h *fakeHost) Announce(msg string, flag int) {
+	h.announces = append(h.announces, announceCall{msg, flag})
+}
+
+func (h *fakeHost) AnnounceMap(mapName, msg string, flag int) {
+	h.mapAnnounces = append(h.mapAnnounces, mapAnnounceCall{mapName, msg, flag})
+}
+
+func (h *fakeHost) HealAbs(hp, sp int) {
+	h.absHeals = append(h.absHeals, healCall{hp, sp})
+}
+
+func (h *fakeHost) ItemInfo(item Value, info int) Value {
+	h.itemInfos = append(h.itemInfos, itemInfoCall{item: item, info: info})
+	if v, ok := h.itemInfoResults[info]; ok {
+		return v
+	}
+	return IntVal(-1)
 }
 
 // runFirstScript compiles src, takes the first script in the set, and runs it
@@ -871,5 +917,111 @@ func TestVMSetQuestVarBuiltin_ShortArgList(t *testing.T) {
 	runFirstScript(t, src, h, nil)
 	if len(h.questWrites) != 0 {
 		t.Errorf("writes = %d, want 0 (short arg list)", len(h.questWrites))
+	}
+}
+
+func TestVMHealBuiltin(t *testing.T) {
+	// `heal(50, 10)` restores absolute HP/SP through the Host — the flat
+	// counterpart to percentheal's percentages.
+	const src = "-\tscript\tHealer\t-1,{\n" +
+		`heal(50, 10);` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.absHeals) != 1 {
+		t.Fatalf("heals = %d, want 1", len(h.absHeals))
+	}
+	if h.absHeals[0] != (healCall{50, 10}) {
+		t.Errorf("heal = %+v, want {50 10}", h.absHeals[0])
+	}
+}
+
+func TestVMHealBuiltin_NegativeAmount(t *testing.T) {
+	// A negative amount is a drain upstream (status_heal routes it through
+	// status_damage); the sign must survive to the Host rather than being
+	// clamped at the builtin.
+	const src = "-\tscript\tN\t-1,{\n" +
+		`heal(-30, 0);` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.absHeals) != 1 || h.absHeals[0] != (healCall{-30, 0}) {
+		t.Fatalf("heals = %+v, want one {-30 0}", h.absHeals)
+	}
+}
+
+func TestVMAnnounceBuiltin(t *testing.T) {
+	// The BC_* identifier resolves to its constant at compile time, so the Host
+	// receives the numeric flag — not an unset variable read as 0.
+	const src = "-\tscript\tN\t-1,{\n" +
+		`announce("Server maintenance in 5 minutes", bc_blue|bc_all);` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.announces) != 1 {
+		t.Fatalf("announces = %d, want 1", len(h.announces))
+	}
+	got := h.announces[0]
+	if got.msg != "Server maintenance in 5 minutes" {
+		t.Errorf("msg = %q", got.msg)
+	}
+	if got.flag != 0x10 { // BC_BLUE|BC_ALL
+		t.Errorf("flag = %#x, want 0x10 (BC_BLUE|BC_ALL)", got.flag)
+	}
+}
+
+func TestVMMapAnnounceBuiltin(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		`mapannounce("prontera", "Welcome", bc_map);` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.mapAnnounces) != 1 {
+		t.Fatalf("map announces = %d, want 1", len(h.mapAnnounces))
+	}
+	if got := h.mapAnnounces[0]; got != (mapAnnounceCall{"prontera", "Welcome", 1}) {
+		t.Errorf("map announce = %+v, want {prontera Welcome 1}", got)
+	}
+}
+
+func TestVMGetItemInfoBuiltin(t *testing.T) {
+	// Both argument shapes reach the Host: a numeric name id and an AegisName.
+	// The ITEMINFO_* identifier is a compile-time constant.
+	const src = "-\tscript\tN\t-1,{\n" +
+		`set(.@a, getiteminfo(501, ITEMINFO_BUY));` + "\n" +
+		`set(.@b, getiteminfo("Red_Potion", ITEMINFO_AEGISNAME));` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	// Column codes are the ITEMINFO_* numbering the constant table carries.
+	const (
+		itemInfoBuy       = 0
+		itemInfoAegisName = 18
+	)
+	h.itemInfoResults = map[int]Value{
+		itemInfoBuy:       IntVal(50),
+		itemInfoAegisName: StrVal("Red_Potion"),
+	}
+	runFirstScript(t, src, h, nil)
+	if len(h.itemInfos) != 2 {
+		t.Fatalf("iteminfo calls = %d, want 2", len(h.itemInfos))
+	}
+	if got := h.itemInfos[0]; got.info != itemInfoBuy || got.item.Kind != KindInt || got.item.Int != 501 {
+		t.Errorf("call[0] = %+v, want {501 iteminfo_buy}", got)
+	}
+	if got := h.itemInfos[1]; got.info != itemInfoAegisName || got.item.Kind != KindStr || got.item.Str != "Red_Potion" {
+		t.Errorf("call[1] = %+v, want {\"Red_Potion\" iteminfo_aegisname}", got)
+	}
+}
+
+func TestVMGetItemInfoBuiltin_UnknownItem(t *testing.T) {
+	// An unknown code (no entry in itemInfoResults) answers -1, rAthena's
+	// unknown-item result, and the script can branch on it.
+	const src = "-\tscript\tN\t-1,{\n" +
+		`set(.@id, getiteminfo(999999, ITEMINFO_ID));` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if len(h.itemInfos) != 1 {
+		t.Fatalf("iteminfo calls = %d, want 1", len(h.itemInfos))
 	}
 }

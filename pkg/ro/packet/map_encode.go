@@ -1197,6 +1197,81 @@ func (r NotifyChatResponse) Encode(w io.Writer) error {
 	return nil
 }
 
+// BroadcastColor* are the BC_COLOR_MASK bits of an announce flag (clif.hpp:256).
+// The colour is not a packet field: clif_broadcast (clif.cpp:6725) prefixes the
+// text with a marker the client strips to pick the render colour.
+const (
+	// BroadcastColorYellow is BC_YELLOW (0x00), the default colour.
+	BroadcastColorYellow uint8 = 0x00
+	// BroadcastColorBlue is BC_BLUE (0x10); the frame carries a "blue" prefix.
+	BroadcastColorBlue uint8 = 0x10
+	// BroadcastColorWoe is BC_WOE (0x20); the frame carries an "ssss" prefix.
+	BroadcastColorWoe uint8 = 0x20
+	// BroadcastColorMask is BC_COLOR_MASK, the bits of flag the colour reads.
+	BroadcastColorMask uint8 = 0x30
+)
+
+// BroadcastResponse encodes ZC_BROADCAST (command 0x009a, variable length) — the
+// server announcement the client shows in its own banner. The announce and
+// mapannounce script builtins emit it.
+//
+// Source: rathena/src/map/packets.hpp:199 (`PACKET_ZC_BROADCAST { int16
+// packetType; int16 PacketLength; char message[] }`) + clif_broadcast
+// (clif.cpp:6725). Two upstream details are reproduced here: PacketLength
+// counts the trailing NUL (rAthena writes strlen+1 bytes), and the colour rides
+// the text as a marker prefix rather than a field — "blue" for BC_BLUE, "ssss"
+// for BC_WOE. rAthena drops a message shorter than two bytes including the NUL
+// (clif.cpp:6728), so an empty Message writes no frame at all.
+type BroadcastResponse struct {
+	// Message is the announcement text.
+	Message string
+	// Color is the BC_COLOR_MASK bits of the announce flag.
+	Color uint8
+}
+
+// colorPrefix returns the marker clif_broadcast prepends for the colour.
+func (r BroadcastResponse) colorPrefix() string {
+	switch r.Color & BroadcastColorMask {
+	case BroadcastColorBlue:
+		return "blue"
+	case BroadcastColorWoe:
+		return "ssss"
+	default:
+		return ""
+	}
+}
+
+// Size returns the on-wire byte length Encode writes.
+func (r BroadcastResponse) Size() int {
+	return 4 + len(r.colorPrefix()) + len(r.Message) + 1
+}
+
+// Encode writes the ZC_BROADCAST packet to w. The wire shape is
+// [2:cmd][2:packetLength][n:prefix+message+NUL]; the length slot is computed
+// from the payload so it can never disagree with the bytes written.
+func (r BroadcastResponse) Encode(w io.Writer) error {
+	if r.Message == "" {
+		return nil
+	}
+	prefix := r.colorPrefix()
+	msgBytes := []byte(r.Message)
+	total := 4 + len(prefix) + len(msgBytes) + 1
+	if total > 0xffff {
+		return fmt.Errorf("packet: write ZC_BROADCAST: message too long (%d bytes)", len(msgBytes))
+	}
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCBROADCAST)
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	copy(buf[4:], prefix)
+	copy(buf[4+len(prefix):], msgBytes)
+	// The trailing byte is already 0x00 from make().
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_BROADCAST: %w", err)
+	}
+	return nil
+}
+
 // ZCWhisperResponse encodes ZC_WHISPER (command 0x09de, variable length) — the
 // delivered private message the recipient receives. At PACKETVER
 // MAIN_NUM>=20131204 (ClientROThailand 20250604 qualifies) clif emits the

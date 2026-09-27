@@ -213,6 +213,12 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 	// the client's level display and bars update together. A headless harness
 	// (no leveling) is a no-op.
 	world.OnLevelUp = s.notifyLevelUp
+	// The announce/mapannounce script builtins resolve their audience in the
+	// world module (it owns the entity registry and AOI grids); this sink turns
+	// that recipient list into one ZC_BROADCAST written to each live
+	// connection. A recipient with no connection (offline, or on another
+	// map-server) is skipped. A harness with no announce scripts is a no-op.
+	world.OnAnnounce = s.notifyAnnounce
 	// Mob AI runs on the same world tick; this sink bridges a mob's landed hit
 	// back to the player as ZC_NOTIFY_ACT so the swing is visible and the target's
 	// HP bar drops. A headless harness (no mob AI) leaves mobs passive.
@@ -317,6 +323,33 @@ func (s *MapServer) notifyLevelUp(charID uint32, newLevel int16, maxHP, maxSP in
 	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: maxSP}.Encode(&buf)
 	_ = ropacket.ParChangeResponse{VarID: ropacket.SPStatusPoint, Count: int32(statusPoint)}.Encode(&buf) //nolint:gosec // G115: points bounded by level count, far below int32.
 	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// notifyAnnounce writes one ZC_BROADCAST carrying msg to every recipient's live
+// connection. It is the world's OnAnnounce sink: the world has already resolved
+// the audience (BC_SELF/MAP/AREA/ALL) and the gateway only owns the connection
+// map, so the frame is encoded once and fanned out — gnet copies the buffer into
+// each connection's write queue, so sharing it is safe. flag carries the
+// announce BC_* bits; only its colour bits reach the wire, matching
+// clif_broadcast (clif.cpp:6725). A recipient with no connection is skipped.
+func (s *MapServer) notifyAnnounce(recipients []uint32, msg string, flag int) {
+	resp := ropacket.BroadcastResponse{
+		Message: msg,
+		Color:   uint8(flag) & ropacket.BroadcastColorMask, //nolint:gosec // G115: BC_* bits are small.
+	}
+	if resp.Message == "" {
+		return // rAthena drops an empty announcement (clif.cpp:6728)
+	}
+	buf := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(buf)); err != nil {
+		s.log.Error("map: encode ZC_BROADCAST", "err", err)
+		return
+	}
+	for _, charID := range recipients {
+		if c, ok := s.connFor(charID); ok {
+			_ = c.AsyncWrite(buf, nil)
+		}
+	}
 }
 
 // notifyMobAttack is the MobAIService.OnMobAttack sink (mirrors notifyStatChange

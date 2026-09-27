@@ -65,6 +65,31 @@ type Host interface {
 	// behaviour where a quest-table failure logs but does not abort the
 	// script). nil disables the persistence side of the builtin.
 	SetQuestVar(npcName, varName string, value int64) error
+	// Announce broadcasts text to the players the BC_* bits in flag select:
+	// BC_SELF (only the dialog's player), BC_MAP (every player on the dialog's
+	// map), BC_AREA (the dialog's AOI neighbours) or BC_ALL (every connected
+	// player). BC_NPC anchors the audience on the NPC running the script rather
+	// than on the player; BC_BLUE/BC_WOE ride the frame so the client renders
+	// the line blue/woe. rAthena: buildin_announce (script.cpp:11957) and
+	// clif_broadcast (clif.cpp:6725). The optional font arguments and the
+	// trailing char_id are not modelled.
+	Announce(msg string, flag int)
+	// AnnounceMap broadcasts text to every player on mapName — rAthena's
+	// mapannounce (script.cpp:12028), which ignores the flag's target and source
+	// bits and honours only its colour. An unknown map is a no-op.
+	AnnounceMap(mapName, msg string, flag int)
+	// HealAbs restores hp/sp as absolute amounts, clamped to [0, max] — rAthena's
+	// heal builtin (script.cpp:6007 status_heal), unlike PercentHeal's
+	// percentages. No frames are emitted here: the world port fires the vitals
+	// notification the gateway already relays as ZC_PAR_CHANGE.
+	HealAbs(hp, sp int)
+	// ItemInfo returns one item_db column for item, selected by an ITEMINFO_*
+	// code — rAthena's getiteminfo (script.cpp:14761). item is a numeric name id
+	// or an AegisName string. An unknown item yields -1; an unsupported code
+	// yields -1 too, matching rAthena's default branch. ITEMINFO_AEGISNAME is the
+	// one string column and answers with a string Value (rAthena's
+	// script_pushstrcopy); every other code yields an integer.
+	ItemInfo(item Value, info int) Value
 }
 
 // control tells the VM how a builtin affected script flow after it returns.

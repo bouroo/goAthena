@@ -35,12 +35,18 @@ type ItemEntry struct {
 	EquipLevelMax int32           `yaml:"EquipLevelMax"`
 	Refineable    bool            `yaml:"Refineable"`
 	View          int32           `yaml:"View"`
+	Gender        string          `yaml:"Gender"`
 	Locations     map[string]bool `yaml:"Locations"`
 	Script        string          `yaml:"Script"`
 	// EquipLocations is the EQP_* bitmask derived from Locations in build()
 	// (the value the inventory.equip column stores and the equip use case reads).
 	// It is not a YAML field.
 	EquipLocations uint32 `yaml:"-"`
+
+	// sex is the SEX_* code derived from Gender in build(): SEX_FEMALE(0),
+	// SEX_MALE(1) or SEX_BOTH(2, the rAthena default for an unset Gender). The
+	// getiteminfo ITEMINFO_GENDER column reads it.
+	sex uint8
 
 	healHPMin int32
 	healHPMax int32
@@ -101,6 +107,148 @@ func (e *ItemEntry) Heal() (hpMin, hpMax, spMin, spMax int32, ok bool) {
 		return 0, 0, 0, 0, false
 	}
 	return e.healHPMin, e.healHPMax, e.healSPMin, e.healSPMax, true
+}
+
+// ItemInfo codes — rAthena's enum iteminfo (script.hpp:2240). The numbers are
+// the wire values scripts compare against; pkg/ro/script's constant table
+// carries the same numbering for ITEMINFO_* identifiers.
+const (
+	InfoBuy           = 0
+	InfoSell          = 1
+	InfoType          = 2
+	InfoMaxChance     = 3
+	InfoGender        = 4
+	InfoLocations     = 5
+	InfoWeight        = 6
+	InfoAttack        = 7
+	InfoDefense       = 8
+	InfoRange         = 9
+	InfoSlot          = 10
+	InfoView          = 11
+	InfoEquipLevelMin = 12
+	InfoWeaponLevel   = 13
+	InfoAliasName     = 14
+	InfoEquipLevelMax = 15
+	InfoMagicAttack   = 16
+	InfoID            = 17
+	InfoAegisName     = 18
+	InfoArmorLevel    = 19
+	InfoSubType       = 20
+)
+
+// maxLevel is rAthena's MAX_LEVEL (map.hpp:78) — the implicit EquipLevelMax.
+const maxLevel = 275
+
+// Info returns one item_db column selected by an Info* code, mirroring rAthena's
+// buildin_getiteminfo (script.cpp:14761). An unknown item yields -1; a column
+// absent from the YAML yields the value rAthena's load-time defaulting would
+// have produced (Sell is Buy/2, EquipLevelMax is MAX_LEVEL, Gender is SEX_BOTH,
+// MaxChance/Attack/Defense/Range/MagicAttack are 0). An unsupported code yields
+// -1, matching rAthena's default branch.
+//
+// InfoAegisName is the one column this numeric table cannot answer — rAthena
+// returns a string there (script.cpp:14823) — so callers read the exported
+// ItemEntry.AegisName field for it.
+func (e *ItemEntry) Info(info int) int64 {
+	if e == nil {
+		return -1
+	}
+	switch info {
+	case InfoBuy:
+		return int64(e.Buy)
+	case InfoSell:
+		// itemdb.cpp:1188 — an item with a Buy but no Sell sells for half.
+		return int64(e.Buy / 2)
+	case InfoType:
+		return int64(WireType(e.Type))
+	case InfoMaxChance:
+		return 0
+	case InfoGender:
+		return int64(e.sex)
+	case InfoLocations:
+		return int64(e.EquipLocations)
+	case InfoWeight:
+		return int64(e.Weight)
+	case InfoAttack:
+		return int64(e.Attack)
+	case InfoDefense:
+		return int64(e.Defense)
+	case InfoRange:
+		return int64(e.Range)
+	case InfoSlot:
+		return int64(e.Slots)
+	case InfoView:
+		return e.view()
+	case InfoEquipLevelMin:
+		return int64(e.EquipLevelMin)
+	case InfoWeaponLevel:
+		return int64(e.WeaponLevel)
+	case InfoAliasName:
+		// rAthena answers view_id (script.cpp:14812), which is 0 unless the item
+		// carries an AliasName. No shipped item_db does, and itemdb does not
+		// parse the field, so 0 is the accurate answer.
+		return 0
+	case InfoEquipLevelMax:
+		if e.EquipLevelMax == 0 {
+			return maxLevel
+		}
+		return int64(e.EquipLevelMax)
+	case InfoMagicAttack:
+		return 0 // pre-renewal: rAthena answers 0 even for a weapon (script.cpp:14815)
+	case InfoID:
+		return int64(e.Id)
+	// InfoAegisName is deliberately absent: it is a string column, so the
+	// content adapter answers it from ItemEntry.AegisName rather than through
+	// this numeric table.
+	case InfoArmorLevel:
+		return int64(e.ArmorLevel)
+	case InfoSubType:
+		return int64(e.subType())
+	default:
+		return -1
+	}
+}
+
+// view is the ITEMINFO_VIEW column: rAthena answers the weapon subtype for a
+// weapon or ammo and the look id otherwise (script.cpp:14790).
+func (e *ItemEntry) view() int64 {
+	switch WireType(e.Type) {
+	case 5, 10: // IT_WEAPON, IT_AMMO
+		return int64(e.subType())
+	default:
+		return int64(e.View)
+	}
+}
+
+// subType is the ITEMINFO_SUBTYPE column: rAthena stores the W_*/AMMO_*/CARD_*
+// constant the SubType string names (itemdb.cpp:165-190, script.cpp:14824).
+func (e *ItemEntry) subType() uint16 {
+	switch WireType(e.Type) {
+	case 5: // IT_WEAPON
+		if c, ok := WeaponClass(e.SubType); ok {
+			return c
+		}
+		return 0 // W_FIST
+	case 10: // IT_AMMO
+		return ammoClass(e.SubType)
+	case 6: // IT_CARD
+		return cardClass(e.SubType)
+	default:
+		return 0
+	}
+}
+
+// sexCode maps an item_db Gender string to the SEX_* code (e_sex, mmo.hpp:1123);
+// an absent or unrecognized value is SEX_BOTH, rAthena's default.
+func sexCode(gender string) uint8 {
+	switch strings.ToLower(gender) {
+	case "female":
+		return 0 // SEX_FEMALE
+	case "male":
+		return 1 // SEX_MALE
+	default:
+		return 2 // SEX_BOTH
+	}
 }
 
 type fileFormat struct {
@@ -186,6 +334,7 @@ func build(bodies ...[]*ItemEntry) *Registry {
 				entry.Type = "Etc"
 			}
 			entry.EquipLocations = equip.LocationBits(entry.Locations)
+			entry.sex = sexCode(entry.Gender)
 			entry.parseHeal()
 			entries[entry.Id] = entry
 			if entry.AegisName != "" {

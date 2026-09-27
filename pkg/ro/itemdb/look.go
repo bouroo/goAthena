@@ -44,3 +44,34 @@ func WeaponClass(subtype string) (uint16, bool) {
 	c, ok := weaponClassByName[strings.ToLower(subtype)]
 	return c, ok
 }
+
+// ammoClassByName maps a lowercased ammo item_db SubType to the rAthena
+// e_ammo_type value (pc.hpp:1005). The names are AMMO_* constants minus the
+// prefix, resolved at load by itemdb.cpp:172 ("AMMO_" + SubType); AMMO_NONE(0)
+// has no SubType.
+var ammoClassByName = map[string]uint16{
+	"arrow":       1,
+	"dagger":      2,
+	"bullet":      3,
+	"shell":       4,
+	"grenade":     5,
+	"shuriken":    6,
+	"kunai":       7,
+	"cannonball":  8,
+	"throwweapon": 9,
+}
+
+// ammoClass maps an ammo SubType string to its e_ammo_type value; an unknown
+// SubType is AMMO_NONE (0), rAthena's fallback (itemdb.cpp:176).
+func ammoClass(subtype string) uint16 { return ammoClassByName[strings.ToLower(subtype)] }
+
+// cardClass maps a card SubType string to the rAthena e_card_type value
+// (pc.hpp:1019): CARD_NORMAL(0) or CARD_ENCHANT(1), resolved at load by
+// itemdb.cpp:186 ("CARD_" + SubType). An unknown SubType is CARD_NORMAL(0),
+// rAthena's fallback.
+func cardClass(subtype string) uint16 {
+	if strings.EqualFold(subtype, "enchant") {
+		return 1 // CARD_ENCHANT
+	}
+	return 0 // CARD_NORMAL
+}

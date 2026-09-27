@@ -164,7 +164,7 @@ func buildTestMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*gw
 	itemUse := worldapp.NewItemUseService(inv, items, world)
 	combat := worldapp.NewCombatService(world, mobs, equipSvc)
 	mobAI := worldapp.NewMobAIService(world, mobs, combat, slog.Default())
-	content := contentapp.NewEngine(nil, nil, nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
+	content := contentapp.NewEngine(nil, nil, nil, nil, nil, nil, slog.Default()) // no scripts/npcs in test; StartDialog early-returns
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
 	skills.SetTree(testSkillTree())
 
@@ -2273,7 +2273,7 @@ func buildTradeMapDeps(t *testing.T, sessions *charinfra.MemorySessionStore) (*g
 	combat := worldapp.NewCombatService(world, nil, nil)
 	itemRepo := invinfra.NewMemoryItemRepository()
 	inv := invapp.NewInventoryService(itemRepo)
-	content := contentapp.NewEngine(nil, nil, nil, nil, nil, slog.Default())
+	content := contentapp.NewEngine(nil, nil, nil, nil, nil, nil, slog.Default())
 	skills := worldapp.NewSkillService(world, combat, testSkillDB())
 	skills.SetTree(testSkillTree())
 	charRepo := charinfra.NewMemoryCharacterRepository()
@@ -2895,5 +2895,125 @@ func TestMap_MobRespawnVisible(t *testing.T) {
 	respawn := readTradeFrame(t, conn, ropacket.HeaderZCSPAWNUNIT, 107)
 	if got := binary.LittleEndian.Uint32(respawn[9:13]); got != 160050 {
 		t.Fatalf("respawn spawn-unit GID = %d, want mob GID 160050", got)
+	}
+}
+
+// TestMap_AnnounceReachesClient proves the announce path end-to-end over a real
+// TCP connection: the world resolves a broadcast's audience (here BC_SELF, the
+// dialog's own player) and the gateway's OnAnnounce sink writes one
+// ZC_BROADCAST to that player's connection. This is the leg the M10 Rung C
+// announce/mapannounce script builtins ride.
+func TestMap_AnnounceReachesClient(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	// CZ_ENTER -> ZC_ACCEPT_ENTER. Draining the reply guarantees the reactor has
+	// registered the connection for charID 150001, so the broadcast below has a
+	// destination.
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// BC_SELF (flag 3) anchors on the player: only that connection is addressed.
+	env.world.Announce(150001, "hello from the script", 3)
+
+	// Frame: [2:cmd=0x009a][2:packetLength][n:message+NUL].
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(conn, head); err != nil {
+		t.Fatalf("read ZC_BROADCAST header: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(head[0:2]); got != ropacket.HeaderZCBROADCAST {
+		t.Fatalf("header = 0x%04x, want 0x%04x (ZC_BROADCAST)", got, ropacket.HeaderZCBROADCAST)
+	}
+	total := int(binary.LittleEndian.Uint16(head[2:4]))
+	if total < 5 {
+		t.Fatalf("packetLength = %d, want at least 5", total)
+	}
+	body := make([]byte, total-4)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		t.Fatalf("read ZC_BROADCAST body: %v", err)
+	}
+	// The trailing NUL is part of the frame; the text precedes it.
+	if got := string(body[:len(body)-1]); got != "hello from the script" {
+		t.Errorf("broadcast text = %q, want %q", got, "hello from the script")
+	}
+	if body[len(body)-1] != 0 {
+		t.Errorf("frame does not end in a NUL terminator")
+	}
+}
+
+// TestMap_AnnounceBluePrefixReachesClient proves the BC_BLUE bit reaches the
+// wire as the "blue" marker clif_broadcast prepends — the colour has no field
+// of its own.
+func TestMap_AnnounceBluePrefixReachesClient(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	env.world.Announce(150001, "blue news", 3|int(ropacket.BroadcastColorBlue)) // BC_SELF|BC_BLUE
+
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(conn, head); err != nil {
+		t.Fatalf("read ZC_BROADCAST header: %v", err)
+	}
+	total := int(binary.LittleEndian.Uint16(head[2:4]))
+	body := make([]byte, total-4)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		t.Fatalf("read ZC_BROADCAST body: %v", err)
+	}
+	if got := string(body[:len(body)-1]); got != "blueblue news" {
+		t.Errorf("broadcast text = %q, want %q", got, "blueblue news")
+	}
+}
+
+// TestMap_AnnounceMapReachesMapOnly proves mapannounce's audience: a broadcast
+// for the player's map reaches that player, and one for a map they are not on
+// reaches nobody.
+func TestMap_AnnounceMapReachesMapOnly(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{
+		AccountID: 2000001, LoginID1: 0x11111111, Sex: 1,
+	})
+	ms, env := buildTestMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	awaitAcceptEnter(t, conn)
+
+	// A broadcast for another map delivers nothing: the read must time out.
+	env.world.AnnounceMap("izlude", "not for you", 0)
+	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	one := make([]byte, 1)
+	if _, err := conn.Read(one); err == nil {
+		t.Fatal("received a frame for a map the player is not on")
+	}
+
+	// The player's own map does deliver.
+	env.world.AnnounceMap("new_1-1", "for you", 0)
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(conn, head); err != nil {
+		t.Fatalf("read ZC_BROADCAST header: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(head[0:2]); got != ropacket.HeaderZCBROADCAST {
+		t.Fatalf("header = 0x%04x, want ZC_BROADCAST", got)
 	}
 }

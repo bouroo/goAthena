@@ -82,6 +82,12 @@ const (
 	// (`PACKET_ZC_NOTIFY_CHAT { int16 PacketType; int16 PacketLength; uint32 GID; char Message[] }`).
 	// Variable length: [2:cmd][2:packetLength][4:GID][n:text+null].
 	HeaderZCNOTIFYCHAT uint16 = 0x008d
+	// ZC_BROADCAST (0x009a) — server announcement. rathena/src/map/packets.hpp:199
+	// (`PACKET_ZC_BROADCAST { int16 packetType; int16 PacketLength; char message[] }`).
+	// Variable length: [2:cmd][2:packetLength][n:text+null]. The colour is not a
+	// field: clif_broadcast (clif.cpp:6725) prefixes the text with "blue" for
+	// BC_BLUE or "ssss" for BC_WOE, which the client recognises.
+	HeaderZCBROADCAST uint16 = 0x009a
 	// ZC_CHANGE_DIRECTION (0x009c) — direction echo. rathena/src/map/
 	// packets.hpp:688-694 (`PACKET_ZC_CHANGE_DIRECTION { int16 packetType;
 	// uint32 srcId; uint16 headDir; uint8 dir }`). Fixed 9 bytes:
@@ -1083,6 +1089,14 @@ func NewMapServerDB() *DB {
 	db.Register(Definition{
 		ID:        HeaderZCNOTIFYCHAT,
 		Name:      "ZC_NOTIFY_CHAT",
+		Length:    VariableLength,
+		Direction: DirectionServerToClient,
+	})
+	// M10 Rung C: ZC_BROADCAST is variable length (announce text + trailing
+	// NUL), the frame the announce/mapannounce script builtins emit.
+	db.Register(Definition{
+		ID:        HeaderZCBROADCAST,
+		Name:      "ZC_BROADCAST",
 		Length:    VariableLength,
 		Direction: DirectionServerToClient,
 	})

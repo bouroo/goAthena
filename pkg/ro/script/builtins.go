@@ -228,6 +228,10 @@ func DefaultBuiltins() map[string]BuiltinFunc {
 		"unequip":          builtinUnequip,
 		"getvariableofnpc": builtinGetVariableOfNPC,
 		"setquestvar":      builtinSetQuestVar,
+		"heal":             builtinHeal,
+		"announce":         builtinAnnounce, //nolint:goconst
+		"mapannounce":      builtinMapAnnounce,
+		"getiteminfo":      builtinGetItemInfo,
 	}
 }
 
@@ -382,4 +386,51 @@ func builtinSetQuestVar(vm *VM, args []Value) (Value, control) {
 		return IntVal(0), ctrlContinue
 	}
 	return IntVal(value), ctrlContinue
+}
+
+// M10 Rung C builtins: the verbs content authors use constantly outside dialogs
+// — server/map announcements, absolute heals, and item_db introspection. Each
+// delegates to the Host exactly like the dialog and item builtins; the Host
+// owns the world/registry lookups.
+
+// builtinHeal implements `heal(<hp>, <sp>)` — BUILDIN_DEF(heal,"ii?")
+// (script.cpp:28020). The amounts are absolute HP/SP, unlike percentheal's
+// percentages; rAthena raises the optional 4th argument out of band and the
+// third is the char_id selector, neither of which is modelled. Returns nil: the
+// upstream builtin pushes no result.
+func builtinHeal(vm *VM, args []Value) (Value, control) {
+	vm.host.HealAbs(argInt(args, 0), argInt(args, 1))
+	return NilVal(), ctrlContinue
+}
+
+// builtinAnnounce implements `announce(<text>, <flag>)` —
+// BUILDIN_DEF(announce,"si??????") (script.cpp:28131). The audience comes from
+// the flag's BC_* target bits; the optional font arguments and the trailing
+// char_id selector are not modelled, so the host gets the text and the raw flag
+// and applies the colour bits itself (clif_broadcast).
+func builtinAnnounce(vm *VM, args []Value) (Value, control) {
+	vm.host.Announce(argStr(args, 0), argInt(args, 1))
+	return NilVal(), ctrlContinue
+}
+
+// builtinMapAnnounce implements `mapannounce(<map>, <text>, <flag>)` —
+// BUILDIN_DEF(mapannounce,"ssi?????") (script.cpp:28132). Unlike announce the
+// map is named explicitly and the flag's target bits are ignored.
+func builtinMapAnnounce(vm *VM, args []Value) (Value, control) {
+	vm.host.AnnounceMap(argStr(args, 0), argStr(args, 1), argInt(args, 2))
+	return NilVal(), ctrlContinue
+}
+
+// builtinGetItemInfo implements `getiteminfo(<item>{, <type>})` —
+// BUILDIN_DEF(getiteminfo,"vi") (script.cpp:14761). The item argument is a
+// numeric id or an AegisName string (rAthena's "v" argument type), passed to the
+// Host unresolved so it can pick the right item_db lookup. The host answers -1
+// for an unknown item, an unsupported type, and an unloaded item_db; the
+// ITEMINFO_AEGISNAME column is the one string result.
+func builtinGetItemInfo(vm *VM, args []Value) (Value, control) {
+	var item Value
+	if len(args) > 0 {
+		item = args[0]
+	}
+	return vm.host.ItemInfo(item, argInt(args, 1)), ctrlContinue
 }

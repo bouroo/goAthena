@@ -50,6 +50,18 @@ type ScriptWorld interface {
 	// maximums, clamped to [0, max], and returns the resulting (HP, SP) so the
 	// caller can emit the stat-change packets.
 	HealPlayer(charID uint32, hpPct, spPct int) (hp, sp int32, err error)
+	// Announce delivers an announcement to the players the flag's BC_* target
+	// bits select, anchored on anchorID — the NPC running the script when the
+	// flag carries BC_NPC, the dialog's player otherwise. The world module
+	// resolves the audience and hands it to the gateway, which owns the
+	// connections; the content module never sees them.
+	Announce(anchorID uint32, msg string, flag int)
+	// AnnounceMap delivers an announcement to every player on mapName, which is
+	// what rAthena's mapannounce selects (it ignores the flag's target bits).
+	AnnounceMap(mapName, msg string, flag int)
+	// HealAbs restores HP and SP by absolute amounts, clamped to [0, max]. It is
+	// the `heal` builtin's effect, distinct from HealPlayer's percentages.
+	HealAbs(charID uint32, hp, sp int) error
 }
 
 // ScriptInventory is the inventory capability the script VM bridge needs for

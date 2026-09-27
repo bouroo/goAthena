@@ -282,16 +282,22 @@ real ledger needs:~~ **done** in commit `8c87e57`:
 | Shops from NPC scripts | commit `1403e6a` | ✅ |
 | Warp portals from corpus | commit `8923241` | ✅ |
 | Script-VM panic-recovery | 00af9aa | ✅ |
+| Rung B quest engine | commit `b7f8ab7` (persistent NPC vars) | ✅ |
+| Rung C misc verbs | `heal`/`announce`/`mapannounce`/`getiteminfo` + `script/constants.go` (this commit) | ✅ |
 
 **Remaining (the bulk):** full rAthena `script.cpp` coverage. The 29k LOC C++
 script VM carries roughly 600 builtins in the production engine. Currently
-implemented (17): `mes`, `next`, `close`, `close2`, `end`, `set`, `warp`,
+implemented (21): `mes`, `next`, `close`, `close2`, `end`, `set`, `warp`,
 `percentheal`, `select`, `prompt`, `menu`, `input`, `getitem`, `getitem2`,
-`delitem`, `countitem`, `equip`, `unequip`. Item-script Rung A landed in
-commit `556a8ee`.
+`delitem`, `countitem`, `equip`, `unequip`, `getvariableofnpc`, `setquestvar`,
+plus Rung C's `heal`, `announce`, `mapannounce`, `getiteminfo`. Item-script
+Rung A landed in commit `556a8ee`.
 
-Rungs B–E (quest engine, monster/event scripts, buffs/sc_start, operator
-primitives) are deferred — each is its own commit-sized effort.
+Rung D (monster/event scripts) and Rung E (operator primitives) are deferred —
+each is its own commit-sized effort. `bonus`/`sc_start`/`sc_end` were dropped
+from Rung C's scope: both need subsystems that do not exist yet (a persistent
+stat-bonus aggregate over equipped items, and a status-effect registry with
+tick/expiry), so they are their own rungs rather than one builtin each.
 
 **Scope ladder** (each rung is a commit; we ship as far as time + L2 permits):
 
@@ -337,8 +343,45 @@ primitives) are deferred — each is its own commit-sized effort.
   / short-arg safety.
 - L1+L2 green (fmt + lint + vet + race tests).
 
-Rungs C–E (misc verbs, monster/event scripts, operator primitives) are
-deferred — each is its own commit-sized effort.
+**Rung C (this commit)** — the verbs content authors use outside dialogs:
+`heal`, `announce`, `mapannounce`, `getiteminfo`, plus the script-constant table
+those and every future builtin need.
+
+- `pkg/ro/script/constants.go` — a compile-time constant table resolved by the
+  compiler (rAthena resolves constants while parsing, script.cpp:2315
+  `script_get_constant`; names match case-insensitively like rAthena's
+  `add_str`/`strcasecmp` string table). Without it `bc_map`/`ITEMINFO_TYPE`
+  compiled to a variable read and silently answered 0. The table is scoped to
+  the constants implemented builtins take (`BC_*`, `ITEMINFO_*`, `IT_*`,
+  `FW_*`) and is generated-from-upstream-shaped when breadth matters.
+- `heal(hp, sp)`: absolute restore via `world.AddVitals`, clamped to [0, max]
+  (rAthena `status_heal`, script.cpp:6007). The script-side int64 saturates to
+  int32 (rAthena `cap_value(hhp, INT_MIN, INT_MAX)`), so an overflowing heal
+  cannot wrap into damage.
+- `announce(text, flag)` / `mapannounce(map, text, flag)`: the audience is
+  resolved in `world` (it owns the entity registry and AOI grids) over the
+  `BC_*` target bits — `BC_SELF`/`BC_MAP`/`BC_AREA`/`BC_ALL`, with `BC_NPC`
+  choosing the NPC as the source instead of the dialog's player (rAthena
+  script.cpp:11957 / :12028). `world.OnAnnounce` hands the recipient char ids to
+  the gateway, which encodes one `ZC_BROADCAST` and writes it to each live
+  connection — the content module never touches connections.
+- `ZC_BROADCAST` (0x009a) codec: `[2:cmd][2:packetLength][prefix+text+NUL]`.
+  The colour has no wire field — `clif_broadcast` (clif.cpp:6725) prefixes the
+  text with `blue` (BC_BLUE) or `ssss` (BC_WOE), which the encoder reproduces;
+  an empty message writes no frame (clif.cpp:6728). Packet DB 149 → **150**.
+- `getiteminfo(item, code)`: `item` is a numeric name id or an AegisName
+  (rAthena dispatches on the argument type, script.cpp:14766). The columns come
+  from new `itemdb.ItemEntry.Info` (+ `Info*` codes), which answers the YAML
+  scalars and the load-time defaults rAthena fills in — Sell = Buy/2
+  (itemdb.cpp:1188), EquipLevelMax = MAX_LEVEL, Gender = SEX_BOTH, and the
+  W_*/AMMO_*/CARD_* subtype resolution (itemdb.cpp:165-190). An unknown item or
+  column answers -1; `ITEMINFO_AEGISNAME` is the one string column.
+- Evidence: kernel builtin tests in `pkg/ro/script/vm_test.go` (flag constants
+  resolve, sign survives, both item argument shapes), `itemdb` column tests,
+  content-adapter tests, world audience tests (`announce_test.go`: self/map/
+  area/all + non-PC anchor + unknown map + flat heal clamp), and L3 over real
+  TCP (`TestMap_AnnounceReachesClient`, `..._BluePrefixReachesClient`,
+  `..._AnnounceMapReachesMapOnly`). L1 (fmt/lint/vet/scans) + L2 (race) green.
 
 ---
 
@@ -462,7 +505,8 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | M8: full transaction log + audit | M | Small. Ship next session. |
 | M9: vending | L | Substantial. |
 | M9: storage/warehouse | ✅ done | Service+schema `1a2b848` + gateway wiring `c33c242`. Guild storage deferred to M11. |
-| M10: Rung B–E | L | Rung A done (`556a8ee`); Rung B done (`b7f8ab7`); Rungs C–E queued. |
+| M10: Rung D–E | L | Rung A `556a8ee`; Rung B `b7f8ab7`; Rung C (this commit: `heal`/`announce`/`mapannounce`/`getiteminfo` + constant table). Rungs D–E queued. |
+| M10: `bonus`/`sc_start`/`sc_end` | L | Not a builtin-sized task: needs a persistent stat-bonus aggregate over equips and a status-effect registry (tick/expiry). Own rungs. |
 | M11: friend list | ✅ done | Wire codecs + dispatch + `friends` table + online toggles (`gateway/app/friend.go`, migration `000009_friend`). |
 | M11: guild | ✅ done | First slice end-to-end: codecs + service + gateway + `000010_guild`; alliances/positions/skills/exp/emblem deferred. |
 | M11: mail | ✅ done | RODEX end-to-end: codecs + service + gateway + `000011_mail` (`375aa87`); account/returned tabs + expiry cron deferred. |
@@ -504,3 +548,4 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-21 | goAthena agent | `0155ada` | M13 economy extraction over NATS — `economy.Service` interface seam (7 zeny verbs; shop/mail/trade resolve the interface), `nats.economy: local\|remote` switch + `nats://\|tls://` scheme validation + optional NATS_USER/PASSWORD, request/reply Proxy+Server (`goathena.economy.v0.zeny.{get,credit,deduct}`, error codes↔sentinels incl. zeny overflow, sanitized replies, queue group, flush-before-return, bounded-drain `natsinfra.Close`), `goathena serve-economy` headless DB+NATS host; adversarial review 11 findings → 6 fixed (overflow sentinel, doubled error text, async-drain shutdown, malformed-URL fatal config, driver-error leak, bus creds) + security-audit F-09 partial; unit round-trips over in-process nats-server + L3 MariaDB/postgres (real char/zeny_ledger rows move through proxy→broker→host→DB, overdraw refuses without moving) — M13 🟡 (sharding keys open) |
 | 2026-09-21 | goAthena agent | `28af5c3` | M14 login-load baseline — `cmd/loadgen` was never wire-correct at 20250604 and the first live run caught it: double cmd header (57B on a 55B frame → empty username + 0x0000 garbage), stale refuse opcode (0x006a vs the server's 0x083e — refused logins counted as throttle), partial-frame reads misaligning reply N+1, read-timeout (silent limiter drop) now classified throttle via errors.As; `task loadtest` target (compose up limiter-off → readyz wait → idempotent DELETE+INSERT seed → loadgen → down); compose goathena service repaired (DB_NAME/DB_USER/DB_PASSWORD unset → config fatal at boot); `.gitignore` loadgen pattern root-anchored (shadowed cmd/loadgen); baseline: ≈1000 logins/s zero-error (100 conns × 10/s × 30s → 29900/29900), limiter 5-burst/1s shape verified (18 accept / 10 throttle / 0 error) — docs/loadtest-baseline.md |
 | 2026-09-27 | goAthena agent | `67b4979` | M12 cross-zone redirect v0 — `transit/domain.MapDirectory` port (`Resolve` map → `Zone{IPv4, Port}`, wire-order address) + single-zone `LocalDirectory` provider in composition; `ZC_NPCACK_SERVERMOVE` codec (0x0ac7, 156B: mapName[24] BE-ip swapped-port empty domain[128], `PACKET_ZC_NPCACK_SERVERMOVE` ≥20170315 — clif_changemapserver) + packet-DB entry (count 148→149); gateway `relocateThroughPortal` + content `ScriptHost.Warp` branch on the resolved zone: remote persists destination, `WorldService.LeaveRemoteZone` (LeaveMap refactor over shared `leaveMap`, offline row stamped at the destination cell so the remote zone's `EnterMap` loads it), client redirected to zone ip:port; Handoff token port skipped — the shared Valkey session check in CZ_ENTER is the cross-zone client credential; L3 `TestMap_CrossZonePortalRedirects` (live gnet 156B frame) + local-warp regression green; Agones fleet directory = M13 || 2026-09-27 | goAthena agent | this commit | M13 fleet `MapDirectory` — `zone.directory.mode` `local\|agones\|static` (ZoneDirectoryConfig + fatal `Validate` on static-without-routes + fatal boot error in `app.New` when a non-local directory fails to build): `transit/agones` resolves Ready Agones GameServers via the K8s API (in-cluster creds, kubeconfig fallback = Docker Swarm path; per-List resolve — cold path), map declaration by CSV annotation `goathena.dev/maps` or `goathena.dev/map-<name>` labels, `game` status port → `Zone` (BE IPv4, plain port — Encode does the BE write; the "ntows(htons) swap" cancels on the value, pinned by e2e bytes), `self_name` marks this pod's own GameServer local, selector narrows candidates; `transit/static` parses the `routes` map→host:port table (IPv4 literal only, malformed = config error); provider switch in `transit.RegisterMapDirectory`; L2 race units green (agones/static/config fake-clientset tests), L1 + scans green, crosszone e2e regression green; fleet YAML manifests = remaining M13 |
+| 2026-09-28 | goAthena agent | this commit | M10 Rung C — misc script verbs. `pkg/ro/script/constants.go` compile-time constant table (`BC_*`/`ITEMINFO_*`/`IT_*`/`FW_*`, case-insensitive like rAthena's `strcasecmp` string table) folded in `compileExpr`, without which `bc_map`/`ITEMINFO_TYPE` compiled to a variable read answering 0; `heal(hp,sp)` (absolute, int64→int32 saturating like `cap_value`, over `world.AddVitals`), `announce(text,flag)`/`mapannounce(map,text,flag)` (audience resolved in `world` over the `BC_*` target bits with `BC_NPC` source selection → `world.OnAnnounce` → gateway encodes one `ZC_BROADCAST` per recipient connection; content never touches connections), `getiteminfo(item,code)` (numeric id or AegisName; new `itemdb.ItemEntry.Info` + `Info*` codes answer the YAML scalars and rAthena's load-time defaults — Sell=Buy/2, EquipLevelMax=MAX_LEVEL, Gender=SEX_BOTH, W_/AMMO_/CARD_ subtype resolution; -1 for unknown item/column, AegisName the one string column); `ZC_BROADCAST` (0x009a) codec reproduces clif_broadcast's prefix-marker colour (`blue`/`ssss`) and empty-message drop, packet DB 149→150; `ScriptWorld` port gains `Announce`/`AnnounceMap`/`HealAbs`; evidence — kernel builtin tests, itemdb column tests, content adapter tests, world audience tests (`announce_test.go`), L3 over real TCP (`TestMap_AnnounceReachesClient`/`_BluePrefixReachesClient`/`_AnnounceMapReachesMapOnly`); `bonus`/`sc_start` deferred (need stat-bonus aggregate + status-effect registry) |

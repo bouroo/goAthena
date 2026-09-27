@@ -3315,3 +3315,96 @@ func TestReqNameAllNPCResponse_Encode(t *testing.T) {
 		}
 	}
 }
+
+// TestBroadcastResponse_Encode pins the ZC_BROADCAST layout for the yellow
+// (default) case: [2:cmd=0x009a][2:packetLength][n:message+null]. The length
+// slot must count the trailing NUL, matching clif_broadcast (clif.cpp:6725).
+func TestBroadcastResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := BroadcastResponse{Message: "server up"}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	// 4 (header) + 9 ("server up") + 1 (NUL) = 14.
+	const wantLen = 14
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+	if got[0] != 0x9a || got[1] != 0x00 {
+		t.Errorf("opcode bytes = %02x %02x, want 9a 00 (LE 0x009a ZC_BROADCAST)", got[0], got[1])
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	if !bytes.Equal(got[4:13], []byte("server up")) {
+		t.Errorf("message bytes = %q, want %q", got[4:13], "server up")
+	}
+	if got[13] != 0 {
+		t.Errorf("NUL terminator at [13] = 0x%02x, want 0x00", got[13])
+	}
+	if resp.Size() != wantLen {
+		t.Errorf("Size() = %d, want %d (must agree with Encode)", resp.Size(), wantLen)
+	}
+}
+
+// TestBroadcastResponse_Encode_BluePrefix proves the colour rides the text as
+// the "blue" marker clif_broadcast prepends — there is no colour field on the
+// wire (clif.cpp:6739).
+func TestBroadcastResponse_Encode_BluePrefix(t *testing.T) {
+	t.Parallel()
+
+	resp := BroadcastResponse{Message: "hi", Color: BroadcastColorBlue}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	wantBody := "bluehi"
+	wantLen := 4 + len(wantBody) + 1
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); int(plen) != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	if !bytes.Equal(got[4:4+len(wantBody)], []byte(wantBody)) {
+		t.Errorf("body = %q, want %q", got[4:4+len(wantBody)], wantBody)
+	}
+	if resp.Size() != wantLen {
+		t.Errorf("Size() = %d, want %d", resp.Size(), wantLen)
+	}
+}
+
+// TestBroadcastResponse_Encode_WoePrefix pins the WoE marker ("ssss").
+func TestBroadcastResponse_Encode_WoePrefix(t *testing.T) {
+	t.Parallel()
+
+	resp := BroadcastResponse{Message: "war", Color: BroadcastColorWoe}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	if got := buf.Bytes(); !bytes.HasPrefix(got[4:], []byte("ssss")) {
+		t.Errorf("body = %q, want an \"ssss\" prefix", got[4:])
+	}
+}
+
+// TestBroadcastResponse_Encode_EmptyMessageWritesNothing proves an empty
+// announcement emits no frame: rAthena drops a message shorter than two bytes
+// including its NUL (clif.cpp:6728), so the client never sees a malformed frame.
+func TestBroadcastResponse_Encode_EmptyMessageWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	if err := (BroadcastResponse{}).Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("wrote %d bytes for an empty message, want 0", buf.Len())
+	}
+}

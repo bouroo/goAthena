@@ -18,6 +18,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
 	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	"github.com/bouroo/goAthena/internal/shared/safe"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
@@ -33,20 +34,24 @@ type Engine struct {
 	world     domain.ScriptWorld
 	inventory domain.ScriptInventory
 	quest     domain.ScriptQuest
-	log       *slog.Logger
+	// items is the kernel item_db registry the getiteminfo builtin reads. nil
+	// (no item_db loaded) makes every lookup an unknown item.
+	items *itemdb.Registry
+	log   *slog.Logger
 
 	mu       sync.Mutex
 	sessions map[uint32]*domain.DialogSession // key = accountID
 }
 
 // NewEngine builds an Engine from compiled scripts, an NPC store, the world
-// port used by effect builtins (warp/heal), and the inventory port used by
-// item-script builtins (getitem/delitem/countitem/equip/unequip). scripts,
+// port used by effect builtins (warp/heal/announce), and the inventory port used
+// by item-script builtins (getitem/delitem/countitem/equip/unequip). scripts,
 // world, and inventory may each be nil: clicks are then a no-op and effect
 // builtins drop their frames / return 0 respectively. quest may be nil: the
-// getvariableofnpc / setquestvar builtins then read 0 / silently no-op.
-func NewEngine(scripts *script.CompiledScriptSet, npcs domain.NPCStore, world domain.ScriptWorld, inventory domain.ScriptInventory, quest domain.ScriptQuest, log *slog.Logger) *Engine {
-	return &Engine{scripts: scripts, npcs: npcs, world: world, inventory: inventory, quest: quest, log: log, sessions: make(map[uint32]*domain.DialogSession)}
+// getvariableofnpc / setquestvar builtins then read 0 / silently no-op. items
+// may be nil: getiteminfo then reports every item as unknown.
+func NewEngine(scripts *script.CompiledScriptSet, npcs domain.NPCStore, world domain.ScriptWorld, inventory domain.ScriptInventory, quest domain.ScriptQuest, items *itemdb.Registry, log *slog.Logger) *Engine {
+	return &Engine{scripts: scripts, npcs: npcs, world: world, inventory: inventory, quest: quest, items: items, log: log, sessions: make(map[uint32]*domain.DialogSession)}
 }
 
 // StartDialog resolves the NPC's script, creates a dialog session, and runs the
@@ -72,7 +77,7 @@ func (e *Engine) StartDialog(accountID, charID, npcGID uint32, writer domain.Pac
 	}
 	sess := &domain.DialogSession{NpcID: npcGID, CharID: charID, Writer: writer, Signal: make(chan domain.DialogSignal, 1)}
 	e.put(accountID, sess)
-	host := &ScriptHost{session: sess, world: e.world, inventory: e.inventory, quest: e.quest, log: e.log}
+	host := &ScriptHost{session: sess, world: e.world, inventory: e.inventory, quest: e.quest, items: e.items, log: e.log}
 	// The VM runs scripts reached from the client (NPC clicks, dialog input), so
 	// a panic inside it must cost this one player's dialog — runScript's own
 	// defer still unregisters the session — rather than the process.
@@ -136,12 +141,14 @@ func (e *Engine) end(accountID uint32) {
 // via the session's Signal channel. Inventory effects (getitem/delitem/countitem/
 // equip/unequip) flow through the injected ScriptInventory port — the engine
 // passes a world-owned adapter; nil disables the item-script builtins (the
-// builtin returns 0 and the script continues).
+// builtin returns 0 and the script continues). items is the kernel item_db
+// registry; nil reports every item as unknown to getiteminfo.
 type ScriptHost struct {
 	session   *domain.DialogSession
 	world     domain.ScriptWorld
 	inventory domain.ScriptInventory
 	quest     domain.ScriptQuest
+	items     *itemdb.Registry
 	log       *slog.Logger
 }
 
@@ -325,6 +332,94 @@ func (h *ScriptHost) SetQuestVar(npcName, varName string, value int64) error {
 	}
 	return nil
 }
+
+// Announce broadcasts text to the audience the flag's BC_* target bits select
+// (rAthena's buildin_announce, script.cpp:11957). The audience is resolved by
+// the world module — it owns the entity registry and AOI grids — and the frames
+// leave through the gateway's connection map. The anchor is the NPC when the
+// flag carries BC_NPC and the dialog's player otherwise, matching rAthena's
+// source selection. No-op when no world is wired.
+func (h *ScriptHost) Announce(msg string, flag int) {
+	if h.world == nil {
+		return
+	}
+	h.world.Announce(h.announceAnchor(flag), msg, flag)
+}
+
+// AnnounceMap broadcasts text to every player on mapName — rAthena's
+// mapannounce (script.cpp:12028), which ignores the flag's target bits.
+func (h *ScriptHost) AnnounceMap(mapName, msg string, flag int) {
+	if h.world == nil {
+		return
+	}
+	h.world.AnnounceMap(mapName, msg, flag)
+}
+
+// announceAnchor picks the broadcast source: the NPC running the script when the
+// flag sets BC_NPC, the dialog's player otherwise (script.cpp:11973).
+func (h *ScriptHost) announceAnchor(flag int) uint32 {
+	const bcNPC = 0x08
+	if flag&bcNPC != 0 {
+		return h.session.NpcID
+	}
+	return h.session.CharID
+}
+
+// HealAbs restores HP/SP by absolute amounts — the `heal` builtin
+// (script.cpp:6007 status_heal). The world port clamps to the player's maxima
+// and fires the vitals notification the gateway relays, so no frame is written
+// here. No-op when no world is wired or the player is not on a map.
+func (h *ScriptHost) HealAbs(hp, sp int) {
+	if h.world == nil {
+		return
+	}
+	if err := h.world.HealAbs(h.session.CharID, hp, sp); err != nil {
+		h.log.Debug("content: heal dropped (player not on map)", "charID", h.session.CharID, "err", err)
+	}
+}
+
+// ItemInfo answers getiteminfo (rAthena buildin_getiteminfo, script.cpp:14761)
+// from the kernel item_db registry. The item argument is a numeric name id or an
+// AegisName string — rAthena dispatches on the argument's type
+// (script_isstring), so the distinction is carried into the lookup. An unknown
+// item, an unsupported code, or an unloaded registry all yield -1;
+// ITEMINFO_AEGISNAME answers with the item's AegisName string, the one string
+// column in the set.
+func (h *ScriptHost) ItemInfo(item script.Value, info int) script.Value {
+	entry := h.lookupItem(item)
+	if entry == nil {
+		if info == itemdb.InfoAegisName {
+			return script.StrVal("") // rAthena: an unknown item's AegisName is "" (script.cpp:14775)
+		}
+		return script.IntVal(-1)
+	}
+	if info == itemdb.InfoAegisName {
+		return script.StrVal(entry.AegisName)
+	}
+	return script.IntVal(entry.Info(info))
+}
+
+// lookupItem resolves a getiteminfo item argument to its item_db entry, or nil
+// when it names no known item.
+func (h *ScriptHost) lookupItem(item script.Value) *itemdb.ItemEntry {
+	if h.items == nil {
+		return nil
+	}
+	// A string argument is an AegisName (rAthena's item_db.searchname path,
+	// script.cpp:14767); a numeric one is a name id.
+	if item.Kind == script.KindStr {
+		return h.items.ByAegisName(item.Str)
+	}
+	n := item.Int
+	if n < 0 || n > maxItemID {
+		return nil
+	}
+	return h.items.Get(int32(n)) //nolint:gosec // G115: bounded by maxItemID above.
+}
+
+// maxItemID bounds the getiteminfo uint32→int32 cast for item_db lookup; item_db
+// ids are < 2^31 (same bound the gateway's itemEntry uses).
+const maxItemID = int64(1<<31 - 1)
 
 // waitAdvance blocks for a Next/OK signal. Cancel/close/timeout → false.
 func (h *ScriptHost) waitAdvance() bool {

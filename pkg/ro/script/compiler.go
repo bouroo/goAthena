@@ -539,6 +539,14 @@ func (c *compiler) compileExpr(e Expr) error {
 		c.emit(Instruction{Op: OpStr, Str: n.Value, Pos: n.Pos()})
 		return nil
 	case *IdentExpr:
+		// A constant resolves to its value here (rAthena resolves constants
+		// while parsing); anything else is a variable read.
+		if isConstantName(n.Name) {
+			if v, ok := lookupConstant(n.Name); ok {
+				c.emit(Instruction{Op: OpInt, Operand: int32(v), Pos: n.Pos()}) //nolint:gosec // G115: table values are small.
+				return nil
+			}
+		}
 		c.emit(Instruction{Op: OpVar, Str: n.Name, Pos: n.Pos()})
 		return nil
 	case *ParenExpr:

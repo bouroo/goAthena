@@ -12,6 +12,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
 	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
@@ -35,20 +36,37 @@ type leaveCall struct {
 	x, y   int16
 }
 
+// announceCall records one ScriptHost.Announce -> ScriptWorld.Announce call.
+type announceCall struct {
+	anchorID uint32
+	msg      string
+	flag     int
+}
+
+// mapAnnounceCall records one ScriptHost.AnnounceMap -> ScriptWorld.AnnounceMap.
+type mapAnnounceCall struct {
+	mapName string
+	msg     string
+	flag    int
+}
+
 // fakeScriptWorld is an in-memory ScriptWorld: it records effect calls and
 // returns scripted HP/SP (and err) for heals. err, when set, makes both methods
 // fail so the ScriptHost exercises its drop-frame branch. zone, when non-nil,
 // makes ResolveZone return it (the cross-zone redirect branch); leaveErr fails
 // the redirect's LeaveRemoteZone.
 type fakeScriptWorld struct {
-	warps    []warpCall
-	heals    []healCall
-	leaves   []leaveCall
-	hp       int32
-	sp       int32
-	err      error
-	zone     *transitdomain.Zone
-	leaveErr error
+	warps        []warpCall
+	heals        []healCall
+	leaves       []leaveCall
+	announces    []announceCall
+	mapAnnounces []mapAnnounceCall
+	absHeals     []healCall
+	hp           int32
+	sp           int32
+	err          error
+	zone         *transitdomain.Zone
+	leaveErr     error
 }
 
 func (f *fakeScriptWorld) WarpPlayer(charID uint32, mapName string, x, y int16) error {
@@ -73,6 +91,23 @@ func (f *fakeScriptWorld) HealPlayer(charID uint32, hpPct, spPct int) (int32, in
 	return f.hp, f.sp, f.err
 }
 
+// Announce records one script broadcast. Audience resolution (BC_SELF/MAP/AREA/
+// ALL) lives in the world module and is covered by its own tests; this fake only
+// shows what the ScriptHost handed over.
+func (f *fakeScriptWorld) Announce(anchorID uint32, msg string, flag int) {
+	f.announces = append(f.announces, announceCall{anchorID: anchorID, msg: msg, flag: flag})
+}
+
+func (f *fakeScriptWorld) AnnounceMap(mapName, msg string, flag int) {
+	f.mapAnnounces = append(f.mapAnnounces, mapAnnounceCall{mapName: mapName, msg: msg, flag: flag})
+}
+
+// HealAbs records one absolute restore and returns f.err, mirroring HealPlayer.
+func (f *fakeScriptWorld) HealAbs(charID uint32, hp, sp int) error {
+	f.absHeals = append(f.absHeals, healCall{charID: charID, hpPct: hp, spPct: sp})
+	return f.err
+}
+
 // captureWriter buffers each WritePacket payload as a separate frame.
 type captureWriter struct {
 	frames [][]byte
@@ -84,10 +119,16 @@ func (w *captureWriter) WritePacket(data []byte) {
 	w.frames = append(w.frames, cp)
 }
 
+// newTestHost builds a ScriptHost over world with a nil item_db registry; the
+// getiteminfo tests use newTestHostWithItems.
 func newTestHost(world domain.ScriptWorld, charID uint32) (*ScriptHost, *captureWriter) {
+	return newTestHostWithItems(world, charID, nil)
+}
+
+func newTestHostWithItems(world domain.ScriptWorld, charID uint32, items *itemdb.Registry) (*ScriptHost, *captureWriter) {
 	w := &captureWriter{}
 	sess := &domain.DialogSession{CharID: charID, Writer: w, Signal: make(chan domain.DialogSignal, 1)}
-	return &ScriptHost{session: sess, world: world, log: slog.Default()}, w
+	return &ScriptHost{session: sess, world: world, items: items, log: slog.Default()}, w
 }
 
 func TestScriptHost_Warp(t *testing.T) {
@@ -336,5 +377,124 @@ func TestScriptHost_Input(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint16(w.frames[0][0:]); got != ropacket.HeaderZCOPENEDITDLG {
 		t.Errorf("frame 0 header = %#x, want ZC_OPEN_EDITDLG", got)
+	}
+}
+
+// TestScriptHost_HealAbs proves the flat heal reaches the world port with its
+// sign and amounts intact.
+func TestScriptHost_HealAbs(t *testing.T) {
+	fw := &fakeScriptWorld{}
+	h, _ := newTestHost(fw, 150001)
+
+	h.HealAbs(60, 20)
+
+	if len(fw.absHeals) != 1 {
+		t.Fatalf("abs heals = %d, want 1", len(fw.absHeals))
+	}
+	if got := fw.absHeals[0]; got.charID != 150001 || got.hpPct != 60 || got.spPct != 20 {
+		t.Errorf("heal = %+v, want {150001 60 20}", got)
+	}
+}
+
+// TestScriptHost_Announce proves the anchor follows the BC_NPC bit: an NPC
+// source anchors on the dialog's NPC, everything else on the player.
+func TestScriptHost_Announce(t *testing.T) {
+	fw := &fakeScriptWorld{}
+	h, _ := newTestHost(fw, 150001)
+	h.session.NpcID = 900001
+
+	h.Announce("player sourced", 0)      // BC_ALL, no BC_NPC
+	h.Announce("npc sourced", 0x08|0x01) // BC_NPC|BC_MAP
+
+	if len(fw.announces) != 2 {
+		t.Fatalf("announces = %d, want 2", len(fw.announces))
+	}
+	if got := fw.announces[0]; got.anchorID != 150001 || got.flag != 0 {
+		t.Errorf("announce[0] = %+v, want anchor 150001 flag 0", got)
+	}
+	if got := fw.announces[1]; got.anchorID != 900001 || got.flag != 0x09 {
+		t.Errorf("announce[1] = %+v, want anchor 900001 flag 0x09", got)
+	}
+}
+
+// TestScriptHost_AnnounceMap proves mapannounce passes the map through verbatim.
+func TestScriptHost_AnnounceMap(t *testing.T) {
+	fw := &fakeScriptWorld{}
+	h, _ := newTestHost(fw, 150001)
+
+	h.AnnounceMap("prontera", "hello map", 1)
+
+	if len(fw.mapAnnounces) != 1 {
+		t.Fatalf("map announces = %d, want 1", len(fw.mapAnnounces))
+	}
+	if got := fw.mapAnnounces[0]; got != (mapAnnounceCall{"prontera", "hello map", 1}) {
+		t.Errorf("map announce = %+v", got)
+	}
+}
+
+// itemFixtureYAML is a two-item item_db: a weapon with rich scalar columns and
+// a healing potion, enough to exercise both getiteminfo lookup paths.
+const itemFixtureYAML = `Header:
+  Type: ITEM_DB
+  Version: 3
+
+Body:
+  - Id: 1101
+    AegisName: Sword
+    Name: Sword
+    Type: Weapon
+    SubType: 1hSword
+    Buy: 100
+    Attack: 25
+    Weight: 500
+  - Id: 501
+    AegisName: Red_Potion
+    Name: Red Potion
+    Type: Healing
+    Buy: 50
+`
+
+// TestScriptHost_ItemInfo proves the three lookups rAthena supports: a numeric
+// name id, an AegisName string, and an unknown item.
+func TestScriptHost_ItemInfo(t *testing.T) {
+	reg, err := itemdb.Load(strings.NewReader(itemFixtureYAML))
+	if err != nil {
+		t.Fatalf("itemdb load: %v", err)
+	}
+	h, _ := newTestHostWithItems(&fakeScriptWorld{}, 150001, reg)
+
+	if got := h.ItemInfo(script.IntVal(1101), itemdb.InfoID); got.Kind != script.KindInt || got.Int != 1101 {
+		t.Errorf("Info(numeric id) = %+v, want 1101", got)
+	}
+	if got := h.ItemInfo(script.IntVal(501), itemdb.InfoBuy); got.Int != 50 {
+		t.Errorf("Info(501 buy) = %+v, want 50", got)
+	}
+	// A string argument resolves by AegisName (rAthena's searchname path).
+	if got := h.ItemInfo(script.StrVal("Red_Potion"), itemdb.InfoAegisName); got.Kind != script.KindStr || got.Str != "Red_Potion" {
+		t.Errorf("Info(aegis) = %+v, want \"Red_Potion\"", got)
+	}
+	// An AegisName lookup on a numeric row still resolves the same entry.
+	if got := h.ItemInfo(script.StrVal("Sword"), itemdb.InfoSubType); got.Int != 2 {
+		t.Errorf("Info(Sword subtype) = %+v, want 2 (W_1HSWORD)", got)
+	}
+	// Unknown item: -1 for a numeric column, "" for the string column.
+	if got := h.ItemInfo(script.IntVal(999999), itemdb.InfoBuy); got.Kind != script.KindInt || got.Int != -1 {
+		t.Errorf("Info(unknown) = %+v, want -1", got)
+	}
+	if got := h.ItemInfo(script.IntVal(999999), itemdb.InfoAegisName); got.Kind != script.KindStr || got.Str != "" {
+		t.Errorf("Info(unknown aegis) = %+v, want \"\"", got)
+	}
+	// An unsupported column is -1 too.
+	if got := h.ItemInfo(script.IntVal(1101), 999); got.Int != -1 {
+		t.Errorf("Info(bad column) = %+v, want -1", got)
+	}
+}
+
+// TestScriptHost_ItemInfo_NilRegistry proves a missing item_db degrades to the
+// unknown-item answer instead of panicking.
+func TestScriptHost_ItemInfo_NilRegistry(t *testing.T) {
+	h, _ := newTestHostWithItems(&fakeScriptWorld{}, 150001, nil)
+	if got := h.ItemInfo(script.IntVal(1101), itemdb.InfoBuy); got.Int != -1 {
+		t.Errorf("Info with nil registry = %+v, want -1", got)
 	}
 }
