@@ -9,6 +9,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/bouroo/goAthena/internal/modules/economy/app"
+	"github.com/bouroo/goAthena/internal/shared/traces"
 )
 
 // Server is the host side of the extraction: it subscribes the economy
@@ -66,10 +67,19 @@ func (s *Server) drain() {
 	}
 }
 
-// boundedCtx bounds the service call so a wedged DB cannot pile up handler
-// goroutines; the caller's own deadline bounds what it waits for.
-func (s *Server) boundedCtx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), HandlerTimeout)
+// spanCtx derives the handler context: it continues the caller's trace (the
+// producer injects its context into the request headers, so the host's DB work
+// nests under the caller's frame) and bounds the service call so a wedged DB
+// cannot pile up handler goroutines. The returned func must run after the
+// service call — it ends the span with that call's error and releases the
+// deadline. HandlerTimeout is that bound.
+func (s *Server) spanCtx(msg *nats.Msg) (context.Context, func(error)) {
+	ctx, span := traces.ExtractSubscribe(context.Background(), msg.Subject, msg.Header)
+	ctx, cancel := context.WithTimeout(ctx, HandlerTimeout)
+	return ctx, func(err error) {
+		cancel()
+		span.End(err)
+	}
 }
 
 // onGet answers zeny.get.
@@ -79,8 +89,8 @@ func (s *Server) onGet(msg *nats.Msg) {
 		s.respond(msg, reply{OK: false, ErrCode: codeInternal, ErrMsg: err.Error()})
 		return
 	}
-	ctx, cancel := s.boundedCtx()
-	defer cancel()
+	ctx, done := s.spanCtx(msg)
+	defer func() { done(err) }()
 	amount, err := s.svc.GetZeny(ctx, req.CharID)
 	if err != nil {
 		s.fail(msg, "get zeny", err)
@@ -99,9 +109,9 @@ func (s *Server) onMove(move func(context.Context, uint32, int32, app.LedgerEntr
 			s.respond(msg, reply{OK: false, ErrCode: codeInternal, ErrMsg: err.Error()})
 			return
 		}
-		ctx, cancel := s.boundedCtx()
-		defer cancel()
-		if err := move(ctx, req.CharID, req.Amount, req.Entry.toEntry()); err != nil {
+		ctx, done := s.spanCtx(msg)
+		defer func() { done(err) }()
+		if err = move(ctx, req.CharID, req.Amount, req.Entry.toEntry()); err != nil {
 			s.fail(msg, "move zeny", err)
 			return
 		}
@@ -133,5 +143,5 @@ func (s *Server) respond(msg *nats.Msg, r reply) {
 	}
 }
 
-// HandlerTimeout bounds one server-side service call; see boundedCtx.
+// HandlerTimeout bounds one server-side service call; see spanCtx.
 const HandlerTimeout = 30 * time.Second

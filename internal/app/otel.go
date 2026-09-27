@@ -7,6 +7,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -61,6 +62,12 @@ func initOTel(ctx context.Context, cfg config.OTelConfig, log *slog.Logger) (shu
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.Sampling))),
 	)
 	otel.SetTracerProvider(tp)
+	// Without this the global propagator is a no-op and the W3C traceparent the
+	// economy proxy injects into NATS headers is silently dropped, so the host
+	// would log an unrelated trace instead of the caller's.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{}, propagation.Baggage{},
+	))
 
 	shutdown = func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)

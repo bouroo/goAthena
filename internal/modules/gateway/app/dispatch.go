@@ -42,7 +42,7 @@ type mapHandler struct {
 	variable bool
 	// fn receives the authed identity resolved on the eventloop so handlers never
 	// read c.Context() off-loop, where gnet's conn.release() races on close.
-	fn func(s *MapServer, c gnet.Conn, auth *mapAuth, frame []byte)
+	fn func(s *MapServer, fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte)
 }
 
 // frameLen returns the full frame byte count for this opcode, whether that
@@ -157,7 +157,7 @@ func mapHandlers() map[uint16]mapHandler {
 }
 
 // handleContactNPC starts an NPC dialog script on click (CZ_CONTACT_NPC 0x0090).
-func (s *MapServer) handleContactNPC(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleContactNPC(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -170,7 +170,7 @@ func (s *MapServer) handleContactNPC(c gnet.Conn, auth *mapAuth, frame []byte) {
 	// clif_parse_NpcClicked → npc_click shop branch): reply ZC_SELECT_DEALTYPE
 	// and wait for CZ_ACK_SELECT_DEALTYPE.
 	if s.shops != nil && s.shopStore != nil {
-		if _, isShop := s.shopStore.ShopForNPC(context.Background(), req.AID); isShop {
+		if _, isShop := s.shopStore.ShopForNPC(fctx, req.AID); isShop {
 			var buf bytes.Buffer
 			_ = ropacket.SelectDealtypeResponse{NpcID: req.AID}.Encode(&buf) //nolint:errcheck // buffer write cannot fail
 			_ = c.AsyncWrite(buf.Bytes(), nil)
@@ -181,7 +181,7 @@ func (s *MapServer) handleContactNPC(c gnet.Conn, auth *mapAuth, frame []byte) {
 }
 
 // handleReqNextScript advances an active dialog (CZ_REQ_NEXT_SCRIPT 0x00b9).
-func (s *MapServer) handleReqNextScript(_ gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleReqNextScript(_ context.Context, _ gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		return
 	}
@@ -189,7 +189,7 @@ func (s *MapServer) handleReqNextScript(_ gnet.Conn, auth *mapAuth, _ []byte) {
 }
 
 // handleChooseMenu delivers a menu selection (CZ_CHOOSE_MENU 0x00b8).
-func (s *MapServer) handleChooseMenu(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleChooseMenu(_ context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -201,7 +201,7 @@ func (s *MapServer) handleChooseMenu(_ gnet.Conn, auth *mapAuth, frame []byte) {
 }
 
 // handleInputEditDlg delivers a numeric input (CZ_INPUT_EDITDLG 0x0143).
-func (s *MapServer) handleInputEditDlg(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleInputEditDlg(_ context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -215,7 +215,7 @@ func (s *MapServer) handleInputEditDlg(_ gnet.Conn, auth *mapAuth, frame []byte)
 // handleInputEditDlgStr delivers a text input (CZ_INPUT_EDITDLGSTR 0x01d5). The
 // frame is already detached and length-resolved by the dispatcher; this mirrors
 // the numeric handler, substituting the raw string value for a decimal string.
-func (s *MapServer) handleInputEditDlgStr(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleInputEditDlgStr(_ context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -258,7 +258,7 @@ func (s *MapServer) variableFrameLen(c gnet.Conn) (n int, ready bool, oversize b
 }
 
 // handleCloseDialog cancels an active dialog (CZ_CLOSE_DIALOG 0x0146).
-func (s *MapServer) handleCloseDialog(_ gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleCloseDialog(_ context.Context, _ gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		return
 	}
@@ -290,7 +290,7 @@ const (
 // threads that name for the following purchase/sell frames (which carry item
 // entries, not the NPC id), and emits the priced buy list (Buy) or sell list
 // (Sell). Cancel and unknown NPCs are no-ops that keep the connection alive.
-func (s *MapServer) handleAckSelectDealtype(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleAckSelectDealtype(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ACK_SELECT_DEALTYPE from unauthed conn")
 		return
@@ -304,7 +304,7 @@ func (s *MapServer) handleAckSelectDealtype(c gnet.Conn, auth *mapAuth, frame []
 		s.log.Warn("map: parse CZ_ACK_SELECT_DEALTYPE", "err", err)
 		return
 	}
-	shopName, ok := s.shopStore.ShopForNPC(context.Background(), req.NpcID)
+	shopName, ok := s.shopStore.ShopForNPC(fctx, req.NpcID)
 	if !ok {
 		s.log.Debug("map: CZ_ACK_SELECT_DEALTYPE for non-shop NPC", "npc", req.NpcID)
 		return
@@ -315,7 +315,7 @@ func (s *MapServer) handleAckSelectDealtype(c gnet.Conn, auth *mapAuth, frame []
 	case dealTypeBuy:
 		s.writePurchaseItemList(c, shopName)
 	case dealTypeSell:
-		s.writeSellItemList(context.Background(), c, shopName, auth.accountID, auth.charID)
+		s.writeSellItemList(fctx, c, shopName, auth.accountID, auth.charID)
 	default:
 		// dealTypeCancel (2) and any unknown value: close the deal window, no list.
 	}
@@ -335,7 +335,7 @@ func (s *MapServer) handleAckSelectDealtype(c gnet.Conn, auth *mapAuth, frame []
 // add-item frame with the destination slot (clif.cpp:2836-2901); the buy result
 // byte follows (clif_npc_buy_result, clif.cpp:12343). Without that frame the
 // client never learns its bag changed and keeps a stale grid.
-func (s *MapServer) handlePurchaseItemList(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handlePurchaseItemList(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_PC_PURCHASE_ITEMLIST from unauthed conn")
 		return
@@ -356,16 +356,15 @@ func (s *MapServer) handlePurchaseItemList(c gnet.Conn, auth *mapAuth, frame []b
 		s.writePurchaseResult(c, shopResultFailed)
 		return
 	}
-	ctx := context.Background()
 	result := shopResultSuccess
 	for _, e := range req.Entries {
-		granted, err := s.shops.Buy(ctx, auth.charID, shopName, e.ItemID, int(e.Amount))
+		granted, err := s.shops.Buy(fctx, auth.charID, shopName, e.ItemID, int(e.Amount))
 		if err != nil {
 			s.log.Warn("map: shop buy", "shop", shopName, "item", e.ItemID, "amount", e.Amount, "err", err)
 			result = shopResultFailed
 			break
 		}
-		slot, ok := s.clientIndexForItem(ctx, auth.accountID, auth.charID, granted.ID)
+		slot, ok := s.clientIndexForItem(fctx, auth.accountID, auth.charID, granted.ID)
 		if !ok {
 			// The row was just written, so this is an internal inconsistency
 			// (a failed reload), not a client error. Suppressing the frame is
@@ -397,7 +396,7 @@ func (s *MapServer) handlePurchaseItemList(c gnet.Conn, auth *mapAuth, frame []b
 // order: npc_selllist calls pc_delitem (npc.cpp:3090-3114), which calls
 // clif_delitem (pc.cpp:6170 → clif.cpp:2915-2928), and the sell result byte
 // follows (clif_npc_sell_result, clif.cpp:12352).
-func (s *MapServer) handleSellItemList(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleSellItemList(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_PC_SELL_ITEMLIST from unauthed conn")
 		return
@@ -418,8 +417,7 @@ func (s *MapServer) handleSellItemList(c gnet.Conn, auth *mapAuth, frame []byte)
 		s.writeSellResult(c, shopResultFailed)
 		return
 	}
-	ctx := context.Background()
-	items, err := s.inv.LoadByChar(ctx, auth.accountID, auth.charID)
+	items, err := s.inv.LoadByChar(fctx, auth.accountID, auth.charID)
 	if err != nil {
 		s.log.Error("map: load inventory for sell", "err", err)
 		s.writeSellResult(c, shopResultFailed)
@@ -442,7 +440,7 @@ func (s *MapServer) handleSellItemList(c gnet.Conn, auth *mapAuth, frame []byte)
 			result = shopResultFailed
 			break
 		}
-		if err := s.shops.Sell(ctx, auth.charID, it.ID, it.NameID, int(e.Amount), price); err != nil {
+		if err := s.shops.Sell(fctx, auth.charID, it.ID, it.NameID, int(e.Amount), price); err != nil {
 			s.log.Warn("map: shop sell", "shop", shopName, "item", it.NameID, "amount", e.Amount, "err", err)
 			result = shopResultFailed
 			break
@@ -611,8 +609,8 @@ func (s *MapServer) writeSellResult(c gnet.Conn, result uint8) {
 
 // handleEnterFrame wraps handleEnter to satisfy the dispatch signature (the
 // frame is already detached from gnet's ring buffer by the caller).
-func (s *MapServer) handleEnterFrame(c gnet.Conn, auth *mapAuth, frame []byte) {
-	s.handleEnter(c, auth, frame)
+func (s *MapServer) handleEnterFrame(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
+	s.handleEnter(fctx, c, auth, frame)
 }
 
 // handleLoadEndAck handles CZ_NOTIFY_ACTORINIT (0x007d, 2B cmd-only). This is
@@ -622,7 +620,7 @@ func (s *MapServer) handleEnterFrame(c gnet.Conn, auth *mapAuth, frame []byte) {
 // The item lists are populated from the character's real inventory rows
 // (writeInventoryLists); before Phase 42 they were the empty forms, which left
 // the client's bag grid permanently empty for a character who owned items.
-func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleLoadEndAck(fctx context.Context, c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		s.log.Warn("map: LoadEndAck from unauthed conn")
 		return
@@ -643,8 +641,8 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	// party window until the next membership change.
 	burst = append(burst, encodePartyConfig(0)...)
 	if s.party != nil {
-		if p, perr := s.party.GetByMember(context.Background(), auth.charID); perr == nil {
-			if members, merr := s.party.Members(context.Background(), p.ID); merr == nil {
+		if p, perr := s.party.GetByMember(fctx, auth.charID); perr == nil {
+			if members, merr := s.party.Members(fctx, p.ID); merr == nil {
 				burst = s.appendGroupList(burst, p, members)
 			}
 		}
@@ -653,7 +651,7 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	// (clif.cpp:15355-15391): the whole list first, then one online
 	// ZC_FRIENDS_STATE per friend the map registry reports connected.
 	if s.friend != nil {
-		if friends, ferr := s.friend.List(context.Background(), auth.charID); ferr == nil {
+		if friends, ferr := s.friend.List(fctx, auth.charID); ferr == nil {
 			burst = s.appendFriendsList(burst, friends)
 		}
 		s.notifyFriendsOnline(auth.charID, auth.accountID, playerName(s.world, auth.charID), true)
@@ -664,7 +662,7 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	// populated. A char without a guild gets nothing (rAthena skips on null
 	// guild).
 	if s.guild != nil {
-		if g, gerr := s.guild.GetByMember(context.Background(), auth.charID); gerr == nil {
+		if g, gerr := s.guild.GetByMember(fctx, auth.charID); gerr == nil {
 			burst = s.appendGuildBurst(burst, g)
 		}
 	}
@@ -674,7 +672,7 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	// here (rAthena requests it lazily on window open via
 	// CZ_REQ_REFRESH_MAIL_LIST).
 	if s.mail != nil {
-		if n, merr := s.mail.UnreadCount(context.Background(), auth.charID); merr == nil && n > 0 {
+		if n, merr := s.mail.UnreadCount(fctx, auth.charID); merr == nil && n > 0 {
 			var icon bytes.Buffer
 			if ierr := ropacket.EncodeZCNotifyUnreadMail(&icon, true); ierr == nil {
 				burst = append(burst, icon.Bytes()...)
@@ -700,7 +698,7 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 // conn. OnClose fires on the close and is a clean no-op: LeaveMap is idempotent on
 // an already-removed entity. Best-effort on the leave path — a LeaveMap failure is
 // logged, the ack is still sent, and the conn still closes.
-func (s *MapServer) handleRestart(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleRestart(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -717,7 +715,7 @@ func (s *MapServer) handleRestart(c gnet.Conn, auth *mapAuth, frame []byte) {
 			return
 		}
 	case czRestartReturnToSelect:
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(fctx, 5*time.Second)
 		defer cancel()
 		if err := s.world.LeaveMap(ctx, auth.charID); err != nil {
 			s.log.Error("map: leave world on CZ_RESTART", "gid", auth.charID, "err", err)
@@ -735,7 +733,7 @@ func (s *MapServer) handleRestart(c gnet.Conn, auth *mapAuth, frame []byte) {
 // raise one learned-skill level, gated by the job's skill tree. On success it sends
 // ZC_SKILLINFO_UPDATE (11B) plus a ParChange(SPSkillPoint). On failure it drops
 // silently — no reply packet, connection stays open — per rAthena convention.
-func (s *MapServer) handleSkillUp(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleSkillUp(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -744,7 +742,7 @@ func (s *MapServer) handleSkillUp(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Debug("map: parse CZ_SKILLUP", "err", err)
 		return
 	}
-	newLevel, spCost, rng, upgradable, err := s.skills.LearnSkill(context.Background(), auth.charID, req.SkillID)
+	newLevel, spCost, rng, upgradable, err := s.skills.LearnSkill(fctx, auth.charID, req.SkillID)
 	if err != nil {
 		s.log.Debug("map: LearnSkill", "gid", auth.charID, "skillID", req.SkillID, "err", err)
 		return
@@ -786,7 +784,7 @@ func (s *MapServer) writeRestartAck(c gnet.Conn, ackType uint8) {
 // packed destination, move the entity in the world, and reply
 // ZC_NOTIFY_PLAYERMOVE. Full AOI broadcast to neighbors lands with the
 // connection-registry in M4b.
-func (s *MapServer) handleRequestMove(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleRequestMove(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_REQUEST_MOVE from unauthed conn")
 		return
@@ -1022,7 +1020,7 @@ func encodeSpawnUnit(s *MapServer, r ropacket.SpawnUnitResponse) ([]byte, bool) 
 // handleItemPickup handles CZ_ITEM_PICKUP (0x0362, 6B): parse GroundID, look up
 // the floor item, remove it from the ground, add it to the player's inventory,
 // and reply ZC_ITEM_PICKUP_ACK.
-func (s *MapServer) handleItemPickup(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleItemPickup(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ITEM_PICKUP from unauthed conn")
 		return
@@ -1037,7 +1035,7 @@ func (s *MapServer) handleItemPickup(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Debug("map: pickup (not found)", "gid", req.GroundID)
 		return // item already taken or gone — client re-syncs
 	}
-	added, err := s.inv.Add(context.Background(), auth.charID, fi.NameID, int(fi.Amount))
+	added, err := s.inv.Add(fctx, auth.charID, fi.NameID, int(fi.Amount))
 	if err != nil {
 		s.log.Error("map: pickup add inventory", "err", err)
 		return
@@ -1046,7 +1044,7 @@ func (s *MapServer) handleItemPickup(c gnet.Conn, auth *mapAuth, frame []byte) {
 	// value: rAthena writes packet.index = client_index(n) for the row
 	// pc_additem chose (clif_additem, clif.cpp:2897), and a hardcoded 0 would
 	// tell every pickup it became the first grid slot.
-	slot, ok := s.clientIndexForItem(context.Background(), auth.accountID, auth.charID, added.ID)
+	slot, ok := s.clientIndexForItem(fctx, auth.accountID, auth.charID, added.ID)
 	if !ok {
 		s.log.Error("map: picked-up row has no resolvable bag slot", "nameID", fi.NameID, "row", added.ID)
 		return
@@ -1076,7 +1074,7 @@ func (s *MapServer) handleItemPickup(c gnet.Conn, auth *mapAuth, frame []byte) {
 // by ItemID, not index, so the row resolves against the ordered list LoadByChar
 // returns — which is the same order handleLoadEndAck's init burst assigns
 // (Phase 42), so the client's slot and this row now agree.
-func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleItemDrop(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ITEM_DROP from unauthed conn")
 		return
@@ -1090,7 +1088,7 @@ func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: CZ_ITEM_DROP zero amount", "index", req.InventoryIndex)
 		return
 	}
-	items, err := s.inv.LoadByChar(context.Background(), auth.accountID, auth.charID)
+	items, err := s.inv.LoadByChar(fctx, auth.accountID, auth.charID)
 	if err != nil {
 		s.log.Error("map: drop load inventory", "err", err)
 		return
@@ -1105,7 +1103,7 @@ func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: CZ_ITEM_DROP amount over stack", "index", req.InventoryIndex, "want", req.Amount, "have", item.Amount)
 		return
 	}
-	if err := s.inv.Remove(context.Background(), item.ID, int(req.Amount)); err != nil {
+	if err := s.inv.Remove(fctx, item.ID, int(req.Amount)); err != nil {
 		s.log.Warn("map: drop remove inventory", "err", err, "id", item.ID)
 		return
 	}
@@ -1155,7 +1153,7 @@ func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
 // ack, because the exact rAthena failure-encoding for the V5 ack (which field
 // carries the success/fail byte varies by client era) is uncertain; emitting a
 // wrong failure byte could wedge the client's equip slot.
-func (s *MapServer) handleReqWearEquip(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleReqWearEquip(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_REQ_WEAR_EQUIP from unauthed conn")
 		return
@@ -1166,7 +1164,7 @@ func (s *MapServer) handleReqWearEquip(c gnet.Conn, auth *mapAuth, frame []byte)
 		return
 	}
 	serverRow := int(ropacket.ServerIndex(req.Index))
-	if err := s.equip.Equip(context.Background(), auth.accountID, auth.charID, serverRow, req.Position); err != nil {
+	if err := s.equip.Equip(fctx, auth.accountID, auth.charID, serverRow, req.Position); err != nil {
 		s.log.Warn("map: wear equip", "gid", auth.charID, "index", req.Index, "err", err)
 		return
 	}
@@ -1199,7 +1197,7 @@ func (s *MapServer) handleReqWearEquip(c gnet.Conn, auth *mapAuth, frame []byte)
 // (clif.cpp:4484), which is the value the client originally sent. On a validation
 // failure (sentinel error) it emits the ack with Result=0 and keeps the
 // connection alive — the failure encoding is known.
-func (s *MapServer) handleUseItem(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleUseItem(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_USE_ITEM2 from unauthed conn")
 		return
@@ -1210,7 +1208,7 @@ func (s *MapServer) handleUseItem(c gnet.Conn, auth *mapAuth, frame []byte) {
 		return
 	}
 	serverRow := int(ropacket.ServerIndex(req.Index))
-	ack, err := s.itemUse.Use(context.Background(), auth.accountID, auth.charID, serverRow)
+	ack, err := s.itemUse.Use(fctx, auth.accountID, auth.charID, serverRow)
 	if err != nil {
 		s.log.Warn("map: use item", "gid", auth.charID, "index", req.Index, "err", err)
 		s.writeUseItemAck(c, auth.accountID, req.Index, 0, 0, 0)
@@ -1244,7 +1242,7 @@ func (s *MapServer) writeUseItemAck(c gnet.Conn, aid uint32, clientIndex, itemID
 // ZC_REQ_TAKEOFF_EQUIP_ACK with flag=0 (success on the wire — the byte is
 // inverted for PACKETVER >= 20110824 so 0 = success). On failure it logs and
 // keeps the connection alive.
-func (s *MapServer) handleReqTakeoffEquip(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleReqTakeoffEquip(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_REQ_TAKEOFF_EQUIP from unauthed conn")
 		return
@@ -1260,7 +1258,7 @@ func (s *MapServer) handleReqTakeoffEquip(c gnet.Conn, auth *mapAuth, frame []by
 		s.log.Warn("map: takeoff index out of range", "gid", auth.charID, "index", req.Index)
 		return
 	}
-	if err := s.equip.Unequip(context.Background(), auth.accountID, auth.charID, serverRow); err != nil {
+	if err := s.equip.Unequip(fctx, auth.accountID, auth.charID, serverRow); err != nil {
 		s.log.Warn("map: takeoff equip", "gid", auth.charID, "index", req.Index, "err", err)
 		return
 	}
@@ -1324,7 +1322,7 @@ func (s *MapServer) equipSprite(serverRow int, position uint32, auth *mapAuth) u
 // echoes the action, and — when the hit kills a mob — drives the death loop:
 // drops + despawn (SpawnService.OnMobDeath) then a ZC_NOTIFY_VANISH + one
 // ZC_ITEM_ENTRY per rolled drop.
-func (s *MapServer) handleActionRequest(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleActionRequest(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ACTION_REQUEST from unauthed conn")
 		return
@@ -1497,7 +1495,7 @@ func (s *MapServer) dropDeadSharers(awards map[uint32][2]uint64) map[uint32][2]u
 // USESKILL_FAIL_* wire codes are not yet defined in the packet layer, a known
 // gap — no wire value is invented). When the hit kills a mob, the same
 // drop/despawn loop as CZ_ACTION_REQUEST runs.
-func (s *MapServer) handleUseSkill2(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleUseSkill2(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_USE_SKILL2 from unauthed conn")
 		return
@@ -1550,7 +1548,7 @@ func (s *MapServer) handleUseSkill2(c gnet.Conn, auth *mapAuth, frame []byte) {
 // kernel future work and deliberately not faked here: only the single nearest
 // mob is affected. Validation failures are logged, surface ZC_ACK_TOUSESKILL only
 // for the verified SP-insufficient cause, and never close the connection.
-func (s *MapServer) handleUseSkillToPos(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleUseSkillToPos(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_USE_SKILL_TOPOS from unauthed conn")
 		return
@@ -1686,7 +1684,7 @@ func (s *MapServer) sendSkillFail(c gnet.Conn, skillID uint16, castErr error) {
 // dialog (ZC_REQ_EXCHANGE_ITEM carries the requester's name/AID/level — the real
 // wire format sends this to the TARGET only, never the requester). On failure the
 // requester gets a ZC_ACK_EXCHANGE_ITEM reject reason.
-func (s *MapServer) handleTradeRequest(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleTradeRequest(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_TRADE_REQUEST from unauthed conn")
 		return
@@ -1701,7 +1699,7 @@ func (s *MapServer) handleTradeRequest(c gnet.Conn, auth *mapAuth, frame []byte)
 		return
 	}
 	targetGID := req.TargetGID
-	if err := s.trade.Request(context.Background(), auth.charID, targetGID); err != nil {
+	if err := s.trade.Request(fctx, auth.charID, targetGID); err != nil {
 		s.writeTradeAck(c, tradeAckResult(err), 0, 0)
 		s.log.Debug("map: trade request rejected", "req", auth.charID, "tgt", targetGID, "err", err)
 		return
@@ -1710,7 +1708,7 @@ func (s *MapServer) handleTradeRequest(c gnet.Conn, auth *mapAuth, frame []byte)
 	// target's dialog, then deliver it to the target's connection.
 	reqEnt, gerr := s.world.Get(worlddomain.EntityID(auth.charID))
 	if gerr != nil {
-		s.trade.Cancel(context.Background(), auth.charID)
+		s.trade.Cancel(fctx, auth.charID)
 		s.log.Error("map: resolve requester entity for trade", "gid", auth.charID, "err", gerr)
 		return
 	}
@@ -1718,7 +1716,7 @@ func (s *MapServer) handleTradeRequest(c gnet.Conn, auth *mapAuth, frame []byte)
 	if !ok {
 		// Target is an online PC (Request verified it) but not reachable through
 		// the conn-registry shim — tear the session down and reject the requester.
-		s.trade.Cancel(context.Background(), auth.charID)
+		s.trade.Cancel(fctx, auth.charID)
 		s.writeTradeAck(c, ropacket.TradeAckCharNotExist, 0, 0)
 		return
 	}
@@ -1730,7 +1728,7 @@ func (s *MapServer) handleTradeRequest(c gnet.Conn, auth *mapAuth, frame []byte)
 // sides get ZC_ACK_EXCHANGE_ITEM(Accept) carrying the OTHER party's AID/level; on
 // cancel both get ZC_CANCEL_EXCHANGE_ITEM. The ack-sender is the target (the one
 // whose dialog was opened); its partner is the requester.
-func (s *MapServer) handleTradeAck(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleTradeAck(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_TRADE_ACK from unauthed conn")
 		return
@@ -1747,12 +1745,12 @@ func (s *MapServer) handleTradeAck(c gnet.Conn, auth *mapAuth, frame []byte) {
 	accept := req.Type == ropacket.CZTradeAckAccept
 	// Resolve the partner BEFORE Ack: an accept leaves both sessions active, but a
 	// cancel tears both down.
-	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
+	partnerID, ok := s.trade.Partner(fctx, auth.charID)
 	if !ok {
 		s.log.Debug("map: CZ_TRADE_ACK with no active trade", "gid", auth.charID)
 		return
 	}
-	if err := s.trade.Ack(context.Background(), auth.charID, accept); err != nil {
+	if err := s.trade.Ack(fctx, auth.charID, accept); err != nil {
 		s.log.Debug("map: trade ack failed", "gid", auth.charID, "err", err)
 		return
 	}
@@ -1776,7 +1774,7 @@ func (s *MapServer) handleTradeAck(c gnet.Conn, auth *mapAuth, frame []byte) {
 // sender's side (CZ_ADD_EXCHANGE_ITEM 0x00e8). On success the SENDER gets
 // ZC_ACK_ADD_EXCHANGE_ITEM(Success) and the PARTNER gets ZC_ADD_EXCHANGE_ITEM (the
 // staged view); on failure only the sender is told.
-func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleAddExchangeItem(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ADD_EXCHANGE_ITEM from unauthed conn")
 		return
@@ -1790,7 +1788,7 @@ func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []by
 		s.log.Warn("map: parse CZ_ADD_EXCHANGE_ITEM", "err", err)
 		return
 	}
-	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
+	partnerID, ok := s.trade.Partner(fctx, auth.charID)
 	if !ok {
 		s.writeAckAddItem(c, req.Index, ropacket.TradeItemAddCanceled)
 		s.log.Debug("map: CZ_ADD_EXCHANGE_ITEM with no active trade", "gid", auth.charID)
@@ -1801,11 +1799,10 @@ func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []by
 	// must be dispatched here, before ServerIndex turns 0 into a wrapped row. For
 	// an item index the wire value is a client index (server row + 2,
 	// clif.cpp:122-128).
-	ctx := context.Background()
 	var res worldapp.AddItemResult
 	if req.Index == 0 {
 		var err error
-		res, err = s.trade.AddZeny(ctx, auth.charID, int(req.Amount)) //nolint:gosec // G115: wire amount is a small positive
+		res, err = s.trade.AddZeny(fctx, auth.charID, int(req.Amount)) //nolint:gosec // G115: wire amount is a small positive
 		if err != nil {
 			s.writeAckAddItem(c, req.Index, tradeItemAddResult(err))
 			s.log.Debug("map: trade add-zeny rejected", "gid", auth.charID, "err", err)
@@ -1813,7 +1810,7 @@ func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []by
 		}
 	} else {
 		var err error
-		res, err = s.trade.AddItem(ctx, auth.charID, int(ropacket.ServerIndex(req.Index)), int(req.Index), int(req.Amount)) //nolint:gosec // G115: wire index/amount are small positives
+		res, err = s.trade.AddItem(fctx, auth.charID, int(ropacket.ServerIndex(req.Index)), int(req.Index), int(req.Amount)) //nolint:gosec // G115: wire index/amount are small positives
 		if err != nil {
 			s.writeAckAddItem(c, req.Index, tradeItemAddResult(err))
 			s.log.Debug("map: trade add-item rejected", "gid", auth.charID, "err", err)
@@ -1832,7 +1829,7 @@ func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []by
 // swap; the lock notifications are still emitted. A conclude failure (the known
 // verify-then-swap TOCTOU window) rolls back, cancels both sessions, and tells both
 // sides the trade was cancelled.
-func (s *MapServer) handleTradeOK(c gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleTradeOK(fctx context.Context, c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_TRADE_OK from unauthed conn")
 		return
@@ -1841,12 +1838,12 @@ func (s *MapServer) handleTradeOK(c gnet.Conn, auth *mapAuth, _ []byte) {
 		s.log.Debug("map: trade not wired, ignoring CZ_TRADE_OK")
 		return
 	}
-	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
+	partnerID, ok := s.trade.Partner(fctx, auth.charID)
 	if !ok {
 		s.log.Debug("map: CZ_TRADE_OK with no active trade", "gid", auth.charID)
 		return
 	}
-	concluded, err := s.trade.OK(context.Background(), auth.charID)
+	concluded, err := s.trade.OK(fctx, auth.charID)
 	if err != nil {
 		s.writeTradeCancel(c)
 		if pc, ok := s.connFor(partnerID); ok {
@@ -1867,7 +1864,7 @@ func (s *MapServer) handleTradeOK(c gnet.Conn, auth *mapAuth, _ []byte) {
 // handleTradeCancel tears down the sender's trade (CZ_TRADE_CANCEL 0x00ed) and
 // tells both sides via ZC_CANCEL_EXCHANGE_ITEM. A no-op when the sender is not
 // trading.
-func (s *MapServer) handleTradeCancel(c gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleTradeCancel(fctx context.Context, c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_TRADE_CANCEL from unauthed conn")
 		return
@@ -1875,8 +1872,8 @@ func (s *MapServer) handleTradeCancel(c gnet.Conn, auth *mapAuth, _ []byte) {
 	if s.trade == nil {
 		return
 	}
-	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
-	s.trade.Cancel(context.Background(), auth.charID)
+	partnerID, ok := s.trade.Partner(fctx, auth.charID)
+	s.trade.Cancel(fctx, auth.charID)
 	s.writeTradeCancel(c)
 	if ok {
 		if pc, ok := s.connFor(partnerID); ok {
@@ -2006,7 +2003,7 @@ func tradeItemAddResult(err error) uint8 {
 // Without the storage service wired, the handler is a no-op (matches the trade
 // nil-tolerant pattern). With it wired, the handler reads the account's
 // warehouse rows and emits the two list frames.
-func (s *MapServer) handleReqOpenStore2(c gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleReqOpenStore2(fctx context.Context, c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_REQ_OPENSTORE2 from unauthed conn")
 		return
@@ -2015,7 +2012,7 @@ func (s *MapServer) handleReqOpenStore2(c gnet.Conn, auth *mapAuth, _ []byte) {
 		s.log.Debug("map: storage not wired, ignoring CZ_REQ_OPENSTORE2")
 		return
 	}
-	rows, err := s.storage.LoadWarehouse(context.Background(), auth.accountID)
+	rows, err := s.storage.LoadWarehouse(fctx, auth.accountID)
 	if err != nil {
 		s.log.Error("map: load warehouse for init burst", "aid", auth.accountID, "err", err)
 		return
@@ -2027,7 +2024,7 @@ func (s *MapServer) handleReqOpenStore2(c gnet.Conn, auth *mapAuth, _ []byte) {
 // warehouse state is server-side (no per-conn flag) — close is informational
 // and the handler is a no-op. Mirrors rAthena's clif_parse_CloseStore which
 // only clears the per-conn storage flag (clif.cpp:7990-7997).
-func (s *MapServer) handleCloseStore(_ gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleCloseStore(_ context.Context, _ gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_CLOSE_STORE from unauthed conn")
 		return
@@ -2039,7 +2036,7 @@ func (s *MapServer) handleCloseStore(_ gnet.Conn, auth *mapAuth, _ []byte) {
 // (CZ_MOVE_ITEM_TO_STORE2 0x07e6). The wire index is the bag slot (server row
 // + 2). On success, emits ZC_STOREITEMLISTRESULT with result=0 (success);
 // on failure, result=1.
-func (s *MapServer) handleMoveItemToStore2(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleMoveItemToStore2(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_MOVE_ITEM_TO_STORE2 from unauthed conn")
 		return
@@ -2053,7 +2050,7 @@ func (s *MapServer) handleMoveItemToStore2(c gnet.Conn, auth *mapAuth, frame []b
 		s.log.Warn("map: parse CZ_MOVE_ITEM_TO_STORE2", "err", err)
 		return
 	}
-	_, mErr := s.storage.MoveToStorage(context.Background(), auth.accountID, auth.charID, uint32(req.Index), int(req.Amount)) //nolint:gosec // G115: amount fits int.
+	_, mErr := s.storage.MoveToStorage(fctx, auth.accountID, auth.charID, uint32(req.Index), int(req.Amount)) //nolint:gosec // G115: amount fits int.
 	s.writeStorageItemListResult(c, mErr)
 }
 
@@ -2061,7 +2058,7 @@ func (s *MapServer) handleMoveItemToStore2(c gnet.Conn, auth *mapAuth, frame []b
 // (CZ_MOVE_ITEM_TO_BODY2 0x07e7). The wire index is the warehouse slot
 // (server row + 2). On success, emits ZC_STOREITEMLISTRESULT with result=0
 // (success); on failure, result=1.
-func (s *MapServer) handleMoveItemToBody2(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleMoveItemToBody2(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_MOVE_ITEM_TO_BODY2 from unauthed conn")
 		return
@@ -2075,7 +2072,7 @@ func (s *MapServer) handleMoveItemToBody2(c gnet.Conn, auth *mapAuth, frame []by
 		s.log.Warn("map: parse CZ_MOVE_ITEM_TO_BODY2", "err", err)
 		return
 	}
-	_, mErr := s.storage.MoveFromStorage(context.Background(), auth.accountID, auth.charID, uint32(req.Index), int(req.Amount)) //nolint:gosec // G115: amount fits int.
+	_, mErr := s.storage.MoveFromStorage(fctx, auth.accountID, auth.charID, uint32(req.Index), int(req.Amount)) //nolint:gosec // G115: amount fits int.
 	s.writeStorageItemListResult(c, mErr)
 }
 

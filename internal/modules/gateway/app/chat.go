@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"sort"
 	"time"
@@ -19,7 +20,7 @@ const maxIgnoreList = 20
 // handleWhisper delivers CZ_WHISPER (0x0096): the target receives ZC_WHISPER
 // (0x09de) carrying sender name/GID + text; the sender receives ZC_ACK_WHISPER
 // (0x09df) with result 0 (success) or 1 (target offline).
-func (s *MapServer) handleWhisper(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleWhisper(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -81,7 +82,7 @@ func (s *MapServer) writeWhisperAck(c gnet.Conn, charID uint32, result uint8) {
 // verbatim, so the name prefix is composed here). The speaker's own client
 // prints its message locally and is excluded, matching the broadcast helper's
 // exclude-actor semantics.
-func (s *MapServer) handleGlobalMessage(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleGlobalMessage(_ context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -108,7 +109,7 @@ func (s *MapServer) handleGlobalMessage(_ gnet.Conn, auth *mapAuth, frame []byte
 // an NPC/mob GID resolves the compact ZC_ACK_REQNAMEALL_NPC (0x0adf). A GID
 // beyond the AOI radius or unknown to the world gets no reply — the client
 // asked about something it cannot see.
-func (s *MapServer) handleGetCharNameRequest(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleGetCharNameRequest(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -157,7 +158,7 @@ func chebyshev(x1, y1, x2, y2 int16) int {
 // clock ping — with ZC_NOTIFY_TIME (0x007f) carrying the server tick. An
 // unanswered ping is why stock clients drop the connection after a while, so
 // this is a keep-alive verb, not just latency telemetry.
-func (s *MapServer) handleRequestTime(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleRequestTime(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -177,7 +178,7 @@ func (s *MapServer) handleRequestTime(c gnet.Conn, auth *mapAuth, frame []byte) 
 // the client owns the icon set — and the actor is excluded because its own
 // client renders the icon locally (same exclude-actor semantics as public
 // chat). No state to persist; this verb is a pure fan-out.
-func (s *MapServer) handleReqEmotion(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleReqEmotion(_ context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -203,7 +204,7 @@ func (s *MapServer) handleReqEmotion(_ gnet.Conn, auth *mapAuth, frame []byte) {
 // client already turned locally. Facing lives on the cached entity so later
 // spawn/walk frames carry it; rAthena clamps headDir 0..2 upstream and the
 // server forwards verbatim.
-func (s *MapServer) handleChangeDir(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleChangeDir(_ context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -231,7 +232,7 @@ func (s *MapServer) handleChangeDir(_ gnet.Conn, auth *mapAuth, frame []byte) {
 // byte and a result: 0 success, 1 failed (removing a name not on the list),
 // 2 too many blocks (list full at maxIgnoreList, rAthena MAX_IGNORE_LIST).
 // Duplicate-add reports success without a second entry (Aegis semantics).
-func (s *MapServer) handlePMIgnore(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handlePMIgnore(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -275,7 +276,7 @@ func (s *MapServer) handlePMIgnore(c gnet.Conn, auth *mapAuth, frame []byte) {
 // (0x00d2). Per rAthena clif_parse_PMIgnoreAll: /exall fails only when already
 // denying; /inall clears the deny flag AND wipes the per-name list (failing
 // when neither was set — the client uses that to print "nobody was ignored").
-func (s *MapServer) handleSettingWhisperState(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleSettingWhisperState(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -306,7 +307,7 @@ func (s *MapServer) handleSettingWhisperState(c gnet.Conn, auth *mapAuth, frame 
 // handleReqWhisperList serves CZ_REQ_WHISPER_LIST (0x00d3) — /wl — with
 // ZC_WHISPER_LIST (0x00d4): [2:cmd][2:packetSize]{24B names}*, names in list
 // order.
-func (s *MapServer) handleReqWhisperList(c gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleReqWhisperList(_ context.Context, c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		return
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/modules/account/domain"
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	"github.com/bouroo/goAthena/internal/shared/traces"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -89,27 +90,31 @@ func (s *LoginServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
 		}
 		go func() {
 			defer closeOnPanic(s.log, "login.handleLogin", c)
-			s.handleLogin(c, cp, ip)
+			// One span per login attempt, so a Grafana panel can show an
+			// authentication spike (see docs/security-audit.md F-08).
+			fctx, span := traces.Frame(context.Background(), "CA_LOGIN", ropacket.HeaderCALOGIN)
+			defer span.End(nil)
+			s.handleLogin(fctx, c, cp, ip)
 		}()
 	}
 	return gnet.None
 }
 
 // handleLogin parses a CA_LOGIN frame, authenticates, and writes the reply.
-func (s *LoginServer) handleLogin(c gnet.Conn, frame []byte, ip string) {
+func (s *LoginServer) handleLogin(fctx context.Context, c gnet.Conn, frame []byte, ip string) {
 	req, err := ropacket.ParseCALogin(frame)
 	if err != nil {
 		s.log.Warn("login: unparseable frame", "err", err, "ip", ip)
 		return // malformed: drop silently rather than crash the loop
 	}
-	acc, id1, id2, err := s.auth.Authenticate(context.Background(), req.Username, req.Password, ip)
+	acc, id1, id2, err := s.auth.Authenticate(fctx, req.Username, req.Password, ip)
 	if err != nil {
 		s.writeRefuse(c, refuseCode(err))
 		s.log.Info("login refused", "user", req.Username, "ip", ip, "err", err)
 		return
 	}
 	// Persist the session so the char server can validate CH_ENTER later.
-	if err := s.sessions.PutSession(context.Background(), chardomain.Session{
+	if err := s.sessions.PutSession(fctx, chardomain.Session{
 		AccountID: uint32(acc.ID),
 		LoginID1:  id1,
 		LoginID2:  id2,

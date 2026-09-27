@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	accountdomain "github.com/bouroo/goAthena/internal/modules/account/domain"
 	charapp "github.com/bouroo/goAthena/internal/modules/character/app"
 	chardomain "github.com/bouroo/goAthena/internal/modules/character/domain"
+	"github.com/bouroo/goAthena/internal/shared/metrics"
+	"github.com/bouroo/goAthena/internal/shared/traces"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
@@ -109,7 +112,7 @@ func NewCharServer(chars *charapp.CharService, account AccountRepo, log *slog.Lo
 // and the function that processes a complete frame of that opcode.
 type charHandler struct {
 	size int
-	fn   func(s *CharServer, c gnet.Conn, frame []byte)
+	fn   func(s *CharServer, fctx context.Context, c gnet.Conn, frame []byte)
 }
 
 // charHandlers is the opcode→handler table the char server dispatches against.
@@ -125,6 +128,15 @@ func charHandlers() map[uint16]charHandler {
 		ropacket.HeaderCHDELETECHAR3:         {size: charDeleteFrameSize, fn: (*CharServer).handleDelete},
 		ropacket.HeaderCHDELETECHAR3CANCEL:   {size: charDeleteCancelFrameSize, fn: (*CharServer).handleDeleteCancel},
 	}
+}
+
+// packetName returns the rAthena PACKET_* name for an opcode, or "" when the
+// packet DB does not know it.
+func (s *CharServer) packetName(opcode uint16) string {
+	if def, ok := s.db.Lookup(opcode); ok {
+		return def.Name
+	}
+	return ""
 }
 
 // OnBoot captures the engine for shutdown.
@@ -161,9 +173,14 @@ func (s *CharServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
 				return gnet.None
 			}
 			cp := append([]byte(nil), frame...) // detach from gnet's ring buffer
+			name := s.packetName(opcode)
 			go func() {
 				defer closeOnPanic(s.log, "char.dispatch", c)
-				h.fn(s, c, cp)
+				// Frame root span; see map.dispatch for why the frame, not the
+				// connection, is the unit.
+				fctx, span := traces.Frame(context.Background(), name, opcode)
+				defer span.End(nil)
+				h.fn(s, fctx, c, cp)
 			}()
 			continue
 		}
@@ -176,6 +193,7 @@ func (s *CharServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
 		if _, err := c.Discard(skip); err != nil {
 			return gnet.None
 		}
+		metrics.UnknownOpcodes.WithLabelValues("char", strconv.FormatBool(s.db.Has(opcode))).Inc()
 		s.log.Debug("char: skipping unhandled opcode", "cmd", fmt.Sprintf("0x%04x", opcode), "skip", skip)
 	}
 }
@@ -218,14 +236,14 @@ func (s *CharServer) unhandledSkip(c gnet.Conn, opcode uint16) (skip int, buffer
 }
 
 // handleEnter validates the CH_ENTER, loads the character list, and replies.
-func (s *CharServer) handleEnter(c gnet.Conn, frame []byte) {
+func (s *CharServer) handleEnter(fctx context.Context, c gnet.Conn, frame []byte) {
 	req, err := ropacket.ParseCHEnter(frame)
 	if err != nil {
 		s.log.Warn("char: unparseable CH_ENTER", "err", err)
 		return
 	}
 	// Validate the login session: AID + loginID1 must match what login stored.
-	if _, err := s.chars.Authorize(context.Background(), req.AccountID, req.LoginID1); err != nil {
+	if _, err := s.chars.Authorize(fctx, req.AccountID, req.LoginID1); err != nil {
 		s.writeRefuseEnter(c)
 		s.log.Info("char refused", "aid", req.AccountID, "err", err)
 		return
@@ -234,7 +252,7 @@ func (s *CharServer) handleEnter(c gnet.Conn, frame []byte) {
 	// connection this is without re-verifying. AID/sex are sourced from the
 	// verified CH_ENTER, never re-read from later client-controlled packets.
 	s.setAuth(c, charAuth{accountID: req.AccountID, sex: req.Sex})
-	chars, err := s.chars.List(context.Background(), req.AccountID)
+	chars, err := s.chars.List(fctx, req.AccountID)
 	if err != nil {
 		s.log.Error("char: list", "aid", req.AccountID, "err", err)
 		s.writeRefuseEnter(c)
@@ -281,7 +299,7 @@ func (s *CharServer) authFor(c gnet.Conn) *charAuth {
 
 // handleMakeChar validates the CH_MAKE_CHAR, creates the character, and replies
 // with HC_ACCEPT_MAKECHAR or HC_REFUSE_MAKECHAR.
-func (s *CharServer) handleMakeChar(c gnet.Conn, frame []byte) {
+func (s *CharServer) handleMakeChar(fctx context.Context, c gnet.Conn, frame []byte) {
 	auth := s.authFor(c)
 	if auth == nil {
 		s.writeRefuseMakeChar(c, makeCharRefuseDenied)
@@ -293,7 +311,7 @@ func (s *CharServer) handleMakeChar(c gnet.Conn, frame []byte) {
 		s.writeRefuseMakeChar(c, makeCharRefuseDenied)
 		return
 	}
-	created, err := s.chars.Create(context.Background(), auth.accountID, int8(req.Slot), req.Name) //nolint:gosec // G115: slot is a validated 0..N client slot index.
+	created, err := s.chars.Create(fctx, auth.accountID, int8(req.Slot), req.Name) //nolint:gosec // G115: slot is a validated 0..N client slot index.
 	if err != nil {
 		switch {
 		case errors.Is(err, chardomain.ErrNameTaken):
@@ -318,7 +336,7 @@ func (s *CharServer) handleMakeChar(c gnet.Conn, frame []byte) {
 
 // handleSelectChar resolves the chosen slot to a character and redirects the
 // client to the map server via HC_NOTIFY_ZONESVR.
-func (s *CharServer) handleSelectChar(c gnet.Conn, frame []byte) {
+func (s *CharServer) handleSelectChar(fctx context.Context, c gnet.Conn, frame []byte) {
 	auth := s.authFor(c)
 	if auth == nil {
 		return
@@ -328,7 +346,7 @@ func (s *CharServer) handleSelectChar(c gnet.Conn, frame []byte) {
 		s.log.Warn("char: unparseable CH_SELECT_CHAR", "err", err)
 		return
 	}
-	chars, err := s.chars.List(context.Background(), auth.accountID)
+	chars, err := s.chars.List(fctx, auth.accountID)
 	if err != nil {
 		s.log.Error("char: list for select", "aid", auth.accountID, "err", err)
 		return
@@ -365,7 +383,7 @@ func (s *CharServer) handleSelectChar(c gnet.Conn, frame []byte) {
 
 // handleDeleteReserved processes CH_DELETE_CHAR3_RESERVED (reserve a deletion slot).
 // Calls CharService.ReserveDelete, then replies HC_DELETE_CHAR3_RESERVED.
-func (s *CharServer) handleDeleteReserved(c gnet.Conn, frame []byte) {
+func (s *CharServer) handleDeleteReserved(fctx context.Context, c gnet.Conn, frame []byte) {
 	auth := s.authFor(c)
 	if auth == nil {
 		return
@@ -375,7 +393,7 @@ func (s *CharServer) handleDeleteReserved(c gnet.Conn, frame []byte) {
 		s.log.Warn("char: unparseable CH_DELETE_CHAR3_RESERVED", "err", err)
 		return
 	}
-	res, err := s.chars.ReserveDelete(context.Background(), chardomain.CharID(req.CID), auth.accountID)
+	res, err := s.chars.ReserveDelete(fctx, chardomain.CharID(req.CID), auth.accountID)
 	if err != nil {
 		s.log.Error("char: reserve-delete", "aid", auth.accountID, "cid", req.CID, "err", err)
 		return
@@ -396,7 +414,7 @@ func (s *CharServer) handleDeleteReserved(c gnet.Conn, frame []byte) {
 
 // handleDelete processes CH_DELETE_CHAR3 (final delete confirmation).
 // Verifies the birthdate against the account, then deletes the character.
-func (s *CharServer) handleDelete(c gnet.Conn, frame []byte) {
+func (s *CharServer) handleDelete(_ context.Context, c gnet.Conn, frame []byte) {
 	auth := s.authFor(c)
 	if auth == nil {
 		return
@@ -460,7 +478,7 @@ func (s *CharServer) deleteResultFor(accountID uint32, req ropacket.CHDeleteChar
 	return 1, true
 }
 
-func (s *CharServer) handleDeleteCancel(c gnet.Conn, frame []byte) {
+func (s *CharServer) handleDeleteCancel(fctx context.Context, c gnet.Conn, frame []byte) {
 	auth := s.authFor(c)
 	if auth == nil {
 		return
@@ -470,7 +488,7 @@ func (s *CharServer) handleDeleteCancel(c gnet.Conn, frame []byte) {
 		s.log.Warn("char: unparseable CH_DELETE_CHAR3_CANCEL", "err", err)
 		return
 	}
-	res, err := s.chars.CancelDelete(context.Background(), chardomain.CharID(req.CID), auth.accountID)
+	res, err := s.chars.CancelDelete(fctx, chardomain.CharID(req.CID), auth.accountID)
 	if err != nil {
 		s.log.Error("char: cancel-delete", "aid", auth.accountID, "cid", req.CID, "err", err)
 		return

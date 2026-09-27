@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -26,6 +27,8 @@ import (
 	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/internal/shared/metrics"
+	"github.com/bouroo/goAthena/internal/shared/traces"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
@@ -619,9 +622,15 @@ func (s *MapServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
 			// conn's context — and pass it in. Handlers must not read c.Context()
 			// off-loop, where gnet's conn.release() races it on close.
 			auth := authFromConn(c)
+			name := s.packetName(opcode)
 			go func() {
 				defer closeOnPanic(s.log, "map.dispatch", c)
-				h.fn(s, c, auth, cp)
+				// One span per decoded frame: the frame is the trace root (a
+				// client frame has no parent carrier), and everything the
+				// handler calls — a service, a bus request — nests under it.
+				fctx, span := traces.Frame(context.Background(), name, opcode)
+				defer span.End(nil)
+				h.fn(s, fctx, c, auth, cp)
 			}()
 			continue
 		}
@@ -634,8 +643,19 @@ func (s *MapServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
 		if _, err := c.Discard(skip); err != nil {
 			return gnet.None
 		}
+		metrics.UnknownOpcodes.WithLabelValues("map", strconv.FormatBool(s.db.Has(opcode))).Inc()
 		s.log.Debug("map: skipping unhandled opcode", "cmd", fmt.Sprintf("0x%04x", opcode), "skip", skip)
 	}
+}
+
+// packetName returns the rAthena PACKET_* name for an opcode, or "" when the
+// packet DB does not know it. Span labels read better as CZ_ENTER than as a hex
+// command, but an unknown opcode is not an error here — it still gets a span.
+func (s *MapServer) packetName(opcode uint16) string {
+	if def, ok := s.db.Lookup(opcode); ok {
+		return def.Name
+	}
+	return ""
 }
 
 // unhandledSkip returns how many leading bytes to discard for an opcode that has
@@ -682,14 +702,14 @@ const aoiSweepRadius = aoi.DefaultBroadcastRadius - 1
 
 // handleEnter verifies the CZ_ENTER, admits the player into the world, and sends
 // the map-enter + self-spawn reply.
-func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
+func (s *MapServer) handleEnter(fctx context.Context, c gnet.Conn, _ *mapAuth, frame []byte) {
 	req, err := ropacket.ParseCZEnter(frame)
 	if err != nil {
 		s.log.Warn("map: unparseable CZ_ENTER", "err", err)
 		return
 	}
 	// Trust gate: verify the session exists and AuthCode matches loginID1.
-	sess, err := s.sess.GetSession(context.Background(), req.AccountID)
+	sess, err := s.sess.GetSession(fctx, req.AccountID)
 	if err != nil {
 		if errors.Is(err, chardomain.ErrSessionNotFound) {
 			s.writeRefuseEnter(c)
@@ -707,7 +727,7 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 	}
 
 	// Admit: load the char's enter state and register it in the world.
-	entity, err := s.world.EnterMap(context.Background(), req.CharID)
+	entity, err := s.world.EnterMap(fctx, req.CharID)
 	if err != nil {
 		s.log.Error("map: enter world", "aid", req.AccountID, "gid", req.CharID, "err", err)
 		s.writeRefuseEnter(c)
@@ -813,7 +833,7 @@ type mapAuth struct {
 // handleStatusChange processes CZ_STATUS_CHANGE (0x00bb) — the client's request to
 // spend status points on a base stat. It delegates to the world service and sends
 // ZC_STATUS_CHANGE_ACK and ZC_PAR_CHANGE back to the client.
-func (s *MapServer) handleStatusChange(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleStatusChange(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_STATUS_CHANGE from unauthed conn")
 		return

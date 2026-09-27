@@ -9,6 +9,12 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
 
@@ -217,4 +223,65 @@ func TestServerSubscriptionsCount(t *testing.T) {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// TestProxyCallEmitsLinkedTrace proves the NATS hop carries the trace context:
+// the proxy's producer span and the host's consumer span must share one trace
+// ID, which only holds if the W3C traceparent survives the message headers.
+// Without propagation the host would record an orphan root span — exactly the
+// silent failure the propagator wiring in internal/app/otel.go prevents.
+func TestProxyCallEmitsLinkedTrace(t *testing.T) {
+	exp := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
+	prevTP, prevProp := otel.GetTracerProvider(), otel.GetTextMapPropagator()
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{}, propagation.Baggage{}))
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		otel.SetTextMapPropagator(prevProp)
+	})
+
+	proxy, repo, _ := startFixture(t)
+	charID := seedChar(t, repo, 500)
+	if _, err := proxy.GetZeny(context.Background(), charID); err != nil {
+		t.Fatalf("GetZeny: %v", err)
+	}
+
+	spans := exp.GetSpans()
+	var producer, consumer *tracetest.SpanStub
+	for i := range spans {
+		switch spans[i].SpanKind {
+		case trace.SpanKindProducer:
+			producer = &spans[i]
+		case trace.SpanKindConsumer:
+			consumer = &spans[i]
+		}
+	}
+	if producer == nil || consumer == nil {
+		t.Fatalf("want a producer and a consumer span, got kinds: %v", spanKinds(spans))
+	}
+	if producer.SpanContext.TraceID() != consumer.SpanContext.TraceID() {
+		t.Errorf("trace IDs differ: producer=%s consumer=%s (context did not cross the bus)",
+			producer.SpanContext.TraceID(), consumer.SpanContext.TraceID())
+	}
+	if consumer.Parent.TraceID() != producer.SpanContext.TraceID() {
+		t.Errorf("consumer parent trace = %s, want the producer's %s (consumer is not a child)",
+			consumer.Parent.TraceID(), producer.SpanContext.TraceID())
+	}
+	if consumer.Parent.SpanID() != producer.SpanContext.SpanID() {
+		t.Errorf("consumer parent span = %s, want producer span %s",
+			consumer.Parent.SpanID(), producer.SpanContext.SpanID())
+	}
+	if producer.Status.Code == codes.Error {
+		t.Errorf("producer span marked failed: %v", producer.Status)
+	}
+}
+
+func spanKinds(spans []tracetest.SpanStub) []trace.SpanKind {
+	kinds := make([]trace.SpanKind, len(spans))
+	for i := range spans {
+		kinds[i] = spans[i].SpanKind
+	}
+	return kinds
 }

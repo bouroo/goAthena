@@ -36,7 +36,7 @@ mutated.
 | F-05 | ✅ verified | — | Unknown opcodes are silently skipped (not closed) |
 | F-06 | ✅ verified | — | Auth context checked on every handler |
 | F-07 | ✅ closed | this commit | Variable-length packets read safely + capped (oversize frames close the connection) |
-| F-08 | 🟡 partial | — | No OTel-driven abuse detection yet |
+| F-08 | ✅ closed | this commit | OTel-driven abuse detection — login-attempt spans, per-frame dispatch spans, unknown-opcode counter (split by whether the packet DB defines the opcode) |
 | F-09 | 🟡 partial | this commit | NATS bus carries extracted-module RPCs (economy); credentials optional, broker isolation is the standing control |
 
 ---
@@ -154,17 +154,36 @@ connection; a fresh connection with in-cap frames still answers whispers.
 
 ---
 
-## 10. F-08 — No OTel-driven abuse detection (open)
+## 10. F-08 — OTel-driven abuse detection (closed)
 
-OTel tracing is wired (`internal/app/otel.go`), but no spans yet drive
-abuse detection. Recommended follow-ups:
-- Span on every login attempt (success / refused / throttled) so a Grafana
-  panel shows spikes.
-- Span on every per-frame dispatch with a slow-handler alert (>10 ms).
-- Counter for unknown opcodes per connection so a port-scan surfaces.
+**Closed.** All three recommended signals landed in M14:
 
-These are dashboard glue, not security-critical. Landed in M14 when the
-load harness exists to validate them.
+- **Every login attempt is a span** (`traces.Frame(context.Background(),
+  "CA_LOGIN", …)` in `LoginServer.OnTraffic`), with the frame's duration and
+  failure status recorded, so a Grafana panel can show an authentication spike.
+  A throttled attempt is dropped before the span by design — the limiter denies
+  silently so an attacker cannot probe it — and shows up in the limiter's own
+  log line instead.
+- **Every per-frame dispatch is a span** on both the map and char listeners,
+  named after the rAthena packet (`frame CZ_ENTER`) and carrying
+  `packet.opcode`/`packet.name`. A slow-handler alert keys off its duration.
+  The frame is the trace root: a decoded frame has no parent carrier, and
+  everything the handler calls nests under it.
+- **Unknown opcodes are counted per listener**:
+  `goathena_gateway_unknown_opcodes_total{listener,known}`. The `known="false"`
+  series is the port-scan/fuzz signal — a playing client never sends an opcode
+  the packet DB does not define. `known="true"` is a coverage signal (the DB
+  defines the verb, no handler is wired yet), kept separate so ordinary
+  unimplemented-verb traffic does not look like an attack.
+
+The NATS hop carries the trace context in message headers, so one trace spans a
+zone's frame and the economy host's DB work. That propagation is load-bearing
+and fragile in one specific way worth knowing: NATS lowercases header keys on
+the wire while OTel's shipped `HeaderCarrier` is `http.Header`-backed and
+canonicalizes lookups, so using it directly silently splits every cross-process
+trace into two unrelated roots. `internal/shared/traces.carrier` is
+case-insensitive for that reason, and
+`TestInjectExtractAcrossLowercasedHeaders` pins it.
 
 ---
 

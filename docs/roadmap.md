@@ -192,7 +192,7 @@ started.**
 | **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 chat ✅; friend/party ✅; guild/mail remain |
 | **M12** Transit | cross-map warp (SetPosition + LeaveMap) | 🟡 partial — in-zone warp + cross-zone redirect v0 (`MapDirectory` port + `ZC_NPCACK_SERVERMOVE` framing, Agones fleet directory open) |
 | **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 🟡 partial — Agones sidecar lifecycle wired; economy extracted over NATS (`economy.Service` seam, request/reply proxy+server, `goathena serve-economy` host, env-driven local/remote switch); sharding keys + further module extractions open |
-| **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | 🟡 partial — /metrics + compose e2e + security review (F-01..F-07 closed incl. variable-frame length cap) + gosec/govulncheck gates live + login-load baseline recorded (`task loadtest`, ≈1000 logins/s zero-error); OTel abuse-detection spans open |
+| **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | 🟡 partial — /metrics + compose e2e + security review (F-01..F-07 closed incl. variable-frame length cap) + gosec/govulncheck gates live + login-load baseline recorded (`task loadtest`, ≈1000 logins/s zero-error) + OTel span coverage at every process boundary (client frame, login attempt, NATS hop with traceparent propagation) + `goathena_gateway_unknown_opcodes_total` probe signal |
 
 **Effort weighting** (from `rathena-subsystem-size-risk-profile`): the protocol/
 crypto/path work is a few hundred lines and **done**; the real effort is the
@@ -233,7 +233,7 @@ it — never when the code merely looks right.
 | **M11** Social | friend/party/guild/mail | L3 | 🟡 friend ✅ party ✅ (L3 e2e); guild/mail remain |
 | **M12** Transit | cross-map handshake + Agones allocation path | L3 (map-change e2e) | 🟡 partial (cross-zone redirect v0 landed; Agones allocation open) |
 | **P-scale** Scale-out | extract one module to a NATS binary; Agones fleet | L3 (multi-process) | 📋 |
-| **P-hard** Harden | OTel coverage, security review, perf profiling, load test | perf budget met | 📋 |
+| **P-hard** Harden | OTel coverage, security review, perf profiling, load test | perf budget met | 🟡 partial — OTel span coverage landed (M14); security review F-01..F-09; perf profiling + sustained load test remain |
 
 ### Phase 0 — recovery decision (recorded)
 

@@ -9,6 +9,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/bouroo/goAthena/internal/modules/economy/app"
+	"github.com/bouroo/goAthena/internal/shared/traces"
 )
 
 // Proxy is the client side of the extraction: it satisfies economy.Service
@@ -84,18 +85,26 @@ func (p *Proxy) move(ctx context.Context, subject string, charID uint32, amount 
 
 // call publishes one request and decodes the envelope. The context wins when
 // it carries a deadline; otherwise the proxy timeout applies.
+//
+// Each call is one span, and the span's context rides the request's NATS
+// headers so the serving host continues the same trace — an extracted module is
+// exactly where a trace stops being optional, since nothing in a log lines up
+// the caller's frame with the host's DB work otherwise.
 func (p *Proxy) call(ctx context.Context, subject string, data []byte) (reply, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, p.timeout)
 		defer cancel()
 	}
-	msg, err := p.nc.RequestWithContext(ctx, subject, data)
+	ctx, header, span := traces.InjectPublish(ctx, subject)
+	msg := &nats.Msg{Subject: subject, Data: data, Header: header}
+	rm, err := p.nc.RequestMsgWithContext(ctx, msg)
+	span.End(err)
 	if err != nil {
 		return reply{}, fmt.Errorf("economy call %s: %w", subject, err)
 	}
 	var r reply
-	if err := json.Unmarshal(msg.Data, &r); err != nil {
+	if err := json.Unmarshal(rm.Data, &r); err != nil {
 		return reply{}, fmt.Errorf("economy reply %s: decode: %w", subject, err)
 	}
 	if !r.OK {
