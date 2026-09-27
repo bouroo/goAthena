@@ -52,6 +52,17 @@ zone:
   view_range_cells: 20              # AOI visibility radius
   db_path: third_party/rathenaThailand/db   # load real pre-re mobs/items/skills from the submodule
 
+  directory:                        # cross-zone handoff routing (M12/M13)
+    mode: local                     # local|agones|static
+    # agones: resolve maps against Agones GameServers (K8s API; in-cluster
+    # credentials, or KUBECONFIG for Swarm/workstation runs).
+    # namespace: default            # GameServer namespace
+    # selector: ""                  # label selector narrowing candidates
+    # self_name: ""                 # THIS pod's GameServer resource name (own maps stay local)
+    # static: fixed route table (Swarm / fixed sharding) — map → host:port
+    # routes:
+    #   geffen: 10.0.4.7:5121
+    #   payon: 10.0.4.8:5121
 log:
   level: info                       # debug|info|warn|error
   format: json                      # json|text

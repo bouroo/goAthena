@@ -153,7 +153,6 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	content.Register(inj, cfg)
 	questmod.Register(inj)
 	transit.Register(inj)
-	transit.RegisterMapDirectory(inj)
 	world.Register(inj, cfg.Zone.TickRateHz, cfg.Zone.DBPath)
 
 	// Seed the world from the compiled script corpus: dialog NPCs, shop NPCs,

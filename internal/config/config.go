@@ -173,6 +173,24 @@ type ZoneConfig struct {
 	DBPath             string        `yaml:"db_path"             env:"ZONE_DB_PATH"`
 	ScriptPath         string        `yaml:"script_path"         env:"ZONE_SCRIPT_PATH"` // NPC .txt files (single file or directory); empty = dev catalog only
 	CheckpointInterval time.Duration `yaml:"checkpoint_interval" env:"ZONE_CHECKPOINT_INTERVAL" validate:"min_duration"`
+	// Directory routes cross-zone handoff (M12/M13): how this process finds
+	// the zone serving a destination map.
+	Directory ZoneDirectoryConfig `yaml:"directory"`
+}
+
+// ZoneDirectoryConfig selects the transit MapDirectory implementation.
+//
+// Mode "local" (default) is the single-zone v0: every map resolves to this
+// process. Mode "agones" resolves maps against Agones GameServer resources
+// (K8s API, in-cluster credentials; also usable from Docker Swarm via a
+// kubeconfig pointed at any reachable apiserver). Mode "static" resolves from
+// the Routes table — the Swarm/deployment-level route map.
+type ZoneDirectoryConfig struct {
+	Mode      string            `yaml:"mode"       env:"ZONE_DIRECTORY_MODE"       validate:"oneof=local agones static"`
+	Namespace string            `yaml:"namespace"  env:"ZONE_DIRECTORY_NAMESPACE"` // agones: GameServer namespace (default "default")
+	Selector  string            `yaml:"selector"   env:"ZONE_DIRECTORY_SELECTOR"`  // agones: label selector narrowing candidate GameServers
+	Routes    map[string]string `yaml:"routes"     env:"ZONE_DIRECTORY_ROUTES"`    // static: map name → host:port
+	SelfName  string            `yaml:"self_name"  env:"ZONE_DIRECTORY_SELF_NAME"` // agones: GameServer resource name of THIS pod (its own maps resolve local)
 }
 
 // LogConfig selects the structured logger (log/slog).
@@ -261,9 +279,12 @@ func defaults() *Config {
 			LoginRatePerSec: 1,
 		},
 		Identity: IdentityConfig{UseMD5Passwords: true, MaxChars: 9},
-		Zone:     ZoneConfig{TickRateHz: 50, ViewRangeCells: 20, DBPath: "db", CheckpointInterval: 5 * time.Minute},
-		Log:      LogConfig{Level: "info", Format: "json"},
-		OTel:     OTelConfig{Exporter: "none", ServiceName: "goathena", Sampling: 1.0},
+		Zone: ZoneConfig{
+			TickRateHz: 50, ViewRangeCells: 20, DBPath: "db", CheckpointInterval: 5 * time.Minute,
+			Directory: ZoneDirectoryConfig{Mode: "local", Namespace: "default"},
+		},
+		Log:  LogConfig{Level: "info", Format: "json"},
+		OTel: OTelConfig{Exporter: "none", ServiceName: "goathena", Sampling: 1.0},
 	}
 }
 
@@ -305,6 +326,11 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// A static zone directory without routes cannot resolve any map: the
+	// gate would silently route every portal walk local. Fail at load.
+	if c.Zone.Directory.Mode == "static" && len(c.Zone.Directory.Routes) == 0 {
+		errs = append(errs, fmt.Errorf("zone.directory.routes is required when zone.directory.mode is static"))
+	}
 	if len(errs) == 0 {
 		return nil
 	}

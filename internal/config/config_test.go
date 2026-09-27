@@ -205,6 +205,24 @@ func TestValidate_NATSRemoteRequiresUsableURL(t *testing.T) {
 	}
 }
 
+func TestValidate_StaticDirectoryRequiresRoutes(t *testing.T) {
+	base := func() *Config {
+		c := defaults()
+		c.DB.Host, c.DB.Name, c.DB.User = "db.local", "ro", "ro"
+		c.Zone.Directory.Mode = "static"
+		return c
+	}
+	empty := base()
+	if err := empty.Validate(); err == nil || !strings.Contains(err.Error(), "zone.directory.routes is required") {
+		t.Errorf("static directory without routes should fail, got: %v", err)
+	}
+	good := base()
+	good.Zone.Directory.Routes = map[string]string{"geffen": "10.0.4.7:5121"}
+	if err := good.Validate(); err != nil {
+		t.Errorf("static directory with routes should pass, got: %v", err)
+	}
+}
+
 func TestValidate_MissingRequired(t *testing.T) {
 	c := defaults() // db.host/name/user left empty
 	err := c.Validate()

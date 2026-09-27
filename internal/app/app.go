@@ -17,6 +17,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/config"
 	"github.com/bouroo/goAthena/internal/infrastructure/agones"
+	"github.com/bouroo/goAthena/internal/modules/transit"
 	"github.com/bouroo/goAthena/internal/shared/safe"
 )
 
@@ -38,6 +39,14 @@ type App struct {
 // shutdown (echo v5 delegates serving to the caller).
 func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error) {
 	inj, d, closeAll := compose(ctx, cfg, log)
+	// The zone directory decides local-warp vs cross-zone redirect (M12).
+	// agones/static modes that fail to build are a fatal boot error — a
+	// misrouted fleet must not silently local-route every portal — and New
+	// is the first caller with a real error return.
+	if err := transit.RegisterMapDirectory(inj, cfg, log); err != nil {
+		closeAll()
+		return nil, fmt.Errorf("zone directory: %w", err)
+	}
 	_ = inj // feature modules resolve from it in M1+
 
 	e := echo.New()

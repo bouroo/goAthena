@@ -37,14 +37,10 @@
 
 ## Next session's likely item (per ledger priority)
 
-**M13 — Agones fleet `MapDirectory`**: implement the port over the Agones
-GameServer registry (map name → zone address), replacing the
-`transit.RegisterMapDirectory` provider — the gateway/content seams take the
-remote addresses unchanged. Tests: extend
-`internal/modules/gateway/app/crosszone_integration_test.go`
-(`remoteGeffenDirectory` is the reference fake). Alternative queue items:
-M10 Rung C (misc script verbs: announce/getiteminfo/bonus/sc_start/heal),
-M9 vending (substantial), M14 OTel span audit.
+The fleet `MapDirectory` landed in this session (see the session log).
+Remaining M13/M14 queue: fleet YAML manifests (GameServer/Fleet for the
+agones mode), M10 Rung C (misc script verbs: announce/getiteminfo/bonus/
+sc_start/heal), M9 vending (substantial), M14 OTel span audit.
 
 ## Regression watch-list
 
