@@ -5,7 +5,7 @@ go 1.27.1
 require (
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/golang-migrate/migrate/v4 v4.20.1
-	github.com/labstack/echo/v5 v5.3.1
+	github.com/labstack/echo/v5 v5.4.0
 	github.com/panjf2000/gnet/v2 v2.10.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/samber/do/v2 v2.1.0
