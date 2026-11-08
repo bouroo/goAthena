@@ -120,6 +120,55 @@ func TestLoad_EnvParsesDuration(t *testing.T) {
 	}
 }
 
+// TestLoad_EnvParsesStringMap proves a map[string]string env var parses.
+//
+// The zone directory's route table is one: a deployment that pins a map's
+// address per node cannot ship a config file to every node, so the table
+// has to be settable from the environment. Before the map case existed
+// in the env overlay, ZONE_DIRECTORY_ROUTES failed the boot with
+// "unsupported kind map" — which made the static directory unreachable
+// from a container deployment.
+func TestLoad_EnvParsesStringMap(t *testing.T) {
+	t.Setenv("ZONE_DIRECTORY_ROUTES", "geffen=10.0.4.7:5121, payon=10.0.4.8:5121")
+	t.Setenv("ZONE_DIRECTORY_MODE", "static")
+	t.Setenv("DB_HOST", "db.local") // Validate requires db connection fields.
+	t.Setenv("DB_NAME", "ro")
+	t.Setenv("DB_USER", "ro")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("app:\n  environment: development\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := map[string]string{"geffen": "10.0.4.7:5121", "payon": "10.0.4.8:5121"}
+	if len(c.Zone.Directory.Routes) != len(want) {
+		t.Fatalf("routes = %v, want %v", c.Zone.Directory.Routes, want)
+	}
+	for k, v := range want {
+		if c.Zone.Directory.Routes[k] != v {
+			t.Errorf("route %q = %q, want %q", k, c.Zone.Directory.Routes[k], v)
+		}
+	}
+}
+
+// TestLoad_EnvRejectsMalformedStringMap proves a malformed map env var
+// fails the boot instead of being silently dropped: a route table with a
+// typo in it would send players to the wrong address.
+func TestLoad_EnvRejectsMalformedStringMap(t *testing.T) {
+	t.Setenv("ZONE_DIRECTORY_ROUTES", "geffen10.0.4.7:5121")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("app:\n  environment: development\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Error("Load should reject a map env var without '='")
+	}
+}
+
 func TestValidate_BadDriver(t *testing.T) {
 	c := defaults()
 	c.DB.Driver = "oracle"

@@ -868,10 +868,13 @@ func (s *MapServer) relocateThroughPortal(c gnet.Conn, charID uint32, def script
 // whether it handled the relocation. A nil directory, an unknown map, or a
 // zero Zone (local) all report false so the caller runs the local warp.
 func (s *MapServer) redirectToRemoteZone(c gnet.Conn, charID uint32, def script.WarpDef, fromMap string, fromPos worlddomain.Position) bool {
-	if s.zones == nil {
+	s.zonesMu.RLock()
+	directory := s.zones
+	s.zonesMu.RUnlock()
+	if directory == nil {
 		return false
 	}
-	zone, err := s.zones.Resolve(def.DestMap)
+	zone, err := directory.Resolve(def.DestMap)
 	if err != nil || zone == (transitdomain.Zone{}) {
 		return false
 	}

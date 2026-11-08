@@ -133,7 +133,11 @@ type MapServer struct {
 	// local-warp path (ZC_NPCACK_MAPMOVE); a remote zone redirects with
 	// ZC_NPCACK_SERVERMOVE. Set post-construction by DI root via
 	// SetZoneDirectory.
-	zones transitdomain.MapDirectory
+	//
+	// Guarded by zonesMu: the setter runs on the boot goroutine while the
+	// event loop reads it on every portal crossing.
+	zonesMu sync.RWMutex
+	zones   transitdomain.MapDirectory
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
 	// DEALTYPE carries an NPC id, not a shop name).
 	shopStore contentdomain.ShopStore
@@ -1103,6 +1107,8 @@ func (s *MapServer) SetStorage(st *worldapp.StorageService) {
 // the DI root can wire it without churning NewMapServer's many call sites.
 // nil keeps the local-warp behavior for every destination map.
 func (s *MapServer) SetZoneDirectory(dir transitdomain.MapDirectory) {
+	s.zonesMu.Lock()
+	defer s.zonesMu.Unlock()
 	s.zones = dir
 }
 

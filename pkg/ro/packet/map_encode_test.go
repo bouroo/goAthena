@@ -3122,8 +3122,11 @@ func TestServerMoveResponse_Encode(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	// IP/Port are pre-swapped wire values (see the field docs); 127.0.0.1:5121
-	// is 0x7f000001 BE / 0x1401 swapped.
+	// IP/Port hold the source's own field values (see the field docs):
+	// htonl(127.0.0.1) is 0x7f000001 and ntows(htons(5121)) is 0x1401.
+	// Encode writes each field's little-endian memory image, so the wire
+	// bytes are 01 00 00 7f and 01 14 — the bytes the source's packed
+	// struct puts on the wire.
 	resp := ServerMoveResponse{MapName: "izlude", X: 128, Y: 200, IP: 0x7f000001, Port: 0x1401}
 	if err := resp.Encode(&buf); err != nil {
 		t.Fatalf("Encode() unexpected error: %v", err)
@@ -3147,11 +3150,13 @@ func TestServerMoveResponse_Encode(t *testing.T) {
 	if y := binary.LittleEndian.Uint16(got[28:30]); y != 200 {
 		t.Errorf("yPos = %d, want 200", y)
 	}
-	if ip := binary.BigEndian.Uint32(got[30:34]); ip != 0x7f000001 {
-		t.Errorf("ip = %#x, want 0x7f000001 (big-endian wire)", ip)
+	// The source's packed struct goes on the wire as its little-endian
+	// memory image: ip 01 00 00 7f, port 01 14.
+	if !bytes.Equal(got[30:34], []byte{0x01, 0x00, 0x00, 0x7f}) {
+		t.Errorf("ip bytes = % x, want 01 00 00 7f", got[30:34])
 	}
-	if port := binary.BigEndian.Uint16(got[34:36]); port != 0x1401 {
-		t.Errorf("port = %#x, want 0x1401 (byte-swapped wire)", port)
+	if !bytes.Equal(got[34:36], []byte{0x01, 0x14}) {
+		t.Errorf("port bytes = % x, want 01 14", got[34:36])
 	}
 	// char domain[128] at [36:156] — all zero.
 	for i, b := range got[36:] {
