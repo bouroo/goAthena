@@ -30,8 +30,14 @@ fi
 # CDN does not.
 for tool in "github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0" \
 	"sigs.k8s.io/kustomize/kustomize/v5@v5.8.3"; do
-	name="${tool%@*}"
-	name="${name##*/}"
+	# The module path's last segment is not always the binary's name:
+	# kustomize's is "v5". Take the binary's name from the path and
+	# strip a leading "v" only from a version segment.
+	case "$tool" in
+	*/cmd/*) name="${tool%%/cmd/*}"; name="${name##*/}" ;;
+	*/v[0-9]*) name="${tool%%/v[0-9]*}"; name="${name##*/}" ;;
+	*) name="${tool%%@*}"; name="${name##*/}" ;;
+	esac
 	bin="$(go env GOPATH)/bin/$name"
 	if [ ! -x "$bin" ]; then
 		echo "▶ installing $name"
@@ -54,17 +60,42 @@ echo "▶ fetching the Agones CRD schema"
 have_agones=0
 if curl -fsSL --max-time 180 "$crd_url" -o "$schema_dir/install.yaml"; then
 	for kind in Fleet FleetAutoscaler; do
-		if go run ./scripts/crdschema "$schema_dir/install.yaml" "$kind" "$schema_dir/${kind}_v1.json"; then
+		# The file name must match kubeconform's template exactly:
+		# {{.ResourceKind}}_{{.ResourceAPIVersion}}. The apiVersion
+		# "agones.dev/v1" contributes only "v1" to that template — the
+		# group is not part of it — so the name is Fleet_v1.json. A name
+		# that does not match is a silent skip: kubeconform reports
+		# "could not find schema" and the resource fails.
+		if go run ./scripts/crdschema "$schema_dir/install.yaml" "$kind" \
+			"$schema_dir/${kind}_v1.json"; then
 			have_agones=1
 		fi
 	done
 fi
 if [ "$have_agones" = 1 ]; then
-	schema_flag="-schema-location $schema_dir/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+	# The local schema comes FIRST. kubeconform tries the schema locations
+	# in order, and the "default" catalog is a remote URL — for the Agones
+	# kinds it 404s, and a network failure on that fetch aborts the
+	# resource instead of falling through to the next location. With the
+	# local schema first, the Fleets never reach the network at all.
+	schema_flag="-schema-location $schema_dir/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json -schema-location default"
 else
 	echo "note: the Agones CRD schemas are unavailable; the Fleets will be skipped" >&2
 	schema_flag=""
 fi
+
+# The schema must actually be found. kubeconform reports a resource whose
+# schema it could not locate as an ERROR rather than an INVALID one, and
+# the reason is buried in the summary — so a naming slip reads as "the
+# manifests are broken" rather than "the schema was never loaded". The
+# Fleets are the resources this check exists for; skipping them would
+# make the check vacuous.
+for kind in Fleet FleetAutoscaler; do
+	if [ ! -f "$schema_dir/${kind}_v1.json" ]; then
+		echo "the $kind schema was not extracted into $schema_dir" >&2
+		exit 1
+	fi
+done
 
 echo "▶ kustomize build $dir"
 kustomize build "$dir" > "$out"
@@ -72,10 +103,7 @@ kustomize build "$dir" > "$out"
 echo "▶ kubeconform -strict"
 if [ -n "$schema_flag" ]; then
 	# shellcheck disable=SC2086 # schema_flag is a deliberate word split.
-	"$kubeconform" -strict -summary \
-		-schema-location default \
-		$schema_flag \
-		"$out"
+	"$kubeconform" -strict -summary $schema_flag "$out"
 else
 	"$kubeconform" -strict -summary \
 		-schema-location default \
