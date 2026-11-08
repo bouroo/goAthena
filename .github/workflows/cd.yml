@@ -102,13 +102,25 @@ jobs:
       - name: Resolve image ref
         id: img
         run: echo "ref=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      # The scan runs from the trivy container, not the trivy-action: the
+      # action installs its scanner by downloading a release tarball from
+      # github.com/.../releases/download/, and that route has been
+      # answering 504 — which failed the install step, not the scan, so the
+      # run reported a scan failure with no findings in it. The container
+      # comes from a registry, which is not affected.
+      #
+      # The gate is unchanged: HIGH and CRITICAL findings fail the job, and
+      # unfixed ones are ignored.
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ steps.img.outputs.ref }}
-          severity: HIGH,CRITICAL
-          exit-code: "1"
-          ignore-unfixed: true
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --exit-code 1 \
+              "${{ steps.img.outputs.ref }}"
 
   # A pushed tag creates a git tag, not a GitHub Release — without this job
   # the Releases page stays empty. Runs only after the scan gate is green, so
