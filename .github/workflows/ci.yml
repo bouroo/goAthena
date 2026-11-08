@@ -153,7 +153,7 @@ jobs:
       # Agones release manifest, because the built-in catalog does not
       # carry Agones and the Fleets would otherwise be skipped silently.
       - name: validate the k3s manifests
-        run: ./scripts/verify-k3s.sh dev && ./scripts/verify-k3s.sh prod
+        run: ./scripts/verify-k3s.sh dev && ./scripts/verify-k3s.sh prod && ./scripts/verify-k3s.sh single
 
   unit:
     name: Unit tests

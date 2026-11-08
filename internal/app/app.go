@@ -17,6 +17,7 @@ import (
 
 	"github.com/bouroo/goAthena/internal/config"
 	"github.com/bouroo/goAthena/internal/infrastructure/agones"
+	"github.com/bouroo/goAthena/internal/modules/gateway"
 	"github.com/bouroo/goAthena/internal/modules/transit"
 	"github.com/bouroo/goAthena/internal/shared/safe"
 )
@@ -38,6 +39,29 @@ type App struct {
 // echo.Echo is the router/framework; a stdlib http.Server owns timeouts + graceful
 // shutdown (echo v5 delegates serving to the caller).
 func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error) {
+	// M13: when the process runs as an Agones GameServer (the sidecar injects
+	// its gRPC port), wire the lifecycle port. A sidecar that should exist but
+	// is unreachable fails the boot — Agones reschedules the pod — while a
+	// plain Podman/bare-metal run stays Agones-free.
+	//
+	// The same sidecar also assigns this pod its client-facing address, so
+	// it is read here: the allocation is runtime state, and the char server
+	// must advertise the address Agones bound rather than a configured one.
+	var agonesPort agones.Port
+	var mapEndpoint gateway.MapEndpointResolver
+	if agones.Enabled() {
+		sc, err := agones.New()
+		if err != nil {
+			return nil, fmt.Errorf("agones sidecar: %w", err)
+		}
+		agonesPort = sc
+		resolver, err := NewAgonesMapEndpoint(ctx, sc, log)
+		if err != nil {
+			return nil, fmt.Errorf("agones map endpoint: %w", err)
+		}
+		mapEndpoint = resolver
+	}
+
 	inj, d, closeAll := compose(ctx, cfg, log)
 	// The zone directory decides local-warp vs cross-zone redirect (M12).
 	// agones/static modes that fail to build are a fatal boot error — a
@@ -47,7 +71,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		closeAll()
 		return nil, fmt.Errorf("zone directory: %w", err)
 	}
-	_ = inj // feature modules resolve from it in M1+
+	// The map endpoint the char server advertises: the Agones allocation
+	// inside a fleet, the configured host otherwise.
+	gateway.RegisterMapEndpoint(inj, mapEndpoint)
 
 	e := echo.New()
 	addr := fmt.Sprintf("%s:%d", cfg.HTTP.Host, cfg.HTTP.Port)
@@ -59,18 +85,6 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		IdleTimeout:  cfg.HTTP.IdleTimeout,
 	}
 
-	// M13: when the process runs as an Agones GameServer (the sidecar injects
-	// its gRPC port), wire the lifecycle port. A sidecar that should exist but
-	// is unreachable fails the boot — Agones reschedules the pod — while a
-	// plain Podman/bare-metal run stays Agones-free.
-	var agonesPort agones.Port
-	if agones.Enabled() {
-		sc, err := agones.New()
-		if err != nil {
-			return nil, fmt.Errorf("agones sidecar: %w", err)
-		}
-		agonesPort = sc
-	}
 	a := &App{cfg: cfg, log: log, echo: e, server: server, deps: d, closeAll: closeAll, agonesPort: agonesPort}
 	a.routes()
 	return a, nil
