@@ -248,18 +248,29 @@ func TestProxyCallEmitsLinkedTrace(t *testing.T) {
 		t.Fatalf("GetZeny: %v", err)
 	}
 
-	spans := exp.GetSpans()
+	// The host ends its consumer span after it publishes the reply, so the
+	// reply can arrive — and this assertion can run — before the consumer
+	// span has ended and been exported. Wait for it rather than assume it.
 	var producer, consumer *tracetest.SpanStub
-	for i := range spans {
-		switch spans[i].SpanKind {
-		case trace.SpanKindProducer:
-			producer = &spans[i]
-		case trace.SpanKindConsumer:
-			consumer = &spans[i]
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		spans := exp.GetSpans()
+		producer, consumer = nil, nil
+		for i := range spans {
+			switch spans[i].SpanKind {
+			case trace.SpanKindProducer:
+				producer = &spans[i]
+			case trace.SpanKindConsumer:
+				consumer = &spans[i]
+			}
 		}
+		if producer != nil && consumer != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if producer == nil || consumer == nil {
-		t.Fatalf("want a producer and a consumer span, got kinds: %v", spanKinds(spans))
+		t.Fatalf("want a producer and a consumer span, got kinds: %v", spanKinds(exp.GetSpans()))
 	}
 	if producer.SpanContext.TraceID() != consumer.SpanContext.TraceID() {
 		t.Errorf("trace IDs differ: producer=%s consumer=%s (context did not cross the bus)",
