@@ -3,6 +3,7 @@
 package protocol_test
 
 import (
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,9 +66,7 @@ func TestTableMatchesUpstreamResolution(t *testing.T) {
 	}
 
 	sizes := map[string]int{}
-	for name, size := range set.Layouts() {
-		sizes[name] = size
-	}
+	maps.Copy(sizes, set.Layouts())
 
 	// Independent re-derivation of upstream's last-wins rule.
 	//

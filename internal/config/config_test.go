@@ -277,6 +277,31 @@ func TestIsFatal(t *testing.T) {
 	}
 }
 
+func TestValidate_MinDurationFloor(t *testing.T) {
+	// The min_duration rule reads the field through reflection, so the
+	// boundary is worth pinning: exactly one second passes, anything
+	// below it fails.
+	cases := []struct {
+		name string
+		val  time.Duration
+		ok   bool
+	}{
+		{"above", 2 * time.Second, true},
+		{"exactly one second", time.Second, true},
+		{"below", 500 * time.Millisecond, false},
+		{"zero", 0, false},
+		{"negative", -time.Second, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validate().Var(tc.val, "min_duration")
+			if got := err == nil; got != tc.ok {
+				t.Errorf("min_duration(%v) accepted = %v, want %v (err %v)", tc.val, got, tc.ok, err)
+			}
+		})
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

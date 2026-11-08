@@ -119,7 +119,7 @@ func TestAdd_StorageFull(t *testing.T) {
 	// repo (public for tests).
 	repo := infra.NewMemoryStorageRepository()
 	svc = app.NewStorageService(repo)
-	for i := 0; i < domain.MaxStorage; i++ {
+	for i := range domain.MaxStorage {
 		row, err := svc.Add(context.Background(), 99, uint32(2000+i), 1) //nolint:gosec // G115: i fits uint32
 		if err != nil {
 			t.Fatalf("seed add %d: %v", i, err)

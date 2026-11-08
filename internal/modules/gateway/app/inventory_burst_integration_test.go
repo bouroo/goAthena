@@ -353,7 +353,7 @@ func TestMemoryItemRepoOrdersByID(t *testing.T) {
 	}
 	// ...and the id order reproduces the insertion order, which a map-iteration
 	// order would not. Repeat the load: an unstable order can pass once by luck.
-	for attempt := 0; attempt < 8; attempt++ {
+	for attempt := range 8 {
 		again, lerr := env.itemRepo.LoadByChar(t.Context(), 2000001, 150001)
 		if lerr != nil {
 			t.Fatalf("reload: %v", lerr)

@@ -151,7 +151,7 @@ func TestObfuscator_DisabledDoesNotAdvanceState(t *testing.T) {
 
 	obf := NewObfuscator(0, 0, 0)
 	stateBefore := obf.state
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		_ = obf.Decode(0x1234)
 		_ = obf.Encode(0x1234)
 	}

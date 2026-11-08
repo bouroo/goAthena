@@ -300,7 +300,7 @@ func TestApplyToConfig_MappedKeysAndAliases(t *testing.T) {
 		name       string
 		rathenaKey string
 		body       string
-		check      func(t *testing.T, cfg interface{})
+		check      func(t *testing.T, cfg any)
 	}{
 		{
 			name:       "use_MD5_passwords=true (canonical)",

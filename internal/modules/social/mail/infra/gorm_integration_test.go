@@ -229,7 +229,7 @@ func TestMail_GORMInboxCap(t *testing.T) {
 	hero := insertMailChar(t, gdb, "MailCapHero")
 	filler := insertMailChar(t, gdb, "MailCapFiller")
 
-	for i := 0; i < maildomain.MaxInbox; i++ {
+	for i := range maildomain.MaxInbox {
 		m := &maildomain.Mail{
 			SenderID: hero, SenderNam: "MailCapHero",
 			DestID: filler, DestName: "MailCapFiller",

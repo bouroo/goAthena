@@ -144,7 +144,7 @@ func TestFleetManifest_MatchesDirectoryContract(t *testing.T) {
 			t.Errorf("Fleet %q declares no %q annotation; the directory cannot resolve any map to it",
 				fleet.Name, MapsAnnotation)
 		}
-		for _, m := range strings.Split(maps, ",") {
+		for m := range strings.SplitSeq(maps, ",") {
 			if strings.ContainsAny(m, " \t") || m == "" {
 				t.Errorf("Fleet %q %s entry %q is not a clean CSV token", fleet.Name, MapsAnnotation, m)
 			}
@@ -179,7 +179,7 @@ func TestFleetManifest_MapsResolveToZone(t *testing.T) {
 		if _, err := zoneOf(gs); err != nil {
 			t.Errorf("Fleet %q does not convert to a Zone: %v", fleet.Name, err)
 		}
-		for _, m := range strings.Split(gs.Annotations[MapsAnnotation], ",") {
+		for m := range strings.SplitSeq(gs.Annotations[MapsAnnotation], ",") {
 			m = strings.TrimSpace(m)
 			if prev, dup := byMap[m]; dup {
 				t.Errorf("map %q declared by both %q and %q — the directory would pick one nondeterministically",

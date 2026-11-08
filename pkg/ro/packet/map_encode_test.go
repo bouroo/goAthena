@@ -2222,8 +2222,8 @@ func TestCZRestartRequest_Encode_TypeZero(t *testing.T) {
 // cstrBytes returns the NUL-terminated prefix of b as a string, or the
 // full slice if no NUL byte is present.
 func cstrBytes(b []byte) string {
-	if i := bytes.IndexByte(b, 0); i >= 0 {
-		return string(b[:i])
+	if before, _, ok := bytes.Cut(b, []byte{0}); ok {
+		return string(before)
 	}
 	return string(b)
 }

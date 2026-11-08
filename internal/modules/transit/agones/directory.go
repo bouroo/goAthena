@@ -109,7 +109,7 @@ func (d *FleetDirectory) Resolve(mapName string) (transitdomain.Zone, error) {
 // serves reports whether the GameServer declares mapName: the CSV
 // MapsAnnotation or a LabelPrefix+mapName label.
 func serves(gs *agonesv1.GameServer, mapName string) bool {
-	for _, m := range strings.Split(gs.Annotations[MapsAnnotation], ",") {
+	for m := range strings.SplitSeq(gs.Annotations[MapsAnnotation], ",") {
 		if strings.TrimSpace(m) == mapName {
 			return true
 		}

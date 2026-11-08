@@ -120,7 +120,7 @@ func structNames(_, _, srcDir string, _ variant, header string) ([]string, error
 // parseSizes reads the size probe's "Z\t<name>\t<size>" lines.
 func parseSizes(out []byte) map[string]int {
 	sizes := map[string]int{}
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		parts := strings.Split(strings.TrimSpace(line), "\t")
 		if len(parts) != 3 || parts[0] != "Z" {
 			continue
