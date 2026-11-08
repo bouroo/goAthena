@@ -33,7 +33,14 @@ patches:
   - path: patch-no-fleet-goathena-geffen.yaml
     target:
       kind: Fleet
-      name: goathena-geffen
+  - path: patch-no-autoscaler-prontera-counter.yaml
+    target:
+      kind: FleetAutoscaler
+      name: goathena-prontera-counter
+  - path: patch-no-autoscaler-geffen-counter.yaml
+    target:
+      kind: FleetAutoscaler
+      name: goathena-geffen-counter
   - path: patch-no-autoscaler-prontera-buffer.yaml
     target:
       kind: FleetAutoscaler

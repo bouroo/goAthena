@@ -172,11 +172,14 @@ can resume a login; NATS for cross-node broadcasts. Read-replicas for PG.
   (`gateway.MapEndpointResolver`). The port policy is **Dynamic**, so Agones
   picks an open host port and a node can carry several shards.
 
-**What the manifests cannot yet carry.** The fleet's size is driven by a
-policy that needs no signal from the app (a buffer of ready GameServers, and
-a schedule), because the shard publishes no player count. A List policy —
-scaling on how many players are actually connected — is the sharp signal,
-and needs an endpoint the app does not have yet.
+**The fleet sizes on the players.** The shard publishes its connected-player
+count to the sidecar, Agones aggregates it across the fleet, and the
+`FleetAutoscaler`'s **Counter** policy sizes the fleet by it: the aggregate
+capacity covers the aggregate players, with spare capacity on top. **Shipped.**
+The Buffer and Schedule policies sit alongside it, because they cover the
+load the counter cannot see — a shard that is up but not yet loaded still has
+to exist before its first player arrives, and a cold start takes longer than
+a report interval.
 
 **The addressing constraint.** The client is told the char and map
 endpoints inside `AC_ACCEPT_LOGIN`, and that handshake carries an IPv4

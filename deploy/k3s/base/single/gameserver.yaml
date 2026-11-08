@@ -25,6 +25,11 @@ spec:
       portPolicy: Dynamic
       containerPort: 5121
       protocol: TCP
+  counters:
+    # The player counter, as in the Fleets (deploy/k3s/base/zone-fleet.yaml).
+    players:
+      count: 0
+      capacity: 100
   health:
     initialDelaySeconds: 5
     periodSeconds: 5
