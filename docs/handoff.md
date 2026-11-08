@@ -498,6 +498,43 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
    carries an IPv4, so a cluster-internal address cannot be what a public
    client is handed.
 
+6. **The released image carries no build stamp.** `cd.yml`'s build step
+   passes no `build-args`, so every published image reports
+   `goathena dev (commit none, built unknown)` at `/version` — the
+   Containerfile's `ARG` defaults. This is pre-existing and long-standing
+   (every release from `v0.1.0-beta.15` on), and it costs the one
+   property the release is supposed to have: a consumer cannot tell which
+   commit an image serves. `task verify-tier1` catches a stale image
+   because the *compose* build passes `COMMIT`/`BUILD_TIME`; the release
+   build does not, so the gap is invisible to the gates. The fix is three
+   lines in `cd.yml`:
+
+   ```yaml
+   with:
+     build-args: |
+       VERSION=${{ github.ref_name }}
+       COMMIT=${{ github.sha }}
+       BUILD_TIME=${{ github.event.repository.updated_at }}
+   ```
+
+   `VERSION` should be the tag without its `v` (`0.1.0-beta.19`), to match
+   the image's own tag. Not done here: it changes what every published
+   image reports, which is a release-surface decision rather than part of
+   the counter work.
+
+7. **The published image is amd64 only.** `cd.yml` builds it on
+   `ubuntu-latest` with no `platforms` matrix, so the image index carries
+   one `linux/amd64` entry. An arm64 node cannot pull it — the pull fails
+   with `no image found in image index for architecture "arm64"`. Every
+   release from `v0.1.0-beta.15` on has this, and it bites the Tier 3
+   story hardest: a k3s cluster on an Apple Silicon workstation or a
+   Graviton node cannot run the shards at all. The fix is a `platforms:`
+   matrix on the build step (`linux/amd64,linux/arm64`) plus a
+   QEMU-emulated arm64 build in the CI runner, which
+   `docker/setup-qemu-action` provides. Not done here: it doubles the
+   release's build time, and the arm64 binaries are not exercised by any
+   test on this machine.
+
 ---
 
 ### M14 — Hardening
@@ -561,7 +598,9 @@ brackets them, so a slow tick shows up as a slow frame.
 | M11: mail | ✅ done | RODEX end-to-end: codecs + service + gateway + `000011_mail` (`375aa87`); account/returned tabs + expiry cron deferred. |
 | M12: Agones fleet directory | ✅ done | `transit/agones` + `transit/static` + `zone.directory.mode` switch (this session); fleet YAML manifests remain M13. |
 | M12: cross-zone redirect v0 | ✅ done | Directory port + SERVERMOVE framing + warp-path branch (`67b4979`); Agones fleet directory = M13 prereq. |
-| M13: Agones SDK | 🟡 partial | Sidecar lifecycle (`internal/infrastructure/agones`) + fleet directory (`transit/agones`) + fleet/GameServer manifests (`deploy/agones/`) landed; the advertised-address work below is what gates a real fleet. |
+| M13: Agones SDK | ✅ done | Sidecar lifecycle (`internal/infrastructure/agones`) + fleet directory (`transit/agones`) + fleet/GameServer manifests (`deploy/k3s/`) + the advertised allocation + the player-count counter. The `deploy/agones/` tree was deleted; `deploy/k3s/` is the one tree. |
+| M13: release image carries no build stamp | L | `cd.yml` passes no `build-args`, so every published image reports `dev (commit none)`. Fix is 4 lines; see ticket 6 above. |
+| M13: release image is amd64 only | M | An arm64 node cannot pull it. Needs a `platforms:` matrix + QEMU; see ticket 7 above. |
 | M14: threat model | M | One-shot. |
 | M14: load test harness | ✅ done | `cmd/loadgen` (wire-correct at 20250604) + `task loadtest` + recorded baseline (`28af5c3`). |
 | M14 F-07 frame cap | ✅ done | Packet DB `MaxLength` + gateway close-on-oversize (this commit). |
