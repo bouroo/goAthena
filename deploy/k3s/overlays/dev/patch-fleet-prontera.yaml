@@ -1,0 +1,20 @@
+# The dev cluster's resource envelope for the Prontera shard.
+#
+# A workstation cluster (k3d, kind, k3s on a laptop) has a handful of
+# cores and little memory, so the shards get a fraction of what
+# production asks for. The requests stay low enough that the scheduler
+# packs them onto one node.
+#
+# A JSON patch, for the same reason as the prod overlay's image patch:
+# kustomize cannot merge a CRD's `containers` list, so a strategic merge
+# would replace the whole list and drop the shard's args and env — the
+# database credentials, the zone identity, the config mount.
+- op: replace
+  path: /spec/template/spec/template/spec/containers/0/resources
+  value:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

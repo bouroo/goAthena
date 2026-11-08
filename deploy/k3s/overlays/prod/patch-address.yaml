@@ -1,0 +1,38 @@
+# The addresses the shard hands the client.
+#
+# The client is told the char and map endpoints inside AC_ACCEPT_LOGIN,
+# and the handshake carries an IPv4 — not a hostname. So the value here
+# must be an address the client can actually dial from wherever it is.
+#
+# The base uses the login Service's name, which resolves to the ClusterIP:
+# correct for a client inside the cluster, useless for one outside it (the
+# ClusterIP is not routable from the internet, and a client on a home
+# network cannot resolve the name).
+#
+# For a client outside the cluster, this must be the ingress's external
+# address — the IP a LoadBalancer Service got, or the node IP a NodePort
+# or a host-network ingress listens on.
+#
+# The operator replaces the placeholder. There is no safe default: a wrong
+# address here produces a login that succeeds and a client that then hangs,
+# which is a worse failure than a refused connection.
+#
+# These are environment variables, not a config file. The env wins over
+# the file (the config is 12-factor), so the shard's advertised address
+# changes without forking the ConfigMap — which is what makes this
+# patchable at all: a ConfigMap's data is one opaque string, so a
+# strategic merge would have to restate the whole file.
+#
+# A JSON patch, for the same reason as the image patch: kustomize cannot
+# merge a CRD's `containers` list. Here the operation appends to the
+# container's env, leaving the shard's existing environment intact.
+- op: add
+  path: /spec/template/spec/template/spec/containers/0/env/-
+  value:
+    name: GATEWAY_CHAR_HOST
+    value: 203.0.113.10
+- op: add
+  path: /spec/template/spec/template/spec/containers/0/env/-
+  value:
+    name: GATEWAY_MAP_HOST
+    value: 203.0.113.10

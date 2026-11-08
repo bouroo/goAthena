@@ -1,0 +1,79 @@
+# The Fleet autoscalers — how a map set grows.
+#
+# A shard is the unit of scale, and Agones owns the shard count (not the
+# Kubernetes HPA: an HPA cannot scale a Fleet). These are the two policies
+# that work without the app reporting anything:
+#
+#   * Buffer — scale on the number of READY GameServers waiting to be
+#     allocated. This is the policy that matches how a zone actually
+#     behaves: a busy map set accumulates unallocated shards, and Agones
+#     adds more until the buffer drains.
+#   * Schedule — scale on a cron window. This covers the predictable load
+#     (an event's opening hours), where waiting for the buffer to fill
+#     would mean the first players of the window queue behind a cold
+#     start.
+#
+# A List policy (scale on the player count the shard reports) would be the
+# sharpest signal, but the app does not publish a player count, so it is
+# not used here: an autoscaler reading a metric nobody exports scales on
+# nothing.
+#
+# The schedules are placeholders — set them to the world's hours before
+# this runs in production. They are expressed in UTC.
+apiVersion: agones.dev/v1
+kind: FleetAutoscaler
+metadata:
+  name: goathena-prontera-buffer
+spec:
+  fleetName: goathena-prontera
+  policy:
+    type: Buffer
+    buffer:
+      bufferSize: 2
+      minReplicas: 1
+      maxReplicas: 10
+  sync:
+    type: FixedInterval
+    fixedInterval:
+      seconds: 30
+---
+apiVersion: agones.dev/v1
+kind: FleetAutoscaler
+metadata:
+  name: goathena-prontera-schedule
+spec:
+  fleetName: goathena-prontera
+  policy:
+    type: Schedule
+    schedule:
+      activePeriod:
+        startCron: "0 0 * * *"
+        duration: 2h
+        timezone: Etc/UTC
+      policy:
+        type: Buffer
+        buffer:
+          bufferSize: 5
+          minReplicas: 1
+          maxReplicas: 10
+  sync:
+    type: FixedInterval
+    fixedInterval:
+      seconds: 30
+---
+apiVersion: agones.dev/v1
+kind: FleetAutoscaler
+metadata:
+  name: goathena-geffen-buffer
+spec:
+  fleetName: goathena-geffen
+  policy:
+    type: Buffer
+    buffer:
+      bufferSize: 2
+      minReplicas: 1
+      maxReplicas: 10
+  sync:
+    type: FixedInterval
+    fixedInterval:
+      seconds: 30

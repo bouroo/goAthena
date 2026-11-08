@@ -176,6 +176,83 @@ tasks:
           echo "▶ stack left up (LOADTEST_KEEP=1)"
         fi
 
+  # Tier 1 of the deployment strategy (docs/roadmap.md §4): one goathena
+  # container with MariaDB + Valkey + NATS as sidecars, no K8s.
+  #
+  # The build is forced (`--build`) and the image is rebuilt with no cache
+  # layer, because a plain `compose up` reuses whatever image the last build
+  # left behind. A stale image served the previous commit's code: the
+  # /metrics route 404'd and every login was refused, while the health
+  # probes stayed green — the stack looked up and the app was not the app.
+  stack-up:
+    desc: Build and start the Tier 1 compose stack from the current tree (rebuilds the image; no cache)
+    cmds:
+      - |
+        set -e
+        # The build stamp goes into the image, so a stale one is visible at
+        # /version instead of silently serving an older commit's code.
+        COMMIT="$(git rev-parse --short HEAD)" BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          docker compose build --no-cache goathena
+        docker compose up -d mariadb valkey nats goathena
+        echo "▶ waiting for /readyz"
+        ready=0
+        for i in $(seq 1 60); do
+          if curl -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then ready=1; break; fi
+          sleep 2
+        done
+        if [ "$ready" != 1 ]; then
+          echo "readyz never passed; last logs:"
+          docker compose logs goathena | tail -20
+          exit 1
+        fi
+        echo "stack up"
+
+  verify-tier1:
+    desc: Prove the Tier 1 compose stack runs THIS tree's code — health, metrics, and a real login
+    cmds:
+      - |
+        set -e
+        task stack-up
+        echo "▶ the running image must carry this commit's build stamp"
+        # The image stamps the commit it was built from into /version. A
+        # stale image carries an older one — that is exactly the failure this
+        # target exists to catch.
+        want="$(git rev-parse --short HEAD)"
+        got="$(curl -fsS http://127.0.0.1:8080/version | tr ',' '\n' | sed -n 's/.*"commit":"\([^"]*\)".*/\1/p')"
+        if [ "$got" != "$want" ]; then
+          echo "the running image is not this tree: commit=$got want=$want"
+          echo "(the image was built from an older commit; rebuild it)"
+          exit 1
+        fi
+        echo "image commit=$got matches HEAD"
+        echo "▶ health and control plane"
+        curl -fsS http://127.0.0.1:8080/healthz >/dev/null
+        curl -fsS http://127.0.0.1:8080/readyz >/dev/null
+        curl -fsS http://127.0.0.1:8080/version >/dev/null
+        # /metrics 404s on an image that predates the M14 metrics endpoint.
+        curl -fsS http://127.0.0.1:8080/metrics >/dev/null
+        echo "healthz, readyz, version, metrics: all 200"
+        echo "▶ seeding loadgen account"
+        docker compose exec -T mariadb mariadb -uroot -pragnarok ragnarok \
+          -e "DELETE FROM login WHERE userid='loadgen'; INSERT INTO login (userid, user_pass, sex) VALUES ('loadgen', MD5('loadgen'), 'M');"
+        echo "▶ login through the container"
+        go run ./cmd/loadgen -conns "${LOADGEN_CONNS:-5}" -rate "${LOADGEN_RATE:-2}" -duration "${LOADGEN_DURATION:-10s}"
+        echo "▶ the server must have logged the accepted logins"
+        docker compose logs goathena | grep -q "login accepted" \
+          || { echo "the server logged no accepted login"; docker compose logs goathena | tail -20; exit 1; }
+        echo "Tier 1 verified"
+
+  verify-k3s:
+    desc: Prove the Tier 3 k3s manifests match the real Kubernetes API schema
+    cmds:
+      - ./scripts/verify-k3s.sh dev
+      - ./scripts/verify-k3s.sh prod
+
+  verify-tier3:
+    desc: Alias for verify-k3s — the Tier 3 counterpart of verify-tier1
+    cmds:
+      - task: verify-k3s
+
   verify:
     desc: Leave the tree passing every gate (tidy + fmt-check + lint + vet + scans + unit + coverage)
     deps: [tidy]

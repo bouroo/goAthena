@@ -1,0 +1,41 @@
+# goAthena Tier 3 — the k3s/Kubernetes deployment base.
+#
+# This is the base the dev and prod overlays patch. It carries:
+#
+#   * the backing services (Postgres, Valkey, NATS, the OTel collector)
+#   * the zone shards (an Agones Fleet per map set)
+#   * the shared Secret and ConfigMap the shards read
+#
+# The Agones Fleets live in the base because a shard IS the unit of scale:
+# one Fleet per map set, and the transit MapDirectory redirects a client to
+# the Fleet serving the destination map. The overlays patch the image, the
+# replica counts, the resources and the ingress.
+#
+# Agones is a CRD provider: `kubectl apply` of a Fleet needs the Agones
+# controller installed (deploy/k3s/README.md). Without it the CRDs are
+# unknown and the apply fails — which is the correct signal, not a
+# silently skipped deployment.
+#
+# The namespace is stamped on each resource rather than through the
+# `namespace:` transformer, because the base declares the Namespace object
+# itself and the transformer would rewrite that object's name too.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - secret.yaml
+  - configmap.yaml
+  - service.yaml
+  - postgres.yaml
+  - valkey.yaml
+  - otel-collector.yaml
+  - zone-fleet.yaml
+  - fleet-autoscaler.yaml
+  - ingress.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: goathena
+      app.kubernetes.io/part-of: goathena
+    includeSelectors: false

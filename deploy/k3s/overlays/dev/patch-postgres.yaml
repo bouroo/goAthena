@@ -1,0 +1,22 @@
+# The dev cluster's resource envelope.
+#
+# A workstation cluster (k3d, kind, k3s on a laptop) has a handful of
+# cores and little memory, so the shards and the backing services get a
+# fraction of what production asks for. The requests stay low enough that
+# the scheduler packs them onto one node.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: goathena-postgres
+spec:
+  template:
+    spec:
+      containers:
+        - name: postgres
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
