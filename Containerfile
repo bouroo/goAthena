@@ -4,7 +4,7 @@
 # container once migrations land (persistence phase).
 
 # ---- builder ----
-FROM golang:1.27.1 AS build
+FROM golang:1.27 AS build
 WORKDIR /src
 # Cache deps first.
 COPY go.mod go.sum ./
@@ -15,15 +15,15 @@ ARG VERSION=dev
 ARG COMMIT=none
 ARG BUILD_TIME=unknown
 RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build \
-      -trimpath -ldflags "-s -w \
-        -X github.com/bouroo/goAthena/internal/app.Version=${VERSION} \
-        -X github.com/bouroo/goAthena/internal/app.Commit=${COMMIT} \
-        -X github.com/bouroo/goAthena/internal/app.BuildTime=${BUILD_TIME}" \
-      -o /out/goathena ./cmd/goathena && \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" \
-      -o /out/healthcheck ./cmd/healthcheck
+  --mount=type=cache,target=/root/.cache/go-build \
+  CGO_ENABLED=0 GOOS=linux go build \
+  -trimpath -ldflags "-s -w \
+  -X github.com/bouroo/goAthena/internal/app.Version=${VERSION} \
+  -X github.com/bouroo/goAthena/internal/app.Commit=${COMMIT} \
+  -X github.com/bouroo/goAthena/internal/app.BuildTime=${BUILD_TIME}" \
+  -o /out/goathena ./cmd/goathena && \
+  CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" \
+  -o /out/healthcheck ./cmd/healthcheck
 
 # ---- runtime ----
 FROM gcr.io/distroless/static-debian13:nonroot AS runtime
@@ -37,6 +37,6 @@ COPY --from=build /out/healthcheck /healthcheck
 EXPOSE 6900 6121 5121 8080
 USER nonroot:nonroot
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["/healthcheck"]
+  CMD ["/healthcheck"]
 ENTRYPOINT ["/goathena"]
 CMD ["serve", "-config", "/config.yaml"]
