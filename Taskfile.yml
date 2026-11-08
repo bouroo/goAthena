@@ -260,7 +260,7 @@ tasks:
       - task: verify-k3s
 
   verify:
-    desc: Leave the tree passing every gate (tidy + fmt-check + lint + vet + scans + unit + coverage)
+    desc: Leave the tree passing every gate (tidy + fmt-check + lint + vet + scans + unit + coverage) and every deployment tier
     deps: [tidy]
     cmds:
       - task: fmt-check
@@ -269,6 +269,11 @@ tasks:
       - task: scan-vuln
       - task: scan-sec
       - task: coverage
+      # The deployment ladder: the hobbyist's single stack, the small
+      # self-hosted fleet, and the k3s manifests.
+      - task: verify-tier1
+      - task: verify-tier2
+      - task: verify-k3s
 
   clean:
     desc: Remove build artifacts
