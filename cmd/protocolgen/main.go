@@ -137,14 +137,14 @@ func run(sourceName, rathenaPath, outDir string) error {
 		return fmt.Errorf("output dir: %w", err)
 	}
 	for _, v := range src.variants {
-		table, err := resolveTable(compiler, checkout, sourceDir, v)
+		table, err := resolveTable(compiler, checkout, v)
 		if err != nil {
 			return fmt.Errorf("variant %s: %w", v.name, err)
 		}
 		if len(table) == 0 {
 			return fmt.Errorf("variant %s: resolved an empty packet table", v.name)
 		}
-		ordered, err := registrationOrderFor(compiler, checkout, sourceDir, v)
+		ordered, err := registrationOrderFor(compiler, checkout, v)
 		if err != nil {
 			return fmt.Errorf("variant %s: %w", v.name, err)
 		}
@@ -157,11 +157,11 @@ func run(sourceName, rathenaPath, outDir string) error {
 	// compiler. The login and char servers frame their packets from these
 	// sizes.
 	for _, v := range src.variants {
-		layouts, err := structLayouts(compiler, checkout, sourceDir, v)
+		layouts, err := structLayouts(compiler, checkout, v)
 		if err != nil {
 			return fmt.Errorf("variant %s: %w", v.name, err)
 		}
-		offsets, err := fieldOffsets(compiler, checkout, sourceDir, v)
+		offsets, err := fieldOffsets(compiler, checkout, v)
 		if err != nil {
 			return fmt.Errorf("variant %s: %w", v.name, err)
 		}
@@ -169,7 +169,7 @@ func run(sourceName, rathenaPath, outDir string) error {
 			return err
 		}
 	}
-	return writeOpcodes(outDir, src, compiler, checkout, sourceDir)
+	return writeOpcodes(outDir, src, compiler, checkout)
 }
 
 // findSource returns the source pack with the given name.

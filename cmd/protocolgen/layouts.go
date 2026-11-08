@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -22,10 +21,10 @@ import (
 //
 // Upstream's map and common header sets share the include guard PACKETS_HPP,
 // so they are probed in separate translation units and merged.
-func structLayouts(compiler, rathenaPath, srcDir string, v variant) (map[string]int, error) {
+func structLayouts(compiler, rathenaPath string, v variant) (map[string]int, error) {
 	layouts := map[string]int{}
 	for _, header := range layoutHeaders {
-		got, err := probeLayouts(compiler, rathenaPath, srcDir, v, header)
+		got, err := probeLayouts(compiler, rathenaPath, v, header)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", header, err)
 		}
@@ -52,17 +51,17 @@ var layoutHeaders = []string{
 // packed attribute and for the preprocessor-selected field widths. A struct
 // whose fields upstream selects conditionally gets the offsets that
 // selection produces.
-func fieldLayouts(compiler, rathenaPath, srcDir string, v variant, header, structName string) (map[string]int, error) {
-	fields, err := structFields(srcDir, header, structName)
+func fieldLayouts(compiler, rathenaPath string, v variant, header, structName string) (map[string]int, error) {
+	fields, err := structFields(rathenaPath, header, structName)
 	if err != nil {
 		return nil, err
 	}
 	if len(fields) == 0 {
 		// Upstream selects a struct's fields conditionally, so the naive scan
 		// can miss them. Fall back to the compiler's own view.
-		return probeFieldOffsets(compiler, rathenaPath, srcDir, v, header, structName, nil)
+		return probeFieldOffsets(compiler, rathenaPath, v, header, structName, nil)
 	}
-	return probeFieldOffsets(compiler, rathenaPath, srcDir, v, header, structName, fields)
+	return probeFieldOffsets(compiler, rathenaPath, v, header, structName, fields)
 }
 
 // structFieldRe matches a field declaration inside a struct body.
@@ -83,9 +82,9 @@ var anonymousStructRe = regexp.MustCompile(`(?m)^\s*\}\s*([A-Za-z_][A-Za-z0-9_]*
 // has to write them at the right offset.
 var structBitFieldRe = regexp.MustCompile(`(?m)^\s*[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[0-9]+\s*;`)
 
-// structFields returns the field names declared in one upstream struct.
-func structFields(srcDir, header, structName string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Join(srcDir, header))
+// structFields returns the field names declared in one source struct.
+func structFields(rathenaPath, header, structName string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(rathenaPath, "src", header))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", header, err)
 	}
@@ -134,34 +133,18 @@ func structFields(srcDir, header, structName string) ([]string, error) {
 }
 
 // probeFieldOffsets compiles a probe that prints the offset of each field of
-// one upstream struct.
-func probeFieldOffsets(compiler, rathenaPath, _ string, v variant, header, structName string, fields []string) (map[string]int, error) {
-	dir, err := os.MkdirTemp("", "protocolgen-off")
+// one source struct.
+func probeFieldOffsets(compiler, rathenaPath string, v variant, header, structName string, fields []string) (map[string]int, error) {
+	ws, err := newWorkspace("protocolgen-off")
 	if err != nil {
-		return nil, fmt.Errorf("temp dir: %w", err)
+		return nil, err
 	}
-	defer os.RemoveAll(dir) //nolint:errcheck // temp dir cleanup
-
-	stubDir := filepath.Join(dir, "stub")
-	if err := os.MkdirAll(stubDir, 0o750); err != nil {
-		return nil, fmt.Errorf("output dir: %w", err)
-	}
-	if err := writeStubs(stubDir); err != nil {
-		return nil, fmt.Errorf("output dir: %w", err)
-	}
+	defer ws.cleanup()
 
 	var src bytes.Buffer
-	fmt.Fprintf(&src, "#include \"config/packets.hpp\"\n")
-	// packets_struct.hpp is not self-contained: it relies on the
-	// DEFINE_PACKET_ID macro that map/packets.hpp defines before it
-	// includes it. Including map/packets.hpp brings both.
-	if header == "map/packets_struct.hpp" {
-		fmt.Fprintf(&src, "#include \"map/packets.hpp\"\n")
-	} else {
-		fmt.Fprintf(&src, "#include \"%s\"\n", header)
-	}
+	src.WriteString(headerIncludes(header))
 	fmt.Fprintf(&src, "#include <cstdio>\n#include <cstddef>\n#include <type_traits>\n")
-	// Upstream selects a struct's fields conditionally, so the raw text
+	// The source selects a struct's fields conditionally, so the raw text
 	// scan sees fields this client family does not have. The compiler
 	// decides: a field the preprocessor dropped is not a member, and the
 	// probe reports only the ones that are.
@@ -183,16 +166,15 @@ func probeFieldOffsets(compiler, rathenaPath, _ string, v variant, header, struc
 	}
 	fmt.Fprintf(&src, "  return 0;\n}\n")
 
-	srcPath := filepath.Join(dir, "probe.cpp")
-	if err := os.WriteFile(srcPath, src.Bytes(), 0o600); err != nil {
-		return nil, fmt.Errorf("write file: %w", err)
+	if err := ws.writeSource(src.Bytes()); err != nil {
+		return nil, err
 	}
-	binPath := filepath.Join(dir, "probe")
-	if err := compile(compiler, rathenaPath, stubDir, v, srcPath, binPath); err != nil {
+	c := newCompiler(compiler, rathenaPath, ws.stubDir, v)
+	if err := c.compile(ws.srcPath, ws.binPath); err != nil {
 		return nil, err
 	}
 
-	out, err := exec.Command(binPath).Output() // #nosec G204 -- the probe is the binary we just compiled into our own temp dir
+	out, err := runProbe(ws.binPath)
 	if err != nil {
 		return nil, fmt.Errorf("running offset probe: %w", err)
 	}
@@ -286,10 +268,10 @@ var offsetStructs = []struct {
 
 // fieldOffsets resolves the byte offsets of the fields of every struct the
 // server encodes field by field, for one variant.
-func fieldOffsets(compiler, rathenaPath, srcDir string, v variant) (map[string]map[string]int, error) {
+func fieldOffsets(compiler, rathenaPath string, v variant) (map[string]map[string]int, error) {
 	out := map[string]map[string]int{}
 	for _, s := range offsetStructs {
-		offsets, err := fieldLayouts(compiler, rathenaPath, srcDir, v, s.header, s.name)
+		offsets, err := fieldLayouts(compiler, rathenaPath, v, s.header, s.name)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", s.name, err)
 		}

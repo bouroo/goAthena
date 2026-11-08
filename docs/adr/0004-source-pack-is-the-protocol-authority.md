@@ -85,6 +85,11 @@ compiling the source's registration headers into a probe that mirrors
 `clif_parse_ActionRequest` and `packetdb_addpacket` exactly. The probe and
 the generated tables agree on every opcode.
 
+The generator's own output is now pinned: `scripts/verify-protocolgen.sh`
+regenerates each source pack's tables from its checkout and compares the
+resolved values to the committed ones. All ten files match, so the
+committed tables and the generator cannot drift apart unnoticed.
+
 ## Consequences
 
 - A packet the branch has no constant for still resolves: the source's

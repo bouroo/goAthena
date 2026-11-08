@@ -1,12 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"math"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -44,64 +40,29 @@ type packetDef struct {
 	offsets []int
 }
 
-// resolveTable resolves upstream's packet table for one variant.
+// resolveRegistrations resolves the source's packet registrations for one
+// variant, in the source's own order.
 //
-// Upstream registers packets in two tables included back to back
+// The source registers packets in two tables included back to back
 // (src/map/clif.cpp:25833-25834) into packetdb_addpacket, which overwrites
 // the entry for an opcode registered twice (src/map/clif.cpp:25798).
 // Reproducing that last-wins rule over the preprocessed registration order
-// yields the same table upstream builds at runtime.
-func resolveTable(compiler, rathenaPath, srcDir string, v variant) ([]packetDef, error) {
-	pre, err := preprocess(compiler, rathenaPath, srcDir, v)
+// yields the same table the source builds at runtime.
+func resolveRegistrations(compiler, rathenaPath string, v variant) ([]packetDef, error) {
+	pre, err := preprocess(compiler, rathenaPath, v)
 	if err != nil {
 		return nil, err
 	}
 
-	// Upstream's opcode constants come from two places: the numeric literals
+	// The source's opcode constants come from two places: the numeric literals
 	// in clif_packetdb.hpp and the HEADER_* symbols in upstream's packet
 	// headers. Both must be resolved to a number.
-	opcodes, err := resolveOpcodes(compiler, rathenaPath, srcDir, v)
+	opcodes, err := resolveOpcodes(compiler, rathenaPath, v)
 	if err != nil {
 		return nil, err
 	}
-	// Upstream's lengths are either a literal or sizeof(struct PACKET_*).
-	sizes, err := structLayouts(compiler, rathenaPath, srcDir, v)
-	if err != nil {
-		return nil, err
-	}
-
-	byOpcode := map[uint16]packetDef{}
-	for line := range strings.SplitSeq(pre, "\n") {
-		call, ok := parseRegistration(line, opcodes, sizes)
-		if !ok {
-			continue
-		}
-		byOpcode[call.opcode] = call
-	}
-
-	out := make([]packetDef, 0, len(byOpcode))
-	for _, d := range byOpcode {
-		out = append(out, d)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].opcode < out[j].opcode })
-	return out, nil
-}
-
-// registrationOrderFor returns the registrations in upstream's own order.
-//
-// The order matters: upstream registers some handlers under several opcodes
-// across client versions, so the last registration of a handler is the one
-// the client uses at a given PACKETVER.
-func registrationOrderFor(compiler, rathenaPath, srcDir string, v variant) ([]packetDef, error) {
-	pre, err := preprocess(compiler, rathenaPath, srcDir, v)
-	if err != nil {
-		return nil, err
-	}
-	opcodes, err := resolveOpcodes(compiler, rathenaPath, srcDir, v)
-	if err != nil {
-		return nil, err
-	}
-	sizes, err := structLayouts(compiler, rathenaPath, srcDir, v)
+	// The source's lengths are either a literal or sizeof(struct PACKET_*).
+	sizes, err := structLayouts(compiler, rathenaPath, v)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +76,38 @@ func registrationOrderFor(compiler, rathenaPath, srcDir string, v variant) ([]pa
 		out = append(out, call)
 	}
 	return out, nil
+}
+
+// resolveTable resolves the source's packet table for one variant.
+//
+// The table is the registrations with the last registration of an opcode
+// winning, keyed by opcode and sorted by it.
+func resolveTable(compiler, rathenaPath string, v variant) ([]packetDef, error) {
+	regs, err := resolveRegistrations(compiler, rathenaPath, v)
+	if err != nil {
+		return nil, err
+	}
+
+	byOpcode := map[uint16]packetDef{}
+	for _, d := range regs {
+		byOpcode[d.opcode] = d
+	}
+
+	out := make([]packetDef, 0, len(byOpcode))
+	for _, d := range byOpcode {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].opcode < out[j].opcode })
+	return out, nil
+}
+
+// registrationOrderFor returns the registrations in the source's own order.
+//
+// The order matters: the source registers some handlers under several opcodes
+// across client versions, so the last registration of a handler is the one
+// the client uses at a given PACKETVER.
+func registrationOrderFor(compiler, rathenaPath string, v variant) ([]packetDef, error) {
+	return resolveRegistrations(compiler, rathenaPath, v)
 }
 
 // parseRegistration parses one expanded packetdb_addpacket call, resolving its
@@ -212,83 +205,33 @@ func resolveLength(expr string, sizes map[string]int) (int, bool) {
 	return 0, false
 }
 
-// preprocess runs the C preprocessor over upstream's packet tables.
+// preprocess runs the C preprocessor over the source's packet tables.
 //
 // Only preprocessing is needed (not compilation): the packet tables are macro
-// invocations whose expansion is exactly what upstream registers at runtime,
-// and preprocessing avoids building upstream's whole map server.
-func preprocess(compiler, rathenaPath, _ string, v variant) (string, error) {
-	dir, err := os.MkdirTemp("", "protocolgen")
+// invocations whose expansion is exactly what the source registers at runtime,
+// and preprocessing avoids building the source's whole map server.
+func preprocess(compiler, rathenaPath string, v variant) (string, error) {
+	ws, err := newWorkspace("protocolgen")
 	if err != nil {
-		return "", fmt.Errorf("temp dir: %w", err)
+		return "", err
 	}
-	defer os.RemoveAll(dir) //nolint:errcheck // temp dir cleanup
+	defer ws.cleanup()
 
-	stubDir := filepath.Join(dir, "stub")
-	if err := os.MkdirAll(stubDir, 0o750); err != nil {
-		return "", fmt.Errorf("output dir: %w", err)
-	}
-	if err := writeStubs(stubDir); err != nil {
-		return "", fmt.Errorf("output dir: %w", err)
-	}
-
-	// The two tables are included in upstream's order; the shuffle table
+	// The two tables are included in the source's order; the shuffle table
 	// re-binds opcodes for specific client versions and must come second.
-	srcPath := filepath.Join(dir, "probe.cpp")
 	body := "#include \"config/packets.hpp\"\n" +
 		"#include \"map/clif_packetdb.hpp\"\n" +
 		"#include \"map/clif_shuffle.hpp\"\n"
-	if err := os.WriteFile(srcPath, []byte(body), 0o600); err != nil {
-		return "", fmt.Errorf("write file: %w", err)
+	if err := ws.writeSource([]byte(body)); err != nil {
+		return "", err
 	}
 
-	args := []string{
-		"-std=c++17",
-		"-E",
-		"-DPACKETVER=" + strconv.Itoa(v.packetver),
+	c := newCompiler(compiler, rathenaPath, ws.stubDir, v)
+	out, err := c.preprocess(ws.srcPath)
+	if err != nil {
+		return "", fmt.Errorf("preprocessing upstream packet tables: %w", err)
 	}
-	if v.zero {
-		args = append(args, "-DPACKETVER_ZERO=1")
-	}
-	args = append(args,
-		"-I"+stubDir,
-		"-I"+filepath.Join(rathenaPath, "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "rapidyaml", "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "rapidyaml", "ext", "c4core", "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "libconfig"),
-		srcPath,
-	)
-
-	// The compiler and the paths are the caller's own: the generator runs
-	// the user's compiler over the user's source tree to ask it what the
-	// source resolves to.
-	cmd := exec.Command(compiler, args...) // #nosec G204 G702 -- the compiler and the paths are the caller's own
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("preprocessing upstream packet tables: %w\n%s", err, stderr.String())
-	}
-	return stdout.String(), nil
-}
-
-// writeStubs writes the minimal third-party headers upstream's map headers
-// include but that carry no wire-layout meaning.
-func writeStubs(dir string) error {
-	mysql := `#pragma once
-typedef struct st_mysql MYSQL;
-typedef struct st_mysql_stmt MYSQL_STMT;
-typedef unsigned long long my_ulonglong;
-typedef struct st_mysql_bind { unsigned long *length; int *is_null; void *buffer; } MYSQL_BIND;
-`
-	if err := os.WriteFile(filepath.Join(dir, "mysql.h"), []byte(mysql), 0o600); err != nil {
-		return fmt.Errorf("write file: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "ryml_std.hpp"), []byte("#pragma once\n"), 0o600); err != nil {
-		return fmt.Errorf("write file: %w", err)
-	}
-	return nil
+	return out, nil
 }
 
 // parseInt parses a C integer literal (decimal or hexadecimal).
