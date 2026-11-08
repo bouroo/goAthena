@@ -33,8 +33,14 @@ for anything a player has touched.
 ## 2. The image tag
 
 `patch-image-goathena-prontera.yaml` and `patch-image-goathena-geffen.yaml`
-pin the shards to `v0.1.0-beta.15`. Update both to the release you want
+pin the shards to `0.1.0-beta.15`. Update both to the release you want
 running.
+
+**The image tag has no `v` prefix, even though the release tag does.**
+The release is cut as `v0.1.0-beta.15`, but the publishing workflow sets
+the image's tags with `type=semver`, and semver's `{{version}}` is
+`0.1.0-beta.15` — the `v` belongs to the git tag, not the image. Pinning
+`v0.1.0-beta.15` gives `ImagePullBackOff` on every shard.
 
 The base uses `latest`, which is right for a dev cluster and wrong for
 production: a rolling update pulls whatever was published last, so two
