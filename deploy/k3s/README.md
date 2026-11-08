@@ -96,25 +96,22 @@ kubectl -n goathena create secret generic goathena-db \
 ```
 
 **2. The image tag.** `overlays/prod/patch-image-goathena-*.yaml` pins
-the shards to `0.1.0-beta.19`. Update it to the release you want
+the shards to `0.1.0-beta.20`. Update it to the release you want
 running. The base uses `latest`, which is right for a dev cluster and
 wrong for production: two pods of the same Fleet could run different
 code.
 
 The image tag carries **no `v` prefix**, even though the release tag
-does: the release is `v0.1.0-beta.19` and the image is
-`0.1.0-beta.19`. The publishing workflow sets the image's tags with
+does: the release is `v0.1.0-beta.20` and the image is
+`0.1.0-beta.20`. The publishing workflow sets the image's tags with
 `type=semver`, and semver's `{{version}}` has no `v`. Pinning the
 release's own tag form gives `ImagePullBackOff` on every shard.
 
-The published image is **amd64 only** — the release workflow builds it on
-`ubuntu-latest` with no `platforms` matrix, so the manifest index carries
-one linux/amd64 entry. An arm64 node (an Apple Silicon workstation, an
-Ampere Graviton node) cannot pull it: the pull fails with `no image
-found in image index for architecture "arm64"`. On an arm64 cluster, the
-shards need an arm64 image — either a multi-arch build of the release
-workflow, or a locally built one pushed to a registry the cluster can
-reach.
+The published image is **multi-arch** — `linux/amd64` and `linux/arm64`,
+so an arm64 node (an Apple Silicon workstation, an Ampere Graviton node)
+pulls the same tag. Before `v0.1.0-beta.20` the release workflow built
+amd64 only and the arm64 pull failed with `no image found in image index
+for architecture "arm64"`.
 
 **3. The addresses the client is handed.** This is the one that bites.
 
