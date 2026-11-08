@@ -48,12 +48,15 @@ jobs:
           import sys
 
           tag = sys.argv[1]
-          for version in json.load(sys.stdin):
-              tags = [
-                  c.get("name")
-                  for c in version.get("metadata", {}).get("container", {}).get("tags", [])
-              ]
-              if tag in tags:
+          payload = json.load(sys.stdin)
+          # The API answers an error with an object, not a list.
+          if not isinstance(payload, list):
+              raise SystemExit("unexpected payload: " + json.dumps(payload)[:300])
+          for version in payload:
+              tags = version.get("metadata", {}).get("container", {}).get("tags", [])
+              # Each entry is a plain tag name, not an object.
+              names = [t.get("name") if isinstance(t, dict) else t for t in tags]
+              if tag in names:
                   print(version["id"])
                   sys.exit(0)
           sys.exit(1)
