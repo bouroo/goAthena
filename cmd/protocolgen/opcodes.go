@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -46,30 +44,21 @@ type opcode struct {
 	value int
 }
 
-// resolveOpcodes resolves every upstream packet-header constant for one
+// resolveOpcodes resolves every source packet-header constant for one
 // variant.
 //
-// Upstream's map and common header sets share the PACKETS_HPP include guard,
+// The source's map and common header sets share the PACKETS_HPP include guard,
 // so each set is preprocessed in its own translation unit and the results are
 // merged here.
-func resolveOpcodes(compiler, rathenaPath, srcDir string, v variant) (map[string]int, error) {
+func resolveOpcodes(compiler, rathenaPath string, v variant) (map[string]int, error) {
 	literals, err := literalOpcodes(rathenaPath)
 	if err != nil {
 		return nil, err
 	}
 
-	stubDir, err := os.MkdirTemp("", "protocolgen-stub")
-	if err != nil {
-		return nil, fmt.Errorf("temp dir: %w", err)
-	}
-	defer os.RemoveAll(stubDir) //nolint:errcheck // temp dir cleanup
-	if err := writeStubs(stubDir); err != nil {
-		return nil, err
-	}
-
 	out := map[string]int{}
 	for _, header := range headerFiles {
-		ops, err := probeOpcodesFor(compiler, rathenaPath, srcDir, stubDir, v, header)
+		ops, err := probeOpcodesFor(compiler, rathenaPath, v, header)
 		if err != nil {
 			return nil, err
 		}
@@ -77,7 +66,7 @@ func resolveOpcodes(compiler, rathenaPath, srcDir string, v variant) (map[string
 			out[o.name] = o.value
 		}
 	}
-	// The literal opcodes: the packets upstream writes without a header
+	// The literal opcodes: the packets the source writes without a header
 	// constant. They are the same in every client family, so they do not
 	// vary with the variant.
 	maps.Copy(out, literals)
@@ -144,61 +133,37 @@ func literalOpcodes(rathenaPath string) (map[string]int, error) {
 	return out, nil
 }
 
-// probeOpcodesFor preprocesses one upstream header set and extracts the
+// probeOpcodesFor preprocesses one source header set and extracts the
 // packet-header constants from the preprocessed output.
-func probeOpcodesFor(compiler, rathenaPath, _, stubDir string, v variant, header string) ([]opcode, error) {
-	dir, err := os.MkdirTemp("", "protocolgen-op")
+func probeOpcodesFor(compiler, rathenaPath string, v variant, header string) ([]opcode, error) {
+	ws, err := newWorkspace("protocolgen-op")
 	if err != nil {
-		return nil, fmt.Errorf("temp dir: %w", err)
+		return nil, err
 	}
-	defer os.RemoveAll(dir) //nolint:errcheck // temp dir cleanup
+	defer ws.cleanup()
 
-	srcPath := filepath.Join(dir, "probe.cpp")
 	body := fmt.Sprintf("#include \"config/packets.hpp\"\n#include \"%s\"\n", header)
-	if err := os.WriteFile(srcPath, []byte(body), 0o600); err != nil {
-		return nil, fmt.Errorf("write file: %w", err)
+	if err := ws.writeSource([]byte(body)); err != nil {
+		return nil, err
 	}
 
-	args := []string{
-		"-std=c++17",
-		"-E",
-		"-DPACKETVER=" + strconv.Itoa(v.packetver),
-	}
-	if v.zero {
-		args = append(args, "-DPACKETVER_ZERO=1")
-	}
-	args = append(args,
-		"-I"+stubDir,
-		"-I"+filepath.Join(rathenaPath, "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "rapidyaml", "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "rapidyaml", "ext", "c4core", "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "libconfig"),
-		srcPath,
-	)
-
-	// The compiler and the paths are the caller's own: the generator runs
-	// the user's compiler over the user's source tree to ask it what the
-	// source resolves to.
-	cmd := exec.Command(compiler, args...) // #nosec G204 G702 -- the compiler and the paths are the caller's own
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("preprocessing %s: %w\n%s", header, err, stderr.String())
+	c := newCompiler(compiler, rathenaPath, ws.stubDir, v)
+	out, err := c.preprocess(ws.srcPath)
+	if err != nil {
+		return nil, err
 	}
 
 	var ops []opcode
-	for _, m := range headerConstRe.FindAllStringSubmatch(stdout.String(), -1) {
+	for _, m := range headerConstRe.FindAllStringSubmatch(out, -1) {
 		val, err := parseInt(m[2])
 		if err != nil {
 			continue
 		}
 		ops = append(ops, opcode{name: m[1], value: val})
 	}
-	// Upstream's enum packet_headers holds the opcodes that have no
+	// The source's enum packet_headers holds the opcodes that have no
 	// HEADER_ constant.
-	for _, m := range enumHeaderRe.FindAllStringSubmatch(stdout.String(), -1) {
+	for _, m := range enumHeaderRe.FindAllStringSubmatch(out, -1) {
 		val, err := parseInt(m[2])
 		if err != nil {
 			continue
@@ -210,13 +175,13 @@ func probeOpcodesFor(compiler, rathenaPath, _, stubDir string, v variant, header
 
 // writeOpcodes emits the generated Go file holding the resolved packet-header
 // constants for every variant.
-func writeOpcodes(outDir string, src source, compiler, rathenaPath, srcDir string) error {
+func writeOpcodes(outDir string, src source, compiler, rathenaPath string) error {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "// Code generated by cmd/protocolgen. DO NOT EDIT.\n\n")
 	fmt.Fprintf(&b, "package %s\n\n", src.pkg)
 
 	for _, v := range src.variants {
-		ops, err := resolveOpcodes(compiler, rathenaPath, srcDir, v)
+		ops, err := resolveOpcodes(compiler, rathenaPath, v)
 		if err != nil {
 			return fmt.Errorf("variant %s: %w", v.name, err)
 		}
@@ -226,7 +191,7 @@ func writeOpcodes(outDir string, src source, compiler, rathenaPath, srcDir strin
 		// knows the packet by. The struct the registration sizes is: it is
 		// the source's own name for the packet, so the opcode is recorded
 		// under it too.
-		pkts, err := resolveTable(compiler, rathenaPath, srcDir, v)
+		pkts, err := resolveTable(compiler, rathenaPath, v)
 		if err != nil {
 			return fmt.Errorf("variant %s: %w", v.name, err)
 		}

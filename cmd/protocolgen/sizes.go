@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -30,36 +29,20 @@ var commentedBlockRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
 
 // probeLayouts compiles a probe that prints the size of every wire struct
 // declared in one upstream header set.
-func probeLayouts(compiler, rathenaPath, srcDir string, v variant, header string) (map[string]int, error) {
-	names, err := structNames(compiler, rathenaPath, srcDir, v, header)
+func probeLayouts(compiler, rathenaPath string, v variant, header string) (map[string]int, error) {
+	names, err := structNames(rathenaPath, header)
 	if err != nil {
 		return nil, err
 	}
 
-	dir, err := os.MkdirTemp("", "protocolgen-size")
+	ws, err := newWorkspace("protocolgen-size")
 	if err != nil {
-		return nil, fmt.Errorf("temp dir: %w", err)
+		return nil, err
 	}
-	defer os.RemoveAll(dir) //nolint:errcheck // temp dir cleanup
-
-	stubDir := filepath.Join(dir, "stub")
-	if err := os.MkdirAll(stubDir, 0o750); err != nil {
-		return nil, fmt.Errorf("output dir: %w", err)
-	}
-	if err := writeStubs(stubDir); err != nil {
-		return nil, fmt.Errorf("output dir: %w", err)
-	}
+	defer ws.cleanup()
 
 	var src bytes.Buffer
-	fmt.Fprintf(&src, "#include \"config/packets.hpp\"\n")
-	// packets_struct.hpp is not self-contained: it relies on the
-	// DEFINE_PACKET_ID macro that map/packets.hpp defines before it
-	// includes it. Including map/packets.hpp brings both.
-	if header == "map/packets_struct.hpp" {
-		fmt.Fprintf(&src, "#include \"map/packets.hpp\"\n")
-	} else {
-		fmt.Fprintf(&src, "#include \"%s\"\n", header)
-	}
+	src.WriteString(headerIncludes(header))
 	fmt.Fprintf(&src, "#include <cstdio>\n")
 	fmt.Fprintf(&src, "#include <type_traits>\n")
 	fmt.Fprintf(&src, "template<typename T, typename = void> struct is_complete : std::false_type {};\n")
@@ -78,30 +61,29 @@ func probeLayouts(compiler, rathenaPath, srcDir string, v variant, header string
 	}
 	fmt.Fprintf(&src, "  return 0;\n}\n")
 
-	srcPath := filepath.Join(dir, "probe.cpp")
-	if err := os.WriteFile(srcPath, src.Bytes(), 0o600); err != nil {
-		return nil, fmt.Errorf("write file: %w", err)
+	if err := ws.writeSource(src.Bytes()); err != nil {
+		return nil, err
 	}
-	binPath := filepath.Join(dir, "probe")
-	if err := compile(compiler, rathenaPath, stubDir, v, srcPath, binPath); err != nil {
+	c := newCompiler(compiler, rathenaPath, ws.stubDir, v)
+	if err := c.compile(ws.srcPath, ws.binPath); err != nil {
 		return nil, err
 	}
 
-	out, err := exec.Command(binPath).Output() // #nosec G204 -- the probe is the binary we just compiled into our own temp dir
+	out, err := runProbe(ws.binPath)
 	if err != nil {
 		return nil, fmt.Errorf("running size probe: %w", err)
 	}
 	return parseSizes(out), nil
 }
 
-// structNames returns the wire struct names declared in one upstream header.
-func structNames(_, _, srcDir string, _ variant, header string) ([]string, error) {
+// structNames returns the wire struct names declared in one source header.
+func structNames(rathenaPath, header string) ([]string, error) {
 	// The struct names come from the preprocessed header, so the
 	// preprocessor's own selection decides which structs exist for this
-	// client family. Upstream guards several structs behind
+	// client family. The source guards several structs behind
 	// `#if PACKETVER_...` blocks that exclude them from older clients; a
 	// text scan would see them and the compiler would reject their size.
-	data, err := os.ReadFile(filepath.Join(srcDir, header))
+	data, err := os.ReadFile(filepath.Join(rathenaPath, "src", header))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", header, err)
 	}
@@ -132,35 +114,4 @@ func parseSizes(out []byte) map[string]int {
 		sizes[parts[1]] = n
 	}
 	return sizes
-}
-
-// compile builds one probe translation unit.
-func compile(compiler, rathenaPath, stubDir string, v variant, srcPath, binPath string) error {
-	args := []string{
-		"-std=c++17",
-		"-DPACKETVER=" + strconv.Itoa(v.packetver),
-	}
-	if v.zero {
-		args = append(args, "-DPACKETVER_ZERO=1")
-	}
-	args = append(args,
-		"-I"+stubDir,
-		"-I"+filepath.Join(rathenaPath, "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "rapidyaml", "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "rapidyaml", "ext", "c4core", "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "libconfig"),
-		srcPath, "-o", binPath,
-	)
-
-	// The compiler and the paths are the caller's own: the generator runs
-	// the user's compiler over the user's source tree to ask it what the
-	// source resolves to.
-	cmd := exec.Command(compiler, args...) // #nosec G204 G702 -- the compiler and the paths are the caller's own
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("compiling probe: %w\n%s", err, stderr.String())
-	}
-	return nil
 }
