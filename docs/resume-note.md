@@ -72,6 +72,8 @@ extractions).
   handler signature over real TCP; a signature change there is a compile break
   in the dispatch table, not a silent regression.
 - `internal/modules/transit/agones` `TestGameServerManifest_*` — decodes
-  `deploy/agones/*.yaml` with the Agones API's own decoder; a manifest edit that
-  drops the `game` port name or the `goathena.dev/maps` annotation fails here.
+  `deploy/k3s/base/zone-fleet.yaml` and
+  `deploy/k3s/base/single/gameserver.yaml` with the Agones API's own decoder;
+  a manifest edit that drops the `game` port name, flips the port policy off
+  `Dynamic`, or drops the `goathena.dev/maps` annotation fails here.
 - `TestNewMapServerDB_Size` — 150 (bump with the next packet-DB registration).

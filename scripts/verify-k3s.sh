@@ -59,7 +59,7 @@ crd_url="https://raw.githubusercontent.com/googleforgames/agones/main/install/ya
 echo "▶ fetching the Agones CRD schema"
 have_agones=0
 if curl -fsSL --max-time 180 "$crd_url" -o "$schema_dir/install.yaml"; then
-	for kind in Fleet FleetAutoscaler; do
+	for kind in Fleet FleetAutoscaler GameServer; do
 		# The file name must match kubeconform's template exactly.
 		# The template expands {{.ResourceKind}} to the kind in LOWERCASE
 		# — "fleet", not "Fleet" — so the name is fleet_v1.json. A name
@@ -89,9 +89,9 @@ fi
 # schema it could not locate as an ERROR rather than an INVALID one, and
 # the reason is buried in the summary — so a naming slip reads as "the
 # manifests are broken" rather than "the schema was never loaded". The
-# Fleets are the resources this check exists for; skipping them would
-# make the check vacuous.
-for kind in Fleet FleetAutoscaler; do
+# Fleets and the GameServer are the resources this check exists for;
+# skipping them would make the check vacuous.
+for kind in Fleet FleetAutoscaler GameServer; do
 	lower="$(printf '%s' "$kind" | tr '[:upper:]' '[:lower:]')"
 	if [ ! -f "$schema_dir/${lower}_v1.json" ]; then
 		echo "the $kind schema was not extracted into $schema_dir" >&2

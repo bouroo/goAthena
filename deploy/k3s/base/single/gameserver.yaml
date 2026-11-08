@@ -1,17 +1,18 @@
 # goAthena single-zone GameServer (Agones) — the one-shard case.
 #
-# Use this instead of a Fleet when a map set runs under a single allocation
-# (a hand-allocated boss zone, a staging shard, a smoke test). It is the same
-# pod contract as deploy/agones/fleet.yaml; see that file's header for the
-# invariants the transit MapDirectory relies on (the `game` port name and the
-# `goathena.dev/maps` annotation).
+# Use this instead of a Fleet when a map set runs under a single
+# allocation: a hand-allocated boss zone, a staging shard, a smoke test.
+# It is the same pod contract as the Fleets in zone-fleet.yaml; that
+# file's header carries the invariants the transit MapDirectory relies
+# on (the `game` port name and the `goathena.dev/maps` annotation).
 #
-# A GameServer left in Ready is allocatable; Agones sends players here only
-# after an allocation call, so the surrounding controller allocates it when the
-# shard should accept crossings.
+# A GameServer left in Ready is allocatable, but Agones sends players
+# here only after an allocation call — so the surrounding controller
+# allocates it when the shard should accept crossings.
 apiVersion: agones.dev/v1
 kind: GameServer
 metadata:
+  namespace: goathena
   name: goathena-boss-zone
   labels:
     app.kubernetes.io/name: goathena
@@ -19,7 +20,9 @@ metadata:
 spec:
   ports:
     - name: game
-      portPolicy: Static
+      # Dynamic, as in the Fleets: Agones picks an open host port and the
+      # shard advertises the one it was allocated.
+      portPolicy: Dynamic
       containerPort: 5121
       protocol: TCP
   health:
@@ -39,8 +42,13 @@ spec:
     spec:
       containers:
         - name: goathena
+          # The overlay pins the image to a release tag.
           image: ghcr.io/bouroo/goathena:latest
-          args: ["serve", "-config", "/config.yaml"]
+          args: ["serve", "-config", "/etc/goathena/config.yaml"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/goathena
+              readOnly: true
           env:
             - name: APP_ENVIRONMENT
               value: production
@@ -114,3 +122,7 @@ spec:
             runAsUser: 65532
             capabilities:
               drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: goathena-config

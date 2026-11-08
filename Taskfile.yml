@@ -247,6 +247,7 @@ tasks:
     cmds:
       - ./scripts/verify-k3s.sh dev
       - ./scripts/verify-k3s.sh prod
+      - ./scripts/verify-k3s.sh single
 
   verify-tier3:
     desc: Alias for verify-k3s — the Tier 3 counterpart of verify-tier1

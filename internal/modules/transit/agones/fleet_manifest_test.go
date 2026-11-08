@@ -22,6 +22,11 @@ import (
 // fleetManifestPath is the committed Agones Fleet manifest. The test walks up
 // from this package to the repo root so the path stays correct however the
 // package moves.
+//
+// It points at deploy/k3s/base/zone-fleet.yaml, the manifest the deployment
+// tier actually applies — not the older deploy/agones/ tree, which is not
+// applied by any overlay. A test that covers a manifest nobody deploys
+// leaves the deployed one unchecked.
 func fleetManifestPath(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()
@@ -29,7 +34,7 @@ func fleetManifestPath(t *testing.T) string {
 		t.Fatalf("getwd: %v", err)
 	}
 	root := filepath.Join(wd, "..", "..", "..", "..")
-	p := filepath.Join(root, "deploy", "agones", "fleet.yaml")
+	p := filepath.Join(root, "deploy", "k3s", "base", "zone-fleet.yaml")
 	if _, err := os.Stat(p); err != nil {
 		t.Fatalf("fleet manifest: %v", err)
 	}
@@ -121,11 +126,13 @@ func TestFleetManifest_MatchesDirectoryContract(t *testing.T) {
 		for _, p := range fleet.Spec.Template.Spec.Ports {
 			if p.Name == PortName {
 				haveGamePort = true
-				if p.PortPolicy != agonesv1.Static {
-					// The container binds GATEWAY_MAP_PORT at boot and is never
-					// told a dynamically assigned host port, so a Dynamic policy
-					// would redirect clients to a port nobody listens on.
-					t.Errorf("Fleet %q game port policy = %q, want Static (the process binds a fixed port)",
+				if p.PortPolicy != agonesv1.Dynamic {
+					// Dynamic is what lets a node carry several shards: Agones
+					// picks an open host port, and the shard advertises the
+					// one it was given (it reads the allocation from the
+					// sidecar at boot). A Static policy pins the host port
+					// to the container port, so only one shard fits per node.
+					t.Errorf("Fleet %q game port policy = %q, want Dynamic (the shard advertises its allocated port)",
 						fleet.Name, p.PortPolicy)
 				}
 				if p.ContainerPort != 5121 {
@@ -168,9 +175,17 @@ func TestFleetManifest_MapsResolveToZone(t *testing.T) {
 		gs.Status.Address = "10.0.0.1"
 		spec := fleet.Spec.Template.Spec
 		for _, p := range spec.Ports {
+			// Under a Dynamic policy the host port is Agones' choice and
+			// differs from the container port — which is the whole point:
+			// the zone must carry the port Agones assigned, not the one the
+			// container listens on.
+			hostPort := int32(p.ContainerPort)
+			if p.PortPolicy == agonesv1.Dynamic {
+				hostPort = 31000
+			}
 			gs.Status.Ports = append(gs.Status.Ports, agonesv1.GameServerStatusPort{
 				Name: p.Name,
-				Port: p.ContainerPort, // Static: host port == container port
+				Port: hostPort,
 			})
 		}
 		gs.Annotations = map[string]string{MapsAnnotation: fleet.Spec.Template.Annotations[MapsAnnotation]}
@@ -209,7 +224,7 @@ func gameServerManifestPath(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	p := filepath.Join(wd, "..", "..", "..", "..", "deploy", "agones", "gameserver.yaml")
+	p := filepath.Join(wd, "..", "..", "..", "..", "deploy", "k3s", "base", "single", "gameserver.yaml")
 	if _, err := os.Stat(p); err != nil {
 		t.Fatalf("gameserver manifest: %v", err)
 	}
@@ -242,8 +257,8 @@ func TestGameServerManifest_ValidatesAndMatchesContract(t *testing.T) {
 	for _, p := range gs.Spec.Ports {
 		if p.Name == PortName {
 			haveGamePort = true
-			if p.PortPolicy != agonesv1.Static {
-				t.Errorf("game port policy = %q, want Static", p.PortPolicy)
+			if p.PortPolicy != agonesv1.Dynamic {
+				t.Errorf("game port policy = %q, want Dynamic (the shard advertises its allocated port)", p.PortPolicy)
 			}
 			if p.ContainerPort != 5121 {
 				t.Errorf("game containerPort = %d, want 5121", p.ContainerPort)

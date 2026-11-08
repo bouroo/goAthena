@@ -1,0 +1,48 @@
+# goAthena Tier 3 — the single-shard overlay.
+#
+# One shard, no Fleet: a hand-allocated boss zone, a staging shard, a
+# smoke test. The Fleets in the base stay out of this overlay — the two
+# are alternatives, not additions.
+#
+# Apply:
+#   kubectl apply -k deploy/k3s/overlays/single
+#
+# The base's Services select on app.kubernetes.io/component=zone, so this
+# shard serves them exactly as a Fleets shard does.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: goathena
+
+resources:
+  - ../../base
+  - ../../base/single
+
+# The Fleets are replaced by the single GameServer, and their autoscalers
+# go with them: an autoscaler scales Fleets, and a Fleet that is not
+# deployed has nothing to scale.
+#
+# A strategic merge patch removes a resource with the `$patch: delete`
+# directive. One patch file per resource, because kustomize applies every
+# document in a patch file to every target listed for it.
+patches:
+  - path: patch-no-fleet-goathena-prontera.yaml
+    target:
+      kind: Fleet
+      name: goathena-prontera
+  - path: patch-no-fleet-goathena-geffen.yaml
+    target:
+      kind: Fleet
+      name: goathena-geffen
+  - path: patch-no-autoscaler-prontera-buffer.yaml
+    target:
+      kind: FleetAutoscaler
+      name: goathena-prontera-buffer
+  - path: patch-no-autoscaler-prontera-schedule.yaml
+    target:
+      kind: FleetAutoscaler
+      name: goathena-prontera-schedule
+  - path: patch-no-autoscaler-geffen-buffer.yaml
+    target:
+      kind: FleetAutoscaler
+      name: goathena-geffen-buffer

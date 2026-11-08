@@ -1,0 +1,5 @@
+apiVersion: agones.dev/v1
+kind: Fleet
+metadata:
+  name: goathena-geffen
+$patch: delete

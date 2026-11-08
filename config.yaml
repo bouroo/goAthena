@@ -67,8 +67,10 @@ zone:
     mode: local                     # local|agones|static
     # agones: resolve maps against Agones GameServers (K8s API; in-cluster
     # credentials, or KUBECONFIG for Swarm/workstation runs). Manifests:
-    # deploy/agones/{fleet,gameserver}.yaml. In a fleet pod set namespace,
-    # selector, and self_name — self_name is the pod's own GameServer name
+    # deploy/k3s/base/zone-fleet.yaml (the Fleets) and
+    # deploy/k3s/base/single/gameserver.yaml (the one-shard case). In a
+    # fleet pod set namespace, selector, and self_name — self_name is the
+    # pod's own GameServer name
     # (metadata.labels['agones.dev/gameserver'] via the downward API), so the
     # pod answers its own maps locally instead of redirecting to itself.
     # A non-local directory that cannot reach its source is a fatal boot error.
