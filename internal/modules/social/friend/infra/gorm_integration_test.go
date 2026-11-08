@@ -169,7 +169,7 @@ func TestFriend_GORMRoundTrip(t *testing.T) {
 
 	// Fill hero's list to the cap: the next add is the requester-full sentinel.
 	fillers := make([]uint32, 0, domain.MaxFriends)
-	for i := 0; i < domain.MaxFriends; i++ {
+	for i := range domain.MaxFriends {
 		fillers = append(fillers, insertChar(t, gdb, fmt.Sprintf("FriFiller%02d", i), false))
 	}
 	for _, filler := range fillers {

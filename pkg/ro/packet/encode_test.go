@@ -191,14 +191,14 @@ func TestAcceptLoginResponse_Encode_TwoCharServers(t *testing.T) {
 
 	// Assert the 17-byte token slot is present and zero-filled when empty.
 	tokenSlotStart := acceptHeaderSize - tokenSlot
-	for i := 0; i < tokenSlot; i++ {
+	for i := range tokenSlot {
 		if got[tokenSlotStart+i] != 0 {
 			t.Errorf("token slot byte %d = 0x%02x, want 0x00 (zero-fill when empty)", i, got[tokenSlotStart+i])
 		}
 	}
 	// And the last_login[26] slot is zero-filled too.
 	lastLoginSlotStart := acceptHeaderSize - tokenSlot - 1 - lastLoginSlot
-	for i := 0; i < lastLoginSlot; i++ {
+	for i := range lastLoginSlot {
 		if got[lastLoginSlotStart+i] != 0 {
 			t.Errorf("last_login slot byte %d = 0x%02x, want 0x00", i, got[lastLoginSlotStart+i])
 		}

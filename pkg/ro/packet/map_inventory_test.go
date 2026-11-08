@@ -57,7 +57,6 @@ func TestParseCZUseItem(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := ParseCZUseItem(tc.frame)
@@ -141,7 +140,6 @@ func TestParseCZReqWearEquip(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := ParseCZReqWearEquip(tc.frame)
@@ -224,7 +222,6 @@ func TestParseCZReqTakeoffEquip(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := ParseCZReqTakeoffEquip(tc.frame)

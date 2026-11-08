@@ -417,7 +417,7 @@ func drainAcceptEnterUntilCharCount(t *testing.T, conn net.Conn, n int) (chars [
 		total := (pktLen - 27) / 175
 		// First CharacterInfo block starts at body[23] (packet offset 27: 27 - 4 = 23).
 		// Each CharacterInfo is 175 bytes; GID is at byte offset 0 within each block.
-		for i := 0; i < total; i++ {
+		for i := range total {
 			gid := binary.LittleEndian.Uint32(body[23+i*175:])
 			chars = append(chars, gid)
 		}

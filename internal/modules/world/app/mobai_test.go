@@ -323,7 +323,7 @@ func TestMobAI_ChaseStopShort(t *testing.T) {
 	spawnChaser(t, spawn, 2, domain.Position{X: 50, Y: 50})
 	spawnPlayer(t, world, 1, 500, domain.Position{X: 53, Y: 50})
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		mobAI.MonsterTick(context.Background(), 400*time.Millisecond)
 	}
 
@@ -407,7 +407,7 @@ func TestMobAI_ChaseGridBounds(t *testing.T) {
 	spawnChaser(t, spawn, 2, domain.Position{X: 509, Y: 509})
 	spawnPlayer(t, world, 1, 500, domain.Position{X: 511, Y: 511}) // corner; Chebyshev dist 2
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		require.NotPanics(t, func() {
 			mobAI.MonsterTick(context.Background(), 400*time.Millisecond)
 		})

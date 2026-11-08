@@ -52,7 +52,7 @@ var validate = sync.OnceValue(func() *validator.Validate {
 
 // minDuration validates a time.Duration field is >= 1 second.
 func minDuration(fl validator.FieldLevel) bool {
-	d, ok := fl.Field().Interface().(time.Duration)
+	d, ok := reflect.TypeAssert[time.Duration](fl.Field())
 	return ok && d >= time.Second
 }
 

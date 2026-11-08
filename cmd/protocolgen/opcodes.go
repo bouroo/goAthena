@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,9 +80,7 @@ func resolveOpcodes(compiler, rathenaPath, srcDir string, v variant) (map[string
 	// The literal opcodes: the packets upstream writes without a header
 	// constant. They are the same in every client family, so they do not
 	// vary with the variant.
-	for name, value := range literals {
-		out[name] = value
-	}
+	maps.Copy(out, literals)
 	return out, nil
 }
 

@@ -95,7 +95,7 @@ func TestFindPath_LShapedPath(t *testing.T) {
 	t.Parallel()
 
 	g := openGrid(20, 20)
-	for y := 0; y < 19; y++ {
+	for y := range 19 {
 		g.set(10, y, false)
 	}
 	p := New(g)
@@ -251,7 +251,7 @@ func TestFindPath_ReusePathfinder(t *testing.T) {
 	g := openGrid(20, 20)
 	p := New(g)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		path, err := p.FindPath(Point{0, 0}, Point{19, 19})
 		require.NoError(t, err)
 		require.NotEmpty(t, path)
@@ -333,9 +333,9 @@ func TestFromMapData_Basic(t *testing.T) {
 	const w = 8
 	const h = 8
 	types := make([][]int, h)
-	for y := 0; y < h; y++ {
+	for y := range h {
 		types[y] = make([]int, w)
-		for x := 0; x < w; x++ {
+		for x := range w {
 			types[y][x] = 0
 		}
 	}
@@ -384,11 +384,11 @@ func buildGAT(t *testing.T, w, h int, types [][]int) []byte {
 	buf[12] = byte(h >> 16)
 	buf[13] = byte(h >> 24)
 	off := 14
-	for y := 0; y < h; y++ {
+	for y := range h {
 		if len(types[y]) != w {
 			t.Fatalf("types[%d] must have %d cols, got %d", y, w, len(types[y]))
 		}
-		for x := 0; x < w; x++ {
+		for x := range w {
 			off += 16
 			typ := uint32(types[y][x])
 			buf[off] = byte(typ)

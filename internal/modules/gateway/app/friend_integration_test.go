@@ -59,7 +59,7 @@ func buildFriendTestEnv(t *testing.T, port int) (net.Conn, net.Conn, *friendinfr
 // init-burst frames in between (variable-length, declared at offset 2).
 func readFriendFrame(t *testing.T, c net.Conn) (uint16, []byte) {
 	t.Helper()
-	for i := 0; i < 24; i++ {
+	for range 24 {
 		cmd, body, ok := readFrameSized(t, c)
 		if !ok {
 			continue // drained an init-burst frame; keep scanning.
@@ -250,7 +250,7 @@ func TestFriend_LoadEndAckRestoresList(t *testing.T) {
 	// Drain the init burst frame-by-frame until the friend list lands. The
 	// burst is: inventory start/lists/end, skill list, ZC_PARTY_CONFIG, then
 	// ZC_FRIENDS_LIST + ZC_FRIENDS_STATE per online friend.
-	for i := 0; i < 24; i++ {
+	for range 24 {
 		cmd, body := readFriendFrame(t, conn1)
 		switch cmd {
 		case ropacket.HeaderZCFRIENDSLIST():

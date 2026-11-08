@@ -14,7 +14,7 @@ func BenchmarkMoveEntity_SameTower(b *testing.B) {
 	const N = 1000
 	gm := NewGridManager(2000, 2000)
 	orig := make([]struct{ x, y int }, N)
-	for i := 0; i < N; i++ {
+	for i := range N {
 		orig[i] = struct{ x, y int }{(i * 7) % 2000, (i * 11) % 2000}
 		_ = gm.AddEntity(newEntity(EntityID(i+1), EntityPlayer, orig[i].x, orig[i].y))
 	}
@@ -53,7 +53,7 @@ func BenchmarkMoveEntity_SameTower(b *testing.B) {
 func BenchmarkMoveEntity_CrossTower(b *testing.B) {
 	const N = 1000
 	gm := NewGridManager(2000, 2000)
-	for i := 0; i < N; i++ {
+	for i := range N {
 		_ = gm.AddEntity(newEntity(EntityID(i+1), EntityPlayer, (i*18)%2000, (i*18)%2000))
 	}
 	rng := rand.New(rand.NewSource(1)) //nolint:gosec // deterministic bench seed
@@ -76,7 +76,7 @@ func BenchmarkQueryVisible(b *testing.B) {
 	const N = 1000
 	gm := NewGridManager(2000, 2000)
 	rng := rand.New(rand.NewSource(42)) //nolint:gosec // deterministic bench seed
-	for i := 0; i < N; i++ {
+	for i := range N {
 		// Cluster around (1000, 1000) so the query viewport sees most of them.
 		x := 1000 + rng.Intn(60) - 30
 		y := 1000 + rng.Intn(60) - 30
@@ -99,7 +99,7 @@ func BenchmarkQueryVisibleSqueezed(b *testing.B) {
 	gm := NewGridManager(2000, 2000)
 	// Cluster a crowd at (1000,1000) to trigger tier-1 squeeze, then
 	// scatter the rest of the entities across the map.
-	for i := 0; i < 600; i++ {
+	for i := range 600 {
 		x := 1000 + (i % 24)
 		y := 1000 + (i / 24)
 		_ = gm.AddEntity(newEntity(EntityID(i+1), EntityPlayer, x, y))

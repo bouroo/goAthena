@@ -25,7 +25,7 @@ func TestLoginRateLimiterBurstThenDeny(t *testing.T) {
 	if l == nil {
 		t.Fatal("limiter should not be nil for positive params")
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if !l.Allow("1.2.3.4") {
 			t.Errorf("attempt %d: want allow (burst)", i)
 		}
@@ -77,7 +77,7 @@ func TestLoginRateLimiterIndependentIPs(t *testing.T) {
 // rate limiting in config.
 func TestLoginRateLimiterNilAllowsAll(t *testing.T) {
 	var l *LoginRateLimiter // nil
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		if !l.Allow("1.1.1.1") {
 			t.Fatalf("nil limiter denied attempt %d", i)
 		}
