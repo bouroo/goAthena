@@ -232,6 +232,7 @@ func DefaultBuiltins() map[string]BuiltinFunc {
 		"announce":         builtinAnnounce, //nolint:goconst
 		"mapannounce":      builtinMapAnnounce,
 		"getiteminfo":      builtinGetItemInfo,
+		"openstorage":      builtinOpenStorage,
 	}
 }
 
@@ -433,4 +434,14 @@ func builtinGetItemInfo(vm *VM, args []Value) (Value, control) {
 		item = args[0]
 	}
 	return vm.host.ItemInfo(item, argInt(args, 1)), ctrlContinue
+}
+
+// builtinOpenStorage implements `openstorage` — the source's
+// BUILDIN_FUNC(openstorage) (src/map/script.cpp:10958), which calls
+// storage_storageopen on the dialog's player. The source takes no arguments
+// and pushes no result; the warehouse burst (the two item lists and the item
+// count) is sent by the storage side, not the VM.
+func builtinOpenStorage(vm *VM, _ []Value) (Value, control) {
+	vm.host.OpenStorage()
+	return NilVal(), ctrlContinue
 }

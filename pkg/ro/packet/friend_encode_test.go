@@ -15,8 +15,8 @@ func TestFriendsAddResponse_Encode(t *testing.T) {
 		t.Fatalf("encode: %v", err)
 	}
 	out := buf.Bytes()
-	if binary.LittleEndian.Uint16(out[0:]) != HeaderZCADDFRIENDS {
-		t.Errorf("cmd = 0x%04x, want 0x%04x", binary.LittleEndian.Uint16(out[0:]), HeaderZCADDFRIENDS)
+	if binary.LittleEndian.Uint16(out[0:]) != HeaderZCADDFRIENDS() {
+		t.Errorf("cmd = 0x%04x, want 0x%04x", binary.LittleEndian.Uint16(out[0:]), HeaderZCADDFRIENDS())
 	}
 	if result := int16(binary.LittleEndian.Uint16(out[2:])); result != FriendAddOK {
 		t.Errorf("result = %d, want 0", result)
@@ -33,15 +33,16 @@ func TestFriendsAddResponse_Encode(t *testing.T) {
 }
 
 // TestFriendsListResponse_Encode pins the ZC_FRIENDS_LIST (0x0201) variable
-// layout: entries are (AID, CID) pairs with NO name at PACKETVER >= 20180221
-// (packets.hpp:286-292), and the declared length covers the whole frame.
+// layout: entries are (AID, CID, name) triples — the source's
+// PACKET_ZC_FRIENDS_LIST_sub keeps the name for PACKETVER >= 20200902
+// (packets.hpp:286-292) — and the declared length covers the whole frame.
 func TestFriendsListResponse_Encode(t *testing.T) {
 	resp := FriendsListResponse{Friends: []FriendsListEntry{
-		{AID: 2000001, CID: 150001},
-		{AID: 2000002, CID: 150002},
+		{AID: 2000001, CID: 150001, Name: "Alpha"},
+		{AID: 2000002, CID: 150002, Name: "Beta"},
 	}}
-	if resp.Size() != 4+2*sizeZCFriendsListSub {
-		t.Fatalf("Size = %d, want %d", resp.Size(), 4+2*sizeZCFriendsListSub)
+	if resp.Size() != 4+2*sizeZCFriendsListSub() {
+		t.Fatalf("Size = %d, want %d", resp.Size(), 4+2*sizeZCFriendsListSub())
 	}
 	var buf bytes.Buffer
 	if err := resp.Encode(&buf); err != nil {
@@ -54,9 +55,14 @@ func TestFriendsListResponse_Encode(t *testing.T) {
 	if binary.LittleEndian.Uint32(out[4:]) != 2000001 || binary.LittleEndian.Uint32(out[8:]) != 150001 {
 		t.Errorf("entry 0 = (%d,%d)", binary.LittleEndian.Uint32(out[4:]), binary.LittleEndian.Uint32(out[8:]))
 	}
-	// 20180221 shape: entries are exactly 8 bytes — no name tail.
-	if len(out) != 4+2*8 {
-		t.Errorf("frame = %d bytes, want %d (AID+CID only)", len(out), 4+2*8)
+	// The source's PACKET_ZC_FRIENDS_LIST_sub carries the name for
+	// PACKETVER >= 20200902 (src/map/packets.hpp: the guard keeps
+	// char name[NAME_LENGTH] there), so an entry is 32 bytes.
+	if len(out) != 4+2*32 {
+		t.Errorf("frame = %d bytes, want %d (AID+CID+name)", len(out), 4+2*32)
+	}
+	if name := readNameField(out, 12, 24); name != "Alpha" {
+		t.Errorf("entry 0 name = %q, want %q", name, "Alpha")
 	}
 }
 

@@ -9,43 +9,68 @@ package packet
 // Only the minimum char-server surface required for Thai Classic
 // (PACKETVER 20250604) is registered here. The full character-info and
 // char-list encoders land in M2b alongside the gateway wiring.
-const (
-	// C→S — client → char server.
-	HeaderCHENTER      uint16 = 0x0065
-	HeaderCHSELECTCHAR uint16 = 0x0066
-	// CH_MAKE_CHAR: PACKETVER >= 20151001 branch (packets.hpp:122-132), the
-	// only branch active for Thai Classic (PACKETVER 20250604).
-	HeaderCHMAKECHAR uint16 = 0x0a39
-	// CH_DELETE_CHAR3_RESERVED: PACKETVER >= 20150513 (packets.hpp:471-476).
-	// Requests a deletion slot for a character.
-	HeaderCHDELETECHAR3RESERVED uint16 = 0x0827
-	// CH_DELETE_CHAR3: PACKETVER >= 20150513 (packets.hpp:481-486). Accepts
-	// deletion after birthdate confirmation.
-	HeaderCHDELETECHAR3 uint16 = 0x0829
-	// CH_DELETE_CHAR3_CANCEL: PACKETVER >= 20150513 (packets.hpp:491-496).
-	// Cancels a pending deletion slot.
-	HeaderCHDELETECHAR3CANCEL uint16 = 0x082b
 
-	// S→C — char server → client.
-	HeaderHCACCEPTENTER   uint16 = 0x006b
-	HeaderHCREFUSEENTER   uint16 = 0x006c
-	HeaderHCNOTIFYZONESVR uint16 = 0x0ac5
-	// HC_DELETE_CHAR3_RESERVED: PACKETVER >= 20150513 (packets.hpp:477-482).
-	// Server reply to CH_DELETE_CHAR3_RESERVED.
-	HeaderHCDELETECHAR3RESERVED uint16 = 0x0828
-	// HC_DELETE_CHAR3: PACKETVER >= 20150513 (packets.hpp:487-492).
-	// Server reply to CH_DELETE_CHAR3 (final delete confirm).
-	HeaderHCDELETECHAR3 uint16 = 0x082a
-	// HC_DELETE_CHAR3_CANCEL: PACKETVER >= 20150513 (packets.hpp:497-502).
-	// Server reply to CH_DELETE_CHAR3_CANCEL.
-	HeaderHCDELETECHAR3CANCEL uint16 = 0x082c
-	// HC_ACCEPT_MAKECHAR: PACKETVER_MAIN_NUM >= 20201007 (packets.hpp:259-264).
-	// 20250604 is on the MAIN path (src/config/packets.hpp:28; PACKETVER_RE is
-	// unset because 20250604 is outside the RE ranges), so the opcode is 0x0b6f,
-	// not the legacy 0x006d. Carries a single CHARACTER_INFO (no length prefix).
-	HeaderHCACCEPTMAKECHAR uint16 = 0x0b6f
-	HeaderHCREFUSEMAKECHAR uint16 = 0x006e
-)
+// C→S — client → char server.
+// HeaderCHENTER is the source pack's own opcode for this packet.
+func HeaderCHENTER() uint16 { return literalOpcode(0x0065) }
+
+// HeaderCHSELECTCHAR is the source pack's own opcode for this packet.
+func HeaderCHSELECTCHAR() uint16 { return opcode("CH_SELECT_CHAR") }
+
+// CH_MAKE_CHAR: PACKETVER >= 20151001 branch (packets.hpp:122-132), the
+// only branch active for Thai Classic (PACKETVER 20250604).
+// HeaderCHMAKECHAR is the source pack's own opcode for this packet.
+func HeaderCHMAKECHAR() uint16 { return opcode("CH_MAKE_CHAR") }
+
+// CH_DELETE_CHAR3_RESERVED: PACKETVER >= 20150513 (packets.hpp:471-476).
+// Requests a deletion slot for a character.
+// HeaderCHDELETECHAR3RESERVED is the source pack's own opcode for this packet.
+func HeaderCHDELETECHAR3RESERVED() uint16 { return opcode("CH_DELETE_CHAR3_RESERVED") }
+
+// CH_DELETE_CHAR3: PACKETVER >= 20150513 (packets.hpp:481-486). Accepts
+// deletion after birthdate confirmation.
+// HeaderCHDELETECHAR3 is the source pack's own opcode for this packet.
+func HeaderCHDELETECHAR3() uint16 { return opcode("CH_DELETE_CHAR3") }
+
+// CH_DELETE_CHAR3_CANCEL: PACKETVER >= 20150513 (packets.hpp:491-496).
+// Cancels a pending deletion slot.
+// HeaderCHDELETECHAR3CANCEL is the source pack's own opcode for this packet.
+func HeaderCHDELETECHAR3CANCEL() uint16 { return opcode("CH_DELETE_CHAR3_CANCEL") }
+
+// S→C — char server → client.
+// HeaderHCACCEPTENTER is the source pack's own opcode for this packet.
+func HeaderHCACCEPTENTER() uint16 { return opcode("HC_ACCEPT_ENTER") }
+
+// HeaderHCREFUSEENTER is the source pack's own opcode for this packet.
+func HeaderHCREFUSEENTER() uint16 { return opcode("HC_REFUSE_ENTER") }
+
+// HeaderHCNOTIFYZONESVR is the source pack's own opcode for this packet.
+func HeaderHCNOTIFYZONESVR() uint16 { return opcode("HC_NOTIFY_ZONESVR") }
+
+// HC_DELETE_CHAR3_RESERVED: PACKETVER >= 20150513 (packets.hpp:477-482).
+// Server reply to CH_DELETE_CHAR3_RESERVED.
+// HeaderHCDELETECHAR3RESERVED is the source pack's own opcode for this packet.
+func HeaderHCDELETECHAR3RESERVED() uint16 { return opcode("HC_DELETE_CHAR3_RESERVED") }
+
+// HC_DELETE_CHAR3: PACKETVER >= 20150513 (packets.hpp:487-492).
+// Server reply to CH_DELETE_CHAR3 (final delete confirm).
+// HeaderHCDELETECHAR3 is the source pack's own opcode for this packet.
+func HeaderHCDELETECHAR3() uint16 { return opcode("HC_DELETE_CHAR3") }
+
+// HC_DELETE_CHAR3_CANCEL: PACKETVER >= 20150513 (packets.hpp:497-502).
+// Server reply to CH_DELETE_CHAR3_CANCEL.
+// HeaderHCDELETECHAR3CANCEL is the source pack's own opcode for this packet.
+func HeaderHCDELETECHAR3CANCEL() uint16 { return opcode("HC_DELETE_CHAR3_CANCEL") }
+
+// HC_ACCEPT_MAKECHAR: PACKETVER_MAIN_NUM >= 20201007 (packets.hpp:259-264).
+// 20250604 is on the MAIN path (src/config/packets.hpp:28; PACKETVER_RE is
+// unset because 20250604 is outside the RE ranges), so the opcode is 0x0b6f,
+// not the legacy 0x006d. Carries a single CHARACTER_INFO (no length prefix).
+// HeaderHCACCEPTMAKECHAR is the source pack's own opcode for this packet.
+func HeaderHCACCEPTMAKECHAR() uint16 { return opcode("HC_ACCEPT_MAKECHAR") }
+
+// HeaderHCREFUSEMAKECHAR is the source pack's own opcode for this packet.
+func HeaderHCREFUSEMAKECHAR() uint16 { return opcode("HC_REFUSE_MAKECHAR") }
 
 // Fixed on-wire byte lengths derived from the packed struct layouts in
 // rathena/src/common/packets.hpp. Constants used:
@@ -55,32 +80,6 @@ const (
 // HC_NOTIFY_ZONESVR also carries a domain[] slot; rAthena declares it as a
 // char[128] in struct ZSMSG (char_clif.cpp / packets.hpp:290-299).
 const (
-	// sizeCHEnter = int16 cmd + uint32 AID + uint32 login_id1 +
-	// uint32 login_id2 + uint16 reserved + uint8 sex = 2+4+4+4+2+1 = 17
-	// (rathena/src/common/packets.hpp PACKET_CH_ENTER / char_clif.cpp:821-829).
-	// The 2 reserved bytes between login_id2 and sex are part of the
-	// packed struct and are ignored by the parser.
-	sizeCHEnter = 17
-	// sizeCHSelectChar = int16 cmd + uint8 slot = 2+1 = 3
-	// (rathena/src/common/packets.hpp:116-120).
-	sizeCHSelectChar = 3
-	// sizeCHMakeChar = int16 cmd + char name[24] + uint8 slot +
-	// uint16 hair_color + uint16 hair_style + uint32 job + uint8 sex
-	// = 2+24+1+2+2+4+1 = 36 (rathena/src/common/packets.hpp:123-132).
-	sizeCHMakeChar = 36
-	// sizeHCRefuseEnter = int16 packetType + uint8 error = 2+1 = 3
-	// (rathena/src/common/packets.hpp:253-257).
-	sizeHCRefuseEnter = 3
-	// sizeHCRefuseMakeChar = int16 packetType + uint8 error = 2+1 = 3
-	// (rathena/src/common/packets.hpp:273-277).
-	sizeHCRefuseMakeChar = 3
-	// sizeHCAcceptMakeChar = int16 packetType + one CHARACTER_INFO
-	// = 2 + 175 = 177 (rathena/src/common/packets.hpp:260-263).
-	sizeHCAcceptMakeChar = 2 + CharacterInfoSize
-	// sizeHCNotifyZone = int16 packetType + uint32 CID +
-	// char mapname[MAP_NAME_LENGTH_EXT] + uint32 ip + uint16 port +
-	// char domain[128] = 2+4+16+4+2+128 = 156.
-	sizeHCNotifyZone = 156
 	// sizeHCCharDeleteReserved = int16 packetType + uint32 CID +
 	// int32 result + uint32 date = 2+4+4+4 = 14.
 	sizeHCCharDeleteReserved = 14
@@ -99,6 +98,46 @@ const (
 	domainSlot = 128
 )
 
+// sizeCHEnter() = int16 cmd + uint32 AID + uint32 login_id1 +
+// uint32 login_id2 + uint16 reserved + uint8 sex = 2+4+4+4+2+1 = 17
+// (rathena/src/common/packets.hpp PACKET_CH_ENTER / char_clif.cpp:821-829).
+// The 2 reserved bytes between login_id2 and sex are part of the
+// packed struct and are ignored by the parser.
+// sizeCHEnter is the source pack's own length for this packet.
+func sizeCHEnter() int { return packetLengthOf(101) }
+
+// sizeCHSelectChar() = int16 cmd + uint8 slot = 2+1 = 3
+// (rathena/src/common/packets.hpp:116-120).
+// sizeCHSelectChar is the source pack's own length for this packet.
+func sizeCHSelectChar() int { return packetLengthOf(102) }
+
+// sizeCHMakeChar() = int16 cmd + char name[24] + uint8 slot +
+// uint16 hair_color + uint16 hair_style + uint32 job + uint8 sex
+// = 2+24+1+2+2+4+1 = 36 (rathena/src/common/packets.hpp:123-132).
+// sizeCHMakeChar is the source pack's own length for this packet.
+func sizeCHMakeChar() int { return layout("PACKET_CH_MAKE_CHAR") }
+
+// sizeHCRefuseEnter() = int16 packetType + uint8 error = 2+1 = 3
+// (rathena/src/common/packets.hpp:253-257).
+// sizeHCRefuseEnter is the source pack's own length for this packet.
+func sizeHCRefuseEnter() int { return packetLengthOf(108) }
+
+// sizeHCRefuseMakeChar() = int16 packetType + uint8 error = 2+1 = 3
+// (rathena/src/common/packets.hpp:273-277).
+// sizeHCRefuseMakeChar is the source pack's own length for this packet.
+func sizeHCRefuseMakeChar() int { return packetLengthOf(110) }
+
+// sizeHCAcceptMakeChar() = int16 packetType + one CHARACTER_INFO
+// = 2 + 175 = 177 (rathena/src/common/packets.hpp:260-263).
+// sizeHCAcceptMakeChar is the source pack's own length for this packet.
+func sizeHCAcceptMakeChar() int { return layout("PACKET_HC_ACCEPT_MAKECHAR") }
+
+// sizeHCNotifyZone() = int16 packetType + uint32 CID +
+// char mapname[MAP_NAME_LENGTH_EXT] + uint32 ip + uint16 port +
+// char domain[128] = 2+4+16+4+2+128 = 156.
+// sizeHCNotifyZone is the source pack's own length for this packet.
+func sizeHCNotifyZone() int { return layout("PACKET_HC_NOTIFY_ZONESVR") }
+
 // NewCharServerDB returns a packet database pre-populated with all known
 // char-server packet definitions for Thai Classic (PACKETVER 20250604).
 //
@@ -116,29 +155,29 @@ func NewCharServerDB() *DB {
 
 	// --- C→S: client → char server.
 	db.Register(Definition{
-		ID:        HeaderCHENTER,
+		ID:        HeaderCHENTER(),
 		Name:      "CH_ENTER",
-		Length:    sizeCHEnter,
+		Length:    sizeCHEnter(),
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCHSELECTCHAR,
+		ID:        HeaderCHSELECTCHAR(),
 		Name:      "CH_SELECT_CHAR",
-		Length:    sizeCHSelectChar,
+		Length:    sizeCHSelectChar(),
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCHMAKECHAR,
+		ID:        HeaderCHMAKECHAR(),
 		Name:      "CH_MAKE_CHAR",
-		Length:    sizeCHMakeChar,
+		Length:    sizeCHMakeChar(),
 		Direction: DirectionClientToServer,
 	})
 
 	// --- S→C: char server → client.
 	db.Register(Definition{
-		ID:        HeaderHCREFUSEENTER,
+		ID:        HeaderHCREFUSEENTER(),
 		Name:      "HC_REFUSE_ENTER",
-		Length:    sizeHCRefuseEnter,
+		Length:    sizeHCRefuseEnter(),
 		Direction: DirectionServerToClient,
 	})
 	// HC_ACCEPT_ENTER (packets.hpp:283-288) carries the char_id+auth_code
@@ -147,45 +186,45 @@ func NewCharServerDB() *DB {
 	// ships in M2b; registration here is required so the gateway codec
 	// can hand the variable-length frame to whatever parses it.
 	db.Register(Definition{
-		ID:        HeaderHCACCEPTENTER,
+		ID:        HeaderHCACCEPTENTER(),
 		Name:      "HC_ACCEPT_ENTER",
 		Length:    VariableLength,
 		Direction: DirectionServerToClient,
 	})
 	db.Register(Definition{
-		ID:        HeaderHCNOTIFYZONESVR,
+		ID:        HeaderHCNOTIFYZONESVR(),
 		Name:      "HC_NOTIFY_ZONESVR",
-		Length:    sizeHCNotifyZone,
+		Length:    sizeHCNotifyZone(),
 		Direction: DirectionServerToClient,
 	})
 	// HC_ACCEPT_MAKECHAR (packets.hpp:259-264) carries cmd + one CHARACTER_INFO
 	// (no length prefix). HC_REFUSE_MAKECHAR (packets.hpp:273-277) is cmd + error.
 	db.Register(Definition{
-		ID:        HeaderHCACCEPTMAKECHAR,
+		ID:        HeaderHCACCEPTMAKECHAR(),
 		Name:      "HC_ACCEPT_MAKECHAR",
-		Length:    sizeHCAcceptMakeChar,
+		Length:    sizeHCAcceptMakeChar(),
 		Direction: DirectionServerToClient,
 	})
 	db.Register(Definition{
-		ID:        HeaderHCREFUSEMAKECHAR,
+		ID:        HeaderHCREFUSEMAKECHAR(),
 		Name:      "HC_REFUSE_MAKECHAR",
-		Length:    sizeHCRefuseMakeChar,
+		Length:    sizeHCRefuseMakeChar(),
 		Direction: DirectionServerToClient,
 	})
 	db.Register(Definition{
-		ID:        HeaderHCDELETECHAR3RESERVED,
+		ID:        HeaderHCDELETECHAR3RESERVED(),
 		Name:      "HC_DELETE_CHAR3_RESERVED",
 		Length:    sizeHCCharDeleteReserved,
 		Direction: DirectionServerToClient,
 	})
 	db.Register(Definition{
-		ID:        HeaderHCDELETECHAR3,
+		ID:        HeaderHCDELETECHAR3(),
 		Name:      "HC_DELETE_CHAR3",
 		Length:    sizeHCCharDelete,
 		Direction: DirectionServerToClient,
 	})
 	db.Register(Definition{
-		ID:        HeaderHCDELETECHAR3CANCEL,
+		ID:        HeaderHCDELETECHAR3CANCEL(),
 		Name:      "HC_DELETE_CHAR3_CANCEL",
 		Length:    sizeHCCharDeleteCancel,
 		Direction: DirectionServerToClient,

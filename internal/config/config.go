@@ -173,9 +173,43 @@ type ZoneConfig struct {
 	DBPath             string        `yaml:"db_path"             env:"ZONE_DB_PATH"`
 	ScriptPath         string        `yaml:"script_path"         env:"ZONE_SCRIPT_PATH"` // NPC .txt files (single file or directory); empty = dev catalog only
 	CheckpointInterval time.Duration `yaml:"checkpoint_interval" env:"ZONE_CHECKPOINT_INTERVAL" validate:"min_duration"`
+	// ClientSource names the source pack the wire protocol comes from:
+	// "thailand" (rAthena-Thailand/rathenaThailand) or "upstream"
+	// (rathena/rathena master).
+	ClientSource string `yaml:"client_source"      env:"ZONE_CLIENT_SOURCE"      validate:"oneof=thailand upstream"`
+	// ClientVariant names the client family within the source pack:
+	// "main" (the modern client) or "re" (the ragexeRE client).
+	ClientVariant string `yaml:"client_variant"     env:"ZONE_CLIENT_VARIANT"     validate:"oneof=main re"`
 	// Directory routes cross-zone handoff (M12/M13): how this process finds
 	// the zone serving a destination map.
 	Directory ZoneDirectoryConfig `yaml:"directory"`
+}
+
+// sourcePackPaths are the reference-data and script roots of each source
+// pack, relative to the repository root.
+var sourcePackPaths = map[string]struct{ db, script string }{
+	"thailand": {db: "third_party/rathenaThailand/db", script: "third_party/rathenaThailand/npc"},
+	"upstream": {db: "third_party/rathena/db", script: "third_party/rathena/npc"},
+}
+
+// resolveSourcePackPaths fills the empty reference-data and script paths
+// from the source pack the zone serves.
+//
+// The reference data and the NPC corpus belong to the source pack: the Thai
+// fork's db/pre-re tree and its 1209 script files are not upstream's 1138.
+// So an unset path follows client_source, and an explicitly configured path
+// wins — an operator pointing at a custom corpus keeps it.
+func (z *ZoneConfig) resolveSourcePackPaths() {
+	paths, ok := sourcePackPaths[z.ClientSource]
+	if !ok {
+		return
+	}
+	if z.DBPath == "" {
+		z.DBPath = paths.db
+	}
+	if z.ScriptPath == "" {
+		z.ScriptPath = paths.script
+	}
 }
 
 // ZoneDirectoryConfig selects the transit MapDirectory implementation.
@@ -240,6 +274,10 @@ func Load(path string) (*Config, error) {
 	if err := applyEnv(cfg); err != nil {
 		return nil, fatal(fmt.Errorf("apply env: %w", err))
 	}
+
+	// The reference-data and script paths follow the source pack the zone
+	// serves, unless the configuration names them explicitly.
+	cfg.Zone.resolveSourcePackPaths()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
@@ -280,7 +318,8 @@ func defaults() *Config {
 		},
 		Identity: IdentityConfig{UseMD5Passwords: true, MaxChars: 9},
 		Zone: ZoneConfig{
-			TickRateHz: 50, ViewRangeCells: 20, DBPath: "db", CheckpointInterval: 5 * time.Minute,
+			TickRateHz: 50, ViewRangeCells: 20, CheckpointInterval: 5 * time.Minute,
+			ClientSource: "thailand", ClientVariant: "re",
 			Directory: ZoneDirectoryConfig{Mode: "local", Namespace: "default"},
 		},
 		Log:  LogConfig{Level: "info", Format: "json"},

@@ -41,7 +41,7 @@ type wireEntry struct {
 
 // entryStride returns the per-entry byte width for the given list opcode.
 func entryStride(cmd uint16) int {
-	if cmd == ropacket.HeaderZCINVENTORYITEMLISTEQUIP {
+	if cmd == ropacket.HeaderZCINVENTORYITEMLISTEQUIP() {
 		return 57
 	}
 	return 26
@@ -56,7 +56,7 @@ func readInventoryList(t *testing.T, r io.Reader) (uint16, []wireEntry) {
 		t.Fatalf("read inventory list header: %v", err)
 	}
 	cmd := binary.LittleEndian.Uint16(hdr[0:2])
-	if cmd != ropacket.HeaderZCINVENTORYITEMLISTNORMAL && cmd != ropacket.HeaderZCINVENTORYITEMLISTEQUIP {
+	if cmd != ropacket.HeaderZCINVENTORYITEMLISTNORMAL() && cmd != ropacket.HeaderZCINVENTORYITEMLISTEQUIP() {
 		t.Fatalf("inventory list cmd = 0x%04x, want 0x0b09 or 0x0b39", cmd)
 	}
 	total := int(binary.LittleEndian.Uint16(hdr[2:4]))
@@ -151,7 +151,7 @@ func TestMap_EnterShowsOwnedInventory(t *testing.T) {
 	}
 
 	cmd, normal := readInventoryList(t, conn)
-	if cmd != ropacket.HeaderZCINVENTORYITEMLISTNORMAL {
+	if cmd != ropacket.HeaderZCINVENTORYITEMLISTNORMAL() {
 		t.Fatalf("first list cmd = 0x%04x, want NORMAL (0x0b09)", cmd)
 	}
 	if len(normal) != 2 {
@@ -167,7 +167,7 @@ func TestMap_EnterShowsOwnedInventory(t *testing.T) {
 	}
 
 	cmd, equipped := readInventoryList(t, conn)
-	if cmd != ropacket.HeaderZCINVENTORYITEMLISTEQUIP {
+	if cmd != ropacket.HeaderZCINVENTORYITEMLISTEQUIP() {
 		t.Fatalf("second list cmd = 0x%04x, want EQUIP (0x0b39)", cmd)
 	}
 	if len(equipped) != 1 {
@@ -212,7 +212,7 @@ func TestMap_ClientIndexAddressesSameRow(t *testing.T) {
 	// CZ_USE_ITEM2 (0x0439, 8B): cmd + index + AID. Send the index the client
 	// would have learned for row 2.
 	req := make([]byte, 8)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSEITEM2)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSEITEM2())
 	binary.LittleEndian.PutUint16(req[2:], clientIdx)
 	binary.LittleEndian.PutUint32(req[4:], 150001)
 	if _, err := conn.Write(req); err != nil {
@@ -303,7 +303,7 @@ func TestMap_EquipAckCarriesItemDBView(t *testing.T) {
 func wearAndReadAck(t *testing.T, conn net.Conn, serverRow int, position uint32) []byte {
 	t.Helper()
 	req := make([]byte, 8)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZREQWEAREQUIPV5)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZREQWEAREQUIPV5())
 	binary.LittleEndian.PutUint16(req[2:], ropacket.ClientIndex(uint16(serverRow))) //nolint:gosec // G115: test-local row index
 	binary.LittleEndian.PutUint32(req[4:], position)
 	if _, err := conn.Write(req); err != nil {

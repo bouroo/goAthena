@@ -503,6 +503,18 @@ fan-out, or individual entity mutations. Per-frame spans on those would swamp
 the exporter and cost more than the loop they measure; the frame span already
 brackets them, so a slow tick shows up as a slow frame.
 
+### M15 — The Thai fork as the primary target
+
+| Item | Evidence | Status |
+|---|---|---|
+| Source pack as the protocol authority | `pkg/ro/protocol`, `pkg/ro/packet/resolve.go`, [ADR 0004](adr/0004-source-pack-is-the-protocol-authority.md) | ✅ — every opcode and wire length resolves from the installed source pack at boot; nothing is a fork-dependent constant. The port of the Thai fork onto `develop` found ≈15 wire values the branch had hand-derived wrongly (frame lengths, field offsets, and opcodes), all corrected against the source's own tables. |
+| Source-aware generator | `cmd/protocolgen` (`-source thailand|upstream`), `pkg/ro/protocol/generated/{thailand,upstream}/` | ✅ — the generator compiles the source's registration headers and emits the resolved table and the registration order, per source pack. |
+| Operator-selected source pack | `client_source` / `client_variant` in `config.yaml` + `ZONE_CLIENT_SOURCE` / `ZONE_CLIENT_VARIANT` | ✅ — the boot installs the set the configuration names (`cmd/goathena`'s `installProtocol`). |
+| Reference data follows the source pack | `internal/config`'s `resolveSourcePackPaths` | ✅ — an unset `db_path` / `script_path` points at the selected source pack's `db/` and `npc/`; an explicit path wins. |
+| Thai-only schema | `internal/infrastructure/db/migrations/*/000012_vip_storage.*.sql` | ✅ — the fork's `vip_storage` table, for both drivers. |
+| Both script corpora compile | `internal/modules/content/corpus_integration_test.go` | ✅ — the fork's 1209 scripts and upstream's 1138 both compile (77/72 dialog scripts, 9308/9304 spawns). |
+| The warehouse speaks the source's protocol | `pkg/ro/packet/storage.go`, `internal/modules/gateway/app/dispatch.go` | ✅ — the source's kafra moves (0x0364 / 0x0365) and close (0x0193), the source's item-list packets (0xb09 / 0xb39 with the invType byte), and the source's delete/count notices. The branch had invented a 0x07e3-0x07eb range the source does not have. |
+
 ---
 
 ## 3. Commit / push cadence

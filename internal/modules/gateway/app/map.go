@@ -36,7 +36,7 @@ import (
 )
 
 // czEnterSize is the wire length of CZ_ENTER (0x0072): 2 cmd + 4 AID + 4 GID +
-// 4 authCode + 4 clientTime + 1 sex = 19. Matches pkg/ro/packet sizeCZEnter.
+// 4 authCode + 4 clientTime + 1 sex = 19. Matches pkg/ro/packet sizeCZEnter().
 const czEnterSize = 19
 
 // mapRefuseRejected mirrors rAthena REFUSE_ENTER_REJECTED (0).
@@ -194,6 +194,18 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 		friendReqs:   make(map[uint32]pendingFriendReq),
 		guildInvites: make(map[uint32]pendingGuildInvite),
 		mailStaging:  make(map[uint32]mailStaging),
+	}
+	// The source registers one handler under each client build's opcode and
+	// its runtime keeps them all, so a client may send any of them. The
+	// dispatch table names one opcode per handler; the rest are registered
+	// here so the server accepts the same set the source does.
+	for opcode, handler := range s.handlers {
+		for _, alt := range ropacket.ClientVariantOpcodes(opcode) {
+			if _, ok := s.handlers[alt]; ok {
+				continue
+			}
+			s.handlers[alt] = handler
+		}
 	}
 	// Regen advances server-side on the world tick loop; this sink bridges the
 	// changed vitals back to the player's client as ZC_PAR_CHANGE (mirrors the

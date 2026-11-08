@@ -13,6 +13,7 @@ the decision was made and is not updated as status changes.
 | [0001](0001-single-packetver-thai-classic.md) | Target a single PACKETVER (Thai Classic 20250604), not multi-client | Accepted |
 | [0002](0002-conn-context-auth-on-eventloop.md) | Cache and resolve per-connection auth on the gnet eventloop | Accepted |
 | [0003](0003-data-file-fault-tolerance.md) | Tolerate (don't abort on) rAthena data-file quirks at load time | Accepted |
+| [0004](0004-source-pack-is-the-protocol-authority.md) | The source pack is the authority: resolve opcodes from the source's runtime table | Accepted |
 
 ## Format
 

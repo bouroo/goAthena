@@ -50,7 +50,18 @@ identity:
 zone:
   tick_rate_hz: 50                  # 20ms game loop (matches rAthena)
   view_range_cells: 20              # AOI visibility radius
-  db_path: third_party/rathenaThailand/db   # load real pre-re mobs/items/skills from the submodule
+  # The reference data (mobs, items, skills) and the NPC corpus belong to the
+  # source pack: the Thai fork's db/pre-re tree and its 1209 script files are
+  # not upstream's 1138. Leaving these unset points them at the source pack
+  # named by client_source below; set them to override.
+  # db_path: third_party/rathenaThailand/db
+  # script_path: third_party/rathenaThailand/npc
+  # The wire protocol comes from a source pack and a client family. The
+  # Thai fork is the primary target; upstream master is the compatibility
+  # set. The client family is "re" (ragexeRE) or "main" (the modern
+  # client); each source pack declares its packet headers per family.
+  client_source: thailand              # thailand|upstream
+  client_variant: re                   # re|main
 
   directory:                        # cross-zone handoff routing (M12/M13)
     mode: local                     # local|agones|static

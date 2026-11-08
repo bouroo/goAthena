@@ -12,62 +12,69 @@ import (
 // Scope note: this slice covers the social core — create, info, roster,
 // invite/reply, leave, expel, break, chat, login-state. Positions, emblems,
 // alliances, castles, and skills are follow-ups (each its own commit).
-const (
-	// C→S opcodes (clif_packetdb.hpp:150-159).
-	HeaderCZREQLEAVEGUILD      uint16 = 0x0159 // CZ_REQ_LEAVE_GUILD — clif_parse_GuildLeave
-	HeaderCZREQBANGUILD        uint16 = 0x015b // CZ_REQ_BAN_GUILD — clif_parse_GuildExpulsion
-	HeaderCZREQDISORGANIZEGILD uint16 = 0x015d // CZ_REQ_DISORGANIZE_GUILD — clif_parse_GuildBreak
-	HeaderCZCREATEGUILD        uint16 = 0x0165 // CZ_REQ_MAKE_GUILD — clif_parse_CreateGuild
-	HeaderCZREQJOINGUILD       uint16 = 0x0168 // CZ_REQ_JOIN_GUILD — clif_parse_GuildInvite
-	HeaderCZJOINGUILD          uint16 = 0x016b // CZ_JOIN_GUILD — clif_parse_GuildReplyInvite
-	HeaderCZGUILDCHAT          uint16 = 0x017e // CZ_GUILD_CHAT — clif_parse_GuildMessage
-	// S→C opcodes.
-	HeaderZCGUILDCHAT       uint16 = 0x017f // ZC_GUILD_CHAT (packets.hpp:867)
-	HeaderZCREQUESTMAKEGILD uint16 = 0x0167 // ZC_RESULT_MAKE_GUILD (packets.hpp:1300)
-	HeaderZCREQJOINGUILD    uint16 = 0x016a // ZC_REQ_JOIN_GUILD (packets.hpp:1320)
-	HeaderZCACKRQJOINGUILD  uint16 = 0x0169 // ZC_ACK_REQ_JOIN_GUILD (packets.hpp:1313)
-	HeaderZCUPDATEGDID      uint16 = 0x02f7 // ZC_UPDATE_GDID (packets_struct.hpp:5378 branch, >=20220216; 0x016c before)
-	HeaderZCUPDATECHARSTAT  uint16 = 0x016d // ZC_UPDATE_CHARSTAT (clif.cpp:8682 memberlogin)
-	HeaderZCACKLEAVEGUILD   uint16 = 0x015a // ZC_ACK_LEAVE_GUILD v2 (packets_struct.hpp:3686, >=20161019)
-	HeaderZCACKBANGUILD     uint16 = 0x015c // ZC_ACK_BAN_GUILD v3 (packets_struct.hpp:3668, >=20161019)
-	HeaderZCACKDISORGGUILD  uint16 = 0x015e // ZC_ACK_DISORGANIZE_GUILD_RESULT (packets.hpp:1293)
-	HeaderZCACKMENUGUILD    uint16 = 0x014e // ZC_ACK_GUILD_MENUINTERFACE (packets.hpp:842)
-	HeaderZCGUILDINFO       uint16 = 0x0b7b // ZC_GUILD_INFO (packets_struct.hpp:4809 branch, >=20200902)
-	HeaderZCMEMBERMGRINFO   uint16 = 0x0b7d // ZC_MEMBERMGR_INFO (packets_struct.hpp:4759 branch, >=20200902)
-)
+
+// C→S opcodes (clif_packetdb.hpp:150-159).
+// HeaderCZREQLEAVEGUILD is the source pack's own opcode for this packet.
+func HeaderCZREQLEAVEGUILD() uint16 { return opcode("CZ_REQ_LEAVE_GUILD") }
+
+// HeaderCZREQBANGUILD is the source pack's own opcode for this packet.
+func HeaderCZREQBANGUILD() uint16 { return opcode("CZ_REQ_BAN_GUILD") }
+
+// HeaderCZREQDISORGANIZEGILD is the source pack's own opcode for this packet.
+func HeaderCZREQDISORGANIZEGILD() uint16 { return opcode("CZ_REQ_DISORGANIZE_GUILD") }
+
+// HeaderCZCREATEGUILD is the source pack's own opcode for this packet.
+func HeaderCZCREATEGUILD() uint16 {
+	return opcodeForHandler("clif_parse_CreateGuild", sizeCZCreateGuild(), []int{2, 6})
+}
+
+// HeaderCZREQJOINGUILD is the source pack's own opcode for this packet.
+func HeaderCZREQJOINGUILD() uint16 { return opcode("CZ_REQ_JOIN_GUILD") }
+
+// HeaderCZJOINGUILD is the source pack's own opcode for this packet.
+func HeaderCZJOINGUILD() uint16 { return opcode("CZ_JOIN_GUILD") }
+
+// HeaderCZGUILDCHAT is the source pack's own opcode for this packet.
+func HeaderCZGUILDCHAT() uint16 {
+	return opcodeForHandler("clif_parse_GuildMessage", -1, []int{2, 4})
+}
+
+// S→C opcodes.
+// HeaderZCGUILDCHAT is the source pack's own opcode for this packet.
+func HeaderZCGUILDCHAT() uint16 { return opcode("ZC_GUILD_CHAT") }
+
+// HeaderZCREQUESTMAKEGILD is the source pack's own opcode for this packet.
+func HeaderZCREQUESTMAKEGILD() uint16 { return opcode("ZC_RESULT_MAKE_GUILD") }
+
+// HeaderZCREQJOINGUILD is the source pack's own opcode for this packet.
+func HeaderZCREQJOINGUILD() uint16 { return opcode("ZC_REQ_JOIN_GUILD") }
+
+// HeaderZCACKRQJOINGUILD is the source pack's own opcode for this packet.
+func HeaderZCACKRQJOINGUILD() uint16 { return opcode("ZC_ACK_REQ_JOIN_GUILD") }
+
+// HeaderZCUPDATEGDID is the source pack's own opcode for this packet.
+func HeaderZCUPDATEGDID() uint16 { return opcode("ZC_UPDATE_GDID") }
+
+// HeaderZCACKLEAVEGUILD is the source pack's own opcode for this packet.
+func HeaderZCACKLEAVEGUILD() uint16 { return opcode("guildLeave") }
+
+// HeaderZCACKBANGUILD is the source pack's own opcode for this packet.
+func HeaderZCACKBANGUILD() uint16 { return opcode("guildExpulsion") }
+
+// HeaderZCACKDISORGGUILD is the source pack's own opcode for this packet.
+func HeaderZCACKDISORGGUILD() uint16 { return opcode("ZC_ACK_DISORGANIZE_GUILD_RESULT") }
+
+// HeaderZCACKMENUGUILD is the source pack's own opcode for this packet.
+func HeaderZCACKMENUGUILD() uint16 { return opcode("ZC_ACK_GUILD_MENUINTERFACE") }
+
+// HeaderZCGUILDINFO is the source pack's own opcode for this packet.
+func HeaderZCGUILDINFO() uint16 { return opcode("ZC_GUILD_INFO") }
+
+// HeaderZCMEMBERMGRINFO is the source pack's own opcode for this packet.
+func HeaderZCMEMBERMGRINFO() uint16 { return opcode("ZC_MEMBERMGR_INFO") }
 
 // On-wire byte sizes.
 const (
-	// CZ_REQ_MAKE_GUILD: int16 cmd + uint32 char id + char name[24]
-	// (clif_packetdb.hpp:156 "0x0165,30"; clif.cpp:14258 — the char id is
-	// read but unused, the session supplies the identity).
-	sizeCZCreateGuild = 30
-	// CZ_REQ_LEAVE_GUILD: cmd + guild_id + AID + CID + message[40] = 52.
-	sizeCZGuildLeave = 52
-	// CZ_REQ_BAN_GUILD: same shape as leave = 52.
-	sizeCZGuildBan = 52
-	// CZ_REQ_DISORGANIZE_GUILD: cmd + key[40] = 44 (packets.hpp:1284).
-	sizeCZGuildBreak = 44
-	// CZ_REQ_JOIN_GUILD: cmd + AID + inviter_AID + inviter_CID = 14
-	// (packets.hpp:1302).
-	sizeCZReqJoinGuild = 14
-	// CZ_JOIN_GUILD: cmd + guild_id + answer = 10 (packets.hpp:1323).
-	sizeCZJoinGuild = 10
-	// CZ_GUILD_CHAT: cmd + message[≤98] variable — dispatch uses fixed 100
-	// (clif_packetdb.hpp binds 0x017e as -1 variable; the handler reads to
-	// frame end). Handlers use the var-length path, so no fixed size const.
-	// ZC_GUILD_CHAT: cmd + len + message[].
-	sizeZCGuildChatHeader = 4
-	// ZC_RESULT_MAKE_GUILD: cmd + result = 3.
-	sizeZCResultMakeGuild = 3
-	// ZC_REQ_JOIN_GUILD: cmd + guild_id + guild name[24] = 30.
-	sizeZCReqJoinGuild = 30
-	// ZC_ACK_REQ_JOIN_GUILD: cmd + result = 3.
-	sizeZCAckReqJoinGuild = 3
-	// ZC_UPDATE_GDID: cmd + guildId + emblemVersion + mode + isMaster +
-	// interSid + guild name[24] + masterGID = 47 (packets_struct.hpp,
-	// masterGID active PACKETVER_MAIN_NUM >= 20220216).
-	sizeZCUpdateGDID = 47
 	// ZC_UPDATE_CHARSTAT: cmd + aid + cid + status = 14 (clif.cpp:8682).
 	sizeZCUpdateCharStat = 14
 	// ZC_ACK_LEAVE_GUILD v2: cmd + GID + reason[40] = 46
@@ -76,26 +83,85 @@ const (
 	// ZC_ACK_BAN_GUILD v3: cmd + reason[40] + GID = 46
 	// (packets_struct.hpp:3668).
 	sizeZCAckBanGuild = 46
-	// ZC_ACK_DISORGANIZE_GUILD_RESULT: cmd + result(int32) = 6
-	// (packets.hpp:1293 result is int32).
-	sizeZCAckDisorgGuild = 6
-	// ZC_ACK_GUILD_MENUINTERFACE: cmd + flag(uint32, is master) = 6
-	// (clif.cpp:8762 clif_guild_masterormember).
-	sizeZCAckMenuInterface = 6
-	// ZC_GUILD_INFO at >=20200902 (packets_struct.hpp:4809): cmd(2) + GDID(4)
-	// + level(4) + userNum(4) + maxUserNum(4) + userAverageLevel(4) + exp(4)
-	// + maxExp(4) + point(4) + honor(4) + virtue(4) + emblemVersion(4) +
-	// guildname(24) + manageLand(16) + zeny(4) + masterGID(4) +
-	// masterName(24) = 118.
-	sizeZCGuildInfo = 118
-	// GUILD_MEMBER_INFO at >=20200902 (packets_struct.hpp:4745): AID(4) +
-	// GID(4) + head(2) + headPalette(2) + sex(2) + job(2) + level(2) +
-	// contributionExp(4) + currentState(4) + positionID(4) +
-	// lastLoginTime(4) + char_name(24) = 58.
-	sizeZCGuildMemberInfo = 58
-	// ZC_MEMBERMGR_INFO header: cmd(2) + packetLength(2).
-	sizeZCMemberMgrHeader = 4
 )
+
+// CZ_REQ_MAKE_GUILD: int16 cmd + uint32 char id + char name[24]
+// (clif_packetdb.hpp:156 "0x0165,30"; clif.cpp:14258 — the char id is
+// read but unused, the session supplies the identity).
+// sizeCZCreateGuild is the source pack's own length for this packet.
+func sizeCZCreateGuild() int { return packetLengthOf(357) }
+
+// CZ_REQ_LEAVE_GUILD: cmd + guild_id + AID + CID + message[40] = 52.
+// sizeCZGuildLeave is the source pack's own length for this packet.
+func sizeCZGuildLeave() int { return layout("PACKET_CZ_REQ_LEAVE_GUILD") }
+
+// CZ_REQ_BAN_GUILD: same shape as leave = 52.
+// CZ_REQ_DISORGANIZE_GUILD: cmd + key[40] = 44 (packets.hpp:1284).
+// sizeCZGuildBreak is the source pack's own length for this packet.
+func sizeCZGuildBreak() int { return layout("PACKET_CZ_REQ_DISORGANIZE_GUILD") }
+
+// CZ_REQ_JOIN_GUILD: cmd + AID + inviter_AID + inviter_CID = 14
+// (packets.hpp:1302).
+// sizeCZReqJoinGuild is the source pack's own length for this packet.
+func sizeCZReqJoinGuild() int { return packetLengthOf(360) }
+
+// CZ_JOIN_GUILD: cmd + guild_id + answer = 10 (packets.hpp:1323).
+// sizeCZJoinGuild is the source pack's own length for this packet.
+func sizeCZJoinGuild() int { return packetLengthOf(363) }
+
+// CZ_GUILD_CHAT: cmd + message[≤98] variable — dispatch uses fixed 100
+// (clif_packetdb.hpp binds 0x017e as -1 variable; the handler reads to
+// frame end). Handlers use the var-length path, so no fixed size const.
+// ZC_GUILD_CHAT: cmd + len + message[].
+// sizeZCGuildChatHeader is the source pack's own length for this packet.
+func sizeZCGuildChatHeader() int { return layout("PACKET_ZC_GUILD_CHAT") }
+
+// ZC_RESULT_MAKE_GUILD: cmd + result = 3.
+// sizeZCResultMakeGuild is the source pack's own length for this packet.
+func sizeZCResultMakeGuild() int { return layout("PACKET_ZC_RESULT_MAKE_GUILD") }
+
+// ZC_REQ_JOIN_GUILD: cmd + guild_id + guild name[24] = 30.
+// sizeZCReqJoinGuild is the source pack's own length for this packet.
+func sizeZCReqJoinGuild() int { return layout("PACKET_ZC_REQ_JOIN_GUILD") }
+
+// ZC_ACK_REQ_JOIN_GUILD: cmd + result = 3.
+// sizeZCAckReqJoinGuild is the source pack's own length for this packet.
+func sizeZCAckReqJoinGuild() int { return layout("PACKET_ZC_ACK_REQ_JOIN_GUILD") }
+
+// ZC_UPDATE_GDID: cmd + guildId + emblemVersion + mode + isMaster +
+// interSid + guild name[24] + masterGID = 47 (packets_struct.hpp,
+// masterGID active PACKETVER_MAIN_NUM >= 20220216).
+// sizeZCUpdateGDID is the source pack's own length for this packet.
+func sizeZCUpdateGDID() int { return layout("PACKET_ZC_UPDATE_GDID") }
+
+// ZC_ACK_DISORGANIZE_GUILD_RESULT: cmd + result(int32) = 6
+// (packets.hpp:1293 result is int32).
+// sizeZCAckDisorgGuild is the source pack's own length for this packet.
+func sizeZCAckDisorgGuild() int { return layout("PACKET_ZC_ACK_DISORGANIZE_GUILD_RESULT") }
+
+// ZC_ACK_GUILD_MENUINTERFACE: cmd + flag(uint32, is master) = 6
+// (clif.cpp:8762 clif_guild_masterormember).
+// sizeZCAckMenuInterface is the source pack's own length for this packet.
+func sizeZCAckMenuInterface() int { return layout("PACKET_ZC_ACK_GUILD_MENUINTERFACE") }
+
+// ZC_GUILD_INFO at >=20200902 (packets_struct.hpp:4809): cmd(2) + GDID(4)
+// + level(4) + userNum(4) + maxUserNum(4) + userAverageLevel(4) + exp(4)
+// + maxExp(4) + point(4) + honor(4) + virtue(4) + emblemVersion(4) +
+// guildname(24) + manageLand(16) + zeny(4) + masterGID(4) +
+// masterName(24) = 118.
+// sizeZCGuildInfo is the source pack's own length for this packet.
+func sizeZCGuildInfo() int { return layout("PACKET_ZC_GUILD_INFO") }
+
+// GUILD_MEMBER_INFO at >=20200902 (packets_struct.hpp:4745): AID(4) +
+// GID(4) + head(2) + headPalette(2) + sex(2) + job(2) + level(2) +
+// contributionExp(4) + currentState(4) + positionID(4) +
+// lastLoginTime(4) + char_name(24) = 58.
+// sizeZCGuildMemberInfo is the source pack's own length for this packet.
+func sizeZCGuildMemberInfo() int { return layout("GUILD_MEMBER_INFO") }
+
+// ZC_MEMBERMGR_INFO header: cmd(2) + packetLength(2).
+// sizeZCMemberMgrHeader is the source pack's own length for this packet.
+func sizeZCMemberMgrHeader() int { return layout("PACKET_ZC_MEMBERMGR_INFO") }
 
 // ZC_RESULT_MAKE_GUILD result values (guild_create flag, src/map/guild.cpp:693-717):
 // 0 created, 1 already in a guild, 2 duplicate name / server rejected,
@@ -139,10 +205,10 @@ type CZCreateGuild struct {
 
 // ParseCZCreateGuild decodes CZ_REQ_MAKE_GUILD (0x0165, 30B).
 func ParseCZCreateGuild(frame []byte) (CZCreateGuild, error) {
-	if len(frame) < sizeCZCreateGuild {
-		return CZCreateGuild{}, fmt.Errorf("packet: parse CZ_REQ_MAKE_GUILD: want at least %d bytes, got %d", sizeCZCreateGuild, len(frame))
+	if len(frame) < sizeCZCreateGuild() {
+		return CZCreateGuild{}, fmt.Errorf("packet: parse CZ_REQ_MAKE_GUILD: want at least %d bytes, got %d", sizeCZCreateGuild(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCREATEGUILD {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCREATEGUILD() {
 		return CZCreateGuild{}, fmt.Errorf("packet: parse CZ_REQ_MAKE_GUILD: unexpected cmd 0x%04x", cmd)
 	}
 	return CZCreateGuild{
@@ -153,11 +219,11 @@ func ParseCZCreateGuild(frame []byte) (CZCreateGuild, error) {
 
 // Encode writes the CZ_REQ_MAKE_GUILD frame to w.
 func (m CZCreateGuild) Encode(w io.Writer) error {
-	var buf [sizeCZCreateGuild]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCREATEGUILD)
+	buf := make([]byte, sizeCZCreateGuild())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCREATEGUILD())
 	binary.LittleEndian.PutUint32(buf[2:], m.CharID)
-	writeNameField(buf[:], 6, m.Name)
-	if _, err := w.Write(buf[:]); err != nil {
+	writeNameField(buf, 6, m.Name)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_REQ_MAKE_GUILD: %w", err)
 	}
 	return nil
@@ -175,17 +241,17 @@ type CZGuildLeave struct {
 
 // ParseCZGuildLeave decodes CZ_REQ_LEAVE_GUILD (0x0159, 52B).
 func ParseCZGuildLeave(frame []byte) (CZGuildLeave, error) {
-	return parseCZGuildLeave(frame, HeaderCZREQLEAVEGUILD)
+	return parseCZGuildLeave(frame, HeaderCZREQLEAVEGUILD())
 }
 
 // ParseCZGuildBan decodes CZ_REQ_BAN_GUILD (0x015b, 52B).
 func ParseCZGuildBan(frame []byte) (CZGuildLeave, error) {
-	return parseCZGuildLeave(frame, HeaderCZREQBANGUILD)
+	return parseCZGuildLeave(frame, HeaderCZREQBANGUILD())
 }
 
 func parseCZGuildLeave(frame []byte, want uint16) (CZGuildLeave, error) {
-	if len(frame) < sizeCZGuildLeave {
-		return CZGuildLeave{}, fmt.Errorf("packet: parse guild leave/ban: want at least %d bytes, got %d", sizeCZGuildLeave, len(frame))
+	if len(frame) < sizeCZGuildLeave() {
+		return CZGuildLeave{}, fmt.Errorf("packet: parse guild leave/ban: want at least %d bytes, got %d", sizeCZGuildLeave(), len(frame))
 	}
 	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != want {
 		return CZGuildLeave{}, fmt.Errorf("packet: parse guild leave/ban: unexpected cmd 0x%04x", cmd)
@@ -200,22 +266,22 @@ func parseCZGuildLeave(frame []byte, want uint16) (CZGuildLeave, error) {
 
 // EncodeCZGuildLeave writes a CZ_REQ_LEAVE_GUILD frame to w.
 func EncodeCZGuildLeave(w io.Writer, guildID, aid, cid uint32, message string) error {
-	return encodeCZGuildLeave(w, HeaderCZREQLEAVEGUILD, guildID, aid, cid, message)
+	return encodeCZGuildLeave(w, HeaderCZREQLEAVEGUILD(), guildID, aid, cid, message)
 }
 
 // EncodeCZGuildBan writes a CZ_REQ_BAN_GUILD frame to w.
 func EncodeCZGuildBan(w io.Writer, guildID, aid, cid uint32, message string) error {
-	return encodeCZGuildLeave(w, HeaderCZREQBANGUILD, guildID, aid, cid, message)
+	return encodeCZGuildLeave(w, HeaderCZREQBANGUILD(), guildID, aid, cid, message)
 }
 
 func encodeCZGuildLeave(w io.Writer, cmd uint16, guildID, aid, cid uint32, message string) error {
-	var buf [sizeCZGuildLeave]byte
+	buf := make([]byte, sizeCZGuildLeave())
 	binary.LittleEndian.PutUint16(buf[0:], cmd)
 	binary.LittleEndian.PutUint32(buf[2:], guildID)
 	binary.LittleEndian.PutUint32(buf[6:], aid)
 	binary.LittleEndian.PutUint32(buf[10:], cid)
-	writeNameField(buf[:], 14, message)
-	if _, err := w.Write(buf[:]); err != nil {
+	writeNameField(buf, 14, message)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write guild leave/ban: %w", err)
 	}
 	return nil
@@ -229,10 +295,10 @@ type CZGuildBreak struct {
 
 // ParseCZGuildBreak decodes CZ_REQ_DISORGANIZE_GUILD (0x015d, 44B).
 func ParseCZGuildBreak(frame []byte) (CZGuildBreak, error) {
-	if len(frame) < sizeCZGuildBreak {
-		return CZGuildBreak{}, fmt.Errorf("packet: parse CZ_REQ_DISORGANIZE_GUILD: want at least %d bytes, got %d", sizeCZGuildBreak, len(frame))
+	if len(frame) < sizeCZGuildBreak() {
+		return CZGuildBreak{}, fmt.Errorf("packet: parse CZ_REQ_DISORGANIZE_GUILD: want at least %d bytes, got %d", sizeCZGuildBreak(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQDISORGANIZEGILD {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQDISORGANIZEGILD() {
 		return CZGuildBreak{}, fmt.Errorf("packet: parse CZ_REQ_DISORGANIZE_GUILD: unexpected cmd 0x%04x", cmd)
 	}
 	return CZGuildBreak{Key: readNameField(frame, 2, 40)}, nil
@@ -240,10 +306,10 @@ func ParseCZGuildBreak(frame []byte) (CZGuildBreak, error) {
 
 // EncodeCZGuildBreak writes a CZ_REQ_DISORGANIZE_GUILD frame to w.
 func EncodeCZGuildBreak(w io.Writer, key string) error {
-	var buf [sizeCZGuildBreak]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQDISORGANIZEGILD)
-	writeNameField(buf[:], 2, key)
-	if _, err := w.Write(buf[:]); err != nil {
+	buf := make([]byte, sizeCZGuildBreak())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQDISORGANIZEGILD())
+	writeNameField(buf, 2, key)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_REQ_DISORGANIZE_GUILD: %w", err)
 	}
 	return nil
@@ -260,10 +326,10 @@ type CZReqJoinGuild struct {
 
 // ParseCZReqJoinGuild decodes CZ_REQ_JOIN_GUILD (0x0168, 14B).
 func ParseCZReqJoinGuild(frame []byte) (CZReqJoinGuild, error) {
-	if len(frame) < sizeCZReqJoinGuild {
-		return CZReqJoinGuild{}, fmt.Errorf("packet: parse CZ_REQ_JOIN_GUILD: want at least %d bytes, got %d", sizeCZReqJoinGuild, len(frame))
+	if len(frame) < sizeCZReqJoinGuild() {
+		return CZReqJoinGuild{}, fmt.Errorf("packet: parse CZ_REQ_JOIN_GUILD: want at least %d bytes, got %d", sizeCZReqJoinGuild(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQJOINGUILD {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQJOINGUILD() {
 		return CZReqJoinGuild{}, fmt.Errorf("packet: parse CZ_REQ_JOIN_GUILD: unexpected cmd 0x%04x", cmd)
 	}
 	return CZReqJoinGuild{
@@ -275,12 +341,12 @@ func ParseCZReqJoinGuild(frame []byte) (CZReqJoinGuild, error) {
 
 // EncodeCZReqJoinGuild writes a CZ_REQ_JOIN_GUILD frame to w.
 func EncodeCZReqJoinGuild(w io.Writer, aid, inviterAID, inviterCID uint32) error {
-	var buf [sizeCZReqJoinGuild]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQJOINGUILD)
+	buf := make([]byte, sizeCZReqJoinGuild())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQJOINGUILD())
 	binary.LittleEndian.PutUint32(buf[2:], aid)
 	binary.LittleEndian.PutUint32(buf[6:], inviterAID)
 	binary.LittleEndian.PutUint32(buf[10:], inviterCID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_REQ_JOIN_GUILD: %w", err)
 	}
 	return nil
@@ -295,10 +361,10 @@ type CZJoinGuild struct {
 
 // ParseCZJoinGuild decodes CZ_JOIN_GUILD (0x016b, 10B).
 func ParseCZJoinGuild(frame []byte) (CZJoinGuild, error) {
-	if len(frame) < sizeCZJoinGuild {
-		return CZJoinGuild{}, fmt.Errorf("packet: parse CZ_JOIN_GUILD: want at least %d bytes, got %d", sizeCZJoinGuild, len(frame))
+	if len(frame) < sizeCZJoinGuild() {
+		return CZJoinGuild{}, fmt.Errorf("packet: parse CZ_JOIN_GUILD: want at least %d bytes, got %d", sizeCZJoinGuild(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZJOINGUILD {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZJOINGUILD() {
 		return CZJoinGuild{}, fmt.Errorf("packet: parse CZ_JOIN_GUILD: unexpected cmd 0x%04x", cmd)
 	}
 	return CZJoinGuild{
@@ -309,11 +375,11 @@ func ParseCZJoinGuild(frame []byte) (CZJoinGuild, error) {
 
 // EncodeCZJoinGuild writes a CZ_JOIN_GUILD frame to w.
 func EncodeCZJoinGuild(w io.Writer, guildID uint32, answer int32) error {
-	var buf [sizeCZJoinGuild]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZJOINGUILD)
+	buf := make([]byte, sizeCZJoinGuild())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZJOINGUILD())
 	binary.LittleEndian.PutUint32(buf[2:], guildID)
 	binary.LittleEndian.PutUint32(buf[6:], uint32(answer)) //nolint:gosec // G115: wire int32.
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_JOIN_GUILD: %w", err)
 	}
 	return nil
@@ -326,7 +392,7 @@ func ParseCZGuildChat(frame []byte) (string, error) {
 	if len(frame) < 4 {
 		return "", fmt.Errorf("packet: parse CZ_GUILD_CHAT: short frame %d", len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZGUILDCHAT {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZGUILDCHAT() {
 		return "", fmt.Errorf("packet: parse CZ_GUILD_CHAT: unexpected cmd 0x%04x", cmd)
 	}
 	return readNameField(frame, 4, len(frame)-4), nil
@@ -336,7 +402,7 @@ func ParseCZGuildChat(frame []byte) (string, error) {
 // message; the length prefix is what variableFrameSize frames on).
 func EncodeCZGuildChat(w io.Writer, message string) error {
 	buf := make([]byte, 4+len(message))
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZGUILDCHAT)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZGUILDCHAT())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(len(buf))) //nolint:gosec // G115: bounded by message len.
 	copy(buf[4:], message)
 	if _, err := w.Write(buf); err != nil {
@@ -354,14 +420,14 @@ type ResultMakeGuildResponse struct {
 }
 
 // Size returns the frame length (always 3).
-func (r ResultMakeGuildResponse) Size() int { return sizeZCResultMakeGuild }
+func (r ResultMakeGuildResponse) Size() int { return sizeZCResultMakeGuild() }
 
 // Encode writes ZC_RESULT_MAKE_GUILD to w.
 func (r ResultMakeGuildResponse) Encode(w io.Writer) error {
-	var buf [sizeZCResultMakeGuild]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQUESTMAKEGILD)
+	buf := make([]byte, sizeZCResultMakeGuild())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQUESTMAKEGILD())
 	buf[2] = r.Result
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_RESULT_MAKE_GUILD: %w", err)
 	}
 	return nil
@@ -375,15 +441,15 @@ type ReqJoinGuildResponse struct {
 }
 
 // Size returns the frame length (always 30).
-func (r ReqJoinGuildResponse) Size() int { return sizeZCReqJoinGuild }
+func (r ReqJoinGuildResponse) Size() int { return sizeZCReqJoinGuild() }
 
 // Encode writes ZC_REQ_JOIN_GUILD to w.
 func (r ReqJoinGuildResponse) Encode(w io.Writer) error {
-	var buf [sizeZCReqJoinGuild]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQJOINGUILD)
+	buf := make([]byte, sizeZCReqJoinGuild())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQJOINGUILD())
 	binary.LittleEndian.PutUint32(buf[2:], r.GuildID)
-	writeNameField(buf[:], 6, r.GuildName)
-	if _, err := w.Write(buf[:]); err != nil {
+	writeNameField(buf, 6, r.GuildName)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_REQ_JOIN_GUILD: %w", err)
 	}
 	return nil
@@ -397,14 +463,14 @@ type AckReqJoinGuildResponse struct {
 }
 
 // Size returns the frame length (always 3).
-func (r AckReqJoinGuildResponse) Size() int { return sizeZCAckReqJoinGuild }
+func (r AckReqJoinGuildResponse) Size() int { return sizeZCAckReqJoinGuild() }
 
 // Encode writes ZC_ACK_REQ_JOIN_GUILD to w.
 func (r AckReqJoinGuildResponse) Encode(w io.Writer) error {
-	var buf [sizeZCAckReqJoinGuild]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKRQJOINGUILD)
+	buf := make([]byte, sizeZCAckReqJoinGuild())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKRQJOINGUILD())
 	buf[2] = byte(r.Result) //nolint:gosec // G115: result is a small enum.
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_REQ_JOIN_GUILD: %w", err)
 	}
 	return nil
@@ -429,12 +495,12 @@ type UpdateGDIDResponse struct {
 }
 
 // Size returns the frame length (always 47).
-func (r UpdateGDIDResponse) Size() int { return sizeZCUpdateGDID }
+func (r UpdateGDIDResponse) Size() int { return sizeZCUpdateGDID() }
 
 // Encode writes ZC_UPDATE_GDID to w.
 func (r UpdateGDIDResponse) Encode(w io.Writer) error {
-	var buf [sizeZCUpdateGDID]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCUPDATEGDID)
+	buf := make([]byte, sizeZCUpdateGDID())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCUPDATEGDID())
 	binary.LittleEndian.PutUint32(buf[2:], r.GuildID)
 	binary.LittleEndian.PutUint32(buf[6:], r.EmblemVersion)
 	binary.LittleEndian.PutUint32(buf[10:], r.Mode)
@@ -442,9 +508,15 @@ func (r UpdateGDIDResponse) Encode(w io.Writer) error {
 		buf[14] = 1
 	}
 	binary.LittleEndian.PutUint32(buf[15:], r.InterSid)
-	writeNameField(buf[:], 19, r.GuildName)
-	binary.LittleEndian.PutUint32(buf[43:], r.MasterGID)
-	if _, err := w.Write(buf[:]); err != nil {
+	writeNameField(buf, 19, r.GuildName)
+	// The source's struct carries the guild leader's id only for
+	// PACKETVER_MAIN_NUM >= 20220216 (src/map/packets_struct.hpp: the
+	// older branch ends at the name), so the field is written only when
+	// the resolved layout has room for it.
+	if len(buf) >= 47 {
+		binary.LittleEndian.PutUint32(buf[43:], r.MasterGID)
+	}
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_UPDATE_GDID: %w", err)
 	}
 	return nil
@@ -465,7 +537,7 @@ func (r UpdateCharStatResponse) Size() int { return sizeZCUpdateCharStat }
 // Encode writes ZC_UPDATE_CHARSTAT to w.
 func (r UpdateCharStatResponse) Encode(w io.Writer) error {
 	var buf [sizeZCUpdateCharStat]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCUPDATECHARSTAT)
+	binary.LittleEndian.PutUint16(buf[0:], opcode("ZC_UPDATE_CHARSTAT"))
 	binary.LittleEndian.PutUint32(buf[2:], r.AID)
 	binary.LittleEndian.PutUint32(buf[6:], r.CID)
 	binary.LittleEndian.PutUint32(buf[10:], r.Status)
@@ -488,7 +560,7 @@ func (r AckLeaveGuildResponse) Size() int { return sizeZCAckLeaveGuild }
 // Encode writes ZC_ACK_LEAVE_GUILD to w.
 func (r AckLeaveGuildResponse) Encode(w io.Writer) error {
 	var buf [sizeZCAckLeaveGuild]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKLEAVEGUILD)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKLEAVEGUILD())
 	binary.LittleEndian.PutUint32(buf[2:], r.GID)
 	writeNameField(buf[:], 6, r.Reason)
 	if _, err := w.Write(buf[:]); err != nil {
@@ -510,7 +582,7 @@ func (r AckBanGuildResponse) Size() int { return sizeZCAckBanGuild }
 // Encode writes ZC_ACK_BAN_GUILD to w.
 func (r AckBanGuildResponse) Encode(w io.Writer) error {
 	var buf [sizeZCAckBanGuild]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKBANGUILD)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKBANGUILD())
 	writeNameField(buf[:], 2, r.Reason)
 	binary.LittleEndian.PutUint32(buf[42:], r.GID)
 	if _, err := w.Write(buf[:]); err != nil {
@@ -526,14 +598,14 @@ type AckDisorganizeGuildResponse struct {
 }
 
 // Size returns the frame length (always 6).
-func (r AckDisorganizeGuildResponse) Size() int { return sizeZCAckDisorgGuild }
+func (r AckDisorganizeGuildResponse) Size() int { return sizeZCAckDisorgGuild() }
 
 // Encode writes ZC_ACK_DISORGANIZE_GUILD_RESULT to w.
 func (r AckDisorganizeGuildResponse) Encode(w io.Writer) error {
-	var buf [sizeZCAckDisorgGuild]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKDISORGGUILD)
+	buf := make([]byte, sizeZCAckDisorgGuild())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKDISORGGUILD())
 	binary.LittleEndian.PutUint32(buf[2:], uint32(r.Result)) //nolint:gosec // G115: wire int32.
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_DISORGANIZE_GUILD_RESULT: %w", err)
 	}
 	return nil
@@ -548,7 +620,7 @@ type GuildChatResponse struct {
 
 // Size returns the frame length (4 + len(message) + 1 — rAthena appends the
 // NUL terminator, clif.cpp clif_guild_message packetLength += len + 1).
-func (r GuildChatResponse) Size() int { return sizeZCGuildChatHeader + len(r.Message) + 1 }
+func (r GuildChatResponse) Size() int { return sizeZCGuildChatHeader() + len(r.Message) + 1 }
 
 // Encode writes ZC_GUILD_CHAT to w.
 func (r GuildChatResponse) Encode(w io.Writer) error {
@@ -556,7 +628,7 @@ func (r GuildChatResponse) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: write ZC_GUILD_CHAT: message too long (%d)", len(r.Message))
 	}
 	buf := make([]byte, r.Size())
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCGUILDCHAT)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCGUILDCHAT())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(r.Size())) //nolint:gosec // G115: bounded above.
 	copy(buf[4:], r.Message)                                 // trailing byte stays NUL
 	if _, err := w.Write(buf); err != nil {
@@ -574,16 +646,16 @@ type AckMenuInterfaceResponse struct {
 }
 
 // Size returns the frame length (always 6).
-func (r AckMenuInterfaceResponse) Size() int { return sizeZCAckMenuInterface }
+func (r AckMenuInterfaceResponse) Size() int { return sizeZCAckMenuInterface() }
 
 // Encode writes ZC_ACK_GUILD_MENUINTERFACE to w.
 func (r AckMenuInterfaceResponse) Encode(w io.Writer) error {
-	var buf [sizeZCAckMenuInterface]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKMENUGUILD)
+	buf := make([]byte, sizeZCAckMenuInterface())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKMENUGUILD())
 	if r.IsMaster {
 		binary.LittleEndian.PutUint32(buf[2:], 1)
 	}
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_GUILD_MENUINTERFACE: %w", err)
 	}
 	return nil
@@ -620,12 +692,12 @@ type GuildInfoResponse struct {
 }
 
 // Size returns the frame length (always 118).
-func (r GuildInfoResponse) Size() int { return sizeZCGuildInfo }
+func (r GuildInfoResponse) Size() int { return sizeZCGuildInfo() }
 
 // Encode writes ZC_GUILD_INFO to w.
 func (r GuildInfoResponse) Encode(w io.Writer) error {
-	var buf [sizeZCGuildInfo]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCGUILDINFO)
+	buf := make([]byte, sizeZCGuildInfo())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCGUILDINFO())
 	binary.LittleEndian.PutUint32(buf[2:], r.GuildID)
 	binary.LittleEndian.PutUint32(buf[6:], r.Level)
 	binary.LittleEndian.PutUint32(buf[10:], r.UserNum)
@@ -637,12 +709,12 @@ func (r GuildInfoResponse) Encode(w io.Writer) error {
 	binary.LittleEndian.PutUint32(buf[34:], r.Honor)
 	binary.LittleEndian.PutUint32(buf[38:], r.Virtue)
 	binary.LittleEndian.PutUint32(buf[42:], r.EmblemVersion)
-	writeNameField(buf[:], 46, r.GuildName)
-	writeNameField(buf[:], 70, r.ManageLand)
+	writeNameField(buf, 46, r.GuildName)
+	writeNameField(buf, 70, r.ManageLand)
 	binary.LittleEndian.PutUint32(buf[86:], r.Zeny)
 	binary.LittleEndian.PutUint32(buf[90:], r.MasterGID)
-	writeNameField(buf[:], 94, r.MasterName)
-	if _, err := w.Write(buf[:]); err != nil {
+	writeNameField(buf, 94, r.MasterName)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_GUILD_INFO: %w", err)
 	}
 	return nil
@@ -682,7 +754,7 @@ type MemberMgrInfoResponse struct {
 // MaxGuildSize).
 func (r MemberMgrInfoResponse) Size() int {
 	n := min(len(r.Members), MaxGuildSize)
-	return sizeZCMemberMgrHeader + sizeZCGuildMemberInfo*n
+	return sizeZCMemberMgrHeader() + sizeZCGuildMemberInfo()*n
 }
 
 // Encode writes ZC_MEMBERMGR_INFO to w. The member list is capped at
@@ -693,10 +765,10 @@ func (r MemberMgrInfoResponse) Encode(w io.Writer) error {
 	if len(members) > MaxGuildSize {
 		members = members[:MaxGuildSize]
 	}
-	buf := make([]byte, sizeZCMemberMgrHeader+sizeZCGuildMemberInfo*len(members))
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCMEMBERMGRINFO)
+	buf := make([]byte, sizeZCMemberMgrHeader()+sizeZCGuildMemberInfo()*len(members))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCMEMBERMGRINFO())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(len(buf))) //nolint:gosec // G115: bounded by MaxGuildSize.
-	off := sizeZCMemberMgrHeader
+	off := sizeZCMemberMgrHeader()
 	for _, m := range members {
 		binary.LittleEndian.PutUint32(buf[off:], m.AID)
 		binary.LittleEndian.PutUint32(buf[off+4:], m.GID)
@@ -710,7 +782,7 @@ func (r MemberMgrInfoResponse) Encode(w io.Writer) error {
 		binary.LittleEndian.PutUint32(buf[off+26:], uint32(m.Position)) //nolint:gosec // G115: wire int32.
 		binary.LittleEndian.PutUint32(buf[off+30:], m.LastLogin)
 		writeNameField(buf, off+34, m.CharName)
-		off += sizeZCGuildMemberInfo
+		off += sizeZCGuildMemberInfo()
 	}
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_MEMBERMGR_INFO: %w", err)
@@ -726,24 +798,39 @@ const MaxGuildSize = 16
 // Exported C→S frame sizes and headers the gateway dispatch table registers.
 // They duplicate the unexported parser constants so the dispatch table and the
 // parsers cannot drift apart without a compile error.
-const (
-	// HeaderCZGUILDCHECKMASTER is CZ_REQ_GUILD_MENUINTERFACE (0x014d, cmd-only
-	// 2B) — the guild-window permission poll (clif_packetdb.hpp:150).
-	HeaderCZGUILDCHECKMASTER uint16 = 0x014d
 
-	// SizeCZCreateGuild is CZ_REQ_MAKE_GUILD's frame size (0x0165, 30B).
-	SizeCZCreateGuild = sizeCZCreateGuild
-	// SizeCZReqJoinGuild is CZ_REQ_JOIN_GUILD's frame size (0x0168, 14B).
-	SizeCZReqJoinGuild = sizeCZReqJoinGuild
-	// SizeCZJoinGuild is CZ_JOIN_GUILD's frame size (0x016b, 10B).
-	SizeCZJoinGuild = sizeCZJoinGuild
-	// SizeCZGuildLeave is CZ_REQ_LEAVE_GUILD's frame size (0x0159, 52B).
-	SizeCZGuildLeave = sizeCZGuildLeave
-	// SizeCZGuildBan is CZ_REQ_BAN_GUILD's frame size (0x015b, 52B).
-	SizeCZGuildBan = sizeCZGuildBan
-	// SizeCZGuildBreak is CZ_REQ_DISORGANIZE_GUILD's frame size (0x015d, 44B).
-	SizeCZGuildBreak = sizeCZGuildBreak
-	// SizeCZGuildCheckMaster is CZ_REQ_GUILD_MENUINTERFACE's frame size
-	// (0x014d, 2B).
-	SizeCZGuildCheckMaster = 2
-)
+// HeaderCZGUILDCHECKMASTER is CZ_REQ_GUILD_MENUINTERFACE (0x014d, cmd-only
+// 2B) — the guild-window permission poll (clif_packetdb.hpp:150).
+// HeaderCZGUILDCHECKMASTER is the source pack's own opcode for this packet.
+func HeaderCZGUILDCHECKMASTER() uint16 {
+	return opcodeForHandler("clif_parse_GuildCheckMaster", 2, nil)
+}
+
+// SizeCZCreateGuild is CZ_REQ_MAKE_GUILD's frame size (0x0165, 30B).
+// SizeCZCreateGuild is the source pack's own length for this packet.
+func SizeCZCreateGuild() int { return packetLengthOf(357) }
+
+// SizeCZReqJoinGuild is CZ_REQ_JOIN_GUILD's frame size (0x0168, 14B).
+// SizeCZReqJoinGuild is the source pack's own length for this packet.
+func SizeCZReqJoinGuild() int { return packetLengthOf(360) }
+
+// SizeCZJoinGuild is CZ_JOIN_GUILD's frame size (0x016b, 10B).
+// SizeCZJoinGuild is the source pack's own length for this packet.
+func SizeCZJoinGuild() int { return packetLengthOf(363) }
+
+// SizeCZGuildLeave is CZ_REQ_LEAVE_GUILD's frame size (0x0159, 52B).
+// SizeCZGuildLeave is the source pack's own length for this packet.
+func SizeCZGuildLeave() int { return layout("PACKET_CZ_REQ_LEAVE_GUILD") }
+
+// SizeCZGuildBan is CZ_REQ_BAN_GUILD's frame size (0x015b, 52B).
+// SizeCZGuildBan is the source pack's own length for this packet.
+func SizeCZGuildBan() int { return layout("PACKET_CZ_REQ_BAN_GUILD") }
+
+// SizeCZGuildBreak is CZ_REQ_DISORGANIZE_GUILD's frame size (0x015d, 44B).
+// SizeCZGuildBreak is the source pack's own length for this packet.
+func SizeCZGuildBreak() int { return layout("PACKET_CZ_REQ_DISORGANIZE_GUILD") }
+
+// SizeCZGuildCheckMaster is CZ_REQ_GUILD_MENUINTERFACE's frame size
+// (0x014d, 2B).
+// SizeCZGuildCheckMaster is the source pack's own length for this packet.
+func SizeCZGuildCheckMaster() int { return packetLengthOf(333) }

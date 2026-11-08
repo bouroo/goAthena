@@ -48,8 +48,8 @@ func buildFriendTestEnv(t *testing.T, port int) (net.Conn, net.Conn, *friendinfr
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
 	awaitAcceptEnter(t, conn2)
 	// Drain the mutual spawn frames (each enter broadcasts the newcomer).
-	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107)
-	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT, 107)
+	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT(), 107)
+	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT(), 107)
 	conn1.SetDeadline(time.Now().Add(3 * time.Second))
 	conn2.SetDeadline(time.Now().Add(3 * time.Second))
 	return conn1, conn2, repo
@@ -81,7 +81,7 @@ func readFrameSized(t *testing.T, c net.Conn) (uint16, []byte, bool) {
 	cmd := binary.LittleEndian.Uint16(cmdBuf[:])
 	total := 0
 	switch cmd {
-	case ropacket.HeaderZCFRIENDSLIST:
+	case ropacket.HeaderZCFRIENDSLIST():
 		var lenBuf [2]byte
 		if _, err := io.ReadFull(c, lenBuf[:]); err != nil {
 			t.Fatalf("read ZC_FRIENDS_LIST len: %v", err)
@@ -95,31 +95,31 @@ func readFrameSized(t *testing.T, c net.Conn) (uint16, []byte, bool) {
 			t.Fatalf("read ZC_FRIENDS_LIST body: %v", err)
 		}
 		return cmd, append(append([]byte{}, lenBuf[:]...), body...), true
-	case ropacket.HeaderZCFRIENDSSTATE:
+	case ropacket.HeaderZCFRIENDSSTATE():
 		total = ropacket.FriendsStateResponse{}.Size()
-	case ropacket.HeaderZCREQADDFRIENDS:
+	case ropacket.HeaderZCREQADDFRIENDS():
 		total = ropacket.FriendsReqAddResponse{}.Size()
-	case ropacket.HeaderZCADDFRIENDS:
+	case ropacket.HeaderZCADDFRIENDS():
 		total = ropacket.FriendsAddResponse{}.Size()
-	case ropacket.HeaderZCDELETEFRIENDS:
+	case ropacket.HeaderZCDELETEFRIENDS():
 		total = ropacket.FriendsDeleteResponse{}.Size()
 	default:
 		// Init-burst fixed frames: ZC_INVENTORY_START is 6 bytes (cmd + len
 		// field + invType), ZC_INVENTORY_END is 4 bytes with NO length field
 		// (mirrors drainUntilPartyConfig).
-		if cmd == ropacket.HeaderZCINVENTORYSTART {
+		if cmd == ropacket.HeaderZCINVENTORYSTART() {
 			if _, err := io.ReadFull(c, make([]byte, 4)); err != nil {
 				t.Fatalf("drain ZC_INVENTORY_START: %v", err)
 			}
 			return 0, nil, false
 		}
-		if cmd == ropacket.HeaderZCINVENTORYEND {
+		if cmd == ropacket.HeaderZCINVENTORYEND() {
 			if _, err := io.ReadFull(c, make([]byte, 2)); err != nil {
 				t.Fatalf("drain ZC_INVENTORY_END: %v", err)
 			}
 			return 0, nil, false
 		}
-		if cmd == ropacket.HeaderZCPARTYCONFIG {
+		if cmd == ropacket.HeaderZCPARTYCONFIG() {
 			if _, err := io.ReadFull(c, make([]byte, 1)); err != nil {
 				t.Fatalf("drain ZC_PARTY_CONFIG: %v", err)
 			}
@@ -156,11 +156,11 @@ func TestFriend_RequestAcceptRemove(t *testing.T) {
 
 	// 1. Hero adds Partner by name: Partner gets the dialog.
 	addFrame := make([]byte, 26)
-	binary.LittleEndian.PutUint16(addFrame[0:], ropacket.HeaderCZFRIENDSADD)
+	binary.LittleEndian.PutUint16(addFrame[0:], ropacket.HeaderCZFRIENDSADD())
 	copy(addFrame[2:26], "Partner")
 	sendRaw(t, conn1, addFrame)
 	cmd, body := readFriendFrame(t, conn2)
-	if cmd != ropacket.HeaderZCREQADDFRIENDS {
+	if cmd != ropacket.HeaderZCREQADDFRIENDS() {
 		t.Fatalf("target reply cmd = 0x%04x, want ZC_REQ_ADD_FRIENDS", cmd)
 	}
 	if aid := binary.LittleEndian.Uint32(body[0:4]); aid != 2000001 {
@@ -172,14 +172,14 @@ func TestFriend_RequestAcceptRemove(t *testing.T) {
 
 	// 2. Partner accepts: BOTH sides get ZC_ADD_FRIENDS result 0 naming the other.
 	reply := make([]byte, 14)
-	binary.LittleEndian.PutUint16(reply[0:], ropacket.HeaderCZFRIENDSREPLY)
+	binary.LittleEndian.PutUint16(reply[0:], ropacket.HeaderCZFRIENDSREPLY())
 	binary.LittleEndian.PutUint32(reply[2:], 2000001)
 	binary.LittleEndian.PutUint32(reply[6:], 150001)
 	binary.LittleEndian.PutUint32(reply[10:], uint32(ropacket.FriendReplyAccept))
 	sendRaw(t, conn2, reply)
 
 	cmd, body = readFriendFrame(t, conn1)
-	if cmd != ropacket.HeaderZCADDFRIENDS {
+	if cmd != ropacket.HeaderZCADDFRIENDS() {
 		t.Fatalf("requester reply cmd = 0x%04x, want ZC_ADD_FRIENDS", cmd)
 	}
 	if result := int16(binary.LittleEndian.Uint16(body[0:2])); result != ropacket.FriendAddOK {
@@ -190,7 +190,7 @@ func TestFriend_RequestAcceptRemove(t *testing.T) {
 	}
 
 	cmd, body = readFriendFrame(t, conn2)
-	if cmd != ropacket.HeaderZCADDFRIENDS {
+	if cmd != ropacket.HeaderZCADDFRIENDS() {
 		t.Fatalf("acceptor echo cmd = 0x%04x, want ZC_ADD_FRIENDS", cmd)
 	}
 	if result := int16(binary.LittleEndian.Uint16(body[0:2])); result != ropacket.FriendAddOK {
@@ -206,20 +206,20 @@ func TestFriend_RequestAcceptRemove(t *testing.T) {
 	// 3. Hero removes Partner: Hero's client hears Partner's ids; Partner's
 	// client hears Hero's ids (clif.cpp:15586-15613 id swap).
 	del := make([]byte, 10)
-	binary.LittleEndian.PutUint16(del[0:], ropacket.HeaderCZFRIENDSDELETE)
+	binary.LittleEndian.PutUint16(del[0:], ropacket.HeaderCZFRIENDSDELETE())
 	binary.LittleEndian.PutUint32(del[2:], 2000002)
 	binary.LittleEndian.PutUint32(del[6:], 150002)
 	sendRaw(t, conn1, del)
 
 	cmd, body = readFriendFrame(t, conn1)
-	if cmd != ropacket.HeaderZCDELETEFRIENDS {
+	if cmd != ropacket.HeaderZCDELETEFRIENDS() {
 		t.Fatalf("remover reply cmd = 0x%04x, want ZC_DELETE_FRIENDS", cmd)
 	}
 	if cid := binary.LittleEndian.Uint32(body[4:8]); cid != 150002 {
 		t.Errorf("remover frame CID = %d, want 150002 (the removed friend)", cid)
 	}
 	cmd, body = readFriendFrame(t, conn2)
-	if cmd != ropacket.HeaderZCDELETEFRIENDS {
+	if cmd != ropacket.HeaderZCDELETEFRIENDS() {
 		t.Fatalf("removed-friend frame cmd = 0x%04x, want ZC_DELETE_FRIENDS", cmd)
 	}
 	if cid := binary.LittleEndian.Uint32(body[4:8]); cid != 150001 {
@@ -253,9 +253,11 @@ func TestFriend_LoadEndAckRestoresList(t *testing.T) {
 	for i := 0; i < 24; i++ {
 		cmd, body := readFriendFrame(t, conn1)
 		switch cmd {
-		case ropacket.HeaderZCFRIENDSLIST:
-			// body = [len(2)] + N*8. One friend expected.
-			if got := (len(body) - 2) / 8; got != 1 {
+		case ropacket.HeaderZCFRIENDSLIST():
+			// body = [len(2)] + N*entry. The entry is the source's own
+			// PACKET_ZC_FRIENDS_LIST_sub: the account id, the character id
+			// and the name.
+			if got := (len(body) - 2) / ropacket.SizeZCFriendsListSub(); got != 1 {
 				t.Fatalf("friend list entries = %d, want 1", got)
 			}
 			if aid := binary.LittleEndian.Uint32(body[2:6]); aid != 2000002 {
@@ -266,7 +268,7 @@ func TestFriend_LoadEndAckRestoresList(t *testing.T) {
 			}
 			// The online toggle for that friend follows immediately.
 			cmd2, body2 := readFriendFrame(t, conn1)
-			if cmd2 != ropacket.HeaderZCFRIENDSSTATE {
+			if cmd2 != ropacket.HeaderZCFRIENDSSTATE() {
 				t.Fatalf("after list cmd = 0x%04x, want ZC_FRIENDS_STATE", cmd2)
 			}
 			if offline := body2[8]; offline != 0 {

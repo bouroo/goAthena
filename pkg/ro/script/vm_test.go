@@ -47,6 +47,8 @@ type fakeHost struct {
 	questVars map[string]map[string]int64
 	// questSetErr makes the next SetQuestVar return an error.
 	questSetErr error
+	// openStorageCount counts the `openstorage` builtin calls.
+	openStorageCount int
 }
 
 type warpCall struct {
@@ -195,6 +197,11 @@ func (h *fakeHost) ItemInfo(item Value, info int) Value {
 		return v
 	}
 	return IntVal(-1)
+}
+
+// OpenStorage records the `openstorage` builtin call.
+func (h *fakeHost) OpenStorage() {
+	h.openStorageCount++
 }
 
 // runFirstScript compiles src, takes the first script in the set, and runs it
@@ -1023,5 +1030,25 @@ func TestVMGetItemInfoBuiltin_UnknownItem(t *testing.T) {
 	runFirstScript(t, src, h, nil)
 	if len(h.itemInfos) != 1 {
 		t.Fatalf("iteminfo calls = %d, want 1", len(h.itemInfos))
+	}
+}
+
+// TestVMOpenStorageBuiltin proves the `openstorage` builtin reaches the Host's
+// OpenStorage capability — the source's BUILDIN_FUNC(openstorage)
+// (src/map/script.cpp:10958), which opens the running player's warehouse.
+// The builtin takes no arguments and pushes no value, so the script runs to
+// completion with the storage call made exactly once.
+func TestVMOpenStorageBuiltin(t *testing.T) {
+	const src = "-\tscript\tN\t-1,{\n" +
+		`openstorage;` + "\n" +
+		`mes "opened";` + "\n" +
+		"}\n"
+	h := newFakeHost()
+	runFirstScript(t, src, h, nil)
+	if h.openStorageCount != 1 {
+		t.Errorf("OpenStorage calls = %d, want 1", h.openStorageCount)
+	}
+	if len(h.mes) != 1 || h.mes[0] != "opened" {
+		t.Errorf("mes = %v, want [opened]", h.mes)
 	}
 }

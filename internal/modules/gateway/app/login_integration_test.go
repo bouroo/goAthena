@@ -102,8 +102,8 @@ func TestLogin_AcceptOverTCP(t *testing.T) {
 
 	sendCALogin(t, conn, "testacc", "s3cret")
 	hdr := readReply(t, conn)
-	if hdr != ropacket.HeaderACACCEPTLOGIN {
-		t.Fatalf("response header = 0x%04x, want AC_ACCEPT_LOGIN (0x%04x)", hdr, ropacket.HeaderACACCEPTLOGIN)
+	if hdr != ropacket.HeaderACACCEPTLOGIN() {
+		t.Fatalf("response header = 0x%04x, want AC_ACCEPT_LOGIN (0x%04x)", hdr, ropacket.HeaderACACCEPTLOGIN())
 	}
 }
 
@@ -114,8 +114,8 @@ func TestLogin_RefuseBadPasswordOverTCP(t *testing.T) {
 
 	sendCALogin(t, conn, "testacc", "wrong")
 	hdr := readReply(t, conn)
-	if hdr != ropacket.HeaderACREFUSELOGIN {
-		t.Fatalf("response header = 0x%04x, want AC_REFUSE_LOGIN (0x%04x)", hdr, ropacket.HeaderACREFUSELOGIN)
+	if hdr != ropacket.HeaderACREFUSELOGIN() {
+		t.Fatalf("response header = 0x%04x, want AC_REFUSE_LOGIN (0x%04x)", hdr, ropacket.HeaderACREFUSELOGIN())
 	}
 }
 
@@ -126,7 +126,7 @@ func TestLogin_RefuseUnknownAccountOverTCP(t *testing.T) {
 
 	sendCALogin(t, conn, "nobody", "x")
 	hdr := readReply(t, conn)
-	if hdr != ropacket.HeaderACREFUSELOGIN {
-		t.Fatalf("response header = 0x%04x, want AC_REFUSE_LOGIN (0x%04x)", hdr, ropacket.HeaderACREFUSELOGIN)
+	if hdr != ropacket.HeaderACREFUSELOGIN() {
+		t.Fatalf("response header = 0x%04x, want AC_REFUSE_LOGIN (0x%04x)", hdr, ropacket.HeaderACREFUSELOGIN())
 	}
 }

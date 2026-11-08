@@ -123,7 +123,6 @@ func Register(inj do.Injector, tickRateHz int, dbPath string) {
 		world := do.MustInvoke[*app.WorldService](i)
 		combatSvc := do.MustInvoke[*app.CombatService](i)
 		skills := do.MustInvoke[*skilldb.Registry](i)
-		dbPath := do.MustInvoke[string](i)
 		log := do.MustInvoke[*slog.Logger](i)
 		tree := loadSkillTree(dbPath, log)
 		svc := app.NewSkillService(world, combatSvc, skills)

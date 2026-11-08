@@ -150,26 +150,26 @@ func TestNewLoginServerDB_HasKnownPackets(t *testing.T) {
 	}
 	checks := []expect{
 		// C→S — fixed length, matches sizeof(PACKET_CA_*) from packets.hpp.
-		{HeaderCALOGIN, "CA_LOGIN", 55, DirectionClientToServer},
-		{HeaderCAREQHASH, "CA_REQ_HASH", 2, DirectionClientToServer},
-		{HeaderCAEXEHASHCHECK, "CA_EXE_HASHCHECK", 18, DirectionClientToServer},
-		{HeaderCACONNECTINFOCHANGED, "CA_CONNECT_INFO_CHANGED", 26, DirectionClientToServer},
-		{HeaderCALOGIN2, "CA_LOGIN2", 47, DirectionClientToServer},
-		{HeaderCALOGIN3, "CA_LOGIN3", 48, DirectionClientToServer},
-		{HeaderCALOGIN4, "CA_LOGIN4", 60, DirectionClientToServer},
-		{HeaderCALOGINPCBANG, "CA_LOGIN_PCBANG", 84, DirectionClientToServer},
-		{HeaderCALOGINCHANNEL, "CA_LOGIN_CHANNEL", 85, DirectionClientToServer},
-		{HeaderCTAUTH, "CT_AUTH", 68, DirectionClientToServer},
+		{HeaderCALOGIN(), "CA_LOGIN", 55, DirectionClientToServer},
+		{HeaderCAREQHASH(), "CA_REQ_HASH", 2, DirectionClientToServer},
+		{HeaderCAEXEHASHCHECK(), "CA_EXE_HASHCHECK", 18, DirectionClientToServer},
+		{HeaderCACONNECTINFOCHANGED(), "CA_CONNECT_INFO_CHANGED", 26, DirectionClientToServer},
+		{HeaderCALOGIN2(), "CA_LOGIN2", 47, DirectionClientToServer},
+		{HeaderCALOGIN3(), "CA_LOGIN3", 48, DirectionClientToServer},
+		{HeaderCALOGIN4(), "CA_LOGIN4", 60, DirectionClientToServer},
+		{HeaderCALOGINPCBANG(), "CA_LOGIN_PCBANG", 84, DirectionClientToServer},
+		{HeaderCALOGINCHANNEL(), "CA_LOGIN_CHANNEL", 85, DirectionClientToServer},
+		{HeaderCTAUTH(), "CT_AUTH", 68, DirectionClientToServer},
 
 		// S→C — fixed length.
-		{HeaderSCNOTIFYBAN, "SC_NOTIFY_BAN", 3, DirectionServerToClient},
-		{HeaderACREFUSELOGIN, "AC_REFUSE_LOGIN", 26, DirectionServerToClient},
+		{HeaderSCNOTIFYBAN(), "SC_NOTIFY_BAN", 3, DirectionServerToClient},
+		{HeaderACREFUSELOGIN(), "AC_REFUSE_LOGIN", 26, DirectionServerToClient},
 
 		// Variable-length entries.
-		{HeaderCASSOLOGINREQ, "CA_SSO_LOGIN_REQ", VariableLength, DirectionClientToServer},
-		{HeaderACACKHASH, "AC_ACK_HASH", VariableLength, DirectionServerToClient},
-		{HeaderACACCEPTLOGIN, "AC_ACCEPT_LOGIN", VariableLength, DirectionServerToClient},
-		{HeaderACACCEPTLOGINOld, "AC_ACCEPT_LOGIN_OLD", VariableLength, DirectionServerToClient},
+		{HeaderCASSOLOGINREQ(), "CA_SSO_LOGIN_REQ", VariableLength, DirectionClientToServer},
+		{HeaderACACKHASH(), "AC_ACK_HASH", VariableLength, DirectionServerToClient},
+		{HeaderACACCEPTLOGIN(), "AC_ACCEPT_LOGIN", VariableLength, DirectionServerToClient},
+		{HeaderACACCEPTLOGINOld(), "AC_ACCEPT_LOGIN_OLD", VariableLength, DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -197,17 +197,17 @@ func TestNewLoginServerDB_HasAllLoginParseablePackets(t *testing.T) {
 	// (loginclif.cpp:483-498) MUST be present.
 	db := NewLoginServerDB()
 	want := []uint16{
-		HeaderCACONNECTINFOCHANGED,
-		HeaderCAEXEHASHCHECK,
-		HeaderCALOGIN,
-		HeaderCALOGINPCBANG,
-		HeaderCALOGINCHANNEL,
-		HeaderCALOGIN2,
-		HeaderCALOGIN3,
-		HeaderCALOGIN4,
-		HeaderCASSOLOGINREQ,
-		HeaderCAREQHASH,
-		HeaderCTAUTH,
+		HeaderCACONNECTINFOCHANGED(),
+		HeaderCAEXEHASHCHECK(),
+		HeaderCALOGIN(),
+		HeaderCALOGINPCBANG(),
+		HeaderCALOGINCHANNEL(),
+		HeaderCALOGIN2(),
+		HeaderCALOGIN3(),
+		HeaderCALOGIN4(),
+		HeaderCASSOLOGINREQ(),
+		HeaderCAREQHASH(),
+		HeaderCTAUTH(),
 	}
 	for _, id := range want {
 		def, ok := db.Lookup(id)
@@ -228,10 +228,10 @@ func TestNewLoginServerDB_VariableLengthConvention(t *testing.T) {
 	db := NewLoginServerDB()
 
 	for _, id := range []uint16{
-		HeaderCASSOLOGINREQ,
-		HeaderACACKHASH,
-		HeaderACACCEPTLOGIN,
-		HeaderACACCEPTLOGINOld,
+		HeaderCASSOLOGINREQ(),
+		HeaderACACKHASH(),
+		HeaderACACCEPTLOGIN(),
+		HeaderACACCEPTLOGINOld(),
 	} {
 		got, ok := db.Length(id)
 		if !ok {

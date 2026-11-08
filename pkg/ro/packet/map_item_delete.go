@@ -11,7 +11,7 @@ import (
 // decremented, so the bag grid re-syncs without waiting for the next list verb.
 // Source: third_party/rathenaThailand src/map/packets.hpp:831
 // (DEFINE_PACKET_HEADER(ZC_DELETE_ITEM_FROM_BODY, 0x7fa)).
-const HeaderZCDeleteItemFromBody uint16 = 0x07fa
+func HeaderZCDeleteItemFromBody() uint16 { return opcode("ZC_DELETE_ITEM_FROM_BODY") }
 
 // sizeZCDeleteItemFromBody is the fixed on-wire length:
 // int16 packetType + int16 deleteType + uint16 index + int16 count
@@ -55,7 +55,7 @@ func (r *DeleteItemFromBodyResponse) Size() int { return sizeZCDeleteItemFromBod
 // Encode writes ZC_DELETE_ITEM_FROM_BODY to w.
 func (r *DeleteItemFromBodyResponse) Encode(w io.Writer) error {
 	var buf [sizeZCDeleteItemFromBody]byte
-	binary.LittleEndian.PutUint16(buf[0:2], HeaderZCDeleteItemFromBody)
+	binary.LittleEndian.PutUint16(buf[0:2], HeaderZCDeleteItemFromBody())
 	binary.LittleEndian.PutUint16(buf[2:4], uint16(r.DeleteType)) //nolint:gosec // bit-cast of a raw int16 wire field
 	binary.LittleEndian.PutUint16(buf[4:6], r.Index)
 	binary.LittleEndian.PutUint16(buf[6:8], uint16(r.Count)) //nolint:gosec // bit-cast of a raw int16 wire field

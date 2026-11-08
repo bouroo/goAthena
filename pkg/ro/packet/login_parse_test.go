@@ -14,8 +14,8 @@ func TestParseCALogin(t *testing.T) {
 	// "testuser" + NUL pad to 24, password "p@ss" + NUL pad to 24,
 	// client_type 0x01.
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCALogin)
-		writeLE16(f[0:], HeaderCALOGIN)
+		f := make([]byte, sizeCALogin())
+		writeLE16(f[0:], HeaderCALOGIN())
 		writeLE32(f[2:], 0x12345678)
 		copy(f[6:], "testuser")
 		copy(f[30:], "p@ss")
@@ -25,8 +25,8 @@ func TestParseCALogin(t *testing.T) {
 
 	// Username and password fill all 24 bytes with no NUL terminator.
 	fullFrame := func() []byte {
-		f := make([]byte, sizeCALogin)
-		writeLE16(f[0:], HeaderCALOGIN)
+		f := make([]byte, sizeCALogin())
+		writeLE16(f[0:], HeaderCALOGIN())
 		writeLE32(f[2:], 0xdeadbeef)
 		user := strings.Repeat("a", 24)
 		pass := strings.Repeat("b", 24)
@@ -67,7 +67,7 @@ func TestParseCALogin(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCALogin-1),
+			frame:      make([]byte, sizeCALogin()-1),
 			wantErr:    true,
 			wantErrSub: "54",
 		},
@@ -80,7 +80,7 @@ func TestParseCALogin(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCALogin)
+				f := make([]byte, sizeCALogin())
 				writeLE16(f[0:], 0x0065)
 				return f
 			}(),

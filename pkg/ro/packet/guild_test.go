@@ -34,8 +34,8 @@ func TestParseCZGuildLeaveRoundTrip(t *testing.T) {
 	if err := EncodeCZGuildLeave(&buf, 42, 2000001, 150001, "goodbye"); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	if got := buf.Len(); got != 52 {
-		t.Fatalf("CZ_REQ_LEAVE_GUILD size = %d, want 52", got)
+	if got := buf.Len(); got != 54 {
+		t.Fatalf("CZ_REQ_LEAVE_GUILD size = %d, want 54", got)
 	}
 	got, err := ParseCZGuildLeave(buf.Bytes())
 	if err != nil {
@@ -66,8 +66,8 @@ func TestParseCZGuildBreakRoundTrip(t *testing.T) {
 	if err := EncodeCZGuildBreak(&buf, "Emperium Crew"); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	if got := buf.Len(); got != 44 {
-		t.Fatalf("CZ_REQ_DISORGANIZE_GUILD size = %d, want 44", got)
+	if got := buf.Len(); got != 42 {
+		t.Fatalf("CZ_REQ_DISORGANIZE_GUILD size = %d, want 42", got)
 	}
 	got, err := ParseCZGuildBreak(buf.Bytes())
 	if err != nil {
@@ -119,7 +119,7 @@ func TestGuildResponseEncoders(t *testing.T) {
 			t.Fatalf("encode: %v", err)
 		}
 		b := buf.Bytes()
-		if len(b) != 3 || binary.LittleEndian.Uint16(b) != HeaderZCREQUESTMAKEGILD || b[2] != 0 {
+		if len(b) != 3 || binary.LittleEndian.Uint16(b) != HeaderZCREQUESTMAKEGILD() || b[2] != 0 {
 			t.Fatalf("bytes = %x", b)
 		}
 	})
@@ -151,7 +151,13 @@ func TestGuildResponseEncoders(t *testing.T) {
 			t.Fatalf("encode: %v", err)
 		}
 		b := buf.Bytes()
-		if len(b) != 47 || binary.LittleEndian.Uint32(b[2:6]) != 5 || b[14] != 1 || readNameField(b, 19, 24) != "Crew" || binary.LittleEndian.Uint32(b[43:47]) != 150001 {
+		// The frame's length is the source's own: the struct carries the
+		// guild leader's id only for PACKETVER_MAIN_NUM >= 20220216.
+		want := sizeZCUpdateGDID()
+		if len(b) != want || binary.LittleEndian.Uint32(b[2:6]) != 5 || b[14] != 1 || readNameField(b, 19, 24) != "Crew" {
+			t.Fatalf("bytes = %x", b)
+		}
+		if want >= 47 && binary.LittleEndian.Uint32(b[43:47]) != 150001 {
 			t.Fatalf("bytes = %x", b)
 		}
 	})

@@ -6,255 +6,467 @@ import (
 	"io"
 )
 
-// Storage packet family for PACKETVER 20250604. The wire layout mirrors
-// rAthena's inventory-item structure (NORMALITEM_INFO / EQUIPITEM_INFO at
-// packets_struct.hpp:418-507) because rAthena stores storage rows in the
-// same shapes as inventory rows. We reuse writeNormalItem / writeEquipItem.
+// Storage packet family for the Thai fork (rAthena-Thailand/rathenaThailand)
+// at PACKETVER 20250604.
 //
-// Source layout references:
+// The wire shapes come from the source pack, not from a hand-derived table:
 //
-//   - third_party/rathenaThailand/src/map/clif.cpp:7801-7850 (clif_storageList)
-//     — the per-list encoders for ZC_STORE_NORMALITEMLIST (0x07e9) +
-//     ZC_STORE_EQUIPMENTITEMLIST (0x07ea).
-//   - third_party/rathenaThailand/src/map/clif.cpp:8020-8035 (clif_storageItemListResult)
-//     — ZC_STOREITEMLISTRESULT (0x07eb) on deposit / withdraw.
-//   - third_party/rathenaThailand/src/map/clif.cpp:8018-8019 (clif_storageOpen)
-//     — ZC_ACCEPT_ENTER2 (0x07e3) on warehouse open.
-
-// CZ_REQ_OPENSTORE2 is the parsed form of CZ_REQ_OPENSTORE2 (header 0x07e4).
-// Layout for PACKETVER 20250604 (clif_packetdb.hpp binds 0x07e4,26):
+//   - Request opcodes and lengths: the source's RUNTIME packet table, which
+//     is what the client speaks. The source registers the same opcode in
+//     several PACKETVER blocks and packetdb_addpacket overwrites an
+//     opcode's entry
+//     (third_party/rathenaThailand/src/map/clif.cpp:25899-25906), so the
+//     effective registration for each handler is its LAST one. At
+//     PACKETVER 20250604 the runtime table holds:
 //
-//	int16 packetType (0x07e4)
-//	char  accountName[24]
+//	clif_parse_MoveToKafra:   0x0364 (len 8, index at 2, amount at 4)
+//	                          plus 0x07ec, 0x086c, 0x0893, 0x08a0,
+//	                          0x08ac, 0x093b
+//	clif_parse_MoveFromKafra: 0x0365 (len 8, index at 2, amount at 4)
+//	                          plus 0x0861, 0x0874, 0x08a6, 0x0963
+//	clif_parse_CloseKafra:    0x0193 (len 2)
 //
-// rAthena opens the warehouse on any post-NPC-trade storage access. We only
-// need the accountName to validate the warehouse belongs to the requesting
-// connection; the gateway already binds accountID through CZ_ENTER, so this
-// field is informational and not used by the handler.
-type CZReqOpenStore2 struct {
-	AccountName string
-}
+//     The handlers are registered at
+//     third_party/rathenaThailand/src/map/clif_packetdb.hpp:95-97 (the first
+//     block) and re-registered in the later PACKETVER blocks of the same
+//     file; the lookup by handler resolves the last registration, which is
+//     the one above. The registered field offsets (2 and 4) are where the
+//     source's handlers read the index and the amount, so the wire layout
+//     is cmd uint16 | index uint16 | amount uint32.
+//
+//   - Response structs: third_party/rathenaThailand/src/map/packets.hpp:1032-1048
+//
+//	PACKET_ZC_CLOSE_STORE            { int16 packetType; }                    (0xf8)
+//	PACKET_ZC_DELETE_ITEM_FROM_STORE { int16 packetType; uint16 index;
+//	                                    uint32 amount; }                       (0xf6)
+//	PACKET_ZC_NOTIFY_STOREITEM_COUNTINFO { int16 packetType; uint16 amount;
+//	                                    uint16 max_amount; }                  (0xf2)
+//
+//   - Storage item lists: third_party/rathenaThailand/src/map/packets_struct.hpp:1205-1260
+//     (ZC_STORE_ITEMLIST_NORMAL / ZC_STORE_ITEMLIST_EQUIP). Both carry an
+//     invType byte at PACKETVER_RE_NUM >= 20180912, and both compute their
+//     length as (sizeof(struct) - sizeof(list)) + sizeof(entry) * count
+//     (third_party/rathenaThailand/src/map/clif.cpp:3182-3235).
+//
+// The item entries are the same NORMALITEM_INFO / EQUIPITEM_INFO shapes the
+// inventory burst writes, so writeNormalItem / writeEquipItem are reused
+// verbatim.
 
-// sizeCZReqOpenStore2 is the fixed on-wire byte count for the post-20170412
-// PACKETVER_MAIN_NUM CZ_REQ_OPENSTORE2 form.
-const sizeCZReqOpenStore2 = 26
+// StorageInvType is the invType byte the source stamps on the warehouse item
+// lists: INVTYPE_STORAGE. Source: third_party/rathenaThailand/src/map/clif.cpp:99-104
+// (enum e_inventory_type) and :3161 (clif_storagelist sets
+// `e_inventory_type type = INVTYPE_STORAGE`).
+const StorageInvType uint8 = 2
 
-// SizeCZReqOpenStore2 is the exported alias used by the gateway dispatch
-// table to register the fixed-size handler entry.
-const SizeCZReqOpenStore2 = sizeCZReqOpenStore2
+// bagIndexOffset is the gap between a bag server row and the index the
+// client sends for a body→store move: the source computes
+// `item_index = RFIFOW(fd,info->pos[0])-2` in clif_parse_MoveToKafra
+// (third_party/rathenaThailand/src/map/clif.cpp:13648).
+const bagIndexOffset uint16 = 2
 
-// ParseCZReqOpenStore2 decodes a CZ_REQ_OPENSTORE2 frame.
-func ParseCZReqOpenStore2(frame []byte) (CZReqOpenStore2, error) {
-	if len(frame) < sizeCZReqOpenStore2 {
-		return CZReqOpenStore2{}, fmt.Errorf("packet: parse CZ_REQ_OPENSTORE2: want at least %d bytes, got %d", sizeCZReqOpenStore2, len(frame))
-	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQOPENSTORE2 {
-		return CZReqOpenStore2{}, fmt.Errorf("packet: parse CZ_REQ_OPENSTORE2: unexpected cmd 0x%04x", cmd)
-	}
-	return CZReqOpenStore2{AccountName: readNameField(frame[2:], 0, 24)}, nil
-}
+// storageIndexOffset is the gap between a warehouse server row and the index
+// the client sends for a store→body move: the source computes
+// `item_index = RFIFOW(fd,info->pos[0])-1` in clif_parse_MoveFromKafra
+// (third_party/rathenaThailand/src/map/clif.cpp:13677). It differs from the
+// bag offset on purpose — the warehouse grid has no reserved first slots.
+const storageIndexOffset uint16 = 1
 
-// Encode writes the CZ_REQ_OPENSTORE2 packet to w (used by the e2e harness).
-func (r CZReqOpenStore2) Encode(w io.Writer) error {
-	var buf [sizeCZReqOpenStore2]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQOPENSTORE2)
-	writeNameField(buf[:], 2, r.AccountName)
-	if _, err := w.Write(buf[:]); err != nil {
-		return fmt.Errorf("packet: write CZ_REQ_OPENSTORE2: %w", err)
-	}
-	return nil
-}
+// The on-wire lengths of the source's kafra storage requests. The source's
+// runtime packet table registers the two move requests with length 8
+// (field offsets 2 and 4) and the close request with length 2.
+const (
+	sizeCZMoveItemFromBodyToStore = 8
+	sizeCZMoveItemFromStoreToBody = 8
+	sizeCZCloseStore              = 2
+)
 
-// CZMoveItemToStore2 is the parsed form of CZ_MOVE_ITEM_TO_STORE2 (header
-// 0x07e6, 8 bytes). Index is the bag grid slot (server row + 2 per rAthena's
-// client_index convention); Amount is the stack count to deposit.
-type CZMoveItemToStore2 struct {
-	Index  uint16
+// CZMoveItemFromBodyToStore is the parsed form of the source's
+// CZ_MOVE_ITEM_FROM_BODY_TO_STORE request (opcode 0x0364, 8 bytes).
+//
+// The opcode is the source's runtime-table registration of
+// clif_parse_MoveToKafra: the source re-registers the opcode in later
+// PACKETVER blocks and packetdb_addpacket overwrites an opcode's entry
+// (third_party/rathenaThailand/src/map/clif.cpp:25899-25906), so the last
+// registration is the one the client speaks.
+//
+// Wire layout (the runtime registration carries the field offsets 2 and 4):
+//
+//	uint16 cmd   (0x0364)
+//	uint16 index (the client's bag slot)
+//	uint32 amount
+//
+// Index is the server's 0-based bag row, the value the source's handler
+// works with: clif_parse_MoveToKafra reads the wire index and subtracts 2
+// (third_party/rathenaThailand/src/map/clif.cpp:13648), because the client's
+// first two grid slots are reserved. Encode adds the same 2 back, so the
+// round trip is exact.
+type CZMoveItemFromBodyToStore struct {
+	// Index is the 0-based bag row the item moves from.
+	Index uint16
+	// Amount is the stack count to deposit.
 	Amount uint32
 }
 
-const sizeCZMoveItemToStore2 = 8
+// Size returns the on-wire byte length of the request (always 8).
+func (CZMoveItemFromBodyToStore) Size() int { return sizeCZMoveItemFromBodyToStore }
 
-// SizeCZMoveItemToStore2 is the exported alias used by the gateway dispatch
-// table to register the fixed-size handler entry.
-const SizeCZMoveItemToStore2 = sizeCZMoveItemToStore2
-
-// ParseCZMoveItemToStore2 decodes a CZ_MOVE_ITEM_TO_STORE2 frame.
-func ParseCZMoveItemToStore2(frame []byte) (CZMoveItemToStore2, error) {
-	if len(frame) < sizeCZMoveItemToStore2 {
-		return CZMoveItemToStore2{}, fmt.Errorf("packet: parse CZ_MOVE_ITEM_TO_STORE2: want at least %d bytes, got %d", sizeCZMoveItemToStore2, len(frame))
+// ParseCZMoveItemFromBodyToStore decodes a CZ_MOVE_ITEM_FROM_BODY_TO_STORE
+// frame.
+//
+// The index is returned as the server's bag row: the source's handler
+// subtracts 2 from the wire index
+// (third_party/rathenaThailand/src/map/clif.cpp:13648), and a wire index below
+// that offset is rejected here because the source's own range check
+// (`item_index < 0`) drops the request.
+func ParseCZMoveItemFromBodyToStore(frame []byte) (CZMoveItemFromBodyToStore, error) {
+	if len(frame) < sizeCZMoveItemFromBodyToStore {
+		return CZMoveItemFromBodyToStore{}, fmt.Errorf("packet: parse CZ_MOVE_ITEM_FROM_BODY_TO_STORE: want at least %d bytes, got %d", sizeCZMoveItemFromBodyToStore, len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZMOVEITEMTOSTORE2 {
-		return CZMoveItemToStore2{}, fmt.Errorf("packet: parse CZ_MOVE_ITEM_TO_STORE2: unexpected cmd 0x%04x", cmd)
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZMOVEITEMFROMBODYTOSTORE() {
+		return CZMoveItemFromBodyToStore{}, fmt.Errorf("packet: parse CZ_MOVE_ITEM_FROM_BODY_TO_STORE: unexpected cmd 0x%04x", cmd)
 	}
-	return CZMoveItemToStore2{
-		Index:  binary.LittleEndian.Uint16(frame[2:4]),
+	wire := binary.LittleEndian.Uint16(frame[2:4])
+	if wire < bagIndexOffset {
+		return CZMoveItemFromBodyToStore{}, fmt.Errorf("packet: parse CZ_MOVE_ITEM_FROM_BODY_TO_STORE: index %d is below the bag offset %d", wire, bagIndexOffset)
+	}
+	return CZMoveItemFromBodyToStore{
+		Index:  wire - bagIndexOffset,
 		Amount: binary.LittleEndian.Uint32(frame[4:8]),
 	}, nil
 }
 
-// Encode writes the CZ_MOVE_ITEM_TO_STORE2 packet to w (used by the e2e harness).
-func (r CZMoveItemToStore2) Encode(w io.Writer) error {
-	var buf [sizeCZMoveItemToStore2]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZMOVEITEMTOSTORE2)
-	binary.LittleEndian.PutUint16(buf[2:], r.Index)
+// Encode writes the CZ_MOVE_ITEM_FROM_BODY_TO_STORE packet to w.
+func (r CZMoveItemFromBodyToStore) Encode(w io.Writer) error {
+	buf := make([]byte, sizeCZMoveItemFromBodyToStore)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZMOVEITEMFROMBODYTOSTORE())
+	binary.LittleEndian.PutUint16(buf[2:], r.Index+bagIndexOffset)
 	binary.LittleEndian.PutUint32(buf[4:], r.Amount)
-	if _, err := w.Write(buf[:]); err != nil {
-		return fmt.Errorf("packet: write CZ_MOVE_ITEM_TO_STORE2: %w", err)
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_MOVE_ITEM_FROM_BODY_TO_STORE: %w", err)
 	}
 	return nil
 }
 
-// CZMoveItemToBody2 is the parsed form of CZ_MOVE_ITEM_TO_BODY2 (header
-// 0x07e7, 8 bytes). Index is the warehouse slot (server row + 2); Amount is
-// the stack count to withdraw.
-type CZMoveItemToBody2 struct {
-	Index  uint16
+// CZMoveItemFromStoreToBody is the parsed form of the source's
+// CZ_MOVE_ITEM_FROM_STORE_TO_BODY request (opcode 0x0365, 8 bytes).
+//
+// The opcode is the source's runtime-table registration of
+// clif_parse_MoveFromKafra: the source re-registers the opcode in later
+// PACKETVER blocks and packetdb_addpacket overwrites an opcode's entry
+// (third_party/rathenaThailand/src/map/clif.cpp:25899-25906), so the last
+// registration is the one the client speaks.
+//
+// Wire layout (the runtime registration carries the field offsets 2 and 4):
+//
+//	uint16 cmd   (0x0365)
+//	uint16 index (the client's warehouse slot)
+//	uint32 amount
+//
+// Index is the server's 0-based warehouse row, the value the source's handler
+// works with: clif_parse_MoveFromKafra reads the wire index and subtracts 1
+// (third_party/rathenaThailand/src/map/clif.cpp:13677). The offset differs
+// from the body→store move's offset (2) on purpose. Encode adds the same 1
+// back, so the round trip is exact.
+type CZMoveItemFromStoreToBody struct {
+	// Index is the 0-based warehouse row the item moves from.
+	Index uint16
+	// Amount is the stack count to withdraw.
 	Amount uint32
 }
 
-const sizeCZMoveItemToBody2 = 8
+// Size returns the on-wire byte length of the request (always 8).
+func (CZMoveItemFromStoreToBody) Size() int { return sizeCZMoveItemFromStoreToBody }
 
-// SizeCZMoveItemToBody2 is the exported alias used by the gateway dispatch
-// table to register the fixed-size handler entry.
-const SizeCZMoveItemToBody2 = sizeCZMoveItemToBody2
-
-// ParseCZMoveItemToBody2 decodes a CZ_MOVE_ITEM_TO_BODY2 frame.
-func ParseCZMoveItemToBody2(frame []byte) (CZMoveItemToBody2, error) {
-	if len(frame) < sizeCZMoveItemToBody2 {
-		return CZMoveItemToBody2{}, fmt.Errorf("packet: parse CZ_MOVE_ITEM_TO_BODY2: want at least %d bytes, got %d", sizeCZMoveItemToBody2, len(frame))
+// ParseCZMoveItemFromStoreToBody decodes a CZ_MOVE_ITEM_FROM_STORE_TO_BODY
+// frame.
+//
+// The index is returned as the server's warehouse row: the source's handler
+// subtracts 1 from the wire index
+// (third_party/rathenaThailand/src/map/clif.cpp:13677), and a wire index below
+// that offset is rejected here because the source's own range check drops the
+// request.
+func ParseCZMoveItemFromStoreToBody(frame []byte) (CZMoveItemFromStoreToBody, error) {
+	if len(frame) < sizeCZMoveItemFromStoreToBody {
+		return CZMoveItemFromStoreToBody{}, fmt.Errorf("packet: parse CZ_MOVE_ITEM_FROM_STORE_TO_BODY: want at least %d bytes, got %d", sizeCZMoveItemFromStoreToBody, len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZMOVEITEMTOBODY2 {
-		return CZMoveItemToBody2{}, fmt.Errorf("packet: parse CZ_MOVE_ITEM_TO_BODY2: unexpected cmd 0x%04x", cmd)
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZMOVEITEMFROMSTORETOBODY() {
+		return CZMoveItemFromStoreToBody{}, fmt.Errorf("packet: parse CZ_MOVE_ITEM_FROM_STORE_TO_BODY: unexpected cmd 0x%04x", cmd)
 	}
-	return CZMoveItemToBody2{
-		Index:  binary.LittleEndian.Uint16(frame[2:4]),
+	wire := binary.LittleEndian.Uint16(frame[2:4])
+	if wire < storageIndexOffset {
+		return CZMoveItemFromStoreToBody{}, fmt.Errorf("packet: parse CZ_MOVE_ITEM_FROM_STORE_TO_BODY: index %d is below the storage offset %d", wire, storageIndexOffset)
+	}
+	return CZMoveItemFromStoreToBody{
+		Index:  wire - storageIndexOffset,
 		Amount: binary.LittleEndian.Uint32(frame[4:8]),
 	}, nil
 }
 
-// Encode writes the CZ_MOVE_ITEM_TO_BODY2 packet to w (used by the e2e harness).
-func (r CZMoveItemToBody2) Encode(w io.Writer) error {
-	var buf [sizeCZMoveItemToBody2]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZMOVEITEMTOBODY2)
-	binary.LittleEndian.PutUint16(buf[2:], r.Index)
+// Encode writes the CZ_MOVE_ITEM_FROM_STORE_TO_BODY packet to w.
+func (r CZMoveItemFromStoreToBody) Encode(w io.Writer) error {
+	buf := make([]byte, sizeCZMoveItemFromStoreToBody)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZMOVEITEMFROMSTORETOBODY())
+	binary.LittleEndian.PutUint16(buf[2:], r.Index+storageIndexOffset)
 	binary.LittleEndian.PutUint32(buf[4:], r.Amount)
-	if _, err := w.Write(buf[:]); err != nil {
-		return fmt.Errorf("packet: write CZ_MOVE_ITEM_TO_BODY2: %w", err)
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write CZ_MOVE_ITEM_FROM_STORE_TO_BODY: %w", err)
 	}
 	return nil
 }
 
-// EncodeCZCloseStore writes the CZ_CLOSE_STORE packet to w (a bare 2-byte cmd;
-// used by the e2e harness). There is no body to parse — the handler validates
-// the cmd only.
-func EncodeCZCloseStore(w io.Writer) error {
-	var buf [2]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCLOSESTORE)
-	if _, err := w.Write(buf[:]); err != nil {
+// CZCloseStore is the parsed form of the source's CZ_CLOSE_STORE request
+// (opcode 0x0193, 2 bytes).
+//
+// The opcode is the source's runtime-table registration of
+// clif_parse_CloseKafra: the source re-registers the opcode in later
+// PACKETVER blocks and packetdb_addpacket overwrites an opcode's entry
+// (third_party/rathenaThailand/src/map/clif.cpp:25899-25906), so the last
+// registration is the one the client speaks.
+//
+// Wire layout (the runtime registration carries no field offsets):
+//
+//	uint16 cmd (0x0193)
+//
+// The request carries no body: the source's handler
+// (third_party/rathenaThailand/src/map/clif.cpp:13747) only clears the
+// session's storage flag.
+type CZCloseStore struct{}
+
+// Size returns the on-wire byte length of the request (always 2).
+func (CZCloseStore) Size() int { return sizeCZCloseStore }
+
+// ParseCZCloseStore decodes a CZ_CLOSE_STORE frame.
+func ParseCZCloseStore(frame []byte) (CZCloseStore, error) {
+	if len(frame) < sizeCZCloseStore {
+		return CZCloseStore{}, fmt.Errorf("packet: parse CZ_CLOSE_STORE: want at least %d bytes, got %d", sizeCZCloseStore, len(frame))
+	}
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCLOSESTORE() {
+		return CZCloseStore{}, fmt.Errorf("packet: parse CZ_CLOSE_STORE: unexpected cmd 0x%04x", cmd)
+	}
+	return CZCloseStore{}, nil
+}
+
+// Encode writes the CZ_CLOSE_STORE packet to w.
+func (CZCloseStore) Encode(w io.Writer) error {
+	buf := make([]byte, sizeCZCloseStore)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCLOSESTORE())
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_CLOSE_STORE: %w", err)
 	}
 	return nil
 }
 
-// StorageItemListResult encodes ZC_STOREITEMLISTRESULT (0x07eb, 6 bytes) —
-// the server→client ack for a deposit / withdraw. result is a rAthena
-// storage_result enum (clif.cpp:8021-8032): 0 = success, 1 = failure.
+// StorageDeleteItemResponse encodes the source's ZC_DELETE_ITEM_FROM_STORE
+// (0xf6, 8 bytes) — the server's notice that a warehouse row was removed.
 //
-// Wire layout (rathenaThailand/src/map/packets_struct.hpp packets.hpp storage
-// ack shape):
+// Wire layout (third_party/rathenaThailand/src/map/packets.hpp:1037-1042):
 //
-//	int16 packetType   (0x07eb)
-//	int16 packetLength (always 6)
-//	int16 result       (0 = success, 1 = failure)
-type StorageItemListResult struct {
-	Result uint16
+//	uint16 cmd   (0xf6)
+//	uint16 index (the client's warehouse slot)
+//	uint32 amount
+//
+// Index is the client-facing warehouse slot, the value the source stamps on
+// the packet (third_party/rathenaThailand/src/map/clif.cpp:4943 uses
+// client_storage_index, i.e. server row + 1).
+type StorageDeleteItemResponse struct {
+	// Index is the client-facing warehouse slot of the removed row.
+	Index uint16
+	// Amount is the removed stack count.
+	Amount uint32
 }
 
-// sizeZCStoreItemListResult is the fixed on-wire byte count for the
-// PACKETVER_MAIN_NUM>=20100427 form (clif.cpp:8021 emits sizeof(...)=6).
-const sizeZCStoreItemListResult = 6
+// Size returns the on-wire byte length Encode will write (always 8).
+func (StorageDeleteItemResponse) Size() int {
+	return layout("PACKET_ZC_DELETE_ITEM_FROM_STORE")
+}
 
-// Size returns the on-wire byte length Encode will write (always 6).
-func (StorageItemListResult) Size() int { return sizeZCStoreItemListResult }
-
-// Encode writes the ZC_STOREITEMLISTRESULT packet to w.
-func (r StorageItemListResult) Encode(w io.Writer) error {
-	var buf [sizeZCStoreItemListResult]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTOREITEMLISTRESULT)
-	binary.LittleEndian.PutUint16(buf[2:], sizeZCStoreItemListResult)
-	binary.LittleEndian.PutUint16(buf[4:], r.Result)
-	if _, err := w.Write(buf[:]); err != nil {
-		return fmt.Errorf("packet: write ZC_STOREITEMLISTRESULT: %w", err)
+// Encode writes the ZC_DELETE_ITEM_FROM_STORE packet to w.
+func (r StorageDeleteItemResponse) Encode(w io.Writer) error {
+	buf := make([]byte, r.Size())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCDELETEITEMFROMSTORE())
+	binary.LittleEndian.PutUint16(buf[2:], r.Index)
+	binary.LittleEndian.PutUint32(buf[4:], r.Amount)
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_DELETE_ITEM_FROM_STORE: %w", err)
 	}
 	return nil
 }
 
-// StorageListNormalResponse encodes a ZC_STORE_NORMALITEMLIST packet (command
-// 0x07e9, variable length, PACKETVER 20250604). The server sends this on
-// CZ_REQ_OPENSTORE2 to populate the warehouse grid with stackable items.
+// StorageItemCountInfoResponse encodes the source's
+// ZC_NOTIFY_STOREITEM_COUNTINFO (0xf2, 6 bytes) — the warehouse's current
+// and maximum item counts.
 //
-// Wire layout (rathenaThailand/src/map/clif.cpp:7801-7820 clif_storageList +
-// packets_struct.hpp:418-448 NORMALITEM_INFO):
+// Wire layout (third_party/rathenaThailand/src/map/packets.hpp:1044-1048):
 //
-//	int16  packetType   (0x07e9)
-//	int16  packetLength (4 + 26 * len(Items))
+//	uint16 cmd   (0xf2)
+//	uint16 amount     (current item count)
+//	uint16 maxAmount  (maximum item count)
+//
+// The source emits it right after the item lists when the warehouse opens
+// (third_party/rathenaThailand/src/map/storage.cpp:147-148 calls
+// clif_storagelist then clif_updatestorageamount).
+type StorageItemCountInfoResponse struct {
+	// Amount is the warehouse's current item count.
+	Amount uint16
+	// MaxAmount is the warehouse's maximum item count.
+	MaxAmount uint16
+}
+
+// Size returns the on-wire byte length Encode will write (always 6).
+func (StorageItemCountInfoResponse) Size() int {
+	return layout("PACKET_ZC_NOTIFY_STOREITEM_COUNTINFO")
+}
+
+// Encode writes the ZC_NOTIFY_STOREITEM_COUNTINFO packet to w.
+func (r StorageItemCountInfoResponse) Encode(w io.Writer) error {
+	buf := make([]byte, r.Size())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYSTOREITEMCOUNTINFO())
+	binary.LittleEndian.PutUint16(buf[2:], r.Amount)
+	binary.LittleEndian.PutUint16(buf[4:], r.MaxAmount)
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_NOTIFY_STOREITEM_COUNTINFO: %w", err)
+	}
+	return nil
+}
+
+// StorageCloseResponse encodes the source's ZC_CLOSE_STORE (0xf8, 2 bytes) —
+// the server's notice that the warehouse is closed.
+//
+// Wire layout (third_party/rathenaThailand/src/map/packets.hpp:1032-1035):
+//
+//	uint16 cmd (0xf8)
+type StorageCloseResponse struct{}
+
+// Size returns the on-wire byte length Encode will write (always 2).
+func (StorageCloseResponse) Size() int { return layout("PACKET_ZC_CLOSE_STORE") }
+
+// Encode writes the ZC_CLOSE_STORE packet to w.
+func (r StorageCloseResponse) Encode(w io.Writer) error {
+	buf := make([]byte, r.Size())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTORECLOSE())
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_CLOSE_STORE: %w", err)
+	}
+	return nil
+}
+
+// StorageListNormalResponse encodes the source's ZC_STORE_ITEMLIST_NORMAL
+// (opcode storageListNormalType, 0xb09 at PACKETVER 20250604) — the
+// warehouse's stackable rows.
+//
+// Wire layout (third_party/rathenaThailand/src/map/packets_struct.hpp:1205-1214
+// + NORMALITEM_INFO:418-448):
+//
+//	uint16  packetType   (0xb09)
+//	uint16  packetLength (5 + 26 * len(Items))
+//	uint8   invType      (INVTYPE_STORAGE = 2)
 //	[per item, 26 bytes:] InventoryNormalItem
 //
-// The header is 4 bytes (no invType byte — the warehouse uses the bare
-// NORMALITEM_INFO list, unlike the inventory init burst which carries a
-// trailing invType byte at PACKETVER >= 20181002).
+// The length is the source's own formula
+// (third_party/rathenaThailand/src/map/clif.cpp:3216): the struct minus its
+// list array, plus the entries actually written.
 type StorageListNormalResponse struct {
+	// InvType is the inventory type byte; the source stamps
+	// INVTYPE_STORAGE on the warehouse lists.
+	InvType uint8
+	// Items holds the stackable warehouse rows.
 	Items []InventoryNormalItem
 }
 
-// Encode writes the ZC_STORE_NORMALITEMLIST packet to w.
+// Size returns the on-wire byte length Encode will write.
+func (r StorageListNormalResponse) Size() int {
+	return sizeStorageListHeader + len(r.Items)*sizeNormalItem
+}
+
+// Encode writes the ZC_STORE_ITEMLIST_NORMAL packet to w.
 func (r StorageListNormalResponse) Encode(w io.Writer) error {
-	total := sizeStorageListHeader + len(r.Items)*sizeNormalItem
+	total := r.Size()
 	if total > 0xffff {
-		return fmt.Errorf("packet: write ZC_STORE_NORMALITEMLIST: too many items (%d)", len(r.Items))
+		return fmt.Errorf("packet: write ZC_STORE_ITEMLIST_NORMAL: too many items (%d)", len(r.Items))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTORENORMALITEMLIST)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTOREITEMLISTNORMAL())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // G115: the length is bounded by the check above.
+	buf[4] = r.InvType
 	for i, it := range r.Items {
 		writeNormalItem(buf, sizeStorageListHeader+i*sizeNormalItem, it)
 	}
 	if _, err := w.Write(buf); err != nil {
-		return fmt.Errorf("packet: write ZC_STORE_NORMALITEMLIST: %w", err)
+		return fmt.Errorf("packet: write ZC_STORE_ITEMLIST_NORMAL: %w", err)
 	}
 	return nil
 }
 
-// StorageListEquipResponse encodes a ZC_STORE_EQUIPMENTITEMLIST packet
-// (command 0x07ea, variable length, PACKETVER 20250604). The server sends
-// this on CZ_REQ_OPENSTORE2 to populate the warehouse grid with equipped
-// items.
+// StorageListEquipResponse encodes the source's ZC_STORE_ITEMLIST_EQUIP
+// (opcode storageListEquipType, 0xb39 at PACKETVER 20250604) — the
+// warehouse's equipment rows.
 //
-// Wire layout (rathenaThailand/src/map/clif.cpp:7822-7848 clif_storageList
-// + packets_struct.hpp:457-507 EQUIPITEM_INFO):
+// Wire layout (third_party/rathenaThailand/src/map/packets_struct.hpp:1250-1259
+// + EQUIPITEM_INFO:457-507):
 //
-//	int16  packetType   (0x07ea)
-//	int16  packetLength (4 + 57 * len(Items))
+//	uint16  packetType   (0xb39)
+//	uint16  packetLength (5 + 57 * len(Items))
+//	uint8   invType      (INVTYPE_STORAGE = 2)
 //	[per item, 57 bytes:] InventoryEquipItem
+//
+// The length is the source's own formula
+// (third_party/rathenaThailand/src/map/clif.cpp:3182): the struct minus its
+// list array, plus the entries actually written.
 type StorageListEquipResponse struct {
+	// InvType is the inventory type byte; the source stamps
+	// INVTYPE_STORAGE on the warehouse lists.
+	InvType uint8
+	// Items holds the equipment warehouse rows.
 	Items []InventoryEquipItem
 }
 
-// Encode writes the ZC_STORE_EQUIPMENTITEMLIST packet to w.
+// Size returns the on-wire byte length Encode will write.
+func (r StorageListEquipResponse) Size() int {
+	return sizeStorageListHeader + len(r.Items)*sizeEquipItem
+}
+
+// Encode writes the ZC_STORE_ITEMLIST_EQUIP packet to w.
 func (r StorageListEquipResponse) Encode(w io.Writer) error {
-	total := sizeStorageListHeader + len(r.Items)*sizeEquipItem
+	total := r.Size()
 	if total > 0xffff {
-		return fmt.Errorf("packet: write ZC_STORE_EQUIPMENTITEMLIST: too many items (%d)", len(r.Items))
+		return fmt.Errorf("packet: write ZC_STORE_ITEMLIST_EQUIP: too many items (%d)", len(r.Items))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTOREEQUIPMENTITEMLIST)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTOREITEMLISTEQUIP())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // G115: the length is bounded by the check above.
+	buf[4] = r.InvType
 	for i, it := range r.Items {
 		writeEquipItem(buf, sizeStorageListHeader+i*sizeEquipItem, it)
 	}
 	if _, err := w.Write(buf); err != nil {
-		return fmt.Errorf("packet: write ZC_STORE_EQUIPMENTITEMLIST: %w", err)
+		return fmt.Errorf("packet: write ZC_STORE_ITEMLIST_EQUIP: %w", err)
+	}
+	return nil
+}
+
+// EncodeStorageOpen writes the source's warehouse-open burst: the two item
+// lists followed by the item count.
+//
+// The source opens the warehouse from the NPC script
+// (third_party/rathenaThailand/src/map/script.cpp:10966 calls
+// storage_storageopen), and storage_storageopen sends the lists and then the
+// count (third_party/rathenaThailand/src/map/storage.cpp:147-148):
+//
+//	clif_storagelist(sd, sd->storage.u.items_storage, ...);
+//	clif_updatestorageamount(*sd, sd->storage.amount, sd->storage.max_amount);
+//
+// There is no client request that opens the warehouse, so the burst is a
+// server-side entry point: the gateway calls it when the player talks to the
+// kafra NPC.
+func EncodeStorageOpen(w io.Writer, normal []InventoryNormalItem, equip []InventoryEquipItem, amount, maxAmount uint16) error {
+	if err := (StorageListNormalResponse{InvType: StorageInvType, Items: normal}).Encode(w); err != nil {
+		return fmt.Errorf("packet: write warehouse open: %w", err)
+	}
+	if err := (StorageListEquipResponse{InvType: StorageInvType, Items: equip}).Encode(w); err != nil {
+		return fmt.Errorf("packet: write warehouse open: %w", err)
+	}
+	if err := (StorageItemCountInfoResponse{Amount: amount, MaxAmount: maxAmount}).Encode(w); err != nil {
+		return fmt.Errorf("packet: write warehouse open: %w", err)
 	}
 	return nil
 }

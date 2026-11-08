@@ -20,48 +20,95 @@ import (
 // S1 moves NO inventory or zeny, so it carries zero item-duplication surface;
 // the atomic-commit slice (S3, CZ_TRADE_COMMIT 0x00ef) is a separate,
 // economy-critical unit and is intentionally NOT implemented here.
-const (
-	// C→S opcodes (clif_packetdb.hpp:87,89,93).
-	HeaderCZTRADEREQUEST uint16 = 0x00e4 // CZ_TRADE_REQUEST — clif_parse_TradeRequest
-	HeaderCZTRADEACK     uint16 = 0x00e6 // CZ_TRADE_ACK — clif_parse_TradeAck (type==3 accept / type==4 cancel)
-	HeaderCZTRADECANCEL  uint16 = 0x00ed // CZ_TRADE_CANCEL — clif_parse_TradeCancel
-	// S→C opcodes. ZC_REQ/ZC_ACK are the PACKETVER > 6 layouts (packets.hpp:373,
-	// :387) — the pre-6 0x9a/0x0e7 aliases are NOT active at 20250604. ZC_CANCEL
-	// is a plain 2-byte cmd (packets.hpp:1062).
-	HeaderZCREQEXCHANGEITEM    uint16 = 0x01f4 // ZC_REQ_EXCHANGE_ITEM — to TARGET, opens its trade dialog
-	HeaderZCACKEXCHANGEITEM    uint16 = 0x01f5 // ZC_ACK_EXCHANGE_ITEM — result to one or both parties
-	HeaderZCCANCELEXCHANGEITEM uint16 = 0x00ee // ZC_CANCEL_EXCHANGE_ITEM — to both parties on cancel
-	// S2 add-item/ok opcodes (clif_packetdb.hpp:90,92; packets_struct.hpp:2642).
-	HeaderCZADDEXCHANGEITEM uint16 = 0x00e8 // CZ_ADD_EXCHANGE_ITEM — add an item (or zeny, index==0) to my side
-	HeaderCZTRADEOK         uint16 = 0x00eb // CZ_TRADE_OK — lock my side
-	// 0x0b42 is the PACKETVER >= 20200916 ZC_ADD variant (packets_struct.hpp:2642)
-	// — the active one at 20250604 (the 0x0a96/0x0a09/0x080f/0x00e9 variants are
-	// for earlier clients). ZC_ACK_ADD and ZC_CONCLUDE are version-stable.
-	HeaderZCADDEXCHANGEITEM      uint16 = 0x0b42 // ZC_ADD_EXCHANGE_ITEM — item staged, to PARTNER
-	HeaderZCACKADDEXCHANGEITEM   uint16 = 0x00ea // ZC_ACK_ADD_EXCHANGE_ITEM — add result to SELF
-	HeaderZCCONCLUDEEXCHANGEITEM uint16 = 0x00ec // ZC_CONCLUDE_EXCHANGE_ITEM — Ok pressed, to SELF
-)
 
-const (
-	sizeCZTradeRequest   = 6  // int16 cmd + uint32 targetGID (clif_packetdb.hpp:87 binds 0x00e4,6)
-	sizeCZTradeAck       = 3  // int16 cmd + uint8 type (clif_packetdb.hpp:89 binds 0x00e6,3)
-	sizeCZTradeCancel    = 2  // int16 cmd only (clif_packetdb.hpp:93 binds 0x00ed,2)
-	sizeZCReqExchange    = 32 // int16 cmd + char[24] requesterName + uint32 targetId + uint16 targetLv
-	sizeZCAckExchange    = 9  // int16 cmd + uint8 result + uint32 targetId + uint16 targetLv
-	sizeZCCancelExchange = 2  // int16 cmd only
-	// S2.
-	sizeCZAddExchangeItem  = 8 // int16 cmd + uint16 index + int32 amount (packets.hpp:1816)
-	sizeCZTradeOk          = 2 // int16 cmd only (clif_packetdb.hpp:92 binds 0x00eb,2)
-	sizeZCAckAddExchange   = 5 // int16 cmd + uint16 index + uint8 result (packets.hpp:405)
-	sizeZCConcludeExchange = 3 // int16 cmd + uint8 who (packets.hpp:1067)
-	// sizeZCAddExchangeItem = the PACKETVER >= 20200916 ZC_ADD layout
-	// (packets_struct.hpp:2608-2639): cmd(2) + itemId(4) + itemType(1) +
-	// amount(4) + identified(1) + damaged(1) + EQUIPSLOTINFO{card[4]uint32}(16)
-	// + ItemOptions[5]{index,val,parm}(25) + location(4) + look(2) + refine(1)
-	// + grade(1) = 2+4+1+4+1+1+16+25+4+2+1+1 = 62. NOTE refine moved POST-cards
-	// at this gate (the older layout has it pre-cards).
-	sizeZCAddExchangeItem = 62
-)
+// C→S opcodes (clif_packetdb.hpp:87,89,93).
+// HeaderCZTRADEREQUEST is the source pack's own opcode for this packet.
+func HeaderCZTRADEREQUEST() uint16 {
+	return opcodeForHandler("clif_parse_TradeRequest", sizeCZTradeRequest(), []int{2})
+}
+
+// HeaderCZTRADEACK is the source pack's own opcode for this packet.
+func HeaderCZTRADEACK() uint16 {
+	return opcodeForHandler("clif_parse_TradeAck", sizeCZTradeAck(), []int{2})
+}
+
+// HeaderCZTRADECANCEL is the source pack's own opcode for this packet.
+func HeaderCZTRADECANCEL() uint16 {
+	return opcodeForHandler("clif_parse_TradeCancel", sizeCZTradeCancel(), nil)
+}
+
+// S→C opcodes. ZC_REQ/ZC_ACK are the PACKETVER > 6 layouts (packets.hpp:373,
+// :387) — the pre-6 0x9a/0x0e7 aliases are NOT active at 20250604. ZC_CANCEL
+// is a plain 2-byte cmd (packets.hpp:1062).
+// HeaderZCREQEXCHANGEITEM is the source pack's own opcode for this packet.
+func HeaderZCREQEXCHANGEITEM() uint16 { return opcode("ZC_REQ_EXCHANGE_ITEM") }
+
+// HeaderZCACKEXCHANGEITEM is the source pack's own opcode for this packet.
+func HeaderZCACKEXCHANGEITEM() uint16 { return opcode("ZC_ACK_EXCHANGE_ITEM") }
+
+// HeaderZCCANCELEXCHANGEITEM is the source pack's own opcode for this packet.
+func HeaderZCCANCELEXCHANGEITEM() uint16 { return opcode("ZC_CANCEL_EXCHANGE_ITEM") }
+
+// S2 add-item/ok opcodes (clif_packetdb.hpp:90,92; packets_struct.hpp:2642).
+// HeaderCZADDEXCHANGEITEM is the source pack's own opcode for this packet.
+func HeaderCZADDEXCHANGEITEM() uint16 { return opcode("CZ_ADD_EXCHANGE_ITEM") }
+
+// HeaderCZTRADEOK is the source pack's own opcode for this packet.
+func HeaderCZTRADEOK() uint16 {
+	return opcodeForHandler("clif_parse_TradeOk", sizeCZTradeOk(), nil)
+}
+
+// 0x0b42 is the PACKETVER >= 20200916 ZC_ADD variant (packets_struct.hpp:2642)
+// — the active one at 20250604 (the 0x0a96/0x0a09/0x080f/0x00e9 variants are
+// for earlier clients). ZC_ACK_ADD and ZC_CONCLUDE are version-stable.
+// HeaderZCADDEXCHANGEITEM is the source pack's own opcode for this packet.
+func HeaderZCADDEXCHANGEITEM() uint16 { return opcode("ZC_ADD_EXCHANGE_ITEM") }
+
+// HeaderZCACKADDEXCHANGEITEM is the source pack's own opcode for this packet.
+func HeaderZCACKADDEXCHANGEITEM() uint16 { return opcode("ZC_ACK_ADD_EXCHANGE_ITEM") }
+
+// HeaderZCCONCLUDEEXCHANGEITEM is the source pack's own opcode for this packet.
+func HeaderZCCONCLUDEEXCHANGEITEM() uint16 { return opcode("ZC_CONCLUDE_EXCHANGE_ITEM") }
+
+// sizeCZTradeRequest is the source pack's own length for this packet.
+func sizeCZTradeRequest() int { return packetLengthOf(228) }
+
+// sizeCZTradeAck is the source pack's own length for this packet.
+func sizeCZTradeAck() int { return packetLengthOf(230) }
+
+// sizeCZTradeCancel is the source pack's own length for this packet.
+func sizeCZTradeCancel() int { return packetLengthOf(237) }
+
+// sizeZCReqExchange is the source pack's own length for this packet.
+func sizeZCReqExchange() int { return layout("PACKET_ZC_REQ_EXCHANGE_ITEM") }
+
+// sizeZCAckExchange is the source pack's own length for this packet.
+func sizeZCAckExchange() int { return layout("PACKET_ZC_ACK_EXCHANGE_ITEM") }
+
+// sizeZCCancelExchange is the source pack's own length for this packet.
+func sizeZCCancelExchange() int { return layout("PACKET_ZC_CANCEL_EXCHANGE_ITEM") }
+
+// S2.
+// sizeCZAddExchangeItem is the source pack's own length for this packet.
+func sizeCZAddExchangeItem() int { return packetLengthOf(232) }
+
+// sizeCZTradeOk is the source pack's own length for this packet.
+func sizeCZTradeOk() int { return packetLengthOf(235) }
+
+// sizeZCAckAddExchange is the source pack's own length for this packet.
+func sizeZCAckAddExchange() int { return packetLengthOf(234) }
+
+// sizeZCConcludeExchange is the source pack's own length for this packet.
+func sizeZCConcludeExchange() int { return layout("PACKET_ZC_CONCLUDE_EXCHANGE_ITEM") }
+
+// sizeZCAddExchangeItem() = the PACKETVER >= 20200916 ZC_ADD layout
+// (packets_struct.hpp:2608-2639): cmd(2) + itemId(4) + itemType(1) +
+// amount(4) + identified(1) + damaged(1) + EQUIPSLOTINFO{card[4]uint32}(16)
+// + ItemOptions[5]{index,val,parm}(25) + location(4) + look(2) + refine(1)
+// + grade(1) = 2+4+1+4+1+1+16+25+4+2+1+1 = 62. NOTE refine moved POST-cards
+// at this gate (the older layout has it pre-cards).
+// sizeZCAddExchangeItem is the source pack's own length for this packet.
+func sizeZCAddExchangeItem() int { return layout("PACKET_ZC_ADD_EXCHANGE_ITEM") }
 
 // TradeAckResult is the e_ack_trade_response enum carried in ZC_ACK_EXCHANGE_ITEM's
 // result byte (clif.cpp:4730-4737): the reason a trade request/ack failed, or the
@@ -97,10 +144,10 @@ type CZTradeRequest struct {
 
 // ParseCZTradeRequest decodes a CZ_TRADE_REQUEST frame.
 func ParseCZTradeRequest(frame []byte) (CZTradeRequest, error) {
-	if len(frame) < sizeCZTradeRequest {
-		return CZTradeRequest{}, fmt.Errorf("packet: parse CZ_TRADE_REQUEST: want at least %d bytes, got %d", sizeCZTradeRequest, len(frame))
+	if len(frame) < sizeCZTradeRequest() {
+		return CZTradeRequest{}, fmt.Errorf("packet: parse CZ_TRADE_REQUEST: want at least %d bytes, got %d", sizeCZTradeRequest(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZTRADEREQUEST {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZTRADEREQUEST() {
 		return CZTradeRequest{}, fmt.Errorf("packet: parse CZ_TRADE_REQUEST: unexpected cmd 0x%04x", cmd)
 	}
 	return CZTradeRequest{TargetGID: binary.LittleEndian.Uint32(frame[2:6])}, nil
@@ -108,10 +155,10 @@ func ParseCZTradeRequest(frame []byte) (CZTradeRequest, error) {
 
 // Encode writes the CZ_TRADE_REQUEST packet to w (used by the e2e harness).
 func (r CZTradeRequest) Encode(w io.Writer) error {
-	var buf [sizeCZTradeRequest]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZTRADEREQUEST)
+	buf := make([]byte, sizeCZTradeRequest())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZTRADEREQUEST())
 	binary.LittleEndian.PutUint32(buf[2:], r.TargetGID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_TRADE_REQUEST: %w", err)
 	}
 	return nil
@@ -126,10 +173,10 @@ type CZTradeAck struct {
 
 // ParseCZTradeAck decodes a CZ_TRADE_ACK frame.
 func ParseCZTradeAck(frame []byte) (CZTradeAck, error) {
-	if len(frame) < sizeCZTradeAck {
-		return CZTradeAck{}, fmt.Errorf("packet: parse CZ_TRADE_ACK: want at least %d bytes, got %d", sizeCZTradeAck, len(frame))
+	if len(frame) < sizeCZTradeAck() {
+		return CZTradeAck{}, fmt.Errorf("packet: parse CZ_TRADE_ACK: want at least %d bytes, got %d", sizeCZTradeAck(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZTRADEACK {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZTRADEACK() {
 		return CZTradeAck{}, fmt.Errorf("packet: parse CZ_TRADE_ACK: unexpected cmd 0x%04x", cmd)
 	}
 	return CZTradeAck{Type: frame[2]}, nil
@@ -137,10 +184,10 @@ func ParseCZTradeAck(frame []byte) (CZTradeAck, error) {
 
 // Encode writes the CZ_TRADE_ACK packet to w (used by the e2e harness).
 func (r CZTradeAck) Encode(w io.Writer) error {
-	var buf [sizeCZTradeAck]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZTRADEACK)
+	buf := make([]byte, sizeCZTradeAck())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZTRADEACK())
 	buf[2] = r.Type
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_TRADE_ACK: %w", err)
 	}
 	return nil
@@ -150,9 +197,9 @@ func (r CZTradeAck) Encode(w io.Writer) error {
 // used by the e2e harness). There is no body to parse — the handler validates the
 // cmd only.
 func EncodeCZTradeCancel(w io.Writer) error {
-	var buf [sizeCZTradeCancel]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZTRADECANCEL)
-	if _, err := w.Write(buf[:]); err != nil {
+	buf := make([]byte, sizeCZTradeCancel())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZTRADECANCEL())
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_TRADE_CANCEL: %w", err)
 	}
 	return nil
@@ -177,16 +224,16 @@ type TradeRequestResponse struct {
 }
 
 // Size returns the on-wire byte length Encode will write (always 32).
-func (r TradeRequestResponse) Size() int { return sizeZCReqExchange }
+func (r TradeRequestResponse) Size() int { return sizeZCReqExchange() }
 
 // Encode writes the ZC_REQ_EXCHANGE_ITEM packet to w.
 func (r TradeRequestResponse) Encode(w io.Writer) error {
-	var buf [sizeZCReqExchange]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQEXCHANGEITEM)
-	writeNameField(buf[:], 2, r.RequesterName)
+	buf := make([]byte, sizeZCReqExchange())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQEXCHANGEITEM())
+	writeNameField(buf, 2, r.RequesterName)
 	binary.LittleEndian.PutUint32(buf[26:], r.TargetID)
 	binary.LittleEndian.PutUint16(buf[30:], r.TargetLv)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_REQ_EXCHANGE_ITEM: %w", err)
 	}
 	return nil
@@ -203,16 +250,16 @@ type TradeAckResponse struct {
 }
 
 // Size returns the on-wire byte length Encode will write (always 9).
-func (r TradeAckResponse) Size() int { return sizeZCAckExchange }
+func (r TradeAckResponse) Size() int { return sizeZCAckExchange() }
 
 // Encode writes the ZC_ACK_EXCHANGE_ITEM packet to w.
 func (r TradeAckResponse) Encode(w io.Writer) error {
-	var buf [sizeZCAckExchange]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKEXCHANGEITEM)
+	buf := make([]byte, sizeZCAckExchange())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKEXCHANGEITEM())
 	buf[2] = r.Result
 	binary.LittleEndian.PutUint32(buf[3:], r.TargetID)
 	binary.LittleEndian.PutUint16(buf[7:], r.TargetLv)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_EXCHANGE_ITEM: %w", err)
 	}
 	return nil
@@ -225,13 +272,13 @@ func (r TradeAckResponse) Encode(w io.Writer) error {
 type CancelExchangeResponse struct{}
 
 // Size returns the on-wire byte length Encode will write (always 2).
-func (CancelExchangeResponse) Size() int { return sizeZCCancelExchange }
+func (CancelExchangeResponse) Size() int { return sizeZCCancelExchange() }
 
 // Encode writes the ZC_CANCEL_EXCHANGE_ITEM packet to w.
 func (CancelExchangeResponse) Encode(w io.Writer) error {
-	var buf [sizeZCCancelExchange]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCANCELEXCHANGEITEM)
-	if _, err := w.Write(buf[:]); err != nil {
+	buf := make([]byte, sizeZCCancelExchange())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCANCELEXCHANGEITEM())
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_CANCEL_EXCHANGE_ITEM: %w", err)
 	}
 	return nil
@@ -262,10 +309,10 @@ type CZAddExchangeItem struct {
 
 // ParseCZAddExchangeItem decodes a CZ_ADD_EXCHANGE_ITEM frame.
 func ParseCZAddExchangeItem(frame []byte) (CZAddExchangeItem, error) {
-	if len(frame) < sizeCZAddExchangeItem {
-		return CZAddExchangeItem{}, fmt.Errorf("packet: parse CZ_ADD_EXCHANGE_ITEM: want at least %d bytes, got %d", sizeCZAddExchangeItem, len(frame))
+	if len(frame) < sizeCZAddExchangeItem() {
+		return CZAddExchangeItem{}, fmt.Errorf("packet: parse CZ_ADD_EXCHANGE_ITEM: want at least %d bytes, got %d", sizeCZAddExchangeItem(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZADDEXCHANGEITEM {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZADDEXCHANGEITEM() {
 		return CZAddExchangeItem{}, fmt.Errorf("packet: parse CZ_ADD_EXCHANGE_ITEM: unexpected cmd 0x%04x", cmd)
 	}
 	return CZAddExchangeItem{
@@ -276,11 +323,11 @@ func ParseCZAddExchangeItem(frame []byte) (CZAddExchangeItem, error) {
 
 // Encode writes the CZ_ADD_EXCHANGE_ITEM packet to w (used by the e2e harness).
 func (r CZAddExchangeItem) Encode(w io.Writer) error {
-	var buf [sizeCZAddExchangeItem]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZADDEXCHANGEITEM)
+	buf := make([]byte, sizeCZAddExchangeItem())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZADDEXCHANGEITEM())
 	binary.LittleEndian.PutUint16(buf[2:], r.Index)
 	binary.LittleEndian.PutUint32(buf[4:], uint32(r.Amount)) //nolint:gosec // G115: wire slot is signed int32
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_ADD_EXCHANGE_ITEM: %w", err)
 	}
 	return nil
@@ -299,15 +346,15 @@ type AckAddExchangeItem struct {
 }
 
 // Size returns the on-wire byte length Encode will write (always 5).
-func (AckAddExchangeItem) Size() int { return sizeZCAckAddExchange }
+func (AckAddExchangeItem) Size() int { return sizeZCAckAddExchange() }
 
 // Encode writes the ZC_ACK_ADD_EXCHANGE_ITEM packet to w.
 func (r AckAddExchangeItem) Encode(w io.Writer) error {
-	var buf [sizeZCAckAddExchange]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKADDEXCHANGEITEM)
+	buf := make([]byte, sizeZCAckAddExchange())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKADDEXCHANGEITEM())
 	binary.LittleEndian.PutUint16(buf[2:], r.Index)
 	buf[4] = r.Result
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_ADD_EXCHANGE_ITEM: %w", err)
 	}
 	return nil
@@ -348,12 +395,12 @@ type ZCAddExchangeItem struct {
 }
 
 // Size returns the on-wire byte length Encode will write (always 62).
-func (ZCAddExchangeItem) Size() int { return sizeZCAddExchangeItem }
+func (ZCAddExchangeItem) Size() int { return sizeZCAddExchangeItem() }
 
 // Encode writes the ZC_ADD_EXCHANGE_ITEM packet to w.
 func (r ZCAddExchangeItem) Encode(w io.Writer) error {
-	var buf [sizeZCAddExchangeItem]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCADDEXCHANGEITEM)
+	buf := make([]byte, sizeZCAddExchangeItem())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCADDEXCHANGEITEM())
 	binary.LittleEndian.PutUint32(buf[2:], r.ItemID)
 	buf[6] = r.ItemType
 	binary.LittleEndian.PutUint32(buf[7:], uint32(r.Amount)) //nolint:gosec // G115: wire slot is signed int32
@@ -374,7 +421,7 @@ func (r ZCAddExchangeItem) Encode(w io.Writer) error {
 	binary.LittleEndian.PutUint16(buf[off+4:], r.Look)
 	buf[off+6] = r.Refine
 	buf[off+7] = r.Grade
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ADD_EXCHANGE_ITEM: %w", err)
 	}
 	return nil
@@ -390,14 +437,14 @@ type ConcludeExchangeItem struct {
 }
 
 // Size returns the on-wire byte length Encode will write (always 3).
-func (ConcludeExchangeItem) Size() int { return sizeZCConcludeExchange }
+func (ConcludeExchangeItem) Size() int { return sizeZCConcludeExchange() }
 
 // Encode writes the ZC_CONCLUDE_EXCHANGE_ITEM packet to w.
 func (r ConcludeExchangeItem) Encode(w io.Writer) error {
-	var buf [sizeZCConcludeExchange]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCONCLUDEEXCHANGEITEM)
+	buf := make([]byte, sizeZCConcludeExchange())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCONCLUDEEXCHANGEITEM())
 	buf[2] = r.Who
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_CONCLUDE_EXCHANGE_ITEM: %w", err)
 	}
 	return nil
@@ -406,9 +453,9 @@ func (r ConcludeExchangeItem) Encode(w io.Writer) error {
 // EncodeCZTradeOk writes the CZ_TRADE_OK packet to w (a bare 2-byte cmd; used by
 // the e2e harness). There is no body — the handler only needs the verified actor.
 func EncodeCZTradeOk(w io.Writer) error {
-	var buf [sizeCZTradeOk]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZTRADEOK)
-	if _, err := w.Write(buf[:]); err != nil {
+	buf := make([]byte, sizeCZTradeOk())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZTRADEOK())
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_TRADE_OK: %w", err)
 	}
 	return nil

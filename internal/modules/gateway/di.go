@@ -158,6 +158,11 @@ func NewMapServer(inj do.Injector, log *slog.Logger) (*app.MapServer, error) {
 		return nil, fmt.Errorf("map server: %w", err)
 	}
 	attachOptionalServices(ms, inj, log)
+	// The gateway owns the player's connection and the storage frames, so it
+	// implements the content module's ScriptStorage port (the `openstorage`
+	// builtin's target). The content module never imports the gateway; the
+	// port is handed over here, at the composition edge.
+	content.SetStorage(ms)
 	return ms, nil
 }
 

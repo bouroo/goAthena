@@ -21,11 +21,22 @@ import (
 //	            37
 //
 // NAME_LENGTH = 23 + 1 = 24 (rathena/src/common/mmo.hpp:154). The
-// 0x0b32 (PACKETVER >= 20190807) variant replaces the fixed-name slot
-// with uint16 level2 and is not handled here — the gateway targets
-// the pre-2019 client, and 0x010f is only ever paired with this
-// SKILLDATA shape.
-const sizeSkillEntry = 37
+// post-2019 variant replaces the fixed-name slot with uint16 level2,
+// so the entry's size comes from the source pack's own struct.
+func sizeSkillEntry() int { return layout("SKILLDATA") }
+
+// SizeSkillEntry is the exported entry width, so a caller that walks the
+// list reads the source's own value rather than a copy.
+func SizeSkillEntry() int { return sizeSkillEntry() }
+
+// skillEntryHasName reports whether the resolved SKILLDATA carries the
+// fixed 24-byte name slot, which the pre-2019 form does and the
+// post-2019 form does not.
+func skillEntryHasName() bool { return sizeSkillEntry() >= 37 }
+
+// SkillEntryHasName reports whether the resolved SKILLDATA carries the
+// fixed 24-byte name slot.
+func SkillEntryHasName() bool { return skillEntryHasName() }
 
 // SkillData is the per-entry shape rAthena writes into ZC_SKILLINFO_LIST
 // for PACKETVER < 20190807. Source:
@@ -34,7 +45,7 @@ const sizeSkillEntry = 37
 //	ZC_SKILLINFO_LIST (0x010f) declared at rathena/src/map/
 //	packets_struct.hpp:4271-4279.
 //
-// On-wire size: sizeSkillEntry (37 bytes).
+// On-wire size: sizeSkillEntry() (37 bytes).
 //
 // Inf carries the skill's learned-state bitmap (rAthena stores it as
 // `int` but only the lower bits are meaningful — see clif.cpp:5678 for
@@ -48,6 +59,10 @@ type SkillData struct {
 	Range2 uint16
 	Name   string
 	UpFlag uint8
+	// Level2 is the post-2019 form's second level slot, which the source
+	// puts where the name slot used to be (src/map/packets_struct.hpp:
+	// 4240-4247). The pre-2019 form has no such field.
+	Level2 uint16
 }
 
 // SkillInfoListResponse encodes a ZC_SKILLINFO_LIST packet (command
@@ -74,15 +89,15 @@ type SkillInfoListResponse struct {
 // length slot disagrees with the trailing bytes. Names longer than
 // the 24-byte slot are truncated and the slot stays NUL-terminated.
 func (r SkillInfoListResponse) Encode(w io.Writer) error {
-	total := 4 + len(r.Skills)*sizeSkillEntry
+	total := 4 + len(r.Skills)*sizeSkillEntry()
 	if total > 0xffff {
 		return fmt.Errorf("packet: write ZC_SKILLINFO_LIST: too many skills (%d)", len(r.Skills))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSKILLINFOLIST)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSKILLINFOLIST())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // bounded by the length check above
 	for i, s := range r.Skills {
-		writeSkillEntry(buf, 4+i*sizeSkillEntry, s)
+		writeSkillEntry(buf, 4+i*sizeSkillEntry(), s)
 	}
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_SKILLINFO_LIST: %w", err)
@@ -93,7 +108,7 @@ func (r SkillInfoListResponse) Encode(w io.Writer) error {
 // writeSkillEntry serializes one SkillData into the 37-byte rAthena
 // SKILLDATA layout for PACKETVER < 20190807. The caller is responsible
 // for slicing the destination buffer so the offset has enough room
-// (sizeSkillEntry bytes).
+// (sizeSkillEntry() bytes).
 //
 // Names are copied into a fixed 24-byte slot, NUL-terminated, and
 // truncated when they would overflow the slot — the client's skill
@@ -105,8 +120,15 @@ func writeSkillEntry(buf []byte, off int, s SkillData) {
 	binary.LittleEndian.PutUint16(buf[off+6:], s.Level)
 	binary.LittleEndian.PutUint16(buf[off+8:], s.SP)
 	binary.LittleEndian.PutUint16(buf[off+10:], s.Range2)
-	writeFixedName(buf[off+12:off+12+24], s.Name)
-	buf[off+36] = s.UpFlag
+	if skillEntryHasName() {
+		writeFixedName(buf[off+12:off+12+24], s.Name)
+		buf[off+36] = s.UpFlag
+		return
+	}
+	// The post-2019 form replaces the name slot with an upgradable flag and
+	// a uint16 level2 (src/map/packets_struct.hpp:4240-4247).
+	buf[off+12] = s.UpFlag
+	binary.LittleEndian.PutUint16(buf[off+13:], s.Level2)
 }
 
 // writeFixedName copies src into the 24-byte name slot, NUL-terminated.
@@ -141,7 +163,7 @@ func writeFixedName(dst []byte, src string) {
 //	 8     2    range2           uint16
 //	10     1    upgradableFlag  uint8   (1 = can level further)
 //
-// Total: 11 bytes = SizeZCSkillInfoUpdate.
+// Total: 11 bytes = SizeZCSkillInfoUpdate().
 type SkillInfoUpdateResponse struct {
 	SkillID        int32
 	Level          int16
@@ -159,8 +181,8 @@ func (r SkillInfoUpdateResponse) Encode(w io.Writer) error {
 	level := uint16(r.Level)     //nolint:gosec // levels cap at 10
 	sp := uint16(r.SP)           //nolint:gosec // per-level SP table values
 	rng := uint16(r.Range2)      //nolint:gosec // ranges fit uint16
-	buf := make([]byte, SizeZCSkillInfoUpdate)
-	binary.LittleEndian.PutUint16(buf[0:2], HeaderZCSKILLINFOUPDATE)
+	buf := make([]byte, SizeZCSkillInfoUpdate())
+	binary.LittleEndian.PutUint16(buf[0:2], HeaderZCSKILLINFOUPDATE())
 	binary.LittleEndian.PutUint16(buf[2:4], skillID)
 	binary.LittleEndian.PutUint16(buf[4:6], level)
 	binary.LittleEndian.PutUint16(buf[6:8], sp)

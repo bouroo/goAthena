@@ -25,12 +25,13 @@ func TestSkillInfoListResponse_EmptyMatchesEncodeEmptySkillList(t *testing.T) {
 
 	got := buf.Bytes()
 	want := EncodeEmptySkillList()
-	assert.Equal(t, []byte{0x0f, 0x01, 0x04, 0x00}, got,
-		"empty SkillInfoListResponse must be the 4-byte header 0x010f + length 4")
+	emptyHeader := HeaderZCSKILLINFOLIST()
+	assert.Equal(t, []byte{byte(emptyHeader), byte(emptyHeader >> 8), 0x04, 0x00}, got,
+		"empty SkillInfoListResponse must be the 4-byte header + length 4")
 	assert.Equal(t, want, got,
 		"empty SkillInfoListResponse must match the shared emptySkillList bytes")
 	assert.Len(t, got, sizeEmptyInventoryList)
-	assert.Equal(t, uint16(HeaderZCSKILLINFOLIST), binary.LittleEndian.Uint16(got[0:2]))
+	assert.Equal(t, uint16(HeaderZCSKILLINFOLIST()), binary.LittleEndian.Uint16(got[0:2]))
 	assert.Equal(t, uint16(4), binary.LittleEndian.Uint16(got[2:4]))
 }
 
@@ -55,28 +56,30 @@ func TestSkillInfoListResponse_SingleNVBasic(t *testing.T) {
 	require.NoError(t, resp.Encode(&buf))
 	got := buf.Bytes()
 
-	const wantLen = 4 + sizeSkillEntry // 41
+	wantLen := 4 + sizeSkillEntry() // 41
 	require.Len(t, got, wantLen, "total frame length")
 
-	// Exact expected byte slice. Layout:
-	//   [0..1]   cmd=0x010f LE         → 0f 01
-	//   [2..3]   packetLength=41 LE    → 29 00
-	//   [4..5]   id=1 LE               → 01 00
-	//   [6..9]   inf=0 LE              → 00 00 00 00
-	//   [10..11] level=1 LE            → 01 00
-	//   [12..13] sp=0 LE               → 00 00
-	//   [14..15] range2=0 LE           → 00 00
-	//   [16..39] name="NV_BASIC" NUL-padded to 24 bytes
-	//   [40]     upFlag=0
-	expected := make([]byte, 4+sizeSkillEntry)
-	expected[0] = 0x0f
-	expected[1] = 0x01
-	expected[2] = 0x29
-	expected[3] = 0x00
+	// Exact expected byte slice. The header comes from the installed
+	// source pack, and the entry's shape is the source's own SKILLDATA.
+	expected := make([]byte, 4+sizeSkillEntry())
+	header := HeaderZCSKILLINFOLIST()
+	expected[0] = byte(header)
+	expected[1] = byte(header >> 8)
+	expected[2] = byte(wantLen)
+	expected[3] = byte(wantLen >> 8)
 	expected[4] = 0x01  // id low byte
 	expected[10] = 0x01 // level low byte
-	copy(expected[16:16+9], "NV_BASIC")
-	// bytes 16+9..40 stay zero (NUL padding + upFlag).
+	if skillEntryHasName() {
+		// The pre-2019 form: a fixed 24-byte name slot, then the
+		// upgradable flag.
+		copy(expected[16:16+9], "NV_BASIC")
+		// bytes 16+9..40 stay zero (NUL padding + upFlag).
+	} else {
+		// The post-2019 form: the upgradable flag and the second level
+		// take the name slot's place.
+		expected[16] = 0 // upFlag
+		// bytes 17..19 stay zero (level2).
+	}
 
 	assert.Equal(t, expected, got, "byte-exact NV_BASIC frame")
 }
@@ -95,26 +98,33 @@ func TestSkillInfoListResponse_TwoEntries(t *testing.T) {
 	require.NoError(t, resp.Encode(&buf))
 	got := buf.Bytes()
 
-	const wantLen = 4 + 2*sizeSkillEntry // 78
+	wantLen := 4 + 2*sizeSkillEntry() // 78
 	require.Len(t, got, wantLen)
 
-	assert.Equal(t, uint16(HeaderZCSKILLINFOLIST), binary.LittleEndian.Uint16(got[0:2]))
+	assert.Equal(t, uint16(HeaderZCSKILLINFOLIST()), binary.LittleEndian.Uint16(got[0:2]))
 	assert.Equal(t, uint16(wantLen), binary.LittleEndian.Uint16(got[2:4]),
 		"packetLength = 4 + 2*37 = 78")
 
-	// Second entry starts at off=4+37=41.
-	off := 4 + sizeSkillEntry
+	// Second entry starts after the first one.
+	off := 4 + sizeSkillEntry()
 	assert.Equal(t, uint16(2), binary.LittleEndian.Uint16(got[off:]),
 		"second entry id")
-	assert.Equal(t, uint8(1), got[off+36], "second entry upFlag")
+	if skillEntryHasName() {
+		assert.Equal(t, uint8(1), got[off+36], "second entry upFlag")
 
-	// Second entry name slot: "SM_SWORD" = 8 bytes, then 16 NULs.
-	nameSlot := got[off+12 : off+12+24]
-	assert.Equal(t, []byte("SM_SWORD"), nameSlot[:8])
-	for i, b := range nameSlot[8:] {
-		assert.Zero(t, b, "name padding byte %d must be NUL", i)
+		// Second entry name slot: "SM_SWORD" = 8 bytes, then 16 NULs.
+		nameSlot := got[off+12 : off+12+24]
+		assert.Equal(t, []byte("SM_SWORD"), nameSlot[:8])
+		for i, b := range nameSlot[8:] {
+			assert.Zero(t, b, "name padding byte %d must be NUL", i)
+		}
+		assert.Zero(t, nameSlot[23], "name slot must end with NUL")
+		return
 	}
-	assert.Zero(t, nameSlot[23], "name slot must end with NUL")
+	// The post-2019 form has no name slot: the upgradable flag and the
+	// second level take its place.
+	assert.Equal(t, uint8(1), got[off+12], "second entry upFlag")
+	assert.Equal(t, uint16(0), binary.LittleEndian.Uint16(got[off+13:]), "second entry level2")
 }
 
 func TestSkillInfoListResponse_LongNameTruncated(t *testing.T) {
@@ -133,7 +143,25 @@ func TestSkillInfoListResponse_LongNameTruncated(t *testing.T) {
 	require.NoError(t, resp.Encode(&buf))
 	got := buf.Bytes()
 
-	require.Len(t, got, 4+sizeSkillEntry)
+	require.Len(t, got, 4+sizeSkillEntry())
+
+	if !skillEntryHasName() {
+		// The post-2019 form has no name slot, so there is nothing to
+		// truncate.
+		return
+	}
+
+	if !skillEntryHasName() {
+		// The post-2019 form has no name slot, so there is nothing to
+		// truncate.
+		return
+	}
+
+	if !skillEntryHasName() {
+		// The post-2019 form has no name slot, so there is nothing to
+		// truncate.
+		return
+	}
 
 	nameSlot := got[4+12 : 4+12+24]
 	// First 23 bytes of src, last byte forced to NUL.
@@ -149,8 +177,8 @@ func TestSkillInfoListResponse_LongNameTruncated(t *testing.T) {
 func TestSkillInfoListResponse_OverflowRejected(t *testing.T) {
 	t.Parallel()
 
-	// 0xffff / 37 = 1772 entries max; build one over the limit.
-	skills := make([]SkillData, 1773)
+	// One entry over the limit the uint16 length slot can carry.
+	skills := make([]SkillData, 0xffff/sizeSkillEntry()+1)
 	for i := range skills {
 		skills[i] = SkillData{ID: uint16(i + 1)}
 	}

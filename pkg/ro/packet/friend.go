@@ -18,32 +18,69 @@ import (
 // NOTE on the ≥ 20180221 shape: ZC_FRIENDS_LIST entries drop the name (the
 // client resolves it from its local mob/char cache after ZC_FRIENDS_STATE);
 // ZC_FRIENDS_STATE KEEPS its trailing name. Both gates are open at 20250604.
-const (
-	// C→S opcodes (clif_packetdb.hpp:257-263).
-	HeaderCZFRIENDSADD    uint16 = 0x0202 // CZ_ADD_FRIENDS — clif_parse_FriendsListAdd
-	HeaderCZFRIENDSDELETE uint16 = 0x0203 // CZ_DELETE_FRIENDS — clif_parse_FriendsListRemove
-	HeaderCZFRIENDSREPLY  uint16 = 0x0208 // CZ_ACK_REQ_ADD_FRIENDS — clif_parse_FriendsListReply
-	// S→C opcodes.
-	HeaderZCFRIENDSLIST   uint16 = 0x0201 // ZC_FRIENDS_LIST (packets.hpp:299)
-	HeaderZCFRIENDSSTATE  uint16 = 0x0206 // ZC_FRIENDS_STATE (packets.hpp:1918)
-	HeaderZCREQADDFRIENDS uint16 = 0x0207 // ZC_REQ_ADD_FRIENDS (clif.cpp:15417)
-	HeaderZCADDFRIENDS    uint16 = 0x0209 // ZC_ADD_FRIENDS (clif.cpp:15397)
-	HeaderZCDELETEFRIENDS uint16 = 0x020a // ZC_DELETE_FRIENDS (clif.cpp:15586)
-)
+
+// C→S opcodes (clif_packetdb.hpp:257-263).
+// HeaderCZFRIENDSADD is the source pack's own opcode for this packet.
+func HeaderCZFRIENDSADD() uint16 {
+	return opcodeForHandler("clif_parse_FriendsListAdd", sizeCZFriendsAdd(), []int{2})
+}
+
+// HeaderCZFRIENDSDELETE is the source pack's own opcode for this packet.
+func HeaderCZFRIENDSDELETE() uint16 {
+	return opcodeForHandler("clif_parse_FriendsListRemove", sizeCZFriendsDelete(), []int{2, 6})
+}
+
+// HeaderCZFRIENDSREPLY is the source pack's own opcode for this packet.
+func HeaderCZFRIENDSREPLY() uint16 {
+	return opcodeForHandler("clif_parse_FriendsListReply", sizeCZFriendsReply(), []int{2, 6, 10})
+}
+
+// S→C opcodes.
+// HeaderZCFRIENDSLIST is the source pack's own opcode for this packet.
+func HeaderZCFRIENDSLIST() uint16 { return opcode("ZC_FRIENDS_LIST") }
+
+// HeaderZCFRIENDSSTATE is the source pack's own opcode for this packet.
+func HeaderZCFRIENDSSTATE() uint16 { return opcode("ZC_FRIENDS_STATE") }
+
+// HeaderZCREQADDFRIENDS is the source pack's own opcode for this packet.
+func HeaderZCREQADDFRIENDS() uint16 { return opcode("ZC_REQ_ADD_FRIENDS") }
+
+// HeaderZCADDFRIENDS is the source pack's own opcode for this packet.
+func HeaderZCADDFRIENDS() uint16 { return opcode("ZC_ADD_FRIENDS_LIST") }
 
 // On-wire byte sizes at PACKETVER 20250604.
-const (
-	sizeCZFriendsAdd    = 26 // int16 cmd + char name[24]
-	sizeCZFriendsDelete = 10 // int16 cmd + uint32 AID + uint32 CID
-	sizeCZFriendsReply  = 14 // int16 cmd + uint32 AID + uint32 CID + int32 reply (≥ 20040705)
-	sizeZCFriendsState  = 35 // int16 cmd + uint32 AID + uint32 CID + uint8 offline + char name[24]
-	sizeZCReqAddFriend  = 34 // int16 cmd + uint32 AID + uint32 CID + char name[24]
-	sizeZCAddFriend     = 36 // int16 cmd + int16 result + uint32 AID + uint32 CID + char name[24]
-	sizeZCDeleteFriends = 10 // int16 cmd + uint32 AID + uint32 CID
-	// ZC_FRIENDS_LIST is variable: cmd(2) + packetLen(2) + N*8 {uint32 AID, uint32 CID}.
-	sizeZCFriendsListHeader = 4
-	sizeZCFriendsListSub    = 8
-)
+
+// sizeCZFriendsAdd is the source pack's own length for this packet.
+func sizeCZFriendsAdd() int { return packetLengthOf(514) }
+
+// sizeCZFriendsDelete is the source pack's own length for this packet.
+func sizeCZFriendsDelete() int { return packetLengthOf(515) }
+
+// sizeCZFriendsReply is the source pack's own length for this packet.
+func sizeCZFriendsReply() int { return packetLengthOf(520) }
+
+// sizeZCFriendsState is the source pack's own length for this packet.
+func sizeZCFriendsState() int { return layout("PACKET_ZC_FRIENDS_STATE") }
+
+// sizeZCReqAddFriend is the source pack's own length for this packet.
+func sizeZCReqAddFriend() int { return packetLengthOf(519) }
+
+// sizeZCAddFriend is the source pack's own length for this packet.
+func sizeZCAddFriend() int { return packetLengthOf(521) }
+
+// sizeZCDeleteFriends is the source pack's own length for this packet.
+func sizeZCDeleteFriends() int { return packetLengthOf(522) }
+
+// ZC_FRIENDS_LIST is variable: cmd(2) + packetLen(2) + N*8 {uint32 AID, uint32 CID}.
+// sizeZCFriendsListHeader is the source pack's own length for this packet.
+func sizeZCFriendsListHeader() int { return layout("PACKET_ZC_FRIENDS_LIST") }
+
+// sizeZCFriendsListSub is the source pack's own length for this packet.
+func sizeZCFriendsListSub() int { return layout("PACKET_ZC_FRIENDS_LIST_sub") }
+
+// SizeZCFriendsListSub is the exported entry width, so a caller that
+// walks the list reads the source's own value rather than a copy.
+func SizeZCFriendsListSub() int { return sizeZCFriendsListSub() }
 
 // ZC_ADD_FRIENDS result values (clif_friendslist_reqack, clif.cpp:15397-15401).
 const (
@@ -68,10 +105,10 @@ type CZFriendsAdd struct {
 
 // ParseCZFriendsAdd decodes a CZ_ADD_FRIENDS (0x0202, 26B) frame.
 func ParseCZFriendsAdd(frame []byte) (CZFriendsAdd, error) {
-	if len(frame) < sizeCZFriendsAdd {
-		return CZFriendsAdd{}, fmt.Errorf("packet: parse CZ_ADD_FRIENDS: want at least %d bytes, got %d", sizeCZFriendsAdd, len(frame))
+	if len(frame) < sizeCZFriendsAdd() {
+		return CZFriendsAdd{}, fmt.Errorf("packet: parse CZ_ADD_FRIENDS: want at least %d bytes, got %d", sizeCZFriendsAdd(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZFRIENDSADD {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZFRIENDSADD() {
 		return CZFriendsAdd{}, fmt.Errorf("packet: parse CZ_ADD_FRIENDS: unexpected cmd 0x%04x", cmd)
 	}
 	return CZFriendsAdd{Name: readNameField(frame, 2, 24)}, nil
@@ -79,10 +116,10 @@ func ParseCZFriendsAdd(frame []byte) (CZFriendsAdd, error) {
 
 // Encode writes CZ_ADD_FRIENDS to w (used by the e2e harness).
 func (m CZFriendsAdd) Encode(w io.Writer) error {
-	var buf [sizeCZFriendsAdd]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZFRIENDSADD)
-	writeNameField(buf[:], 2, m.Name)
-	if _, err := w.Write(buf[:]); err != nil {
+	buf := make([]byte, sizeCZFriendsAdd())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZFRIENDSADD())
+	writeNameField(buf, 2, m.Name)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_ADD_FRIENDS: %w", err)
 	}
 	return nil
@@ -97,10 +134,10 @@ type CZFriendsDelete struct {
 
 // ParseCZFriendsDelete decodes a CZ_DELETE_FRIENDS (0x0203, 10B) frame.
 func ParseCZFriendsDelete(frame []byte) (CZFriendsDelete, error) {
-	if len(frame) < sizeCZFriendsDelete {
-		return CZFriendsDelete{}, fmt.Errorf("packet: parse CZ_DELETE_FRIENDS: want at least %d bytes, got %d", sizeCZFriendsDelete, len(frame))
+	if len(frame) < sizeCZFriendsDelete() {
+		return CZFriendsDelete{}, fmt.Errorf("packet: parse CZ_DELETE_FRIENDS: want at least %d bytes, got %d", sizeCZFriendsDelete(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZFRIENDSDELETE {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZFRIENDSDELETE() {
 		return CZFriendsDelete{}, fmt.Errorf("packet: parse CZ_DELETE_FRIENDS: unexpected cmd 0x%04x", cmd)
 	}
 	return CZFriendsDelete{
@@ -111,11 +148,11 @@ func ParseCZFriendsDelete(frame []byte) (CZFriendsDelete, error) {
 
 // Encode writes CZ_DELETE_FRIENDS to w.
 func (m CZFriendsDelete) Encode(w io.Writer) error {
-	var buf [sizeCZFriendsDelete]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZFRIENDSDELETE)
+	buf := make([]byte, sizeCZFriendsDelete())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZFRIENDSDELETE())
 	binary.LittleEndian.PutUint32(buf[2:], m.AID)
 	binary.LittleEndian.PutUint32(buf[6:], m.CID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_DELETE_FRIENDS: %w", err)
 	}
 	return nil
@@ -133,10 +170,10 @@ type CZFriendsReply struct {
 // ParseCZFriendsReply decodes a CZ_ACK_REQ_ADD_FRIENDS (0x0208, 14B) frame.
 // The 11-byte variant (reply as int8) predates PACKETVER 6 and is not read.
 func ParseCZFriendsReply(frame []byte) (CZFriendsReply, error) {
-	if len(frame) < sizeCZFriendsReply {
-		return CZFriendsReply{}, fmt.Errorf("packet: parse CZ_ACK_REQ_ADD_FRIENDS: want at least %d bytes, got %d", sizeCZFriendsReply, len(frame))
+	if len(frame) < sizeCZFriendsReply() {
+		return CZFriendsReply{}, fmt.Errorf("packet: parse CZ_ACK_REQ_ADD_FRIENDS: want at least %d bytes, got %d", sizeCZFriendsReply(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZFRIENDSREPLY {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZFRIENDSREPLY() {
 		return CZFriendsReply{}, fmt.Errorf("packet: parse CZ_ACK_REQ_ADD_FRIENDS: unexpected cmd 0x%04x", cmd)
 	}
 	return CZFriendsReply{
@@ -148,12 +185,12 @@ func ParseCZFriendsReply(frame []byte) (CZFriendsReply, error) {
 
 // Encode writes CZ_ACK_REQ_ADD_FRIENDS to w.
 func (m CZFriendsReply) Encode(w io.Writer) error {
-	var buf [sizeCZFriendsReply]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZFRIENDSREPLY)
+	buf := make([]byte, sizeCZFriendsReply())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZFRIENDSREPLY())
 	binary.LittleEndian.PutUint32(buf[2:], m.AID)
 	binary.LittleEndian.PutUint32(buf[6:], m.CID)
 	binary.LittleEndian.PutUint32(buf[10:], uint32(m.Reply)) //nolint:gosec // G115: wire int32.
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_ACK_REQ_ADD_FRIENDS: %w", err)
 	}
 	return nil
@@ -171,19 +208,19 @@ type FriendsStateResponse struct {
 }
 
 // Size returns ZC_FRIENDS_STATE frame length.
-func (r FriendsStateResponse) Size() int { return sizeZCFriendsState }
+func (r FriendsStateResponse) Size() int { return sizeZCFriendsState() }
 
 // Encode writes ZC_FRIENDS_STATE to w.
 func (r FriendsStateResponse) Encode(w io.Writer) error {
-	var buf [sizeZCFriendsState]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCFRIENDSSTATE)
+	buf := make([]byte, sizeZCFriendsState())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCFRIENDSSTATE())
 	binary.LittleEndian.PutUint32(buf[2:], r.AID)
 	binary.LittleEndian.PutUint32(buf[6:], r.CID)
 	if r.Offline {
 		buf[10] = 1
 	}
-	writeNameField(buf[:], 11, r.Name)
-	if _, err := w.Write(buf[:]); err != nil {
+	writeNameField(buf, 11, r.Name)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_FRIENDS_STATE: %w", err)
 	}
 	return nil
@@ -199,16 +236,16 @@ type FriendsReqAddResponse struct {
 }
 
 // Size returns ZC_REQ_ADD_FRIENDS frame length.
-func (r FriendsReqAddResponse) Size() int { return sizeZCReqAddFriend }
+func (r FriendsReqAddResponse) Size() int { return sizeZCReqAddFriend() }
 
 // Encode writes ZC_REQ_ADD_FRIENDS to w.
 func (r FriendsReqAddResponse) Encode(w io.Writer) error {
-	var buf [sizeZCReqAddFriend]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQADDFRIENDS)
+	buf := make([]byte, sizeZCReqAddFriend())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQADDFRIENDS())
 	binary.LittleEndian.PutUint32(buf[2:], r.AID)
 	binary.LittleEndian.PutUint32(buf[6:], r.CID)
-	writeNameField(buf[:], 10, r.Name)
-	if _, err := w.Write(buf[:]); err != nil {
+	writeNameField(buf, 10, r.Name)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_REQ_ADD_FRIENDS: %w", err)
 	}
 	return nil
@@ -225,21 +262,24 @@ type FriendsAddResponse struct {
 }
 
 // Size returns ZC_ADD_FRIENDS frame length.
-func (r FriendsAddResponse) Size() int { return sizeZCAddFriend }
+func (r FriendsAddResponse) Size() int { return sizeZCAddFriend() }
 
 // Encode writes ZC_ADD_FRIENDS to w.
 func (r FriendsAddResponse) Encode(w io.Writer) error {
-	var buf [sizeZCAddFriend]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCADDFRIENDS)
+	buf := make([]byte, sizeZCAddFriend())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCADDFRIENDS())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(r.Result)) //nolint:gosec // G115: bounded by the four FriendAdd* constants.
 	binary.LittleEndian.PutUint32(buf[4:], r.AID)
 	binary.LittleEndian.PutUint32(buf[8:], r.CID)
-	writeNameField(buf[:], 12, r.Name)
-	if _, err := w.Write(buf[:]); err != nil {
+	writeNameField(buf, 12, r.Name)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ADD_FRIENDS: %w", err)
 	}
 	return nil
 }
+
+// HeaderZCDELETEFRIENDS is the source pack's own opcode for this packet.
+func HeaderZCDELETEFRIENDS() uint16 { return literalOpcode(0x020a) }
 
 // FriendsDeleteResponse encodes ZC_DELETE_FRIENDS (0x020a, 10B). The IDs
 // written depend on the receiver (clif_parse_FriendsListRemove, clif.cpp:15586
@@ -251,15 +291,15 @@ type FriendsDeleteResponse struct {
 }
 
 // Size returns ZC_DELETE_FRIENDS frame length.
-func (r FriendsDeleteResponse) Size() int { return sizeZCDeleteFriends }
+func (r FriendsDeleteResponse) Size() int { return sizeZCDeleteFriends() }
 
 // Encode writes ZC_DELETE_FRIENDS to w.
 func (r FriendsDeleteResponse) Encode(w io.Writer) error {
-	var buf [sizeZCDeleteFriends]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCDELETEFRIENDS)
+	buf := make([]byte, sizeZCDeleteFriends())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCDELETEFRIENDS())
 	binary.LittleEndian.PutUint32(buf[2:], r.AID)
 	binary.LittleEndian.PutUint32(buf[6:], r.CID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_DELETE_FRIENDS: %w", err)
 	}
 	return nil
@@ -278,13 +318,19 @@ type FriendsListResponse struct {
 type FriendsListEntry struct {
 	AID uint32
 	CID uint32
+	// Name is the friend's name.
+	//
+	// The source's PACKET_ZC_FRIENDS_LIST_sub carries the name for
+	// PACKETVER >= 20200902 (src/map/packets.hpp: the guard keeps
+	// char name[NAME_LENGTH] there), so the entry is 32 bytes, not 8.
+	Name string
 }
 
 // Size returns the on-wire byte length Encode will write (4 + 8*N, capped at
 // MaxFriends).
 func (r FriendsListResponse) Size() int {
 	n := min(len(r.Friends), MaxFriends)
-	return sizeZCFriendsListHeader + sizeZCFriendsListSub*n
+	return sizeZCFriendsListHeader() + sizeZCFriendsListSub()*n
 }
 
 // Encode writes ZC_FRIENDS_LIST to w. The list is capped at MaxFriends so an
@@ -294,14 +340,15 @@ func (r FriendsListResponse) Encode(w io.Writer) error {
 	if len(friends) > MaxFriends {
 		friends = friends[:MaxFriends]
 	}
-	buf := make([]byte, sizeZCFriendsListHeader+sizeZCFriendsListSub*len(friends))
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCFRIENDSLIST)
+	buf := make([]byte, sizeZCFriendsListHeader()+sizeZCFriendsListSub()*len(friends))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCFRIENDSLIST())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(len(buf))) //nolint:gosec // G115: bounded by MaxFriends.
-	off := sizeZCFriendsListHeader
+	off := sizeZCFriendsListHeader()
 	for _, f := range friends {
 		binary.LittleEndian.PutUint32(buf[off:], f.AID)
 		binary.LittleEndian.PutUint32(buf[off+4:], f.CID)
-		off += sizeZCFriendsListSub
+		writeNameField(buf[off+8:], 0, f.Name)
+		off += sizeZCFriendsListSub()
 	}
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_FRIENDS_LIST: %w", err)

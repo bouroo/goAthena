@@ -53,14 +53,14 @@ func TestMap_CrossZonePortalRedirects(t *testing.T) {
 
 	// Walk east onto the trigger tile.
 	moveReq := make([]byte, 5)
-	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE())
 	moveDest := packMoveDest(54, 111)
 	copy(moveReq[2:], moveDest[:])
 	sendRaw(t, conn, moveReq)
 
 	// Self move-ack, then the 156B ZC_NPCACK_SERVERMOVE redirect.
-	readTradeFrame(t, conn, ropacket.HeaderZCNOTIFYPLAYERMOVE, 12)
-	move := readTradeFrame(t, conn, ropacket.HeaderZCNPCACKSERVERMOVE, 156)
+	readTradeFrame(t, conn, ropacket.HeaderZCNOTIFYPLAYERMOVE(), 12)
+	move := readTradeFrame(t, conn, ropacket.HeaderZCNPCACKSERVERMOVE(), 156)
 	if got := strings.TrimRight(string(move[2:26]), "\x00"); got != "geffen" {
 		t.Errorf("dest map = %q, want geffen", got)
 	}

@@ -25,8 +25,8 @@ func TestParseCZUseSkill(t *testing.T) {
 	t.Parallel()
 
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZUseSkill2)
-		writeLE16(f[0:], HeaderCZUSESKILL)
+		f := make([]byte, sizeCZUseSkill2())
+		writeLE16(f[0:], HeaderCZUSESKILL())
 		writeLE16(f[2:], 1)      // skillLv
 		writeLE16(f[4:], 5)      // skillID (SM_BASH)
 		writeLE32(f[6:], 0x1234) // targetID
@@ -54,7 +54,7 @@ func TestParseCZUseSkill(t *testing.T) {
 		},
 		{
 			name:       "frame too short",
-			frame:      goodFrame[:sizeCZUseSkill2-1],
+			frame:      goodFrame[:sizeCZUseSkill2()-1],
 			wantErr:    true,
 			wantErrSub: "want at least 10 bytes",
 		},
@@ -97,7 +97,7 @@ func TestCZUseSkill_Encode(t *testing.T) {
 	require.NoError(t, r.Encode(&buf))
 	got := buf.Bytes()
 
-	require.Len(t, got, sizeCZUseSkill2, "frame length")
+	require.Len(t, got, sizeCZUseSkill2(), "frame length")
 	// [2:cmd=0x0438 LE] → 38 04
 	assert.Equal(t, []byte{0x38, 0x04}, got[0:2], "header bytes")
 	// [2:skillLv=5 LE] → 05 00
@@ -149,7 +149,7 @@ func TestNotifySkillResponse_Encode_BashHit(t *testing.T) {
 	require.NoError(t, r.Encode(&buf))
 	got := buf.Bytes()
 
-	require.Len(t, got, sizeZCNotifySkill, "frame length must be 33")
+	require.Len(t, got, sizeZCNotifySkill(), "frame length must be 33")
 
 	// Byte-exact expected layout (LE everywhere; int8.Action is the
 	// last byte):
@@ -164,7 +164,7 @@ func TestNotifySkillResponse_Encode_BashHit(t *testing.T) {
 	//   [28..29] Level=1          → 01 00
 	//   [30..31] Count=1          → 01 00
 	//   [32]     Action=0         → 00
-	expected := make([]byte, sizeZCNotifySkill)
+	expected := make([]byte, sizeZCNotifySkill())
 	expected[0] = 0xde
 	expected[1] = 0x01
 	expected[2] = 0x05
@@ -180,7 +180,7 @@ func TestNotifySkillResponse_Encode_BashHit(t *testing.T) {
 
 	// Spot-check the field offsets against the spec (header size 2 +
 	// SKID u16 + AID u32 + TargetID u32 + StartTime u32).
-	assert.Equal(t, uint16(HeaderZCNOTIFYSKILL), binary.LittleEndian.Uint16(got[0:2]))
+	assert.Equal(t, uint16(HeaderZCNOTIFYSKILL()), binary.LittleEndian.Uint16(got[0:2]))
 	assert.Equal(t, r.SKID, binary.LittleEndian.Uint16(got[2:4]))
 	assert.Equal(t, r.AID, binary.LittleEndian.Uint32(got[4:8]))
 	assert.Equal(t, r.TargetID, binary.LittleEndian.Uint32(got[8:12]))
@@ -221,7 +221,7 @@ func TestNotifySkillResponse_Encode_VariousValues(t *testing.T) {
 			var buf bytes.Buffer
 			require.NoError(t, tc.in.Encode(&buf))
 			got := buf.Bytes()
-			require.Len(t, got, sizeZCNotifySkill)
+			require.Len(t, got, sizeZCNotifySkill())
 			assert.Equal(t, tc.in.SKID, binary.LittleEndian.Uint16(got[2:4]))
 			assert.Equal(t, tc.in.AID, binary.LittleEndian.Uint32(got[4:8]))
 			assert.Equal(t, tc.in.Damage, int32(binary.LittleEndian.Uint32(got[24:28])))
@@ -246,7 +246,7 @@ func TestAckUseSkillResponse_Encode_SPInsufficient(t *testing.T) {
 	require.NoError(t, r.Encode(&buf))
 	got := buf.Bytes()
 
-	require.Len(t, got, sizeZCAckToUseSkill, "frame length must be 14")
+	require.Len(t, got, sizeZCAckToUseSkill(), "frame length must be 14")
 	// Byte-exact layout (LE everywhere):
 	//   [0..1]   cmd=0x0110     → 10 01
 	//   [2..3]   skillId=5      → 05 00
@@ -264,7 +264,7 @@ func TestAckUseSkillResponse_Encode_SPInsufficient(t *testing.T) {
 	}
 	assert.Equal(t, expected, got, "byte-exact ZC_ACK_TOUSESKILL frame for SP-insufficient Bash")
 
-	assert.Equal(t, uint16(HeaderZCACKTOUSESKILL), binary.LittleEndian.Uint16(got[0:2]))
+	assert.Equal(t, uint16(HeaderZCACKTOUSESKILL()), binary.LittleEndian.Uint16(got[0:2]))
 	assert.Equal(t, r.SkillID, binary.LittleEndian.Uint16(got[2:4]))
 	assert.Equal(t, r.BType, int32(binary.LittleEndian.Uint32(got[4:8])))
 	assert.Equal(t, r.ItemID, binary.LittleEndian.Uint32(got[8:12]))
@@ -297,7 +297,7 @@ func TestAckUseSkillResponse_Encode_VariousValues(t *testing.T) {
 			var buf bytes.Buffer
 			require.NoError(t, tc.in.Encode(&buf))
 			got := buf.Bytes()
-			require.Len(t, got, sizeZCAckToUseSkill)
+			require.Len(t, got, sizeZCAckToUseSkill())
 			assert.Equal(t, tc.in.SkillID, binary.LittleEndian.Uint16(got[2:4]))
 			assert.Equal(t, tc.in.BType, int32(binary.LittleEndian.Uint32(got[4:8])))
 			assert.Equal(t, tc.in.ItemID, binary.LittleEndian.Uint32(got[8:12]))
@@ -317,9 +317,9 @@ func TestSkillUsagePackets_DBEntries(t *testing.T) {
 		length    int
 		direction Direction
 	}{
-		{HeaderCZUSESKILL, "CZ_USE_SKILL2", sizeCZUseSkill2, DirectionClientToServer},
-		{HeaderZCNOTIFYSKILL, "ZC_NOTIFY_SKILL", sizeZCNotifySkill, DirectionServerToClient},
-		{HeaderZCACKTOUSESKILL, "ZC_ACK_TOUSESKILL", sizeZCAckToUseSkill, DirectionServerToClient},
+		{HeaderCZUSESKILL(), "CZ_USE_SKILL2", sizeCZUseSkill2(), DirectionClientToServer},
+		{HeaderZCNOTIFYSKILL(), "ZC_NOTIFY_SKILL", sizeZCNotifySkill(), DirectionServerToClient},
+		{HeaderZCACKTOUSESKILL(), "ZC_ACK_TOUSESKILL", sizeZCAckToUseSkill(), DirectionServerToClient},
 	}
 	for _, c := range cases {
 		c := c
