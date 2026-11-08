@@ -134,6 +134,27 @@ jobs:
       - name: gosec (adjudicated rules excluded)
         run: task scan-sec
 
+  manifests:
+    name: Deployment manifests (k3s)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: install kubeconform and kustomize
+        run: |
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0
+          go install sigs.k8s.io/kustomize/kustomize/v5@v5.8.3
+      # Every resource is checked against the real API schema — the core
+      # APIs and Agones' own CRDs. The Agones schemas are fetched from the
+      # Agones release manifest, because the built-in catalog does not
+      # carry Agones and the Fleets would otherwise be skipped silently.
+      - name: validate the k3s manifests
+        run: ./scripts/verify-k3s.sh dev && ./scripts/verify-k3s.sh prod
+
   unit:
     name: Unit tests
     runs-on: ubuntu-latest

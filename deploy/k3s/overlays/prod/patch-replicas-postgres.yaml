@@ -1,0 +1,20 @@
+# The production replica counts.
+#
+# The base runs one of each backing service, which is right for a
+# workstation and not for production: a node drain would take the bus
+# with it. Production runs more than one where that is safe, so a
+# voluntary disruption can roll one at a time — which is what the
+# PodDisruptionBudget in this overlay protects.
+#
+# Postgres stays at one replica. It writes to a PersistentVolumeClaim,
+# and that volume is ReadWriteOnce: a second replica would mount the
+# same volume and two writers would corrupt it. A standby needs a
+# replication setup, which is a larger piece of work than this tier
+# does — the honest production answer is a managed database, and
+# README.md says so. The PDB below covers the rollout, not the volume.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: goathena-postgres
+spec:
+  replicas: 1

@@ -457,6 +457,8 @@ directory (remote = real address) and keeps the client-side seam unchanged.
 | Agones Fleet manifests | `deploy/agones/{fleet,gameserver}.yaml` + `transit/agones/fleet_manifest_test.go` | ✅ — two-Fleet manifest (prontera/geffen map sets) + a single-shard GameServer; `Static` port policy (the process binds `GATEWAY_MAP_PORT` at boot and is never told a dynamic host port, so `Dynamic` would redirect clients to a port nobody listens on); `self_name` read from the pod label `agones.dev/gameserver` via the downward API; probes on `/healthz`+`/readyz`; the test decodes each document with the Agones API's own YAML decoder and runs `Validate` + `ApplyDefaults`, asserting the `game` port name and `goathena.dev/maps` annotation the directory reads (it caught the missing `spec.strategy.type`) |
 | Fleet `MapDirectory` | `transit/agones` + `transit/static` | ✅ — `zone.directory.mode` `local\|agones\|static`; agones resolves Ready GameServers (maps CSV annotation `goathena.dev/maps` or `goathena.dev/map-<name>` labels, `game` port) via in-cluster creds or KUBECONFIG (Swarm path); static parses `routes` map→host:port; fatal boot error on non-local dial failure |
 | Fleet cross-node admission | ✗ open | The char→map handoff advertises `gateway.map_host`, and a Static-port fleet puts many shards on one node while a Dynamic one is never told its host port — so a fleet pod must publish its Agones-assigned `Status.Address` instead of the configured host. No env var can express "my node's address" (it is runtime state), so this needs the SDK `GetGameServer` call at boot; tracked below. |
+| Tier 3 K8s deployment | `deploy/k3s/` + `scripts/verify-k3s.sh` + `scripts/crdschema/` | ✅ — the whole tier: namespace, Secret, ConfigMap, the client-facing and control-plane Services, Postgres (with its volume), Valkey, NATS, the OTel collector, the per-map-set Fleets, the `FleetAutoscaler`s, and a TCP ingress; dev and prod overlays. Every resource is validated against the real API schema (`kubeconform -strict`), with the Agones CRD schemas extracted from the Agones release manifest because the built-in catalog does not carry Agones. Both overlays: 24 resources, all valid. |
+| Tier 1 compose verification | `task verify-tier1` + `task stack-up` | ✅ — proves the running container carries *this tree's* commit stamp, that `/healthz` `/readyz` `/version` `/metrics` all answer 200, and that a login is accepted. The check exists because `docker compose up` reuses the last image: a stale image served an older commit whose `/metrics` 404'd and refused every login while `/healthz` stayed green. The stack looked up and the app was not the app. `task stack-up` rebuilds with `--no-cache`. |
 
 **Plan in this session:** wire `nats.Connect` in `composition.go`; define
 subject taxonomy (`economy.zeny.*`, `social.party.*`, `transit.handoff.*`,
@@ -477,6 +479,23 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 2. **Sharding keys** — the NATS subjects are not partitioned by zone yet.
 3. **Further module extractions** over NATS (social/mail are the next-largest
    port surfaces after economy).
+4. **A player-count signal for the autoscaler.** The `FleetAutoscaler` in
+   `deploy/k3s/base/` uses a `Buffer` policy (scale on the number of READY
+   GameServers waiting to be allocated) and a `Schedule` policy, because
+   both work with no signal from the app. A `List` policy — scaling on how
+   many players are actually connected — is the sharp one, and it needs a
+   capacity endpoint the Agones adapter does not have: the adapter today
+   exposes only `Port`, `Sidecar` (`Ready`/`Health`/`ShutDown`/`Close`),
+   `Noop` and `RunHealthLoop`.
+5. **The advertised address for a public deployment.** The base sets
+   `gateway.char_host`/`gateway.map_host` to the `goathena-login` Service's
+   name, which resolves to the ClusterIP: correct for a client inside the
+   cluster, useless for one outside it. The prod overlay sets
+   `GATEWAY_CHAR_HOST`/`GATEWAY_MAP_HOST` to a placeholder, and the
+   operator must replace it with the ingress's external address. This is
+   item 1 above seen from the deployment side: the handshake carries an
+   IPv4, so a cluster-internal name cannot be what a public client is
+   handed.
 
 ---
 

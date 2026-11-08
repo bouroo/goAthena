@@ -1,0 +1,18 @@
+# The production resource envelope for the Prontera shard.
+#
+# The base's numbers are a floor that fits on a workstation. Production
+# asks for what a shard actually needs under load: a game loop at 50Hz
+# with hundreds of players on the map.
+#
+# A JSON patch, for the same reason as the image patch: kustomize cannot
+# merge a CRD's `containers` list, so a strategic merge would replace the
+# whole list and drop the shard's args and env.
+- op: replace
+  path: /spec/template/spec/template/spec/containers/0/resources
+  value:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi

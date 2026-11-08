@@ -1,0 +1,22 @@
+# Pod disruption budgets, for the production replica counts.
+#
+# The base runs one of each backing service, so it has no availability to
+# budget: a PDB with minAvailable: 1 over a single pod permits no
+# voluntary eviction at all, and would block a node drain forever. The
+# budgets therefore live here, where the replica counts make them
+# meaningful.
+#
+# The shards are Agones GameServers, and get no budget. Agones manages
+# their lifecycle — it allocates and evicts them — and a PDB would block
+# Agones' own evictions. The shard's availability comes from the Fleet's
+# replica count and from the FleetAutoscaler keeping spare shards Ready.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: goathena-nats
+spec:
+  # Two of three may be disrupted: one stays up.
+  maxUnavailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: goathena-nats

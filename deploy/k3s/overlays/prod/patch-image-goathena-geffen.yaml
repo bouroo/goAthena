@@ -1,0 +1,18 @@
+# Pin the shards to a released image.
+#
+# The base carries `latest`, which is right for a dev cluster and wrong
+# for production: a rolling update would pull whatever was published last,
+# so two pods of the same Fleet could run different code.
+#
+# This is a JSON patch, not a strategic merge. A Fleet is a CRD, and
+# kustomize cannot infer a merge key for a CRD's `containers` list — a
+# strategic merge there REPLACES the whole list, dropping the shard's
+# `args` and `env` (the database credentials, the zone identity, the
+# config mount). The shard would then start with no arguments and no
+# configuration. A JSON patch names the one field it changes.
+#
+# The path is Fleet.spec.template.spec.template.spec.containers[0].image:
+# the Fleet wraps a GameServer template, which wraps a pod template.
+- op: replace
+  path: /spec/template/spec/template/spec/containers/0/image
+  value: ghcr.io/bouroo/goathena:v0.1.0-beta.14
