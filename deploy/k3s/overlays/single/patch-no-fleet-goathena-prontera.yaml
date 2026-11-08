@@ -1,0 +1,10 @@
+# Drop the Fleets from the single-shard overlay.
+#
+# A strategic merge patch can remove a resource outright with the
+# `$patch: delete` directive, which is how the single-shard overlay
+# replaces the Fleets with one GameServer.
+apiVersion: agones.dev/v1
+kind: Fleet
+metadata:
+  name: goathena-prontera
+$patch: delete

@@ -4,6 +4,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -67,12 +68,16 @@ func NewCharServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.C
 	if err != nil {
 		return nil, fmt.Errorf("resolve account repository: %w", err)
 	}
+	endpoint, err := resolveMapEndpoint(context.Background(), inj, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("map endpoint: %w", err)
+	}
 	cs, err := app.NewCharServer(
 		chars,
 		accRepo,
 		log,
-		cfg.Gateway.MapHost,
-		uint16(cfg.Gateway.MapPort), //nolint:gosec // G115: MapPort operator-set (default 5121).
+		endpoint.Host,
+		endpoint.Port,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("char server: %w", err)

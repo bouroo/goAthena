@@ -161,32 +161,38 @@ can resume a login; NATS for cross-node broadcasts. Read-replicas for PG.
   manifests.
 - **PostgreSQL** for durable state; **Valkey** for hot cache; **OTel Collector**
   → Prometheus/Grafana for telemetry. **Shipped** in `deploy/k3s/base/`.
-- Kustomize base + dev/prod overlays, Agones `FleetAutoscaler`, PDBs, and a
-  TCP ingress for the three client ports. **Shipped** in `deploy/k3s/`.
+- Kustomize base + dev/prod/single overlays, Agones `FleetAutoscaler`, PDBs, and
+  a TCP ingress for the three client ports. **Shipped** in `deploy/k3s/`.
   The roadmap said "Traefik ingress + rate-limit"; the manifests use the
   nginx ingress class instead, because the game's protocol is raw TCP with a
   length-prefixed frame, and an HTTP-path router cannot proxy it.
+- **The shard advertises the address Agones assigned it.** **Shipped**:
+  `internal/infrastructure/agones/allocation.go` reads the allocation from the
+  sidecar (`GetGameServer`) at boot, and the gateway advertises it
+  (`gateway.MapEndpointResolver`). The port policy is **Dynamic**, so Agones
+  picks an open host port and a node can carry several shards.
 
-**What the manifests cannot yet carry.** The scale-out *plumbing* is
-partial: the Agones lifecycle adapter and the transit `MapDirectory` are
-in the tree and the Fleets are wired to them, but the fleet's size is
-driven by a policy that needs no signal from the app (a buffer of ready
-GameServers, and a schedule), because the shard publishes no player count.
-A List policy — scaling on how many players are actually connected — is
-the sharp signal, and needs an endpoint the app does not have yet.
+**What the manifests cannot yet carry.** The fleet's size is driven by a
+policy that needs no signal from the app (a buffer of ready GameServers, and
+a schedule), because the shard publishes no player count. A List policy —
+scaling on how many players are actually connected — is the sharp signal,
+and needs an endpoint the app does not have yet.
 
 **The addressing constraint.** The client is told the char and map
 endpoints inside `AC_ACCEPT_LOGIN`, and that handshake carries an IPv4
-address, not a hostname. So a cluster's Service names are not enough: a
-client outside the cluster needs the ingress's external address, and the
-prod overlay makes that an operator's explicit decision rather than a
-default that silently breaks.
+address, not a hostname. Inside a cluster the shard advertises the
+allocation Agones gave it (the node address and the assigned port), which is
+runtime state no configuration can express. Outside the cluster the
+*login* port still needs the ingress's external address, so the prod
+overlay makes that an operator's explicit decision rather than a default
+that silently breaks.
 
 The architectural seam is real today: `composition.go` wires the process via
 explicit ordered factories and every module is injectable behind an interface.
-The scale-out *plumbing* is partial — the Agones adapter and the NATS
-connection are in the binary now, but versioned NATS subjects and the
-extraction of the bounded contexts into separate binaries remain future work.
+The scale-out *plumbing* is partial — the Agones adapter, the allocation and
+the NATS connection are in the binary now, but versioned NATS subjects and
+the extraction of the bounded contexts into separate binaries remain future
+work.
 
 ---
 
@@ -214,7 +220,7 @@ started.**
 | **M10** Content | script VM ↔ dialog bridge (mes/next/select/input/close) | 🟡 partial — dialog bridge landed (602 LOC); full script-VM coverage open |
 | **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 chat ✅; friend/party ✅; guild/mail remain |
 | **M12** Transit | cross-map warp (SetPosition + LeaveMap) | 🟡 partial — in-zone warp + cross-zone redirect v0 (`MapDirectory` port + `ZC_NPCACK_SERVERMOVE` framing, Agones fleet directory open) |
-| **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 🟡 partial — Agones sidecar lifecycle wired; economy extracted over NATS (`economy.Service` seam, request/reply proxy+server, `goathena serve-economy` host, env-driven local/remote switch); sharding keys + further module extractions open |
+| **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 🟡 partial — Agones sidecar lifecycle wired; the shard advertises the allocation Agones assigned it (node address + assigned host port, read from the sidecar at boot), which is what a `Dynamic` port policy needs and what lets a node carry several shards; economy extracted over NATS (`economy.Service` seam, request/reply proxy+server, `goathena serve-economy` host, env-driven local/remote switch); sharding keys + further module extractions open |
 | **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | 🟡 partial — /metrics + compose e2e + security review (F-01..F-07 closed incl. variable-frame length cap) + gosec/govulncheck gates live + login-load baseline recorded (`task loadtest`, ≈1000 logins/s zero-error) + OTel span coverage at every process boundary (client frame, login attempt, NATS hop with traceparent propagation) + `goathena_gateway_unknown_opcodes_total` probe signal |
 | **M15** Source-pack protocol | The Thai fork as the primary protocol target; upstream as the compatibility set | ✅ — the source pack is the authority: every opcode and wire length resolves from the installed source pack at boot, from the source's own runtime packet table ([ADR 0004](adr/0004-source-pack-is-the-protocol-authority.md)). The port found ≈15 wire values the branch had hand-derived wrongly (frame lengths, field offsets, opcodes) and corrected them against the source; the warehouse now speaks the source's kafra protocol instead of an invented 0x07e3-0x07eb range. The source pack and client family are operator configuration (`client_source` / `client_variant`), the reference data and NPC corpus follow the selected pack, and the fork's `vip_storage` table is a migration. Both corpora compile (1209 fork scripts + 1138 upstream). Live-verified: login succeeds on all four (pack × family) combinations. |
 

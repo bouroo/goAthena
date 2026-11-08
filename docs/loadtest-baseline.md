@@ -38,7 +38,7 @@ go run ./cmd/loadgen -conns 10 -rate 2 -duration 15s -source upstream -variant m
 - each login exercises: packet parse → MD5 auth (MariaDB read) → Valkey
   `PutSession` → AC_ACCEPT_LOGIN encode/write
 
-## Results (2026-09-21)
+## Results (2026-11-08, re-recorded on the source-pack protocol)
 
 | Profile | Conns × rate | Duration | Limiter | Success | Refused | Throttle | Errors |
 |---|---|---|---|---|---|---|---|
@@ -53,6 +53,10 @@ go run ./cmd/loadgen -conns 10 -rate 2 -duration 15s -source upstream -variant m
   burst plus ~1/s refill passes, everything above it is silently dropped and
   reported as throttle (a denial is silence by design — no reply, so the
   attack cannot probe the limiter).
+
+Every profile reproduced the 2026-09-21 numbers exactly (590 / 7450 / 29900 /
+18+10), so the port to the source pack's protocol left the login path's
+capacity and its limiter shape unchanged. The numbers are current.
 
 ### Source-pack matrix (2026-11-08)
 

@@ -49,7 +49,16 @@ spec:
     spec:
       ports:
         - name: game
-          portPolicy: Static
+          # Dynamic: Agones picks an open host port and the shard
+          # advertises the one it was given (the allocation it reads from
+          # the sidecar at boot). A Static policy would fix the host port
+          # at 5121, so only one shard fits per node — the Dynamic policy
+          # is what lets a node carry several shards.
+          #
+          # The container still binds 5121: that is the containerPort, and
+          # the map listener inside the pod always listens there. Only the
+          # host-side port varies.
+          portPolicy: Dynamic
           containerPort: 5121
           protocol: TCP
       health:
@@ -117,9 +126,10 @@ spec:
                 - name: LOG_FORMAT
                   value: json
               ports:
-                # The map listener binds the container port; with a Static
-                # port policy Agones reports the same value in
-                # Status.Ports["game"].
+                # The map listener binds the container port; the host port
+                # is Agones' choice under the Dynamic policy, and the shard
+                # advertises the one it was allocated (see the fleet's
+                # port policy above).
                 - name: game
                   containerPort: 5121
                   protocol: TCP
@@ -188,7 +198,8 @@ spec:
     spec:
       ports:
         - name: game
-          portPolicy: Static
+          # Dynamic: see the prontera Fleet above.
+          portPolicy: Dynamic
           containerPort: 5121
           protocol: TCP
       health:

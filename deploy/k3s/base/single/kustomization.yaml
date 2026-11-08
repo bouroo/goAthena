@@ -1,0 +1,10 @@
+# The single-shard GameServer: one zone, no Fleet.
+#
+# It is a resource of its own rather than a file in the base, because it is
+# an alternative to the Fleets, not an addition to them: the base's
+# kustomization would deploy it alongside the Fleets.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - gameserver.yaml

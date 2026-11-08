@@ -1,0 +1,5 @@
+apiVersion: agones.dev/v1
+kind: FleetAutoscaler
+metadata:
+  name: goathena-prontera-schedule
+$patch: delete

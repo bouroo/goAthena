@@ -23,9 +23,13 @@ deploy/k3s/
     zone-fleet.yaml         the shards: one Fleet per map set
     fleet-autoscaler.yaml   how a map set grows
     ingress.yaml            the client-facing ports
+    single/                 the one-shard GameServer (an alternative, not
+                            an addition — the overlay picks it over the
+                            Fleets)
   overlays/
     dev/                    small resources, `latest` image
     prod/                   pinned image, real resources, real addresses
+    single/                 one GameServer instead of the Fleets
 ```
 
 ## Installing Agones
@@ -170,10 +174,26 @@ they carry the shard's contract with the transit MapDirectory.
 ## Notes on the manifests
 
 **The shard's ports.** The game port must be named `game` — the transit
-adapter reads `Status.Ports["game"].Port` out of the Agones API. The
-port policy is Static: the container binds 5121 at boot and nothing
-tells it a dynamic host port. The cost is one GameServer per node,
-since the port cannot be shared.
+adapter reads `Status.Ports["game"].Port` out of the Agones API.
+
+The port policy is **Dynamic**: Agones picks an open host port, and the
+shard advertises the one it was given. It reads the allocation from the
+sidecar at boot (`GetGameServer`) and puts the node address and the
+assigned port in the handshake it hands the client.
+
+This matters because the address is runtime state. The pod's IP is
+assigned after the manifest is written, so no environment variable can
+express it — a shard that advertised `gateway.map_host` would tell the
+client to dial an address that is not this shard's. It is also what lets
+a node carry several shards: a Static policy pins the host port to the
+container port, so only one shard fits per node.
+
+**The single-shard overlay.** `overlays/single` deploys one
+GameServer instead of the Fleets — a hand-allocated boss zone, a staging
+shard, a smoke test. It is an alternative to the Fleets, not an addition:
+the overlay removes the Fleets and their autoscalers, because an
+autoscaler scales Fleets and a Fleet that is not deployed has nothing to
+scale.
 
 **The namespace.** Each resource carries its namespace explicitly rather
 than through kustomize's `namespace:` transformer, because the base
