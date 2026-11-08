@@ -186,6 +186,15 @@ the wrong world.
   sidecar (`GetGameServer`) at boot, and the gateway advertises it
   (`gateway.MapEndpointResolver`). The port policy is **Dynamic**, so Agones
   picks an open host port and a node can carry several shards.
+- **The shard advertises the address of the shard that serves the
+  character's map.** **Shipped**: the char server resolves the endpoint for
+  the character's *own* map through the zone directory, not one fixed
+  address. A character standing on a map another shard serves must be
+  handed that shard's address — the client dials whatever the handshake
+  carries, and a shard that always advertised its own address would put
+  the character in the wrong world. The same mechanism carries Tier 2's
+  static route table, so both tiers redirect the client to the shard that
+  owns the map.
 
 **The fleet sizes on the players.** The shard publishes its connected-player
 count to the sidecar, Agones aggregates it across the fleet, and the
@@ -218,10 +227,10 @@ work.
 
 The re-init wiped the tree; the rebuild re-lands each milestone fresh (keep the
 `pkg/ro` kernel, rewrite the app layer on the framework stack). **M0–M7 are
-re-landed and proven** in the new tree; **first slices of M8, M9, M10, and M12
-have landed** and M11 is a scaffold. M13 scale-out and M14 hardening remain
-planned; **dual-client (roBrowser/WebSocket) and PACKETVER decoupling are not
-started.**
+re-landed and proven** in the new tree; **M8–M12 have landed in slices**;
+**M13's scale-out has landed with all three deployment tiers shipped and
+verified**; M14's hardening is largely closed. **Dual-client
+(roBrowser/WebSocket) and PACKETVER decoupling are not started.**
 
 | Milestone | Scope | Status |
 |---|---|---|
@@ -238,7 +247,7 @@ started.**
 | **M10** Content | script VM ↔ dialog bridge (mes/next/select/input/close) | 🟡 partial — dialog bridge landed (602 LOC); full script-VM coverage open |
 | **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 chat ✅; friend/party ✅; guild/mail remain |
 | **M12** Transit | cross-map warp (SetPosition + LeaveMap) | 🟡 partial — in-zone warp + cross-zone redirect v0 (`MapDirectory` port + `ZC_NPCACK_SERVERMOVE` framing, Agones fleet directory open) |
-| **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 🟡 partial — Agones sidecar lifecycle wired; the shard advertises the allocation Agones assigned it (node address + assigned host port, read from the sidecar at boot), which is what a `Dynamic` port policy needs and what lets a node carry several shards; economy extracted over NATS (`economy.Service` seam, request/reply proxy+server, `goathena serve-economy` host, env-driven local/remote switch); sharding keys + further module extractions open |
+| **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 🟡 partial — Agones sidecar lifecycle wired; the shard advertises the allocation Agones assigned it (node address + assigned host port, read from the sidecar at boot), which is what a `Dynamic` port policy needs and what lets a node carry several shards; the shard advertises the address of the shard that serves the character's **own** map (the per-map address handoff), which is what both the Agones fleet directory and Tier 2's static route table feed; the fleet sizes on the players (the shard publishes its connected-player count to the sidecar, the `FleetAutoscaler`'s Counter policy sizes the fleet by it); economy extracted over NATS (`economy.Service` seam, request/reply proxy+server, `goathena serve-economy` host, env-driven local/remote switch); **all three deployment tiers shipped and verified** (Tier 1 compose, Tier 2 small fleet, Tier 3 k3s); sharding keys + further module extractions open |
 | **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | 🟡 partial — /metrics + compose e2e + security review (F-01..F-07 closed incl. variable-frame length cap) + gosec/govulncheck gates live + login-load baseline recorded (`task loadtest`, ≈1000 logins/s zero-error) + OTel span coverage at every process boundary (client frame, login attempt, NATS hop with traceparent propagation) + `goathena_gateway_unknown_opcodes_total` probe signal |
 | **M15** Source-pack protocol | The Thai fork as the primary protocol target; upstream as the compatibility set | ✅ — the source pack is the authority: every opcode and wire length resolves from the installed source pack at boot, from the source's own runtime packet table ([ADR 0004](adr/0004-source-pack-is-the-protocol-authority.md)). The port found ≈15 wire values the branch had hand-derived wrongly (frame lengths, field offsets, opcodes) and corrected them against the source; the warehouse now speaks the source's kafra protocol instead of an invented 0x07e3-0x07eb range. The source pack and client family are operator configuration (`client_source` / `client_variant`), the reference data and NPC corpus follow the selected pack, and the fork's `vip_storage` table is a migration. Both corpora compile (1209 fork scripts + 1138 upstream). Live-verified: login succeeds on all four (pack × family) combinations. |
 
