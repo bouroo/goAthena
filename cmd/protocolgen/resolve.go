@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -234,24 +232,6 @@ func preprocess(compiler, rathenaPath string, v variant) (string, error) {
 		return "", fmt.Errorf("preprocessing upstream packet tables: %w", err)
 	}
 	return out, nil
-}
-
-// writeStubs writes the minimal third-party headers upstream's map headers
-// include but that carry no wire-layout meaning.
-func writeStubs(dir string) error {
-	mysql := `#pragma once
-typedef struct st_mysql MYSQL;
-typedef struct st_mysql_stmt MYSQL_STMT;
-typedef unsigned long long my_ulonglong;
-typedef struct st_mysql_bind { unsigned long *length; int *is_null; void *buffer; } MYSQL_BIND;
-`
-	if err := os.WriteFile(filepath.Join(dir, "mysql.h"), []byte(mysql), 0o600); err != nil {
-		return fmt.Errorf("write file: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "ryml_std.hpp"), []byte("#pragma once\n"), 0o600); err != nil {
-		return fmt.Errorf("write file: %w", err)
-	}
-	return nil
 }
 
 // parseInt parses a C integer literal (decimal or hexadecimal).

@@ -61,7 +61,24 @@ compares the resolved values to the committed ones.
    so it is a redundant argument threaded through twenty sites and read in
    two. The two readers derive it from the checkout they already hold.
 
-Each step is its own commit, green at every step. Steps 1-4 are done.
+Each step is its own commit, green at every step. All five are done.
+
+## Result
+
+The duplicated constructs now each have one owner. Counting their
+occurrences in `cmd/protocolgen`:
+
+| Construct | Before | After |
+|---|---|---|
+| the include-path list | 3 | 1 |
+| the `PACKETVER` defines | 3 | 1 |
+| the stub-header setup | 5 | 2 |
+| the temp-dir creation | 5 | 1 |
+| the `packets_struct.hpp` rule | 2 | 1 |
+| the `srcDir` parameter | 27 | 0 |
+
+The generator's resolved values are unchanged: `scripts/verify-protocolgen.sh`
+reports all 10 files OK for both source packs, before and after.
 
 ## Non-goals
 

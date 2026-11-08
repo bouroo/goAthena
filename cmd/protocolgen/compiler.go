@@ -161,3 +161,21 @@ func headerIncludes(header string) string {
 	}
 	return src.String()
 }
+
+// writeStubs writes the minimal third-party headers the source's map headers
+// include but that carry no wire-layout meaning.
+func writeStubs(dir string) error {
+	mysql := `#pragma once
+typedef struct st_mysql MYSQL;
+typedef struct st_mysql_stmt MYSQL_STMT;
+typedef unsigned long long my_ulonglong;
+typedef struct st_mysql_bind { unsigned long *length; int *is_null; void *buffer; } MYSQL_BIND;
+`
+	if err := os.WriteFile(filepath.Join(dir, "mysql.h"), []byte(mysql), 0o600); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ryml_std.hpp"), []byte("#pragma once\n"), 0o600); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+	return nil
+}
