@@ -15,4 +15,4 @@
 # the Fleet wraps a GameServer template, which wraps a pod template.
 - op: replace
   path: /spec/template/spec/template/spec/containers/0/image
-  value: ghcr.io/bouroo/goathena:0.1.0-beta.17
+  value: ghcr.io/bouroo/goathena:0.1.0-beta.18

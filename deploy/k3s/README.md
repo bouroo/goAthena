@@ -90,14 +90,14 @@ kubectl -n goathena create secret generic goathena-db \
 ```
 
 **2. The image tag.** `overlays/prod/patch-image-goathena-*.yaml` pins
-the shards to `0.1.0-beta.17`. Update it to the release you want
+the shards to `0.1.0-beta.18`. Update it to the release you want
 running. The base uses `latest`, which is right for a dev cluster and
 wrong for production: two pods of the same Fleet could run different
 code.
 
 The image tag carries **no `v` prefix**, even though the release tag
-does: the release is `v0.1.0-beta.17` and the image is
-`0.1.0-beta.17`. The publishing workflow sets the image's tags with
+does: the release is `v0.1.0-beta.18` and the image is
+`0.1.0-beta.18`. The publishing workflow sets the image's tags with
 `type=semver`, and semver's `{{version}}` has no `v`. Pinning the
 release's own tag form gives `ImagePullBackOff` on every shard.
 
