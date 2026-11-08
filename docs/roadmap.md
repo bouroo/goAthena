@@ -147,8 +147,23 @@ checks that the running container carries this tree's commit stamp, that
 login is accepted rather than refused.
 
 ### Tier 2 — Small fleet (self-hosted, a few nodes)
-Modular monolith behind a load balancer; Valkey for shared sessions so any node
-can resume a login; NATS for cross-node broadcasts. Read-replicas for PG.
+Two or more `goathena` processes, each serving a **disjoint set of maps**,
+behind one shared Postgres (durable state), one shared Valkey (sessions, so
+any node can resume a login) and one shared NATS (the bus). **Shipped**:
+`deploy/tier2/compose.yml` + `task verify-tier2`.
+
+The nodes find each other through a **static route table**
+(`zone.directory.mode=static`): each node's configuration names the maps
+served by *another* node and that node's address. A map with no route is
+served by this process, so the table is the fleet minus one and no node
+redirects a client to itself.
+
+The route table reaches the client through the **per-map address
+handoff**: the char server resolves the endpoint for the character's *own*
+map, so a character standing on a map another node serves is handed that
+node's address — the client dials whatever the handshake carries, and a
+node that always advertised its own address would put the character in
+the wrong world.
 
 ### Tier 3 — Enterprise (Kubernetes + Agones)
 - **Agones `Fleet`** allocates **per-zone (per-map-shard) `GameServer` processes**

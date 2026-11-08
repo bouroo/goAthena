@@ -1,0 +1,144 @@
+# Tier 2 — Small fleet (self-hosted, a few nodes).
+#
+# The middle rung of the ladder: more than one game process, no Kubernetes.
+#
+# What "small fleet" means here, concretely:
+#
+#   * Two or more goathena processes, each serving a DISJOINT set of maps.
+#     A node that serves a map the client is sent to is a node the client
+#     can reach; a node that serves the wrong map is a node that puts the
+#     character in the wrong world.
+#   * One shared Postgres (durable state), one shared Valkey (sessions, so
+#     any node can resume a login), one shared NATS (the bus).
+#   * A static route table (zone.directory.mode=static): each node knows
+#     which node serves which map, by address. No discovery API is needed
+#     — the operator knows the addresses, and the table is the deployment's
+#     configuration.
+#   * The per-map address handoff: the char server resolves the endpoint
+#     for the character's OWN map through the route table, so a character
+#     on a remote map is handed that node's address, not the node's own.
+#
+# Why the route table lists only REMOTE maps: a map with no route is
+# served by this process (the static directory resolves it local). That
+# keeps the table the size of the fleet minus one, and it means a node
+# never redirects a client to itself.
+#
+# Run it:
+#
+#   docker compose -f deploy/tier2/compose.yml up -d
+#
+# The node addresses below are the nodes' routable addresses. A real
+# deployment replaces them — the client dials an IPv4 literal, never a
+# hostname:
+#
+#   node-a (prontera)  →  10.0.4.6
+#   node-b (geffen)     →  10.0.4.7
+#
+# The ports here are HOST ports. Two nodes on one machine cannot both bind
+# 6900, so each node gets its own block; the route table names the
+# container ports (5121), which is what a client on the LAN dials.
+
+name: goathena-tier2
+
+x-shared-env: &shared-env
+  APP_ENVIRONMENT: production
+  DB_DRIVER: mariadb
+  DB_HOST: mariadb
+  DB_NAME: ragnarok
+  DB_USER: ragnarok
+  DB_PASSWORD: ragnarok
+  VALKEY_HOST: valkey
+  NATS_URL: nats://nats:4222
+  # The route table: the maps served by ANOTHER node, and their address.
+  # A map with no entry is served by this process.
+  ZONE_DIRECTORY_MODE: static
+
+services:
+  # --- shared services (one set for the fleet) ---
+  mariadb:
+    image: mariadb:11.8
+    environment:
+      MARIADB_ROOT_PASSWORD: ragnarok
+      MARIADB_DATABASE: ragnarok
+      MARIADB_USER: ragnarok
+      MARIADB_PASSWORD: ragnarok
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -uroot -p\"$$MARIADB_ROOT_PASSWORD\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  valkey:
+    image: valkey/valkey:9
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    image: nats:2-alpine
+    command: ["-js", "-m", "8222"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # --- node A: serves prontera ---
+  node-a:
+    build:
+      context: ../..
+      dockerfile: Containerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    depends_on:
+      mariadb: { condition: service_healthy }
+      valkey: { condition: service_healthy }
+      nats: { condition: service_healthy }
+    environment:
+      <<: *shared-env
+      # The address this node advertises for the maps it serves.
+      GATEWAY_CHAR_HOST: ${NODE_A_ADDRESS:-10.0.4.6}
+      GATEWAY_MAP_HOST: ${NODE_A_ADDRESS:-10.0.4.6}
+      ZONE_DIRECTORY_ROUTES: "geffen=${NODE_B_ADDRESS:-10.0.4.7}:5121"
+    ports:
+      - "6901:6900"
+      - "6131:6121"
+      - "5131:5121"
+      - "8081:8080"
+
+  # --- node B: serves geffen ---
+  node-b:
+    build:
+      context: ../..
+      dockerfile: Containerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    depends_on:
+      mariadb: { condition: service_healthy }
+      valkey: { condition: service_healthy }
+      nats: { condition: service_healthy }
+    environment:
+      <<: *shared-env
+      GATEWAY_CHAR_HOST: ${NODE_B_ADDRESS:-10.0.4.7}
+      GATEWAY_MAP_HOST: ${NODE_B_ADDRESS:-10.0.4.7}
+      # prontera is served by node-a; everything else is local.
+      ZONE_DIRECTORY_ROUTES: "prontera=${NODE_A_ADDRESS:-10.0.4.6}:5121"
+    ports:
+      - "6902:6900"
+      - "6132:6121"
+      - "5132:5121"
+      - "8082:8080"
+
+volumes:
+  mariadb-data: {}

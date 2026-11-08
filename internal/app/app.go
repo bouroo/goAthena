@@ -14,14 +14,10 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/samber/do/v2"
 
 	"github.com/bouroo/goAthena/internal/config"
 	"github.com/bouroo/goAthena/internal/infrastructure/agones"
 	"github.com/bouroo/goAthena/internal/modules/gateway"
-	gatewayapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
-	"github.com/bouroo/goAthena/internal/modules/transit"
-	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	"github.com/bouroo/goAthena/internal/shared/safe"
 )
 
@@ -65,34 +61,11 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		mapEndpoint = resolver
 	}
 
-	inj, d, closeAll := compose(ctx, cfg, log)
-	// The zone directory decides local-warp vs cross-zone redirect (M12).
-	// agones/static modes that fail to build are a fatal boot error — a
-	// misrouted fleet must not silently local-route every portal — and New
-	// is the first caller with a real error return.
-	if err := transit.RegisterMapDirectory(inj, cfg, log); err != nil {
-		closeAll()
-		return nil, fmt.Errorf("zone directory: %w", err)
-	}
-	// The map endpoint the char server advertises: the Agones allocation
-	// inside a fleet, the configured host otherwise.
-	gateway.RegisterMapEndpoint(inj, mapEndpoint)
-	// The per-map endpoint: a character is handed the address of the shard
-	// that serves ITS map. The zone directory answers which shard that is;
-	// a map it resolves locally is answered with this process's endpoint.
-	local, err := gateway.ResolveMapEndpoint(ctx, inj, *cfg)
+	d, closeAll, err := compose(ctx, cfg, log, mapEndpoint)
 	if err != nil {
 		closeAll()
-		return nil, fmt.Errorf("map endpoint: %w", err)
+		return nil, err
 	}
-	if directory, derr := do.Invoke[transitdomain.MapDirectory](inj); derr == nil {
-		do.ProvideValue(inj, gatewayapp.MapScopedEndpointResolver(&DirectoryMapEndpoints{
-			Directory: directory,
-			Local:     local,
-			Log:       log,
-		}))
-	}
-
 	e := echo.New()
 	addr := fmt.Sprintf("%s:%d", cfg.HTTP.Host, cfg.HTTP.Port)
 	server := &http.Server{

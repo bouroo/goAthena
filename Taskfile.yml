@@ -242,6 +242,11 @@ tasks:
           || { echo "the server logged no accepted login"; docker compose logs goathena | tail -20; exit 1; }
         echo "Tier 1 verified"
 
+  verify-tier2:
+    desc: Prove the Tier 2 fleet runs THIS tree's code — two nodes, one shared store, the route table wired
+    cmds:
+      - ./scripts/verify-tier2.sh
+
   verify-k3s:
     desc: Prove the Tier 3 k3s manifests match the real Kubernetes API schema
     cmds:
