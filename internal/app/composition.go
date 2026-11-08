@@ -55,6 +55,7 @@ type deps struct {
 	mapSrv protoListener
 	tick   tickStarter
 	mobAI  *worldapp.MobAIService
+	world  *worldapp.WorldService
 }
 
 // tickStarter is the lifecycle surface for the world tick loop and the periodic
@@ -165,6 +166,7 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 		log.Error("world service resolve failed; tick loop will not run", "err", err)
 	} else {
 		d.tick = ws
+		d.world = ws
 		// Graceful-shutdown save-all: appended before the listeners so the reverse
 		// close order stops the listeners first (their OnClose handlers persist
 		// per-conn), then this flushes any remaining online PCs (vitals + offline)

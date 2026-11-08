@@ -113,6 +113,12 @@ func (a *App) Run(ctx context.Context) error {
 	// M13: all listeners are live — declare the GameServer ready for player
 	// allocations and stream health pings until shutdown.
 	a.agonesReady(ctx)
+	// The shard publishes its player count to Agones, so the fleet's
+	// autoscaler can size the fleet by the players actually connected.
+	// No-op outside a GameServer.
+	if reporter := counterReporterFor(a.agonesPort); reporter != nil {
+		go RunCounterLoop(ctx, a.log, reporter, a.counterLoopSource(), CounterReportInterval)
+	}
 	// The world tick loop drives natural HP/SP regen at the configured rate and
 	// advances mob AI (aggro + attack) on the same cadence, chained as a second
 	// update call so mobs and regen share one consistent snapshot per tick.

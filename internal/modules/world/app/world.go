@@ -283,6 +283,25 @@ func (w *WorldService) PlayersOnMap(mapName string) []domain.EntityID {
 	return w.playersOnMapLocked(mapName)
 }
 
+// OnlinePlayerCount reports how many player characters are in the world.
+//
+// It is the signal the Agones autoscaler scales on: a fleet shard that
+// publishes it lets the FleetAutoscaler size the fleet by the players
+// actually connected, rather than by a buffer of idle shards. The count
+// is a scan of the registry under RLock, the same way PlayerByName does
+// it.
+func (w *WorldService) OnlinePlayerCount() int {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	n := 0
+	for _, e := range w.entities {
+		if e.Type == domain.EntityTypePC {
+			n++
+		}
+	}
+	return n
+}
+
 // PlayerByName resolves an online player-character's entity by exact name.
 // Names are unique among live PCs (the char table enforces it); the scan walks
 // the registry under RLock. Whisper routing uses this — a target that is not

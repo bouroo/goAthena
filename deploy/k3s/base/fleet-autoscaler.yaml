@@ -1,25 +1,60 @@
 # The Fleet autoscalers — how a map set grows.
 #
 # A shard is the unit of scale, and Agones owns the shard count (not the
-# Kubernetes HPA: an HPA cannot scale a Fleet). These are the two policies
-# that work without the app reporting anything:
+# Kubernetes HPA: an HPA cannot scale a Fleet).
+#
+# Three policies, each for a different shape of load:
+#
+#   * Counter — scale on the number of players connected across the
+#     fleet. This is the sharp signal: the shards publish their player
+#     count to the sidecar, Agones aggregates it across the fleet, and
+#     the fleet is sized so the aggregate capacity covers the aggregate
+#     players. A busy world grows; a quiet one shrinks.
 #
 #   * Buffer — scale on the number of READY GameServers waiting to be
-#     allocated. This is the policy that matches how a zone actually
-#     behaves: a busy map set accumulates unallocated shards, and Agones
-#     adds more until the buffer drains.
+#     allocated. This covers the load the counter cannot see: a shard
+#     that is up but not yet loaded still has to exist before its first
+#     player arrives, and a cold start takes longer than a report
+#     interval.
+#
 #   * Schedule — scale on a cron window. This covers the predictable load
-#     (an event's opening hours), where waiting for the buffer to fill
+#     (an event's opening hours), where waiting for the counter to climb
 #     would mean the first players of the window queue behind a cold
 #     start.
 #
-# A List policy (scale on the player count the shard reports) would be the
-# sharpest signal, but the app does not publish a player count, so it is
-# not used here: an autoscaler reading a metric nobody exports scales on
-# nothing.
+# The counter's key is the name the Fleets declare the counter under
+# (spec.template.spec.counters.players) and the name the shard publishes
+# it under. A typo in either leaves the autoscaler scaling on a counter
+# that does not exist; the manifest test asserts the two agree.
+#
+# The capacities are the fleet's, not one shard's: a shard serves 100
+# players, so a fleet of ten serves 1000. The min is one shard's worth
+# (100) and the max is the ceiling the operator set (1000).
 #
 # The schedules are placeholders — set them to the world's hours before
 # this runs in production. They are expressed in UTC.
+apiVersion: agones.dev/v1
+kind: FleetAutoscaler
+metadata:
+  name: goathena-prontera-counter
+spec:
+  fleetName: goathena-prontera
+  policy:
+    type: Counter
+    counter:
+      key: players
+      # 10% of the desired players is spare capacity, so a burst does
+      # not immediately need another shard.
+      bufferSize: 10%
+      # One shard's worth of capacity at the floor.
+      minCapacity: 100
+      # Ten shards' worth at the ceiling.
+      maxCapacity: 1000
+  sync:
+    type: FixedInterval
+    fixedInterval:
+      seconds: 30
+---
 apiVersion: agones.dev/v1
 kind: FleetAutoscaler
 metadata:
@@ -30,7 +65,9 @@ spec:
     type: Buffer
     buffer:
       bufferSize: 2
-      minReplicas: 1
+      # Agones requires minReplicas >= bufferSize: the policy wants two
+      # unallocated shards, so a floor of one would be rejected.
+      minReplicas: 2
       maxReplicas: 10
   sync:
     type: FixedInterval
@@ -54,8 +91,27 @@ spec:
         type: Buffer
         buffer:
           bufferSize: 5
-          minReplicas: 1
+          # Agones requires minReplicas >= bufferSize.
+          minReplicas: 5
           maxReplicas: 10
+  sync:
+    type: FixedInterval
+    fixedInterval:
+      seconds: 30
+---
+apiVersion: agones.dev/v1
+kind: FleetAutoscaler
+metadata:
+  name: goathena-geffen-counter
+spec:
+  fleetName: goathena-geffen
+  policy:
+    type: Counter
+    counter:
+      key: players
+      bufferSize: 10%
+      minCapacity: 100
+      maxCapacity: 1000
   sync:
     type: FixedInterval
     fixedInterval:
@@ -71,7 +127,9 @@ spec:
     type: Buffer
     buffer:
       bufferSize: 2
-      minReplicas: 1
+      # Agones requires minReplicas >= bufferSize: the policy wants two
+      # unallocated shards, so a floor of one would be rejected.
+      minReplicas: 2
       maxReplicas: 10
   sync:
     type: FixedInterval

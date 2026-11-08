@@ -57,6 +57,12 @@ kubectl get crd fleets.agones.dev fleetautoscalers.agones.dev
 GameServer. The shard does not need it, and it is one fewer thing
 listening on every node.
 
+The chart's `agones.featureGates` is left at its default, which turns
+on `CountsAndLists` — the gate the player counter and the Counter policy
+need. If the chart is installed with a custom gate string, that gate
+must include `CountsAndLists=true`; without it the controller rejects
+the Fleets' counter and the Counter policy.
+
 ## Applying
 
 ```sh
@@ -128,21 +134,35 @@ connection.
 Agones owns the shard count, not the Kubernetes HPA — an HPA cannot
 scale a Fleet, and one that tried would fight Agones for the replicas.
 
-Two `FleetAutoscaler` policies are in `base/fleet-autoscaler.yaml`:
+Three `FleetAutoscaler` policies are in `base/fleet-autoscaler.yaml`:
 
+- **Counter** — scale on the number of players connected across the
+  fleet. This is the sharp signal: each shard publishes its player count
+  to the sidecar every 10 seconds, Agones aggregates the counts across
+  the fleet, and the fleet is sized so the aggregate capacity covers
+  the aggregate players. A busy world grows; a quiet one shrinks.
 - **Buffer** — scale on the number of READY GameServers waiting to be
-  allocated. This is the policy that matches how a zone behaves: a busy
-  map set accumulates unallocated shards, and Agones adds more until the
-  buffer drains.
+  allocated. This covers the load the counter cannot see: a shard that
+  is up but not yet loaded still has to exist before its first player
+  arrives, and a cold start takes longer than a report interval.
 - **Schedule** — scale on a cron window, for the predictable load (an
-  event's opening hours) where waiting for the buffer to fill would
+  event's opening hours) where waiting for the counter to climb would
   queue the first players behind a cold start.
 
-A third policy is deliberately absent. A **List** policy scales on the
-player count the shard reports, which would be the sharpest signal, but
-the app does not publish a player count — there is no capacity endpoint
-on the Agones adapter. An autoscaler reading a metric nobody exports
-scales on nothing.
+The counter's name is a contract between three places, and a typo in any
+one of them leaves the autoscaler scaling on a counter that does not
+exist:
+
+1. the Fleet declares it — `spec.template.spec.counters.players`
+2. the shard publishes it — `agones.PlayersCounterName` (`"players"`)
+3. the policy reads it — `spec.policy.counter.key`
+
+The manifest test asserts the three agree.
+
+The counter's capacity (100) is the shard's design point: the players
+one shard serves before another is needed. The policy's `minCapacity`
+and `maxCapacity` are the fleet's — one shard's worth at the floor, ten
+shards' worth at the ceiling.
 
 The schedule in the base is a placeholder (`0 0 * * *`, two hours
 long). Set it to the world's hours, in UTC, before it runs in production.

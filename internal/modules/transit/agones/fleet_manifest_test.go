@@ -12,6 +12,7 @@ import (
 
 	"agones.dev/agones/pkg/apis"
 	agonesv1 "agones.dev/agones/pkg/apis/agones/v1"
+	"agones.dev/agones/pkg/util/runtime"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/yaml"
@@ -100,6 +101,14 @@ var _ agonesv1.APIHooks = noopAPIHooks{}
 // satisfies the Agones API's own validation — a manifest that fails here would
 // be rejected by the apiserver at apply time.
 func TestFleetManifest_ValidatesAgainstAgones(t *testing.T) {
+	// The Agones feature gates default to empty until the controller
+	// parses them at startup (runtime.ParseFeaturesFromEnv). The
+	// validator reads them, so the test applies the same defaults the
+	// controller does — otherwise the Fleet's player counter is rejected
+	// for a reason that does not exist in a real cluster.
+	if err := runtime.ParseFeatures(""); err != nil {
+		t.Fatalf("parse the Agones feature defaults: %v", err)
+	}
 	fleets := loadFleets(t)
 	hooks := noopAPIHooks{}
 	for _, fleet := range fleets {
@@ -235,6 +244,10 @@ func gameServerManifestPath(t *testing.T) string {
 // manifest satisfies the Agones API and honours the same directory contract
 // (a `game` port, a maps declaration) as the Fleet.
 func TestGameServerManifest_ValidatesAndMatchesContract(t *testing.T) {
+	// The same feature-gate defaults as the Fleet test above.
+	if err := runtime.ParseFeatures(""); err != nil {
+		t.Fatalf("parse the Agones feature defaults: %v", err)
+	}
 	f, err := os.Open(gameServerManifestPath(t))
 	if err != nil {
 		t.Fatalf("open manifest: %v", err)

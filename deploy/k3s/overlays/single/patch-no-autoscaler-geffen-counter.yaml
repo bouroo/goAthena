@@ -1,0 +1,8 @@
+# Drop the geffen-counter autoscaler from the single-shard overlay.
+#
+# It scales a Fleet, and a Fleet that is not deployed has nothing to scale.
+apiVersion: agones.dev/v1
+kind: FleetAutoscaler
+metadata:
+  name: goathena-geffen-counter
+$patch: delete
