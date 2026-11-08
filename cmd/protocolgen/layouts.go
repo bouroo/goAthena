@@ -142,15 +142,7 @@ func probeFieldOffsets(compiler, rathenaPath, _ string, v variant, header, struc
 	defer ws.cleanup()
 
 	var src bytes.Buffer
-	fmt.Fprintf(&src, "#include \"config/packets.hpp\"\n")
-	// packets_struct.hpp is not self-contained: it relies on the
-	// DEFINE_PACKET_ID macro that map/packets.hpp defines before it
-	// includes it. Including map/packets.hpp brings both.
-	if header == "map/packets_struct.hpp" {
-		fmt.Fprintf(&src, "#include \"map/packets.hpp\"\n")
-	} else {
-		fmt.Fprintf(&src, "#include \"%s\"\n", header)
-	}
+	src.WriteString(headerIncludes(header))
 	fmt.Fprintf(&src, "#include <cstdio>\n#include <cstddef>\n#include <type_traits>\n")
 	// The source selects a struct's fields conditionally, so the raw text
 	// scan sees fields this client family does not have. The compiler

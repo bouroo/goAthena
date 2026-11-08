@@ -144,3 +144,20 @@ func (w *workspace) writeSource(body []byte) error {
 	}
 	return nil
 }
+
+// headerIncludes returns the includes a probe needs before the header set it
+// inspects.
+//
+// packets_struct.hpp is not self-contained: it relies on the DEFINE_PACKET_ID
+// macro that map/packets.hpp defines before it includes it. Including
+// map/packets.hpp brings both.
+func headerIncludes(header string) string {
+	var src bytes.Buffer
+	fmt.Fprintf(&src, "#include \"config/packets.hpp\"\n")
+	if header == "map/packets_struct.hpp" {
+		fmt.Fprintf(&src, "#include \"map/packets.hpp\"\n")
+	} else {
+		fmt.Fprintf(&src, "#include \"%s\"\n", header)
+	}
+	return src.String()
+}

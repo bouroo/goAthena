@@ -42,15 +42,7 @@ func probeLayouts(compiler, rathenaPath, srcDir string, v variant, header string
 	defer ws.cleanup()
 
 	var src bytes.Buffer
-	fmt.Fprintf(&src, "#include \"config/packets.hpp\"\n")
-	// packets_struct.hpp is not self-contained: it relies on the
-	// DEFINE_PACKET_ID macro that map/packets.hpp defines before it
-	// includes it. Including map/packets.hpp brings both.
-	if header == "map/packets_struct.hpp" {
-		fmt.Fprintf(&src, "#include \"map/packets.hpp\"\n")
-	} else {
-		fmt.Fprintf(&src, "#include \"%s\"\n", header)
-	}
+	src.WriteString(headerIncludes(header))
 	fmt.Fprintf(&src, "#include <cstdio>\n")
 	fmt.Fprintf(&src, "#include <type_traits>\n")
 	fmt.Fprintf(&src, "template<typename T, typename = void> struct is_complete : std::false_type {};\n")
