@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -36,19 +35,11 @@ func probeLayouts(compiler, rathenaPath, srcDir string, v variant, header string
 		return nil, err
 	}
 
-	dir, err := os.MkdirTemp("", "protocolgen-size")
+	ws, err := newWorkspace("protocolgen-size")
 	if err != nil {
-		return nil, fmt.Errorf("temp dir: %w", err)
+		return nil, err
 	}
-	defer os.RemoveAll(dir) //nolint:errcheck // temp dir cleanup
-
-	stubDir := filepath.Join(dir, "stub")
-	if err := os.MkdirAll(stubDir, 0o750); err != nil {
-		return nil, fmt.Errorf("output dir: %w", err)
-	}
-	if err := writeStubs(stubDir); err != nil {
-		return nil, fmt.Errorf("output dir: %w", err)
-	}
+	defer ws.cleanup()
 
 	var src bytes.Buffer
 	fmt.Fprintf(&src, "#include \"config/packets.hpp\"\n")
@@ -78,16 +69,15 @@ func probeLayouts(compiler, rathenaPath, srcDir string, v variant, header string
 	}
 	fmt.Fprintf(&src, "  return 0;\n}\n")
 
-	srcPath := filepath.Join(dir, "probe.cpp")
-	if err := os.WriteFile(srcPath, src.Bytes(), 0o600); err != nil {
-		return nil, fmt.Errorf("write file: %w", err)
+	if err := ws.writeSource(src.Bytes()); err != nil {
+		return nil, err
 	}
-	binPath := filepath.Join(dir, "probe")
-	if err := compile(compiler, rathenaPath, stubDir, v, srcPath, binPath); err != nil {
+	c := newCompiler(compiler, rathenaPath, ws.stubDir, v)
+	if err := c.compile(ws.srcPath, ws.binPath); err != nil {
 		return nil, err
 	}
 
-	out, err := exec.Command(binPath).Output() // #nosec G204 -- the probe is the binary we just compiled into our own temp dir
+	out, err := runProbe(ws.binPath)
 	if err != nil {
 		return nil, fmt.Errorf("running size probe: %w", err)
 	}
@@ -132,35 +122,4 @@ func parseSizes(out []byte) map[string]int {
 		sizes[parts[1]] = n
 	}
 	return sizes
-}
-
-// compile builds one probe translation unit.
-func compile(compiler, rathenaPath, stubDir string, v variant, srcPath, binPath string) error {
-	args := []string{
-		"-std=c++17",
-		"-DPACKETVER=" + strconv.Itoa(v.packetver),
-	}
-	if v.zero {
-		args = append(args, "-DPACKETVER_ZERO=1")
-	}
-	args = append(args,
-		"-I"+stubDir,
-		"-I"+filepath.Join(rathenaPath, "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "rapidyaml", "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "rapidyaml", "ext", "c4core", "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "libconfig"),
-		srcPath, "-o", binPath,
-	)
-
-	// The compiler and the paths are the caller's own: the generator runs
-	// the user's compiler over the user's source tree to ask it what the
-	// source resolves to.
-	cmd := exec.Command(compiler, args...) // #nosec G204 G702 -- the compiler and the paths are the caller's own
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("compiling probe: %w\n%s", err, stderr.String())
-	}
-	return nil
 }

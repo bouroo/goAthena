@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -134,21 +133,13 @@ func structFields(srcDir, header, structName string) ([]string, error) {
 }
 
 // probeFieldOffsets compiles a probe that prints the offset of each field of
-// one upstream struct.
+// one source struct.
 func probeFieldOffsets(compiler, rathenaPath, _ string, v variant, header, structName string, fields []string) (map[string]int, error) {
-	dir, err := os.MkdirTemp("", "protocolgen-off")
+	ws, err := newWorkspace("protocolgen-off")
 	if err != nil {
-		return nil, fmt.Errorf("temp dir: %w", err)
+		return nil, err
 	}
-	defer os.RemoveAll(dir) //nolint:errcheck // temp dir cleanup
-
-	stubDir := filepath.Join(dir, "stub")
-	if err := os.MkdirAll(stubDir, 0o750); err != nil {
-		return nil, fmt.Errorf("output dir: %w", err)
-	}
-	if err := writeStubs(stubDir); err != nil {
-		return nil, fmt.Errorf("output dir: %w", err)
-	}
+	defer ws.cleanup()
 
 	var src bytes.Buffer
 	fmt.Fprintf(&src, "#include \"config/packets.hpp\"\n")
@@ -161,7 +152,7 @@ func probeFieldOffsets(compiler, rathenaPath, _ string, v variant, header, struc
 		fmt.Fprintf(&src, "#include \"%s\"\n", header)
 	}
 	fmt.Fprintf(&src, "#include <cstdio>\n#include <cstddef>\n#include <type_traits>\n")
-	// Upstream selects a struct's fields conditionally, so the raw text
+	// The source selects a struct's fields conditionally, so the raw text
 	// scan sees fields this client family does not have. The compiler
 	// decides: a field the preprocessor dropped is not a member, and the
 	// probe reports only the ones that are.
@@ -183,16 +174,15 @@ func probeFieldOffsets(compiler, rathenaPath, _ string, v variant, header, struc
 	}
 	fmt.Fprintf(&src, "  return 0;\n}\n")
 
-	srcPath := filepath.Join(dir, "probe.cpp")
-	if err := os.WriteFile(srcPath, src.Bytes(), 0o600); err != nil {
-		return nil, fmt.Errorf("write file: %w", err)
+	if err := ws.writeSource(src.Bytes()); err != nil {
+		return nil, err
 	}
-	binPath := filepath.Join(dir, "probe")
-	if err := compile(compiler, rathenaPath, stubDir, v, srcPath, binPath); err != nil {
+	c := newCompiler(compiler, rathenaPath, ws.stubDir, v)
+	if err := c.compile(ws.srcPath, ws.binPath); err != nil {
 		return nil, err
 	}
 
-	out, err := exec.Command(binPath).Output() // #nosec G204 -- the probe is the binary we just compiled into our own temp dir
+	out, err := runProbe(ws.binPath)
 	if err != nil {
 		return nil, fmt.Errorf("running offset probe: %w", err)
 	}

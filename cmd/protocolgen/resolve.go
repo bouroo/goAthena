@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -212,65 +210,33 @@ func resolveLength(expr string, sizes map[string]int) (int, bool) {
 	return 0, false
 }
 
-// preprocess runs the C preprocessor over upstream's packet tables.
+// preprocess runs the C preprocessor over the source's packet tables.
 //
 // Only preprocessing is needed (not compilation): the packet tables are macro
-// invocations whose expansion is exactly what upstream registers at runtime,
-// and preprocessing avoids building upstream's whole map server.
+// invocations whose expansion is exactly what the source registers at runtime,
+// and preprocessing avoids building the source's whole map server.
 func preprocess(compiler, rathenaPath, _ string, v variant) (string, error) {
-	dir, err := os.MkdirTemp("", "protocolgen")
+	ws, err := newWorkspace("protocolgen")
 	if err != nil {
-		return "", fmt.Errorf("temp dir: %w", err)
+		return "", err
 	}
-	defer os.RemoveAll(dir) //nolint:errcheck // temp dir cleanup
+	defer ws.cleanup()
 
-	stubDir := filepath.Join(dir, "stub")
-	if err := os.MkdirAll(stubDir, 0o750); err != nil {
-		return "", fmt.Errorf("output dir: %w", err)
-	}
-	if err := writeStubs(stubDir); err != nil {
-		return "", fmt.Errorf("output dir: %w", err)
-	}
-
-	// The two tables are included in upstream's order; the shuffle table
+	// The two tables are included in the source's order; the shuffle table
 	// re-binds opcodes for specific client versions and must come second.
-	srcPath := filepath.Join(dir, "probe.cpp")
 	body := "#include \"config/packets.hpp\"\n" +
 		"#include \"map/clif_packetdb.hpp\"\n" +
 		"#include \"map/clif_shuffle.hpp\"\n"
-	if err := os.WriteFile(srcPath, []byte(body), 0o600); err != nil {
-		return "", fmt.Errorf("write file: %w", err)
+	if err := ws.writeSource([]byte(body)); err != nil {
+		return "", err
 	}
 
-	args := []string{
-		"-std=c++17",
-		"-E",
-		"-DPACKETVER=" + strconv.Itoa(v.packetver),
+	c := newCompiler(compiler, rathenaPath, ws.stubDir, v)
+	out, err := c.preprocess(ws.srcPath)
+	if err != nil {
+		return "", fmt.Errorf("preprocessing upstream packet tables: %w", err)
 	}
-	if v.zero {
-		args = append(args, "-DPACKETVER_ZERO=1")
-	}
-	args = append(args,
-		"-I"+stubDir,
-		"-I"+filepath.Join(rathenaPath, "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "rapidyaml", "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "rapidyaml", "ext", "c4core", "src"),
-		"-I"+filepath.Join(rathenaPath, "3rdparty", "libconfig"),
-		srcPath,
-	)
-
-	// The compiler and the paths are the caller's own: the generator runs
-	// the user's compiler over the user's source tree to ask it what the
-	// source resolves to.
-	cmd := exec.Command(compiler, args...) // #nosec G204 G702 -- the compiler and the paths are the caller's own
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("preprocessing upstream packet tables: %w\n%s", err, stderr.String())
-	}
-	return stdout.String(), nil
+	return out, nil
 }
 
 // writeStubs writes the minimal third-party headers upstream's map headers
