@@ -25,6 +25,7 @@ import (
 	economydomain "github.com/bouroo/goAthena/internal/modules/economy/domain"
 	economyinfra "github.com/bouroo/goAthena/internal/modules/economy/infra"
 	"github.com/bouroo/goAthena/internal/modules/gateway"
+	gatewayapp "github.com/bouroo/goAthena/internal/modules/gateway/app"
 	"github.com/bouroo/goAthena/internal/modules/inventory"
 	"github.com/bouroo/goAthena/internal/modules/social"
 	friendmod "github.com/bouroo/goAthena/internal/modules/social/friend"
@@ -32,6 +33,7 @@ import (
 	mailmod "github.com/bouroo/goAthena/internal/modules/social/mail"
 	partymod "github.com/bouroo/goAthena/internal/modules/social/party"
 	"github.com/bouroo/goAthena/internal/modules/transit"
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	"github.com/bouroo/goAthena/internal/modules/world"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 )
@@ -80,7 +82,7 @@ type tickStarter interface {
 // rather than crashing the process, so /healthz stays 200 and /readyz reflects
 // the outage for the readiness loop to keep probing. The returned closer tears
 // everything down in reverse order.
-func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Injector, *deps, func()) {
+func compose(ctx context.Context, cfg *config.Config, log *slog.Logger, mapEndpoint gateway.MapEndpointResolver) (*deps, func(), error) {
 	inj := do.New()
 	d := &deps{}
 	var closers []func()
@@ -156,6 +158,25 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	transit.Register(inj)
 	world.Register(inj, cfg.Zone.TickRateHz, cfg.Zone.DBPath)
 
+	// The zone directory decides local-warp vs cross-zone redirect (M12).
+	// agones/static modes that fail to build are a fatal boot error — a
+	// misrouted fleet must not silently local-route every portal.
+	//
+	// It must be registered BEFORE the listeners are built: the char
+	// server's per-map resolver needs the directory at construction.
+	if err := transit.RegisterMapDirectory(inj, cfg, log); err != nil {
+		return d, func() {}, fmt.Errorf("zone directory: %w", err)
+	}
+
+	// The map endpoint the char server advertises: the Agones allocation
+	// inside a fleet, the configured host otherwise.
+	//
+	// It must be registered BEFORE the listeners are built: the char
+	// server resolves its endpoint at construction, and a resolver
+	// registered afterwards would never be seen — the server would
+	// advertise the configured host instead of the allocated address.
+	gateway.RegisterMapEndpoint(inj, mapEndpoint)
+
 	// Seed the world from the compiled script corpus: dialog NPCs, shop NPCs,
 	// and mob spawns become live entities. Best-effort — a corpus failure
 	// leaves an unseeded but bootable world.
@@ -187,6 +208,23 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	} else {
 		d.mobAI = mobAI
 	}
+	// The per-map endpoint resolver must exist BEFORE the char server is
+	// built: the server resolves it at construction, and a resolver
+	// registered afterwards would be too late — the server would
+	// advertise its own address for every map.
+	//
+	// The zone directory answers which shard serves a map; a map it
+	// resolves locally is answered with this process's own endpoint.
+	local, err := gateway.ResolveMapEndpoint(ctx, inj, *cfg)
+	if err != nil {
+		log.Error("map endpoint resolve failed; every character gets the configured address", "err", err)
+	} else if directory, derr := do.Invoke[transitdomain.MapDirectory](inj); derr == nil {
+		do.ProvideValue(inj, gatewayapp.MapScopedEndpointResolver(&DirectoryMapEndpoints{
+			Directory: directory,
+			Local:     local,
+			Log:       log,
+		}))
+	}
 
 	// Listeners resolve their ports from the injector. Best-effort: a build
 	// failure is logged and the listener simply won't serve.
@@ -214,7 +252,7 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 			closer()
 		}
 	}
-	return inj, d, closeAll
+	return d, closeAll, nil
 }
 
 // ready reports nil only when every required dependency answers its probe AND

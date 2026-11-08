@@ -67,6 +67,14 @@ type CharServer struct {
 	log     *slog.Logger
 	mapIP   uint32 // advertised map-server IPv4 (wire uint32)
 	mapPort uint16 // advertised map-server port
+	// endpoints resolves the map-server address for a specific map. It is
+	// optional: without it every character is handed the same address,
+	// which is correct only when one process serves every map.
+	//
+	// Guarded by endpointsMu: the setter runs on the boot goroutine while
+	// the event loop reads it on every char-select.
+	endpointsMu sync.RWMutex
+	endpoints   MapScopedEndpointResolver
 	// handlers is the opcode→handler dispatch table. CH_ENTER admits the
 	// connection; CH_MAKE_CHAR/CH_SELECT_CHAR are only valid post-auth.
 	handlers map[uint16]charHandler
@@ -106,6 +114,18 @@ func NewCharServer(chars *charapp.CharService, account AccountRepo, log *slog.Lo
 		db:       ropacket.NewCharServerDB(),
 		auth:     make(map[gnet.Conn]charAuth),
 	}, nil
+}
+
+// SetMapEndpoints attaches the map-scoped resolver after construction, so
+// the DI root can wire it without churning NewCharServer's call sites.
+//
+// nil keeps the single-address behavior: every character is handed the
+// configured map endpoint, which is correct when one process serves every
+// map.
+func (s *CharServer) SetMapEndpoints(resolver MapScopedEndpointResolver) {
+	s.endpointsMu.Lock()
+	defer s.endpointsMu.Unlock()
+	s.endpoints = resolver
 }
 
 // charHandler is one entry in the char-server dispatch table: a fixed frame size
@@ -366,11 +386,15 @@ func (s *CharServer) handleSelectChar(fctx context.Context, c gnet.Conn, frame [
 		s.log.Warn("char: select slot not found", "aid", auth.accountID, "slot", req.Slot)
 		return
 	}
+	// The client is handed the address of the shard that serves the
+	// character's map. In a single-process deployment that is this
+	// process; in a fleet it is whichever shard owns the map.
+	ip, port := s.mapEndpointFor(fctx, mapName, auth.accountID)
 	resp := ropacket.NotifyZoneServerResponse{
 		CID:     gid,
 		MapName: mapName,
-		IP:      s.mapIP,
-		Port:    s.mapPort,
+		IP:      ip,
+		Port:    port,
 	}
 	out := make([]byte, resp.Size())
 	if err := resp.Encode(sliceWriter(out)); err != nil {
@@ -379,6 +403,33 @@ func (s *CharServer) handleSelectChar(fctx context.Context, c gnet.Conn, frame [
 	}
 	_ = c.AsyncWrite(out, nil)
 	s.log.Info("char selected", "aid", auth.accountID, "gid", gid, "map", mapName)
+}
+
+// mapEndpointFor returns the address to advertise for a character's map:
+// the shard that serves it, resolved through the per-map resolver when
+// one is registered, and this process's own address otherwise.
+//
+// A resolution failure keeps this process's address: it is the one
+// address known to be dialable, and handing the client an unroutable one
+// would be worse than handing it the shard the character is already on.
+func (s *CharServer) mapEndpointFor(ctx context.Context, mapName string, accountID uint32) (uint32, uint16) {
+	s.endpointsMu.RLock()
+	resolver := s.endpoints
+	s.endpointsMu.RUnlock()
+	if resolver == nil {
+		return s.mapIP, s.mapPort
+	}
+	endpoint, err := resolver.ResolveMapEndpointFor(ctx, mapName)
+	if err != nil {
+		s.log.Warn("char: resolve map endpoint", "aid", accountID, "map", mapName, "err", err)
+		return s.mapIP, s.mapPort
+	}
+	ip, err := ipToWire(endpoint.Host)
+	if err != nil {
+		s.log.Warn("char: map endpoint host", "aid", accountID, "map", mapName, "host", endpoint.Host, "err", err)
+		return s.mapIP, s.mapPort
+	}
+	return ip, endpoint.Port
 }
 
 // handleDeleteReserved processes CH_DELETE_CHAR3_RESERVED (reserve a deletion slot).

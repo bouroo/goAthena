@@ -68,7 +68,7 @@ func NewCharServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.C
 	if err != nil {
 		return nil, fmt.Errorf("resolve account repository: %w", err)
 	}
-	endpoint, err := resolveMapEndpoint(context.Background(), inj, cfg)
+	endpoint, err := ResolveMapEndpoint(context.Background(), inj, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("map endpoint: %w", err)
 	}
@@ -81,6 +81,17 @@ func NewCharServer(inj do.Injector, cfg config.Config, log *slog.Logger) (*app.C
 	)
 	if err != nil {
 		return nil, fmt.Errorf("char server: %w", err)
+	}
+	// The per-map endpoint: a character is handed the address of the shard
+	// that serves ITS map, which in a multi-process deployment is not
+	// this process. The zone directory answers which shard that is.
+	// The directory is optional — without it every character gets this
+	// process's address, which is correct when one process serves every
+	// map.
+	if resolver, rerr := do.Invoke[app.MapScopedEndpointResolver](inj); rerr == nil {
+		cs.SetMapEndpoints(resolver)
+	} else {
+		log.Info("no per-map endpoint resolver; every character gets this process's map address")
 	}
 	return cs, nil
 }

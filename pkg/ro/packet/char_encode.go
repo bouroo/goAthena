@@ -135,13 +135,17 @@ type NotifyZoneServerResponse struct {
 	// MapName is the zone-side map name (zero-padded ASCII on the wire to
 	// fill a 16-byte slot — MAP_NAME_LENGTH_EXT).
 	MapName string
-	// IP is the zone server's IPv4 address in network byte order, stored as
-	// a uint32 (the most-significant byte of the original IPv4 octet set is
-	// the highest byte of the uint32). The encoder writes these bytes to
-	// the wire verbatim using binary.LittleEndian.PutUint32 — match the
-	// convention used by encode.go LastIP/IP for AC_ACCEPT_LOGIN.
+	// IP is the zone server's IPv4 address as the source holds it:
+	// htonl of the host-order IPv4 (rathenaThailand/src/char/
+	// char_clif.cpp:909 — p.ip = htonl(map_server[...].ip)), so 127.0.0.1
+	// is 0x7f000001. Encode writes the field's little-endian memory
+	// image, which is what socket_send's memcpy of the packed struct puts
+	// on the wire: 01 00 00 7f.
 	IP uint32
-	// Port is the zone server's TCP port.
+	// Port is the zone server's TCP port as the plain number. The source
+	// writes ntows(htons(port)) (char_clif.cpp:910) — the two swaps
+	// cancel, so the field value is the port itself (5121), and its
+	// little-endian memory image is 01 14.
 	Port uint16
 	// Domain is the zone-server DNS name or empty string (zero-padded ASCII
 	// on the wire to fill a 128-byte slot).
@@ -168,11 +172,11 @@ func (r NotifyZoneServerResponse) Encode(w io.Writer) error {
 	binary.LittleEndian.PutUint32(buf[2:], r.CID)
 	// char mapname[16] at offset 6 — zero-padded.
 	writeFixedString(buf[6:6+mapNameExtSlot], r.MapName)
-	// uint32 ip at offset 22 (2+4+16) — network-order bytes written
-	// verbatim (LE PutUint32 preserves the byte order in the uint32
-	// itself, matching the encode.go LastIP/IP convention).
+	// uint32 ip at offset 22 (2+4+16) — the little-endian memory image of
+	// the source's htonl(ip) field value.
 	binary.LittleEndian.PutUint32(buf[22:], r.IP)
-	// uint16 port at offset 26.
+	// uint16 port at offset 26 — the little-endian memory image of the
+	// source's ntows(htons(port)) field value.
 	binary.LittleEndian.PutUint16(buf[26:], r.Port)
 	// char domain[128] at offset 28 — zero-padded.
 	writeFixedString(buf[28:28+domainSlot], r.Domain)

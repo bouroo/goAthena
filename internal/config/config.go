@@ -427,18 +427,9 @@ func setField(field reflect.Value, raw, name string) error {
 		}
 		field.SetBool(b)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		// time.Duration is an int64 but parsed from its string form ("30s").
-		if field.Type() == reflect.TypeFor[time.Duration]() {
-			d, err := time.ParseDuration(raw)
-			if err != nil {
-				return fmt.Errorf("env %s=%q: %w", name, raw, err)
-			}
-			field.SetInt(int64(d))
-			return nil
-		}
-		n, err := strconv.ParseInt(raw, 10, 64)
+		n, err := parseInt(field.Type(), raw, name)
 		if err != nil {
-			return fmt.Errorf("env %s=%q: %w", name, raw, err)
+			return err
 		}
 		field.SetInt(n)
 	case reflect.Float64:
@@ -459,8 +450,52 @@ func setField(field reflect.Value, raw, name string) error {
 			}
 		}
 		field.Set(reflect.ValueOf(out))
+	case reflect.Map:
+		out, err := parseStringMap(raw, name)
+		if err != nil {
+			return err
+		}
+		field.Set(reflect.ValueOf(out))
 	default:
 		return fmt.Errorf("env %s: unsupported kind %s", name, field.Kind())
 	}
 	return nil
+}
+
+// parseStringMap parses a map[string]string env var: "key=value,key=value".
+//
+// The zone directory's route table is the one that needs it — a
+// deployment that pins a map's address per node cannot ship a config file
+// to every node.
+func parseStringMap(raw, name string) (map[string]string, error) {
+	out := make(map[string]string)
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok {
+			return nil, fmt.Errorf("env %s=%q: want key=value", name, raw)
+		}
+		out[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return out, nil
+}
+
+// parseInt parses an integer env var, and a duration when the field is
+// one (time.Duration is an int64 but parsed from its string form, "30s").
+func parseInt(fieldType reflect.Type, raw, name string) (int64, error) {
+	if fieldType == reflect.TypeFor[time.Duration]() {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return 0, fmt.Errorf("env %s=%q: %w", name, raw, err)
+		}
+		return int64(d), nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("env %s=%q: %w", name, raw, err)
+	}
+	return n, nil
 }
