@@ -71,7 +71,7 @@ func resolveTable(compiler, rathenaPath, srcDir string, v variant) ([]packetDef,
 	}
 
 	byOpcode := map[uint16]packetDef{}
-	for _, line := range strings.Split(pre, "\n") {
+	for line := range strings.SplitSeq(pre, "\n") {
 		call, ok := parseRegistration(line, opcodes, sizes)
 		if !ok {
 			continue
@@ -107,7 +107,7 @@ func registrationOrderFor(compiler, rathenaPath, srcDir string, v variant) ([]pa
 	}
 
 	var out []packetDef
-	for _, line := range strings.Split(pre, "\n") {
+	for line := range strings.SplitSeq(pre, "\n") {
 		call, ok := parseRegistration(line, opcodes, sizes)
 		if !ok {
 			continue
@@ -147,7 +147,7 @@ func parseRegistration(line string, opcodes map[string]int, sizes map[string]int
 		def.handler = handler
 		// The trailing arguments are the field offsets, terminated by a zero
 		// (upstream's packetdb_addpacket reads offsets until it sees one).
-		for _, a := range strings.Split(m[4], ",") {
+		for a := range strings.SplitSeq(m[4], ",") {
 			a = strings.TrimSpace(a)
 			if a == "" {
 				continue

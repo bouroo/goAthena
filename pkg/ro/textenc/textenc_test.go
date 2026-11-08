@@ -22,7 +22,6 @@ func TestCodepageString(t *testing.T) {
 		{Codepage(99), "codepage(99)"},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.want, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tc.want, tc.c.String())
@@ -69,7 +68,6 @@ func TestParseCodepage(t *testing.T) {
 		{"garbage", 0, true},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.in, func(t *testing.T) {
 			t.Parallel()
 			got, err := ParseCodepage(tc.in)
@@ -102,7 +100,6 @@ func TestASCIIPassthroughAll(t *testing.T) {
 
 	ascii := []byte("Hello, World! 0123456789")
 	for _, c := range []Codepage{UTF8, CP874, EUCKR} {
-		c := c
 		t.Run(c.String(), func(t *testing.T) {
 			t.Parallel()
 			decoded, err := c.Decode(ascii)
@@ -125,7 +122,6 @@ func TestCP874RoundTrip(t *testing.T) {
 		"ABC ผสม 123", // mixed ASCII + Thai
 	}
 	for _, original := range cases {
-		original := original
 		t.Run(original, func(t *testing.T) {
 			t.Parallel()
 			encoded, err := CP874.Encode(original)
@@ -175,7 +171,6 @@ func TestEUCKRRoundTrip(t *testing.T) {
 		"안녕하세요, World!", // mixed
 	}
 	for _, original := range cases {
-		original := original
 		t.Run(original, func(t *testing.T) {
 			t.Parallel()
 			encoded, err := EUCKR.Encode(original)
@@ -260,7 +255,6 @@ func TestDecodeRobust(t *testing.T) {
 
 	garbage := []byte{0x00, 0x80, 0xC0, 0xFF, 0xFE, 0x01, 0x7F}
 	for _, c := range []Codepage{CP874, EUCKR} {
-		c := c
 		t.Run(c.String(), func(t *testing.T) {
 			t.Parallel()
 			out, err := c.Decode(garbage)
@@ -285,7 +279,6 @@ func TestEmptyInput(t *testing.T) {
 	t.Parallel()
 
 	for _, c := range []Codepage{UTF8, CP874, EUCKR} {
-		c := c
 		t.Run(c.String(), func(t *testing.T) {
 			t.Parallel()
 

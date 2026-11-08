@@ -3,6 +3,7 @@
 package app_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/bouroo/goAthena/internal/modules/world/app"
@@ -36,12 +37,7 @@ func newAnnounceWorld(t *testing.T) (*app.WorldService, *[]announceCapture) {
 }
 
 func hasRecipient(rs []uint32, want uint32) bool {
-	for _, r := range rs {
-		if r == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(rs, want)
 }
 
 // BC_SELF addresses only the anchor when the anchor is a player.

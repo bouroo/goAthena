@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,9 +29,7 @@ func structLayouts(compiler, rathenaPath, srcDir string, v variant) (map[string]
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", header, err)
 		}
-		for k, n := range got {
-			layouts[k] = n
-		}
+		maps.Copy(layouts, got)
 	}
 	return layouts, nil
 }
@@ -199,7 +198,7 @@ func probeFieldOffsets(compiler, rathenaPath, _ string, v variant, header, struc
 	}
 
 	offsets := map[string]int{}
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		parts := strings.Split(strings.TrimSpace(line), "\t")
 		if len(parts) != 3 || parts[0] != "F" {
 			continue

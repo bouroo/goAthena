@@ -6,7 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -78,7 +78,7 @@ func (f *itemUseFakeInv) LoadByChar(_ context.Context, _, charID uint32) ([]doma
 	for id := range f.items {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	out := make([]domain.Item, 0, len(ids))
 	for _, id := range ids {
 		if it := f.items[id]; it.CharID == charID {

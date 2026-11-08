@@ -123,17 +123,15 @@ func setup(driver string) (config.DBConfig, testcontainers.Container, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	// The image/env/port fields live on the embedded ContainerRequest — a flat
-	// literal only compiles where Go ≥ 1.27 promoted-field literals are
-	// honored, so older typecheckers (gopls on a 1.26 toolchain) reject it.
+	// The image/env/port fields are promoted from the embedded
+	// ContainerRequest. The flat literal needs Go 1.27's promoted-field
+	// literals, which the module's go directive now requires.
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        spec.image,
-			Env:          spec.env,
-			ExposedPorts: []string{spec.port},
-			WaitingFor:   wait.ForLog(spec.waitLog).WithStartupTimeout(startupTimeout),
-		},
-		Started: true,
+		Image:        spec.image,
+		Env:          spec.env,
+		ExposedPorts: []string{spec.port},
+		WaitingFor:   wait.ForLog(spec.waitLog).WithStartupTimeout(startupTimeout),
+		Started:      true,
 	})
 	if err != nil {
 		return config.DBConfig{}, nil, fmt.Errorf("testdb: start %s container: %w", norm, err)

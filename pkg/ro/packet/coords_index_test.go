@@ -18,7 +18,7 @@ func TestInventoryIndexConvention(t *testing.T) {
 	}
 
 	// Round-trip: every server row maps to a client index and back.
-	for row := uint16(0); row < 200; row++ {
+	for row := range uint16(200) {
 		if got := ServerIndex(ClientIndex(row)); got != row {
 			t.Fatalf("ServerIndex(ClientIndex(%d)) = %d, want %d", row, got, row)
 		}

@@ -28,7 +28,6 @@ func TestSqueezeRadius_AllTiers(t *testing.T) {
 		{"negative treated as zero", -1, SqueezeRadiusNormal},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tc.want, SqueezeRadius(tc.count))
@@ -63,7 +62,6 @@ func TestSqueezeTierOf_AllTiers(t *testing.T) {
 		{-1, SqueezeTierNormal},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run("", func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tc.want, SqueezeTierOf(tc.count))
@@ -85,7 +83,7 @@ func TestQueryVisibleSqueezed_AdaptsToDensity(t *testing.T) {
 
 	gm := NewGridManager(400, 400)
 	// Build a clustered crowd at (200,200).
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		x := 200 + (i % 10)
 		y := 200 + (i / 10)
 		require.NoError(t, gm.AddEntity(newEntity(EntityID(i+1), EntityPlayer, x, y)))
@@ -103,7 +101,7 @@ func TestQueryVisibleSqueezed_NormalAtLowDensity(t *testing.T) {
 	t.Parallel()
 
 	gm := NewGridManager(400, 400)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		require.NoError(t, gm.AddEntity(newEntity(EntityID(i+1), EntityPlayer, 200+i, 200)))
 	}
 	normal := gm.QueryVisible(200, 200)

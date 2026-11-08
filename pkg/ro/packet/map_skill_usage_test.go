@@ -66,7 +66,6 @@ func TestParseCZUseSkill(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := ParseCZUseSkill(tc.frame)
@@ -117,7 +116,6 @@ func TestCZUseSkill_RoundTrip(t *testing.T) {
 		{SkillLv: -1, SkillID: 1, TargetID: 0}, // boundary: negative skillLv
 	}
 	for _, in := range cases {
-		in := in
 		t.Run("", func(t *testing.T) {
 			t.Parallel()
 			var buf bytes.Buffer
@@ -215,7 +213,6 @@ func TestNotifySkillResponse_Encode_VariousValues(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var buf bytes.Buffer
@@ -291,7 +288,6 @@ func TestAckUseSkillResponse_Encode_VariousValues(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var buf bytes.Buffer
@@ -322,7 +318,6 @@ func TestSkillUsagePackets_DBEntries(t *testing.T) {
 		{HeaderZCACKTOUSESKILL(), "ZC_ACK_TOUSESKILL", sizeZCAckToUseSkill(), DirectionServerToClient},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			def, ok := db.Lookup(c.cmd)

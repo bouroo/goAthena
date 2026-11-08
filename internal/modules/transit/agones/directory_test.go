@@ -10,7 +10,6 @@ import (
 	agonesv1 "agones.dev/agones/pkg/apis/agones/v1"
 	versioned "agones.dev/agones/pkg/client/clientset/versioned"
 	"agones.dev/agones/pkg/client/clientset/versioned/fake"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
@@ -18,11 +17,9 @@ import (
 
 func gs(name, state, address, maps string, port int32) *agonesv1.GameServer {
 	g := &agonesv1.GameServer{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   "default",
-			Annotations: map[string]string{MapsAnnotation: maps},
-		},
+		Name:        name,
+		Namespace:   "default",
+		Annotations: map[string]string{MapsAnnotation: maps},
 	}
 	if state != "" {
 		g.Status.State = agonesv1.GameServerState(state)

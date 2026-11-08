@@ -259,7 +259,7 @@ func TestStorage_MoveToStorage_WarehouseFull(t *testing.T) {
 
 	// Fill account 2000001's warehouse to MAX_STORAGE with equipment (each
 	// row distinct because Equip!=0 forces a new row).
-	for i := 0; i < storagedomain.MaxStorage; i++ {
+	for i := range storagedomain.MaxStorage {
 		row, err := sto.Add(ctx, 2000001, uint32(2000+i), 1) //nolint:gosec // G115: i fits uint32
 		if err != nil {
 			t.Fatalf("seed warehouse %d: %v", i, err)

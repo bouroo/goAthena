@@ -92,7 +92,7 @@ func readGuildFrame(t *testing.T, r io.Reader) (uint16, []byte) {
 // shift the reads.
 func drainUntilGuildBurst(t *testing.T, r io.Reader) []byte {
 	t.Helper()
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		var cmdBuf [2]byte
 		if _, err := io.ReadFull(r, cmdBuf[:]); err != nil {
 			t.Fatalf("drain burst: read cmd: %v", err)

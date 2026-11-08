@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -407,12 +408,7 @@ func TestSetSitting(t *testing.T) {
 
 // containsID reports whether ids contains id.
 func containsID(ids []domain.EntityID, id domain.EntityID) bool {
-	for _, v := range ids {
-		if v == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ids, id)
 }
 
 // TestRespawnPlayer_SavePointAndGridReseat verifies a dead PC respawns at its

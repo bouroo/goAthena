@@ -44,7 +44,6 @@ func TestTowerID_BoundsAndMapping(t *testing.T) {
 		{"deep tower", 35, 35, 1*gm.GridWidth() + 1},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tc.want, gm.TowerID(tc.x, tc.y))
@@ -335,24 +334,24 @@ func TestConcurrentMoves_NoRaceAndNoLoss(t *testing.T) {
 
 	gm := NewGridManager(400, 400)
 	const N = 100
-	for i := 0; i < N; i++ {
+	for i := range N {
 		require.NoError(t, gm.AddEntity(newEntity(EntityID(i+1), EntityPlayer, i%400, (i*7)%400)))
 	}
 
 	var wg sync.WaitGroup
-	var moves int64
-	for g := 0; g < 100; g++ {
+	var moves atomic.Int64
+	for g := range 100 {
 		wg.Add(1)
 		go func(seed int) {
 			defer wg.Done()
 			x := (seed * 13) % 400
 			y := (seed * 17) % 400
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				id := EntityID((seed + i) % N)
 				nx := (x + i) % 400
 				ny := (y + i*3) % 400
 				if err := gm.MoveEntity(id+1, nx, ny); err == nil {
-					atomic.AddInt64(&moves, 1)
+					moves.Add(1)
 				}
 			}
 		}(g)
@@ -360,7 +359,7 @@ func TestConcurrentMoves_NoRaceAndNoLoss(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, N, gm.EntityCount(), "no entity should be lost under concurrent moves")
-	assert.Greater(t, atomic.LoadInt64(&moves), int64(0))
+	assert.Greater(t, moves.Load(), int64(0))
 }
 
 func TestConcurrentAddRemove_NoRace(t *testing.T) {
@@ -368,18 +367,18 @@ func TestConcurrentAddRemove_NoRace(t *testing.T) {
 
 	gm := NewGridManager(200, 200)
 	var wg sync.WaitGroup
-	for g := 0; g < 50; g++ {
+	for g := range 50 {
 		wg.Add(2)
 		go func(seed int) {
 			defer wg.Done()
-			for i := 0; i < 100; i++ {
+			for i := range 100 {
 				id := EntityID(seed*1000 + i + 1)
 				_ = gm.AddEntity(newEntity(id, EntityMob, (seed+i)%200, (seed*3+i)%200))
 			}
 		}(g)
 		go func(seed int) {
 			defer wg.Done()
-			for i := 0; i < 100; i++ {
+			for i := range 100 {
 				id := EntityID(seed*1000 + i + 1)
 				_ = gm.RemoveEntity(id)
 			}
@@ -394,7 +393,7 @@ func TestCount9Grid(t *testing.T) {
 	t.Parallel()
 
 	gm := NewGridManager(200, 200)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		require.NoError(t, gm.AddEntity(newEntity(EntityID(i+1), EntityPlayer, 50+i, 50+i)))
 	}
 	got := gm.Count9Grid(50, 50)
