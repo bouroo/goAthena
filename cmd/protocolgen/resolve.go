@@ -42,63 +42,28 @@ type packetDef struct {
 	offsets []int
 }
 
-// resolveTable resolves upstream's packet table for one variant.
+// resolveRegistrations resolves the source's packet registrations for one
+// variant, in the source's own order.
 //
-// Upstream registers packets in two tables included back to back
+// The source registers packets in two tables included back to back
 // (src/map/clif.cpp:25833-25834) into packetdb_addpacket, which overwrites
 // the entry for an opcode registered twice (src/map/clif.cpp:25798).
 // Reproducing that last-wins rule over the preprocessed registration order
-// yields the same table upstream builds at runtime.
-func resolveTable(compiler, rathenaPath, srcDir string, v variant) ([]packetDef, error) {
+// yields the same table the source builds at runtime.
+func resolveRegistrations(compiler, rathenaPath, srcDir string, v variant) ([]packetDef, error) {
 	pre, err := preprocess(compiler, rathenaPath, srcDir, v)
 	if err != nil {
 		return nil, err
 	}
 
-	// Upstream's opcode constants come from two places: the numeric literals
+	// The source's opcode constants come from two places: the numeric literals
 	// in clif_packetdb.hpp and the HEADER_* symbols in upstream's packet
 	// headers. Both must be resolved to a number.
 	opcodes, err := resolveOpcodes(compiler, rathenaPath, srcDir, v)
 	if err != nil {
 		return nil, err
 	}
-	// Upstream's lengths are either a literal or sizeof(struct PACKET_*).
-	sizes, err := structLayouts(compiler, rathenaPath, srcDir, v)
-	if err != nil {
-		return nil, err
-	}
-
-	byOpcode := map[uint16]packetDef{}
-	for line := range strings.SplitSeq(pre, "\n") {
-		call, ok := parseRegistration(line, opcodes, sizes)
-		if !ok {
-			continue
-		}
-		byOpcode[call.opcode] = call
-	}
-
-	out := make([]packetDef, 0, len(byOpcode))
-	for _, d := range byOpcode {
-		out = append(out, d)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].opcode < out[j].opcode })
-	return out, nil
-}
-
-// registrationOrderFor returns the registrations in upstream's own order.
-//
-// The order matters: upstream registers some handlers under several opcodes
-// across client versions, so the last registration of a handler is the one
-// the client uses at a given PACKETVER.
-func registrationOrderFor(compiler, rathenaPath, srcDir string, v variant) ([]packetDef, error) {
-	pre, err := preprocess(compiler, rathenaPath, srcDir, v)
-	if err != nil {
-		return nil, err
-	}
-	opcodes, err := resolveOpcodes(compiler, rathenaPath, srcDir, v)
-	if err != nil {
-		return nil, err
-	}
+	// The source's lengths are either a literal or sizeof(struct PACKET_*).
 	sizes, err := structLayouts(compiler, rathenaPath, srcDir, v)
 	if err != nil {
 		return nil, err
@@ -113,6 +78,38 @@ func registrationOrderFor(compiler, rathenaPath, srcDir string, v variant) ([]pa
 		out = append(out, call)
 	}
 	return out, nil
+}
+
+// resolveTable resolves the source's packet table for one variant.
+//
+// The table is the registrations with the last registration of an opcode
+// winning, keyed by opcode and sorted by it.
+func resolveTable(compiler, rathenaPath, srcDir string, v variant) ([]packetDef, error) {
+	regs, err := resolveRegistrations(compiler, rathenaPath, srcDir, v)
+	if err != nil {
+		return nil, err
+	}
+
+	byOpcode := map[uint16]packetDef{}
+	for _, d := range regs {
+		byOpcode[d.opcode] = d
+	}
+
+	out := make([]packetDef, 0, len(byOpcode))
+	for _, d := range byOpcode {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].opcode < out[j].opcode })
+	return out, nil
+}
+
+// registrationOrderFor returns the registrations in the source's own order.
+//
+// The order matters: the source registers some handlers under several opcodes
+// across client versions, so the last registration of a handler is the one
+// the client uses at a given PACKETVER.
+func registrationOrderFor(compiler, rathenaPath, srcDir string, v variant) ([]packetDef, error) {
+	return resolveRegistrations(compiler, rathenaPath, srcDir, v)
 }
 
 // parseRegistration parses one expanded packetdb_addpacket call, resolving its
