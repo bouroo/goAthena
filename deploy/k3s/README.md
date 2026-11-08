@@ -86,7 +86,7 @@ kubectl -n goathena create secret generic goathena-db \
 ```
 
 **2. The image tag.** `overlays/prod/patch-image-goathena-*.yaml` pins
-the shards to `v0.1.0-beta.14`. Update it to the release you want
+the shards to `v0.1.0-beta.15`. Update it to the release you want
 running. The base uses `latest`, which is right for a dev cluster and
 wrong for production: two pods of the same Fleet could run different
 code.
