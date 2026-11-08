@@ -568,7 +568,7 @@ brackets them, so a slow tick shows up as a slow frame.
 
 | Ticket | Priority | Notes |
 |---|---|---|
-| M8: full transaction log + audit | M | Small. Ship next session. |
+| M8: full transaction log + audit | ✅ done | `economy_domain.ZenyTransaction` + `LedgerRepository` + the `zeny_ledger` table (migration `000005_zeny_ledger`) + the query ports; shop and trade carry reason-tagged movements (`8c87e57`). |
 | M9: vending | L | Substantial. |
 | M9: storage/warehouse | ✅ done | Service+schema `1a2b848` + gateway wiring `c33c242`. Guild storage deferred to M11. |
 | M10: Rung D–E | L | Rung A `556a8ee`; Rung B `b7f8ab7`; Rung C (this commit: `heal`/`announce`/`mapannounce`/`getiteminfo` + constant table). Rungs D–E queued. |
