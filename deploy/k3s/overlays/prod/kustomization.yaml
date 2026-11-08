@@ -1,0 +1,98 @@
+# goAthena Tier 3 — the prod overlay.
+#
+# The production cluster: a pinned image, real credentials, larger
+# resources, and the ingress's real host.
+#
+# Apply:
+#   kubectl apply -k deploy/k3s/overlays/prod
+#
+# Before this runs, the Secret must be replaced with a real one — see
+# README.md in this directory. The base's Secret is a placeholder that
+# says so.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: goathena
+
+resources:
+  - ../../base
+  - pdb/pdb-nats.yaml
+  - pdb/pdb-valkey.yaml
+  - pdb/pdb-otel.yaml
+# document in a patch file to every target listed for it, so a patch file
+# with four documents and four targets applies all four documents to all
+# four objects.
+patches:
+  # The image is pinned to a release tag. `latest` would make a redeploy
+  # pull whatever was published last, which is not reproducible: two pods
+  # of the same Fleet could run different code.
+  - path: patch-image-goathena-prontera.yaml
+    target:
+      kind: Fleet
+      name: goathena-prontera
+  - path: patch-image-goathena-geffen.yaml
+    target:
+      kind: Fleet
+      name: goathena-geffen
+  # The addresses the shard hands the client. An env var, not a config
+  # file: the env wins over the file, and a ConfigMap's data is one
+  # opaque string a strategic merge cannot patch field-wise.
+  - path: patch-address.yaml
+    target:
+      kind: Fleet
+      name: goathena-prontera
+  - path: patch-address.yaml
+    target:
+      kind: Fleet
+      name: goathena-geffen
+  # The prod cluster has the room the base does not ask for.
+  - path: patch-resources-fleet-prontera.yaml
+    target:
+      kind: Fleet
+      name: goathena-prontera
+  - path: patch-resources-fleet-geffen.yaml
+    target:
+      kind: Fleet
+      name: goathena-geffen
+  - path: patch-resources-postgres.yaml
+    target:
+      kind: Deployment
+      name: goathena-postgres
+  - path: patch-resources-valkey.yaml
+    target:
+      kind: StatefulSet
+      name: goathena-valkey
+  - path: patch-resources-nats.yaml
+    target:
+      kind: Deployment
+      name: goathena-nats
+  - path: patch-resources-otel.yaml
+    target:
+      kind: Deployment
+      name: goathena-otel-collector
+  # More replicas where that is safe, so a node drain can roll one at a
+  # time. Postgres stays at one: its volume is ReadWriteOnce.
+  - path: patch-replicas-postgres.yaml
+    target:
+      kind: Deployment
+      name: goathena-postgres
+  - path: patch-replicas-valkey.yaml
+    target:
+      kind: StatefulSet
+      name: goathena-valkey
+  - path: patch-replicas-nats.yaml
+    target:
+      kind: Deployment
+      name: goathena-nats
+  - path: patch-replicas-otel.yaml
+    target:
+      kind: Deployment
+      name: goathena-otel-collector
+  # The ingress's real host. The client reaches the login port by name;
+  # the char and map ports are reached by address, so the operator must
+  # also set GATEWAY_CHAR_HOST and GATEWAY_MAP_HOST to the ingress's
+  # external address (see README.md).
+  - path: patch-ingress.yaml
+    target:
+      kind: Ingress
+      name: goathena-login

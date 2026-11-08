@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: goathena-valkey
+spec:
+  # One of two may be disrupted: one stays up.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: goathena-valkey

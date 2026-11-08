@@ -1,0 +1,77 @@
+# NATS — the bus between the shards and between the extracted services.
+#
+# The economy service runs over NATS (the `economy.Service` seam), and the
+# shards publish cross-zone events. JetStream is on so a restarted
+# subscriber can catch up on what it missed rather than losing an event.
+#
+# The subjects are versioned (`goathena.economy.v0.zeny.*`) so a service
+# can be replaced without breaking the ones still talking to it.
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: goathena
+  name: goathena-nats
+spec:
+  selector:
+    app.kubernetes.io/name: goathena-nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: client
+    - name: monitor
+      port: 8222
+      targetPort: monitor
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: goathena
+  name: goathena-nats
+  labels:
+    app.kubernetes.io/name: goathena-nats
+    app.kubernetes.io/component: infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: goathena-nats
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: goathena-nats
+        app.kubernetes.io/component: infra
+        # The backing services are upstream images that cannot satisfy the
+        # namespace's restricted profile. The exemption is by pod label, so
+        # it covers exactly these pods.
+        pod-security.kubernetes.io/enforce: baseline
+    spec:
+      containers:
+        - name: nats
+          image: nats:2-alpine
+          args: ["-js", "-m", "8222"]
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi

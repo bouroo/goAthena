@@ -1,0 +1,101 @@
+# The client-facing ingress.
+#
+# What the client needs, and why the ingress covers only part of it:
+#
+#   * the LOGIN port (6900) — the client connects here by name, from its
+#     server list. This is the only connection the client makes by name.
+#   * the CHAR port (6121) and the MAP port (5121) — the client is told
+#     these inside the handshake: AC_ACCEPT_LOGIN carries the char
+#     server's address, and the map server's address comes with the map
+#     entry or with the cross-zone redirect (ZC_NPCACK_SERVERMOVE).
+#
+# The handshake carries an IPv4 and a port, not a hostname. So the char and
+# map addresses the shard advertises must be the address the client can
+# actually reach: the ingress's external IP (or the node's, for the
+# Agones cross-zone redirect, which uses Status.Address).
+#
+# That is why the config's gateway.char_host and gateway.map_host are set
+# by the operator to the ingress address, and why they are NOT the Service
+# names: a Service name does not resolve to an IPv4 the client can dial.
+#
+# The ingress below therefore routes the login port, and the char and map
+# ports are exposed by the same ingress with the host-based rule that the
+# client's traffic carries — a client that connects to the ingress's IP on
+# 6121 or 5121 reaches the same backing service.
+#
+# The ingress class is ingress-nginx and the host is game.example.com; the
+# prod overlay patches both. A cluster without ingress-nginx needs a
+# different controller (Traefik, Gateway API) — the ports and the backing
+# service do not change.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: goathena-login
+  annotations:
+    # The game protocol is a long-lived TCP stream with no HTTP semantics.
+    # An ingress that proxies by path would corrupt it, so the controller
+    # must treat these as TCP.
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/backend-protocol: "TCP"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: game.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: goathena-login
+                port:
+                  name: login
+---
+# The char and map ports are separate TCP services on the same ingress.
+# The client reaches them by the ingress's address, not by a hostname, so
+# they are exposed as their own Ingress objects with no host rule.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: goathena-char
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/backend-protocol: "TCP"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: goathena-login
+                port:
+                  name: char
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: goathena-map
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/backend-protocol: "TCP"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: goathena-login
+                port:
+                  name: map

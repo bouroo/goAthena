@@ -141,7 +141,10 @@ differs.
 ### Tier 1 — Hobbyist (single node)
 `podman compose up` — one `goathena` container with MariaDB + Valkey + NATS as
 sidecars. One process, one map zone, hundreds of concurrent players. No K8s.
-Lowest operational footprint.
+Lowest operational footprint. **Shipped and verified**: `task verify-tier1`
+checks that the running container carries this tree's commit stamp, that
+`/healthz`, `/readyz`, `/version` and `/metrics` all answer 200, and that a
+login is accepted rather than refused.
 
 ### Tier 2 — Small fleet (self-hosted, a few nodes)
 Modular monolith behind a load balancer; Valkey for shared sessions so any node
@@ -150,20 +153,40 @@ can resume a login; NATS for cross-node broadcasts. Read-replicas for PG.
 ### Tier 3 — Enterprise (Kubernetes + Agones)
 - **Agones `Fleet`** allocates **per-zone (per-map-shard) `GameServer` processes**
   — the natural unit of horizontal scale for a zone-based world. Each allocation
-  is an isolated game loop.
+  is an isolated game loop. **Shipped**: `deploy/k3s/base/zone-fleet.yaml`.
 - The modular monolith's bounded contexts (each already behind an interface)
   extract into **separate binaries over NATS** as load demands: e.g. the
   `economy` zeny-ledger becomes a dedicated, sharded service; `social` chat fans
-  out via NATS subjects.
-- **PostgreSQL** primary+replicas for durable state; **Valkey** cluster for hot
-  cache; **OTel Collector** → Prometheus/Grafana for telemetry.
-- Kustomize base + dev/prod overlays, HPA, PDB, Traefik ingress + rate-limit.
+  out via NATS subjects. **Shipped**: NATS is in the tree and in both tiers'
+  manifests.
+- **PostgreSQL** for durable state; **Valkey** for hot cache; **OTel Collector**
+  → Prometheus/Grafana for telemetry. **Shipped** in `deploy/k3s/base/`.
+- Kustomize base + dev/prod overlays, Agones `FleetAutoscaler`, PDBs, and a
+  TCP ingress for the three client ports. **Shipped** in `deploy/k3s/`.
+  The roadmap said "Traefik ingress + rate-limit"; the manifests use the
+  nginx ingress class instead, because the game's protocol is raw TCP with a
+  length-prefixed frame, and an HTTP-path router cannot proxy it.
+
+**What the manifests cannot yet carry.** The scale-out *plumbing* is
+partial: the Agones lifecycle adapter and the transit `MapDirectory` are
+in the tree and the Fleets are wired to them, but the fleet's size is
+driven by a policy that needs no signal from the app (a buffer of ready
+GameServers, and a schedule), because the shard publishes no player count.
+A List policy — scaling on how many players are actually connected — is
+the sharp signal, and needs an endpoint the app does not have yet.
+
+**The addressing constraint.** The client is told the char and map
+endpoints inside `AC_ACCEPT_LOGIN`, and that handshake carries an IPv4
+address, not a hostname. So a cluster's Service names are not enough: a
+client outside the cluster needs the ingress's external address, and the
+prod overlay makes that an operator's explicit decision rather than a
+default that silently breaks.
 
 The architectural seam is real today: `composition.go` wires the process via
 explicit ordered factories and every module is injectable behind an interface.
-The scale-out *plumbing* is not — there is no `nats.Connect` and no Agones
-adapter in the binary; versioned NATS subjects and an Agones lifecycle client
-are future work, not present in the tree.
+The scale-out *plumbing* is partial — the Agones adapter and the NATS
+connection are in the binary now, but versioned NATS subjects and the
+extraction of the bounded contexts into separate binaries remain future work.
 
 ---
 

@@ -1,0 +1,85 @@
+# The runtime configuration the shards read.
+#
+# The app takes its configuration from a YAML file plus environment
+# overrides (12-factor: env wins over file). This ConfigMap carries the
+# file; the Fleet's env carries the environment-specific values (the
+# service names, the shard's identity) because those differ per cluster.
+#
+# The values here are the ones a cluster must agree on with the code:
+# the client source pack and family (the wire protocol), the zone
+# directory mode (how a shard finds the shard serving a destination map),
+# and the control-plane port the probes use.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: goathena
+  name: goathena-config
+data:
+  config.yaml: |
+    app:
+      environment: production
+      shutdown_timeout: 45s
+
+    http:
+      host: 0.0.0.0
+      port: 8080
+      read_timeout: 30s
+      write_timeout: 30s
+      idle_timeout: 120s
+
+    db:
+      driver: postgres
+      port: 5432
+      name: ragnarok
+      user: ragnarok
+      ssl_mode: disable
+
+    valkey:
+      port: 6379
+
+    nats:
+      url: nats://goathena-nats:4222
+
+    gateway:
+      login_host: 0.0.0.0
+      login_port: 6900
+      # The addresses the shard hands the client, inside
+      # AC_ACCEPT_LOGIN and the map entry. 127.0.0.1 would tell the
+      # client to dial the player's own machine — right on a laptop
+      # running the compose stack, wrong everywhere else.
+      #
+      # These are the login Service's name. The shard resolves the name
+      # to an IPv4 (the handshake carries an IPv4, not a hostname), so
+      # the client is handed the Service's ClusterIP: correct for a
+      # client inside the cluster. A client outside it needs the
+      # ingress's external address, which the prod overlay sets — see
+      # README.md.
+      char_host: goathena-login
+      char_port: 6121
+      map_host: goathena-login
+      map_port: 5121
+
+    identity:
+      # rAthena stores MD5 hex when use_MD5_passwords is on; the client
+      # sends the plain password and the server hashes it.
+      use_md5_passwords: true
+      max_chars: 9
+
+    zone:
+      tick_rate_hz: 50
+      view_range_cells: 20
+      # The wire protocol comes from a source pack and a client family.
+      # The Thai fork is the primary target; upstream master is the
+      # compatibility set. The reference data and the NPC corpus follow
+      # the pack (they are left unset here so the pack's own tree is used).
+      client_source: thailand
+      client_variant: re
+      directory:
+        # agones: resolve maps against Agones GameServers.
+        mode: agones
+        namespace: goathena
+        selector: app.kubernetes.io/component=zone
+
+    log:
+      level: info
+      format: json

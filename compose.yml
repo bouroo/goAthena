@@ -53,6 +53,13 @@ services:
     build:
       context: .
       dockerfile: Containerfile
+      args:
+        # The stamp the running binary reports at /version. It is what makes
+        # a stale image visible: a `compose up` that reuses an old image
+        # serves an old commit's code while the health probes stay green.
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     depends_on:
       mariadb: { condition: service_healthy }
       valkey: { condition: service_healthy }
