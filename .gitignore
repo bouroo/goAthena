@@ -1,6 +1,9 @@
 # Binaries
 bin/
 /loadgen
+/protocolgen
+/goathena
+/healthcheck
 *.exe
 *.dll
 *.so
