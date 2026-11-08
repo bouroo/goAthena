@@ -10,6 +10,7 @@ package app_test
 // no-op the OnClose contract promises).
 
 import (
+	"bytes"
 	"encoding/binary"
 	"strings"
 	"testing"
@@ -70,11 +71,13 @@ func TestMap_CrossZonePortalRedirects(t *testing.T) {
 	if y := binary.LittleEndian.Uint16(move[28:30]); y != 77 {
 		t.Errorf("dest Y = %d, want 77", y)
 	}
-	if ip := binary.BigEndian.Uint32(move[30:34]); ip != 0x7f000001 {
-		t.Errorf("zone ip = %#x, want 0x7f000001 (big-endian wire)", ip)
+	// The source's packed struct goes on the wire as its little-endian
+	// memory image: ip 01 00 00 7f, port 01 14.
+	if ip := move[30:34]; !bytes.Equal(ip, []byte{0x01, 0x00, 0x00, 0x7f}) {
+		t.Errorf("zone ip bytes = % x, want 01 00 00 7f", ip)
 	}
-	if p := binary.BigEndian.Uint16(move[34:36]); p != 0x1401 {
-		t.Errorf("zone port = %#x, want 0x1401 (byte-swapped wire)", p)
+	if p := move[34:36]; !bytes.Equal(p, []byte{0x01, 0x14}) {
+		t.Errorf("zone port bytes = % x, want 01 14", p)
 	}
 
 	// The redirect's LeaveRemoteZone removed the entity: the disconnect

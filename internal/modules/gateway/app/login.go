@@ -179,7 +179,18 @@ func sexByte(s domain.Sex) uint8 {
 	}
 }
 
-// ipToWire converts a dotted-quad host to the wire uint32 the client expects.
+// ipToWire converts a dotted-quad host to the address value the wire
+// packets carry.
+//
+// The value is the source's own field value: htonl of the host-order IPv4
+// (rathenaThailand/src/char/char_clif.cpp:909 and
+// src/login/loginclif.cpp:137 both write `p.ip = htonl(ip)`). 127.0.0.1 is
+// therefore 0x7f000001, and the packet encoders write the field's
+// little-endian memory image — which is what socket_send's memcpy of the
+// packed struct puts on the wire: 01 00 00 7f.
+//
+// It is NOT the host-order value: that would put the octets on the wire
+// reversed, and the client would dial 1.0.0.127.
 func ipToWire(host string) (uint32, error) {
 	ip := net.ParseIP(host)
 	if ip == nil {
@@ -193,7 +204,7 @@ func ipToWire(host string) (uint32, error) {
 	if ip4 == nil {
 		return 0, fmt.Errorf("not an ipv4: %s", host)
 	}
-	return binary.LittleEndian.Uint32(ip4), nil
+	return binary.BigEndian.Uint32(ip4), nil
 }
 
 // remoteIP extracts the remote IPv4 string from a gnet conn address.

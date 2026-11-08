@@ -65,11 +65,17 @@ var (
 // bytes on the wire): ip(4) + port(2) + name[20](20) + users(2) + type(2) +
 // new_(2) + unknown[128](128).
 type CharServer struct {
-	// IP is the char server's IPv4 address in network byte order (already
-	// in big-endian uint32 form, as rAthena stores it — rathena/src/login/
-	// loginclif.cpp builds this from inet_addr / htonl).
+	// IP is the char server's IPv4 address as the source holds it: htonl
+	// of the host-order IPv4 (rathenaThailand/src/login/loginclif.cpp:137
+	// — char_server.ip = htonl(ch_server[i].ip)), so 127.0.0.1 is
+	// 0x7f000001. Encode writes the field's little-endian memory image,
+	// which is what socket_send's memcpy of the packed struct puts on the
+	// wire: 01 00 00 7f.
 	IP uint32
-	// Port is the char server's TCP port.
+	// Port is the char server's TCP port as the plain number. The source
+	// writes ntows(htons(port)) (loginclif.cpp:138) — the two swaps
+	// cancel, so the field value is the port itself (6121), and its
+	// little-endian memory image is e9 17.
 	Port uint16
 	// Name is a short display name. Must fit in 20 bytes on the wire.
 	Name string

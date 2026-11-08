@@ -144,10 +144,11 @@ func (r MapMoveResponse) Encode(w io.Writer) error {
 //
 // Fixed wire length: 156 bytes (int16 packetType + char mapName[24] +
 // uint16 xPos + uint16 yPos + uint32 ip + uint16 port + char domain[128]).
-// The struct is packed (no padding). ip and port are the two fields the
-// client reads big-endian — rAthena writes htonl(ip) and the byte-swapped
-// port ("ntows(htons(port))", clif.cpp:2173-2174) — so Encode stores them
-// verbatim as pre-swapped wire values.
+// The struct is packed (no padding). rAthena writes htonl(ip) and the
+// byte-swapped port ("ntows(htons(port))", clif.cpp:2178-2179), and
+// socket_send memcpy's the struct — so the wire bytes are the host
+// (little-endian) memory image of those field values. Encode stores the
+// field values verbatim and writes them the same way.
 type ServerMoveResponse struct {
 	// MapName is the destination map name (no extension, e.g. "izlude"),
 	// zero-padded to fill the 24-byte slot (MAP_NAME_LENGTH_EXT).
@@ -156,11 +157,16 @@ type ServerMoveResponse struct {
 	X uint16
 	// Y is the destination cell Y.
 	Y uint16
-	// IP is the zone address in the wire (big-endian) byte order the client
-	// expects — the value of binary.BigEndian.PutUint32 over the IPv4 octets.
+	// IP is the zone address as the source holds it: htonl of the host-order
+	// IPv4 (rathenaThailand/src/map/clif.cpp:2178 — packet.ip = htonl(ip)),
+	// so 127.0.0.1 is 0x7f000001. Encode writes the field's little-endian
+	// memory image, which is what socket_send's memcpy of the packed struct
+	// puts on the wire: 01 00 00 7f.
 	IP uint32
-	// Port is the zone port in the wire (byte-swapped) order rAthena's
-	// ntows(htons(port)) produces.
+	// Port is the zone's TCP port as the plain number. The source writes
+	// ntows(htons(port)) (clif.cpp:2179) — the two swaps cancel, so the
+	// field value is the port itself (5121), and its little-endian memory
+	// image is 01 14.
 	Port uint16
 }
 
@@ -184,11 +190,12 @@ func (r ServerMoveResponse) Encode(w io.Writer) error {
 	binary.LittleEndian.PutUint16(buf[26:], r.X)
 	// uint16 yPos at offset 28.
 	binary.LittleEndian.PutUint16(buf[28:], r.Y)
-	// uint32 ip at offset 30 — big-endian on the wire (clif.cpp htonl).
-	binary.BigEndian.PutUint32(buf[30:], r.IP)
-	// uint16 port at offset 34 — byte-swapped on the wire (clif.cpp
-	// ntows(htons(port))).
-	binary.BigEndian.PutUint16(buf[34:], r.Port)
+	// uint32 ip at offset 30 — the little-endian memory image of the
+	// source's htonl(ip) field value (clif.cpp:2178).
+	binary.LittleEndian.PutUint32(buf[30:], r.IP)
+	// uint16 port at offset 34 — the little-endian memory image of the
+	// source's ntows(htons(port)) field value (clif.cpp:2179).
+	binary.LittleEndian.PutUint16(buf[34:], r.Port)
 	// char domain[128] at offset 36 — sent empty (rAthena safestrncpy "").
 
 	if _, err := w.Write(buf); err != nil {

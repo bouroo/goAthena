@@ -3,6 +3,7 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"io"
@@ -293,6 +294,14 @@ func TestChar_SelectCharNotifyZoneOverTCP(t *testing.T) {
 	const portOff = 2 + 4 + 16 + 4
 	if got := binary.LittleEndian.Uint16(resp[portOff:]); got != 5121 {
 		t.Fatalf("advertised map port = %d, want 5121", got)
+	}
+	// The IP at offset 22 must decode back to the configured address: the
+	// client reads it as a little-endian uint32 and extracts the octets
+	// most-significant-first. Before the byte-order fix these bytes were
+	// 7f 00 00 01, which the client read as 1.0.0.127.
+	const ipOff = 2 + 4 + 16
+	if got := resp[ipOff : ipOff+4]; !bytes.Equal(got, []byte{0x01, 0x00, 0x00, 0x7f}) {
+		t.Fatalf("advertised map ip bytes = % x, want 01 00 00 7f", got)
 	}
 }
 

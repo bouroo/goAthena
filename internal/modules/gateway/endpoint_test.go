@@ -36,7 +36,7 @@ func testConfig() config.Config {
 // what a local run wants.
 func TestResolveMapEndpointFallsBackToTheConfiguredEndpoint(t *testing.T) {
 	inj := do.New()
-	endpoint, err := resolveMapEndpoint(context.Background(), inj, testConfig())
+	endpoint, err := ResolveMapEndpoint(context.Background(), inj, testConfig())
 	if err != nil {
 		t.Fatalf("resolveMapEndpoint: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestResolveMapEndpointPrefersTheResolver(t *testing.T) {
 	inj := do.New()
 	RegisterMapEndpoint(inj, stubResolver{endpoint: MapEndpoint{Host: "10.0.0.7", Port: 31234}})
 
-	endpoint, err := resolveMapEndpoint(context.Background(), inj, testConfig())
+	endpoint, err := ResolveMapEndpoint(context.Background(), inj, testConfig())
 	if err != nil {
 		t.Fatalf("resolveMapEndpoint: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestResolveMapEndpointRejectsAnUnusableAnswer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			inj := do.New()
 			RegisterMapEndpoint(inj, stubResolver{endpoint: tc.end})
-			if _, err := resolveMapEndpoint(context.Background(), inj, testConfig()); err == nil {
+			if _, err := ResolveMapEndpoint(context.Background(), inj, testConfig()); err == nil {
 				t.Fatal("resolveMapEndpoint = nil error, want a rejection")
 			}
 		})
@@ -96,7 +96,7 @@ func TestResolveMapEndpointRejectsAnUnusableAnswer(t *testing.T) {
 func TestResolveMapEndpointPropagatesTheResolverError(t *testing.T) {
 	inj := do.New()
 	RegisterMapEndpoint(inj, stubResolver{err: errors.New("sidecar unreachable")})
-	_, err := resolveMapEndpoint(context.Background(), inj, testConfig())
+	_, err := ResolveMapEndpoint(context.Background(), inj, testConfig())
 	if err == nil {
 		t.Fatal("resolveMapEndpoint = nil error, want the resolver's error")
 	}

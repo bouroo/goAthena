@@ -15,19 +15,16 @@ import (
 	"github.com/samber/do/v2"
 
 	"github.com/bouroo/goAthena/internal/config"
+	"github.com/bouroo/goAthena/internal/modules/gateway/app"
 )
 
 // MapEndpoint is the map-server address the char server hands the client.
 //
 // It is a port of this module: the shape is what the gateway needs, and
-// the adapter that fills it lives outside the module.
-type MapEndpoint struct {
-	// Host is the map server's address as the client will dial it. A
-	// hostname is resolved to an IPv4 when the endpoint is built.
-	Host string
-	// Port is the map server's port.
-	Port uint16
-}
+// the adapter that fills it lives outside the module. The definition
+// lives in the app package because that is where the char server
+// consumes it, and an app package cannot import its own module root.
+type MapEndpoint = app.MapEndpoint
 
 // MapEndpointResolver resolves the map-server endpoint the char server
 // advertises.
@@ -37,6 +34,18 @@ type MapEndpointResolver interface {
 	// ResolveMapEndpoint returns the endpoint to advertise.
 	ResolveMapEndpoint(ctx context.Context) (MapEndpoint, error)
 }
+
+// MapScopedEndpointResolver resolves the map-server endpoint for a
+// specific map.
+//
+// It is the port that lets a multi-process deployment tell each client
+// where its character's map actually is. A char whose last map is served
+// by another shard must be handed that shard's address, not the one this
+// process happens to be — otherwise the client connects to a shard that
+// does not serve the map and the character enters the wrong world.
+//
+// Implementations must be safe for concurrent use.
+type MapScopedEndpointResolver = app.MapScopedEndpointResolver
 
 // StaticMapEndpoint is the configured endpoint: gateway.map_host and
 // gateway.map_port.
@@ -68,10 +77,11 @@ func RegisterMapEndpoint(inj do.Injector, resolver MapEndpointResolver) {
 	}
 }
 
-// resolveMapEndpoint returns the endpoint to advertise: the injected
+// ResolveMapEndpoint returns the endpoint to advertise: the injected
 // resolver's answer when one is registered, and the configured endpoint
-// otherwise.
-func resolveMapEndpoint(ctx context.Context, inj do.Injector, cfg config.Config) (MapEndpoint, error) {
+// otherwise. The composition root uses it to learn this process's own
+// address, which is what a locally-served map is answered with.
+func ResolveMapEndpoint(ctx context.Context, inj do.Injector, cfg config.Config) (MapEndpoint, error) {
 	resolver, err := do.Invoke[MapEndpointResolver](inj)
 	if err != nil {
 		// No resolver registered: the configured endpoint is the answer.

@@ -142,12 +142,12 @@ func zoneOf(gs *agonesv1.GameServer) (transitdomain.Zone, error) {
 		gs.Name, PortName, transitdomain.ErrUnknownMap)
 }
 
-// swapPort converts an Agones host-order port into the wire value
-// ZC_NPCACK_SERVERMOVE carries. Numerically this is the identity: the pinned
-// e2e byte evidence is frame [34:36] == 01 14 for port 5121 — the plain
-// port number written big-endian (rAthena's ntows(htons()) pair cancels to
-// exactly that on the wire). Encode BigEndian-writes the value verbatim.
-// Agones types the port int32; ports are ≤ 65535 by IANA.
+// swapPort converts an Agones host-order port into the value the zone
+// struct carries. Numerically this is the identity: rAthena's
+// ntows(htons()) pair cancels to exactly the plain port number, and the
+// encoder writes the field's little-endian memory image — frame
+// [34:36] == 01 14 for port 5121, the bytes the source's packed struct
+// puts on the wire. Agones types the port int32; ports are ≤ 65535 by IANA.
 func swapPort(port int32) uint16 {
 	return uint16(port) //nolint:gosec // G115: ports ≤ 65535.
 }

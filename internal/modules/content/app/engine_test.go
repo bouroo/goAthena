@@ -3,6 +3,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -200,11 +201,13 @@ func TestScriptHost_WarpRemoteZoneRedirects(t *testing.T) {
 	if got := binary.LittleEndian.Uint16(fr[28:]); got != 60 {
 		t.Errorf("y = %d, want 60", got)
 	}
-	if got := binary.BigEndian.Uint32(fr[30:]); got != 0x7f000001 {
-		t.Errorf("ip = %#x, want 0x7f000001 (big-endian wire)", got)
+	// The source's packed struct goes on the wire as its little-endian
+	// memory image: ip 01 00 00 7f, port 01 14.
+	if got := fr[30:34]; !bytes.Equal(got, []byte{0x01, 0x00, 0x00, 0x7f}) {
+		t.Errorf("ip bytes = % x, want 01 00 00 7f", got)
 	}
-	if got := binary.BigEndian.Uint16(fr[34:]); got != 0x1401 {
-		t.Errorf("port = %#x, want 0x1401 (byte-swapped wire)", got)
+	if got := fr[34:36]; !bytes.Equal(got, []byte{0x01, 0x14}) {
+		t.Errorf("port bytes = % x, want 01 14", got)
 	}
 }
 

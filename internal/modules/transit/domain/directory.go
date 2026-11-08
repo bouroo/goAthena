@@ -10,11 +10,15 @@ import "errors"
 type Zone struct {
 	// Name is the operator-assigned zone id (informational in v0).
 	Name string
-	// IPv4 is the zone's client-facing IPv4 address, big-endian uint32
-	// (0x7f000001 = 127.0.0.1) — the wire order ZC_NPCACK_SERVERMOVE carries.
+	// IPv4 is the zone's client-facing IPv4 address as the source's struct
+	// holds it: htonl of the host-order address, so 127.0.0.1 is
+	// 0x7f000001. The packet encoders write the field's little-endian
+	// memory image, which is what the source's packed struct puts on the
+	// wire (01 00 00 7f).
 	IPv4 uint32
-	// Port is the zone's map-port wire value: byte-swapped
-	// (rAthena ntows(htons(port))), ready for ServerMoveResponse.Port.
+	// Port is the zone's map port as the plain number. The source writes
+	// ntows(htons(port)) (the two swaps cancel), so the field value is the
+	// port itself — 5121.
 	Port uint16
 }
 
