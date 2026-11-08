@@ -21,10 +21,10 @@ import (
 //
 // Upstream's map and common header sets share the include guard PACKETS_HPP,
 // so they are probed in separate translation units and merged.
-func structLayouts(compiler, rathenaPath, srcDir string, v variant) (map[string]int, error) {
+func structLayouts(compiler, rathenaPath string, v variant) (map[string]int, error) {
 	layouts := map[string]int{}
 	for _, header := range layoutHeaders {
-		got, err := probeLayouts(compiler, rathenaPath, srcDir, v, header)
+		got, err := probeLayouts(compiler, rathenaPath, v, header)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", header, err)
 		}
@@ -51,17 +51,17 @@ var layoutHeaders = []string{
 // packed attribute and for the preprocessor-selected field widths. A struct
 // whose fields upstream selects conditionally gets the offsets that
 // selection produces.
-func fieldLayouts(compiler, rathenaPath, srcDir string, v variant, header, structName string) (map[string]int, error) {
-	fields, err := structFields(srcDir, header, structName)
+func fieldLayouts(compiler, rathenaPath string, v variant, header, structName string) (map[string]int, error) {
+	fields, err := structFields(rathenaPath, header, structName)
 	if err != nil {
 		return nil, err
 	}
 	if len(fields) == 0 {
 		// Upstream selects a struct's fields conditionally, so the naive scan
 		// can miss them. Fall back to the compiler's own view.
-		return probeFieldOffsets(compiler, rathenaPath, srcDir, v, header, structName, nil)
+		return probeFieldOffsets(compiler, rathenaPath, v, header, structName, nil)
 	}
-	return probeFieldOffsets(compiler, rathenaPath, srcDir, v, header, structName, fields)
+	return probeFieldOffsets(compiler, rathenaPath, v, header, structName, fields)
 }
 
 // structFieldRe matches a field declaration inside a struct body.
@@ -82,9 +82,9 @@ var anonymousStructRe = regexp.MustCompile(`(?m)^\s*\}\s*([A-Za-z_][A-Za-z0-9_]*
 // has to write them at the right offset.
 var structBitFieldRe = regexp.MustCompile(`(?m)^\s*[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[0-9]+\s*;`)
 
-// structFields returns the field names declared in one upstream struct.
-func structFields(srcDir, header, structName string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Join(srcDir, header))
+// structFields returns the field names declared in one source struct.
+func structFields(rathenaPath, header, structName string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(rathenaPath, "src", header))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", header, err)
 	}
@@ -134,7 +134,7 @@ func structFields(srcDir, header, structName string) ([]string, error) {
 
 // probeFieldOffsets compiles a probe that prints the offset of each field of
 // one source struct.
-func probeFieldOffsets(compiler, rathenaPath, _ string, v variant, header, structName string, fields []string) (map[string]int, error) {
+func probeFieldOffsets(compiler, rathenaPath string, v variant, header, structName string, fields []string) (map[string]int, error) {
 	ws, err := newWorkspace("protocolgen-off")
 	if err != nil {
 		return nil, err
@@ -268,10 +268,10 @@ var offsetStructs = []struct {
 
 // fieldOffsets resolves the byte offsets of the fields of every struct the
 // server encodes field by field, for one variant.
-func fieldOffsets(compiler, rathenaPath, srcDir string, v variant) (map[string]map[string]int, error) {
+func fieldOffsets(compiler, rathenaPath string, v variant) (map[string]map[string]int, error) {
 	out := map[string]map[string]int{}
 	for _, s := range offsetStructs {
-		offsets, err := fieldLayouts(compiler, rathenaPath, srcDir, v, s.header, s.name)
+		offsets, err := fieldLayouts(compiler, rathenaPath, v, s.header, s.name)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", s.name, err)
 		}

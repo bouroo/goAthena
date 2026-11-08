@@ -54,8 +54,14 @@ compares the resolved values to the committed ones.
    file, so the four sites stop restating it.
 3. One owner for the three-input resolution preamble, so
    `resolveTable` and `registrationOrderFor` share it.
+4. One owner for the header include shape, so the two probes that inspect a
+   header set stop restating the `packets_struct.hpp` rule.
+5. Drop the dead `srcDir` parameter (found during execution): `sourceDir` is
+   always `filepath.Join(checkout, "src")` and `rathenaPath` is `checkout`,
+   so it is a redundant argument threaded through twenty sites and read in
+   two. The two readers derive it from the checkout they already hold.
 
-Each step is its own commit, green at every step.
+Each step is its own commit, green at every step. Steps 1-4 are done.
 
 ## Non-goals
 

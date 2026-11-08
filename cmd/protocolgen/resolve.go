@@ -50,8 +50,8 @@ type packetDef struct {
 // the entry for an opcode registered twice (src/map/clif.cpp:25798).
 // Reproducing that last-wins rule over the preprocessed registration order
 // yields the same table the source builds at runtime.
-func resolveRegistrations(compiler, rathenaPath, srcDir string, v variant) ([]packetDef, error) {
-	pre, err := preprocess(compiler, rathenaPath, srcDir, v)
+func resolveRegistrations(compiler, rathenaPath string, v variant) ([]packetDef, error) {
+	pre, err := preprocess(compiler, rathenaPath, v)
 	if err != nil {
 		return nil, err
 	}
@@ -59,12 +59,12 @@ func resolveRegistrations(compiler, rathenaPath, srcDir string, v variant) ([]pa
 	// The source's opcode constants come from two places: the numeric literals
 	// in clif_packetdb.hpp and the HEADER_* symbols in upstream's packet
 	// headers. Both must be resolved to a number.
-	opcodes, err := resolveOpcodes(compiler, rathenaPath, srcDir, v)
+	opcodes, err := resolveOpcodes(compiler, rathenaPath, v)
 	if err != nil {
 		return nil, err
 	}
 	// The source's lengths are either a literal or sizeof(struct PACKET_*).
-	sizes, err := structLayouts(compiler, rathenaPath, srcDir, v)
+	sizes, err := structLayouts(compiler, rathenaPath, v)
 	if err != nil {
 		return nil, err
 	}
@@ -84,8 +84,8 @@ func resolveRegistrations(compiler, rathenaPath, srcDir string, v variant) ([]pa
 //
 // The table is the registrations with the last registration of an opcode
 // winning, keyed by opcode and sorted by it.
-func resolveTable(compiler, rathenaPath, srcDir string, v variant) ([]packetDef, error) {
-	regs, err := resolveRegistrations(compiler, rathenaPath, srcDir, v)
+func resolveTable(compiler, rathenaPath string, v variant) ([]packetDef, error) {
+	regs, err := resolveRegistrations(compiler, rathenaPath, v)
 	if err != nil {
 		return nil, err
 	}
@@ -108,8 +108,8 @@ func resolveTable(compiler, rathenaPath, srcDir string, v variant) ([]packetDef,
 // The order matters: the source registers some handlers under several opcodes
 // across client versions, so the last registration of a handler is the one
 // the client uses at a given PACKETVER.
-func registrationOrderFor(compiler, rathenaPath, srcDir string, v variant) ([]packetDef, error) {
-	return resolveRegistrations(compiler, rathenaPath, srcDir, v)
+func registrationOrderFor(compiler, rathenaPath string, v variant) ([]packetDef, error) {
+	return resolveRegistrations(compiler, rathenaPath, v)
 }
 
 // parseRegistration parses one expanded packetdb_addpacket call, resolving its
@@ -212,7 +212,7 @@ func resolveLength(expr string, sizes map[string]int) (int, bool) {
 // Only preprocessing is needed (not compilation): the packet tables are macro
 // invocations whose expansion is exactly what the source registers at runtime,
 // and preprocessing avoids building the source's whole map server.
-func preprocess(compiler, rathenaPath, _ string, v variant) (string, error) {
+func preprocess(compiler, rathenaPath string, v variant) (string, error) {
 	ws, err := newWorkspace("protocolgen")
 	if err != nil {
 		return "", err

@@ -29,8 +29,8 @@ var commentedBlockRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
 
 // probeLayouts compiles a probe that prints the size of every wire struct
 // declared in one upstream header set.
-func probeLayouts(compiler, rathenaPath, srcDir string, v variant, header string) (map[string]int, error) {
-	names, err := structNames(compiler, rathenaPath, srcDir, v, header)
+func probeLayouts(compiler, rathenaPath string, v variant, header string) (map[string]int, error) {
+	names, err := structNames(rathenaPath, header)
 	if err != nil {
 		return nil, err
 	}
@@ -76,14 +76,14 @@ func probeLayouts(compiler, rathenaPath, srcDir string, v variant, header string
 	return parseSizes(out), nil
 }
 
-// structNames returns the wire struct names declared in one upstream header.
-func structNames(_, _, srcDir string, _ variant, header string) ([]string, error) {
+// structNames returns the wire struct names declared in one source header.
+func structNames(rathenaPath, header string) ([]string, error) {
 	// The struct names come from the preprocessed header, so the
 	// preprocessor's own selection decides which structs exist for this
-	// client family. Upstream guards several structs behind
+	// client family. The source guards several structs behind
 	// `#if PACKETVER_...` blocks that exclude them from older clients; a
 	// text scan would see them and the compiler would reject their size.
-	data, err := os.ReadFile(filepath.Join(srcDir, header))
+	data, err := os.ReadFile(filepath.Join(rathenaPath, "src", header))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", header, err)
 	}
