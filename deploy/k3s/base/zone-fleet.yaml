@@ -61,6 +61,18 @@ spec:
           portPolicy: Dynamic
           containerPort: 5121
           protocol: TCP
+      counters:
+        # The number of players connected to this shard. The shard
+        # publishes the count to the sidecar; Agones aggregates it across
+        # the fleet, and the FleetAutoscaler's CounterPolicy divides the
+        # aggregate by the capacity to decide how many shards the load
+        # needs.
+        #
+        # The capacity is the shard's design point — the players one shard
+        # serves before another is needed — not a measurement.
+        players:
+          count: 0
+          capacity: 100
       health:
         # The app streams Health() every 5s (agones.DefaultHealthInterval).
         # Agones evicts after failureThreshold missed periods.
@@ -202,6 +214,11 @@ spec:
           portPolicy: Dynamic
           containerPort: 5121
           protocol: TCP
+      counters:
+        # The player counter, as in the prontera Fleet above.
+        players:
+          count: 0
+          capacity: 100
       health:
         initialDelaySeconds: 5
         periodSeconds: 5

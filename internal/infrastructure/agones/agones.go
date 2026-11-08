@@ -55,6 +55,7 @@ type Sidecar struct {
 	client  sdk.SDKClient
 	conn    *grpc.ClientConn
 	health  sdk.SDK_HealthClient
+	beta    betaClient
 	stopped bool
 }
 
@@ -68,7 +69,11 @@ func New() (*Sidecar, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agones: dial sidecar %s: %w", addr, err)
 	}
-	return &Sidecar{client: sdk.NewSDKClient(conn), conn: conn}, nil
+	return &Sidecar{
+		client: sdk.NewSDKClient(conn),
+		conn:   conn,
+		beta:   newBeta(conn),
+	}, nil
 }
 
 // Ready marks the GameServer ready for allocations.
