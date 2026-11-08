@@ -60,14 +60,15 @@ echo "▶ fetching the Agones CRD schema"
 have_agones=0
 if curl -fsSL --max-time 180 "$crd_url" -o "$schema_dir/install.yaml"; then
 	for kind in Fleet FleetAutoscaler; do
-		# The file name must match kubeconform's template exactly:
-		# {{.ResourceKind}}_{{.ResourceAPIVersion}}. The apiVersion
-		# "agones.dev/v1" contributes only "v1" to that template — the
-		# group is not part of it — so the name is Fleet_v1.json. A name
-		# that does not match is a silent skip: kubeconform reports
-		# "could not find schema" and the resource fails.
+		# The file name must match kubeconform's template exactly.
+		# The template expands {{.ResourceKind}} to the kind in LOWERCASE
+		# — "fleet", not "Fleet" — so the name is fleet_v1.json. A name
+		# that does not match is a silent miss: kubeconform reports
+		# "could not find schema" and the resource fails. The case is
+		# invisible on macOS, whose filesystem is case-insensitive; on
+		# Linux it decides whether the check works at all.
 		if go run ./scripts/crdschema "$schema_dir/install.yaml" "$kind" \
-			"$schema_dir/${kind}_v1.json"; then
+			"$schema_dir/$(printf '%s' "$kind" | tr '[:upper:]' '[:lower:]')_v1.json"; then
 			have_agones=1
 		fi
 	done
@@ -91,7 +92,8 @@ fi
 # Fleets are the resources this check exists for; skipping them would
 # make the check vacuous.
 for kind in Fleet FleetAutoscaler; do
-	if [ ! -f "$schema_dir/${kind}_v1.json" ]; then
+	lower="$(printf '%s' "$kind" | tr '[:upper:]' '[:lower:]')"
+	if [ ! -f "$schema_dir/${lower}_v1.json" ]; then
 		echo "the $kind schema was not extracted into $schema_dir" >&2
 		exit 1
 	fi
