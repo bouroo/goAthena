@@ -1,0 +1,80 @@
+# Prune image tags from the ghcr.io package.
+#
+# The publish job only ever adds tags, so the registry accumulates every
+# build a release ever made — including builds whose binaries carry HIGH
+# advisories that a later release fixed. Deleting them needs
+# `packages: delete`, which only the workflow's own GITHUB_TOKEN has (a
+# local `gh` token without that scope cannot delete a package version),
+# so the prune has to run here.
+#
+# Deleting a tag removes the manifest it points at, and the manifest is
+# shared: a digest reachable from another tag survives, and only the
+# unreferenced digest is garbage-collected. So deleting the tag for one
+# release does not necessarily free the blobs.
+#
+# Usage: Actions -> Prune image tag -> run, with `tag` set.
+name: Prune image tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to delete (e.g. 0.1.0-beta.9, latest)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prune:
+    name: Delete the tag's manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete the manifest behind the tag
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          # The registry needs the manifest's digest, not its tag, and the
+          # Accept header must name every manifest type the tag may hold.
+          digest="$(curl -fsSL \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+            -D - -o /dev/null \
+            "https://ghcr.io/v2/${IMAGE#ghcr.io/}/manifests/${TAG}" \
+            | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" { print $2 }')"
+          if [ -z "$digest" ]; then
+            echo "::error::no manifest found for ${TAG}"
+            exit 1
+          fi
+          echo "deleting ${TAG} -> ${digest}"
+          curl -fsSL -X DELETE \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://ghcr.io/v2/${IMAGE#ghcr.io/}/manifests/${digest}"
+          echo "deleted ${TAG}"
+
+      - name: Confirm the tag is gone
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if curl -fsSL -o /dev/null \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/${IMAGE#ghcr.io/}/manifests/${TAG}"; then
+            echo "::error::${TAG} is still resolvable"
+            exit 1
+          fi
+          echo "${TAG} no longer resolves"
