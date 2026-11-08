@@ -37,6 +37,27 @@ jobs:
       TAG: ${{ inputs.tag }}
       API: https://api.github.com
     steps:
+      # The version list is JSON nested three levels deep (version ->
+      # metadata -> container -> tags), which is unreadable as a shell
+      # one-liner and breaks YAML when embedded inline, so it gets a file.
+      - name: Write the tag picker
+        run: |
+          cat > "${RUNNER_TEMP}/pick.py" <<'PY'
+          import json
+          import os
+          import sys
+
+          tag = sys.argv[1]
+          for version in json.load(sys.stdin):
+              tags = [
+                  c.get("name")
+                  for c in version.get("metadata", {}).get("container", {}).get("tags", [])
+              ]
+              if tag in tags:
+                  print(version["id"])
+                  sys.exit(0)
+          sys.exit(1)
+          PY
       - name: Find the package version holding the tag
         id: version
         run: |
@@ -53,15 +74,7 @@ jobs:
           echo "base=${base}" >> "$GITHUB_OUTPUT"
           id="$(curl -fsSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             "${base}?per_page=100" \
-            | python3 -c '
-import json, os, sys
-tag = os.environ["TAG"]
-for v in json.load(sys.stdin):
-    tags = [c.get("name") for c in v.get("metadata", {}).get("container", {}).get("tags", [])]
-    if tag in tags:
-        print(v["id"])
-        break
-')"
+            | python3 "${RUNNER_TEMP}/pick.py" "${TAG}")"
           if [ -z "$id" ]; then
             echo "::error::no package version carries the tag ${TAG}"
             exit 1
@@ -87,13 +100,7 @@ for v in json.load(sys.stdin):
           set -euo pipefail
           if curl -fsSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             "${BASE}?per_page=100" \
-            | python3 -c '
-import json, os, sys
-tag = os.environ["TAG"]
-found = any(tag in [c.get("name") for c in v.get("metadata", {}).get("container", {}).get("tags", [])]
-            for v in json.load(sys.stdin))
-sys.exit(1 if found else 0)
-'; then
+            | python3 "${RUNNER_TEMP}/pick.py" "${TAG}" > /dev/null; then
             echo "::error::${TAG} is still present"
             exit 1
           fi
