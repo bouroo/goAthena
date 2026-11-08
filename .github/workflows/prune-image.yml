@@ -7,10 +7,9 @@
 # local `gh` token without that scope cannot delete a package version),
 # so the prune has to run here.
 #
-# Deleting a tag removes the manifest it points at, and the manifest is
-# shared: a digest reachable from another tag survives, and only the
-# unreferenced digest is garbage-collected. So deleting the tag for one
-# release does not necessarily free the blobs.
+# It goes through the GitHub Packages API, not the registry's own DELETE:
+# ghcr.io answers the registry's manifest DELETE with 405 UNSUPPORTED for
+# every token, so the API is the only route that works.
 #
 # Usage: Actions -> Prune image tag -> run, with `tag` set.
 name: Prune image tag
@@ -19,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag to delete (e.g. 0.1.0-beta.9, latest)"
+        description: "Image tag to delete (e.g. 0.1.0-beta.9)"
         required: true
         type: string
 
@@ -29,52 +28,83 @@ permissions:
 
 jobs:
   prune:
-    name: Delete the tag's manifest
+    name: Delete the tag's package version
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      OWNER: ${{ github.repository_owner }}
+      PACKAGE: ${{ github.event.repository.name }}
+      TAG: ${{ inputs.tag }}
+      API: https://api.github.com
     steps:
-      - name: Log in to ghcr.io
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      # The version list is JSON nested three levels deep (version ->
+      # metadata -> container -> tags), which is unreadable as a shell
+      # one-liner and breaks YAML when embedded inline, so it gets a file.
+      - name: Write the tag picker
+        run: |
+          cat > "${RUNNER_TEMP}/pick.py" <<'PY'
+          import json
+          import os
+          import sys
 
-      - name: Delete the manifest behind the tag
-        env:
-          IMAGE: ghcr.io/${{ github.repository }}
-          TAG: ${{ inputs.tag }}
+          tag = sys.argv[1]
+          payload = json.load(sys.stdin)
+          # The API answers an error with an object, not a list.
+          if not isinstance(payload, list):
+              raise SystemExit("unexpected payload: " + json.dumps(payload)[:300])
+          for version in payload:
+              tags = version.get("metadata", {}).get("container", {}).get("tags", [])
+              # Each entry is a plain tag name, not an object.
+              names = [t.get("name") if isinstance(t, dict) else t for t in tags]
+              if tag in names:
+                  print(version["id"])
+                  sys.exit(0)
+          sys.exit(1)
+          PY
+      - name: Find the package version holding the tag
+        id: version
         run: |
           set -euo pipefail
-          # The registry needs the manifest's digest, not its tag, and the
-          # Accept header must name every manifest type the tag may hold.
-          digest="$(curl -fsSL \
+          # A user-owned package is addressed under /users; an org-owned one
+          # under /orgs. The owner name alone does not say which.
+          if curl -fsSL -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
-            -D - -o /dev/null \
-            "https://ghcr.io/v2/${IMAGE#ghcr.io/}/manifests/${TAG}" \
-            | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" { print $2 }')"
-          if [ -z "$digest" ]; then
-            echo "::error::no manifest found for ${TAG}"
+            "${API}/users/${OWNER}/packages/container/${PACKAGE}/versions?per_page=1" | grep -q '^200$'; then
+            base="${API}/users/${OWNER}/packages/container/${PACKAGE}/versions"
+          else
+            base="${API}/orgs/${OWNER}/packages/container/${PACKAGE}/versions"
+          fi
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          id="$(curl -fsSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "${base}?per_page=100" \
+            | python3 "${RUNNER_TEMP}/pick.py" "${TAG}")"
+          if [ -z "$id" ]; then
+            echo "::error::no package version carries the tag ${TAG}"
             exit 1
           fi
-          echo "deleting ${TAG} -> ${digest}"
+          echo "id=${id}" >> "$GITHUB_OUTPUT"
+          echo "package version ${id} carries ${TAG}"
+
+      - name: Delete the package version
+        env:
+          BASE: ${{ steps.version.outputs.base }}
+          ID: ${{ steps.version.outputs.id }}
+        run: |
+          set -euo pipefail
           curl -fsSL -X DELETE \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://ghcr.io/v2/${IMAGE#ghcr.io/}/manifests/${digest}"
-          echo "deleted ${TAG}"
+            "${BASE}/${ID}"
+          echo "deleted package version ${ID}"
 
       - name: Confirm the tag is gone
         env:
-          IMAGE: ghcr.io/${{ github.repository }}
-          TAG: ${{ inputs.tag }}
+          BASE: ${{ steps.version.outputs.base }}
         run: |
           set -euo pipefail
-          if curl -fsSL -o /dev/null \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
-            "https://ghcr.io/v2/${IMAGE#ghcr.io/}/manifests/${TAG}"; then
-            echo "::error::${TAG} is still resolvable"
+          if curl -fsSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "${BASE}?per_page=100" \
+            | python3 "${RUNNER_TEMP}/pick.py" "${TAG}" > /dev/null; then
+            echo "::error::${TAG} is still present"
             exit 1
           fi
-          echo "${TAG} no longer resolves"
+          echo "${TAG} is gone"
