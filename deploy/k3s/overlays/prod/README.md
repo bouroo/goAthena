@@ -33,7 +33,7 @@ for anything a player has touched.
 ## 2. The image tag
 
 `patch-image-goathena-prontera.yaml` and `patch-image-goathena-geffen.yaml`
-pin the shards to `v0.1.0-beta.14`. Update both to the release you want
+pin the shards to `v0.1.0-beta.15`. Update both to the release you want
 running.
 
 The base uses `latest`, which is right for a dev cluster and wrong for
