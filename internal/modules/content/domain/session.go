@@ -101,10 +101,13 @@ type ScriptInventory interface {
 // waiting for the client's response. CharID is the player's entity id (char_id)
 // so effect builtins can target the player in the world.
 type DialogSession struct {
-	NpcID  uint32
-	CharID uint32
-	Writer PacketWriter
-	Signal chan DialogSignal
+	NpcID uint32
+	// AccountID is the player's account (AID). The warehouse is an
+	// account-scoped store, so the storage port needs it alongside CharID.
+	AccountID uint32
+	CharID    uint32
+	Writer    PacketWriter
+	Signal    chan DialogSignal
 }
 
 // NPCStore resolves an NPC entity GID to its script name (so a click can find
@@ -139,6 +142,21 @@ type ScriptQuest interface {
 	// (`getvariableofnpc(npcName, varName)`). Same semantics as GetVar but
 	// the npcName is the argument, not the current NPC.
 	GetVarOfNPC(charID uint32, npcName, varName string) int64
+}
+
+// ScriptStorage is the warehouse capability the script VM bridge needs for
+// the `openstorage` builtin. It is implemented by the gateway (it owns the
+// player's connection and the storage frames); isolating the port here keeps
+// the content domain free of gateway imports.
+//
+// The warehouse is an account-scoped store (rAthena's kafra storage), so the
+// port carries both ids: charID addresses the player's live connection,
+// accountID selects the warehouse rows. A nil port disables the builtin.
+type ScriptStorage interface {
+	// OpenStorage opens the account's warehouse for the given player,
+	// emitting the storage item lists and the item count. It is a no-op
+	// when the player has no live connection or no storage is wired.
+	OpenStorage(accountID, charID uint32)
 }
 
 // CurrentNPCName returns the script name the current NPC dialog is running

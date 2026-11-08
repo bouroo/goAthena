@@ -17,8 +17,8 @@ func TestParseCZUseItem(t *testing.T) {
 	t.Parallel()
 
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZUseItem2)
-		writeLE16(f[0:], HeaderCZUSEITEM2)
+		f := make([]byte, sizeCZUseItem2())
+		writeLE16(f[0:], HeaderCZUSEITEM2())
 		writeLE16(f[2:], 0x00AB) // inventory index
 		writeLE32(f[4:], 0x00001092)
 		return f
@@ -45,7 +45,7 @@ func TestParseCZUseItem(t *testing.T) {
 		},
 		{
 			name:       "frame too short",
-			frame:      goodFrame[:sizeCZUseItem2-1],
+			frame:      goodFrame[:sizeCZUseItem2()-1],
 			wantErr:    true,
 			wantErrSub: "want at least 8 bytes",
 		},
@@ -89,8 +89,8 @@ func TestCZUseItemRequest_Encode(t *testing.T) {
 		t.Fatalf("Encode err = %v, want nil", err)
 	}
 	got := buf.Bytes()
-	if len(got) != sizeCZUseItem2 {
-		t.Fatalf("len = %d, want %d", len(got), sizeCZUseItem2)
+	if len(got) != sizeCZUseItem2() {
+		t.Fatalf("len = %d, want %d", len(got), sizeCZUseItem2())
 	}
 	if got[0] != 0x39 || got[1] != 0x04 {
 		t.Errorf("header = %02x %02x, want 39 04 (LE 0x0439)", got[0], got[1])
@@ -107,8 +107,8 @@ func TestParseCZReqWearEquip(t *testing.T) {
 	t.Parallel()
 
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZReqWearEquipV5)
-		writeLE16(f[0:], HeaderCZREQWEAREQUIPV5)
+		f := make([]byte, sizeCZReqWearEquipV5())
+		writeLE16(f[0:], HeaderCZREQWEAREQUIPV5())
 		writeLE16(f[2:], 0x0010) // inventory index
 		writeLE32(f[4:], 0x00000002)
 		return f
@@ -129,7 +129,7 @@ func TestParseCZReqWearEquip(t *testing.T) {
 		},
 		{
 			name:       "frame too short",
-			frame:      goodFrame[:sizeCZReqWearEquipV5-1],
+			frame:      goodFrame[:sizeCZReqWearEquipV5()-1],
 			wantErr:    true,
 			wantErrSub: "want at least 8 bytes",
 		},
@@ -173,8 +173,8 @@ func TestCZReqWearEquipRequest_Encode(t *testing.T) {
 		t.Fatalf("Encode err = %v", err)
 	}
 	got := buf.Bytes()
-	if len(got) != sizeCZReqWearEquipV5 {
-		t.Fatalf("len = %d, want %d", len(got), sizeCZReqWearEquipV5)
+	if len(got) != sizeCZReqWearEquipV5() {
+		t.Fatalf("len = %d, want %d", len(got), sizeCZReqWearEquipV5())
 	}
 	if got[0] != 0x98 || got[1] != 0x09 {
 		t.Errorf("header = %02x %02x, want 98 09 (LE 0x0998)", got[0], got[1])
@@ -191,8 +191,8 @@ func TestParseCZReqTakeoffEquip(t *testing.T) {
 	t.Parallel()
 
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZReqTakeoffEquip)
-		writeLE16(f[0:], HeaderCZREQTAKEOFFEQUIP)
+		f := make([]byte, sizeCZReqTakeoffEquip())
+		writeLE16(f[0:], HeaderCZREQTAKEOFFEQUIP())
 		writeLE16(f[2:], 0x0011)
 		return f
 	}()
@@ -212,7 +212,7 @@ func TestParseCZReqTakeoffEquip(t *testing.T) {
 		},
 		{
 			name:       "frame too short",
-			frame:      goodFrame[:sizeCZReqTakeoffEquip-1],
+			frame:      goodFrame[:sizeCZReqTakeoffEquip()-1],
 			wantErr:    true,
 			wantErrSub: "want at least 4 bytes",
 		},
@@ -256,8 +256,8 @@ func TestCZReqTakeoffEquipRequest_Encode(t *testing.T) {
 		t.Fatalf("Encode err = %v", err)
 	}
 	got := buf.Bytes()
-	if len(got) != sizeCZReqTakeoffEquip {
-		t.Fatalf("len = %d, want %d", len(got), sizeCZReqTakeoffEquip)
+	if len(got) != sizeCZReqTakeoffEquip() {
+		t.Fatalf("len = %d, want %d", len(got), sizeCZReqTakeoffEquip())
 	}
 	if got[0] != 0xab || got[1] != 0x00 {
 		t.Errorf("header = %02x %02x, want ab 00 (LE 0x00ab)", got[0], got[1])
@@ -470,8 +470,8 @@ func TestReqWearEquipAckResponse_Encode(t *testing.T) {
 		t.Fatalf("Encode err = %v", err)
 	}
 	got := buf.Bytes()
-	if len(got) != sizeZCReqWearEquipAckV5 {
-		t.Fatalf("len = %d, want %d", len(got), sizeZCReqWearEquipAckV5)
+	if len(got) != sizeZCReqWearEquipAckV5() {
+		t.Fatalf("len = %d, want %d", len(got), sizeZCReqWearEquipAckV5())
 	}
 	if got[0] != 0x99 || got[1] != 0x09 {
 		t.Errorf("header = %02x %02x, want 99 09 (LE 0x0999)", got[0], got[1])
@@ -503,8 +503,8 @@ func TestReqTakeoffEquipAckResponse_Encode(t *testing.T) {
 		t.Fatalf("Encode err = %v", err)
 	}
 	got := buf.Bytes()
-	if len(got) != sizeZCReqTakeoffEquipAck {
-		t.Fatalf("len = %d, want %d", len(got), sizeZCReqTakeoffEquipAck)
+	if len(got) != sizeZCReqTakeoffEquipAck() {
+		t.Fatalf("len = %d, want %d", len(got), sizeZCReqTakeoffEquipAck())
 	}
 	if got[0] != 0x9a || got[1] != 0x09 {
 		t.Errorf("header = %02x %02x, want 9a 09 (LE 0x099a)", got[0], got[1])
@@ -535,8 +535,8 @@ func TestUseItemAck2Response_Encode(t *testing.T) {
 		t.Fatalf("Encode err = %v", err)
 	}
 	got := buf.Bytes()
-	if len(got) != sizeZCUseItemAck2 {
-		t.Fatalf("len = %d, want %d", len(got), sizeZCUseItemAck2)
+	if len(got) != sizeZCUseItemAck2() {
+		t.Fatalf("len = %d, want %d", len(got), sizeZCUseItemAck2())
 	}
 	if got[0] != 0xc8 || got[1] != 0x01 {
 		t.Errorf("header = %02x %02x, want c8 01 (LE 0x01c8)", got[0], got[1])

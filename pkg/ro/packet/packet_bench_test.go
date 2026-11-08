@@ -13,7 +13,7 @@ func BenchmarkDB_Lookup(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = db.Lookup(HeaderCALOGIN)
+		_, _ = db.Lookup(HeaderCALOGIN())
 	}
 }
 
@@ -23,7 +23,7 @@ func BenchmarkDB_Length(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = db.Length(HeaderCALOGIN)
+		_, _ = db.Length(HeaderCALOGIN())
 	}
 }
 
@@ -42,10 +42,10 @@ func BenchmarkDB_LookupMiss(b *testing.B) {
 func BenchmarkDB_Has(b *testing.B) {
 	db := NewLoginServerDB()
 	cmds := []uint16{
-		HeaderCALOGIN,
-		HeaderCAREQHASH,
-		HeaderACACCEPTLOGIN,
-		HeaderSCNOTIFYBAN,
+		HeaderCALOGIN(),
+		HeaderCAREQHASH(),
+		HeaderACACCEPTLOGIN(),
+		HeaderSCNOTIFYBAN(),
 	}
 	b.ReportAllocs()
 	b.ResetTimer()

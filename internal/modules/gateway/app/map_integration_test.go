@@ -326,7 +326,7 @@ func startMapListener(t *testing.T, port int, sessions *charinfra.MemorySessionS
 func sendCZEnter(t *testing.T, c net.Conn, aid, gid, authCode uint32) {
 	t.Helper()
 	buf := make([]byte, 19)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZENTER)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZENTER())
 	binary.LittleEndian.PutUint32(buf[2:], aid)
 	binary.LittleEndian.PutUint32(buf[6:], gid)
 	binary.LittleEndian.PutUint32(buf[10:], authCode)
@@ -355,8 +355,8 @@ func TestMap_AcceptEnterOverTCP(t *testing.T) {
 		t.Fatalf("read reply header: %v", err)
 	}
 	got := binary.LittleEndian.Uint16(hdr)
-	if got != ropacket.HeaderZCACCEPTENTER {
-		t.Fatalf("response header = 0x%04x, want ZC_ACCEPT_ENTER (0x%04x)", got, ropacket.HeaderZCACCEPTENTER)
+	if got != ropacket.HeaderZCACCEPTENTER() {
+		t.Fatalf("response header = 0x%04x, want ZC_ACCEPT_ENTER (0x%04x)", got, ropacket.HeaderZCACCEPTENTER())
 	}
 }
 
@@ -393,16 +393,17 @@ func TestMap_SkillInfoListOnEnter(t *testing.T) {
 	if _, err := io.ReadFull(conn, header); err != nil {
 		t.Fatalf("read skill-list header: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(header[0:2]); got != uint16(ropacket.HeaderZCSKILLINFOLIST) {
+	if got := binary.LittleEndian.Uint16(header[0:2]); got != uint16(ropacket.HeaderZCSKILLINFOLIST()) {
 		t.Fatalf("skill-list header = 0x%04x, want 0x010f", got)
 	}
+	entrySize := ropacket.SizeSkillEntry()
 	packetLen := binary.LittleEndian.Uint16(header[2:4])
-	if packetLen < 4+37 {
-		t.Fatalf("skill-list len = %d, want >= 41", packetLen)
+	if int(packetLen) < 4+entrySize {
+		t.Fatalf("skill-list len = %d, want >= %d", packetLen, 4+entrySize)
 	}
 
-	// Read the entry body (37 bytes).
-	entry := make([]byte, 37)
+	// Read the entry body.
+	entry := make([]byte, entrySize)
 	if _, err := io.ReadFull(conn, entry); err != nil {
 		t.Fatalf("read skill entry: %v", err)
 	}
@@ -442,7 +443,7 @@ func TestMap_CastLearnedAndUnlearnedSkill(t *testing.T) {
 
 	// Cast the LEARNED skill (id=5, level=1).
 	req := make([]byte, 10)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILL)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILL())
 	binary.LittleEndian.PutUint16(req[2:], 1) // skillLv
 	binary.LittleEndian.PutUint16(req[4:], 5) // SM_BASH (learned)
 	binary.LittleEndian.PutUint32(req[6:], 160010)
@@ -453,14 +454,14 @@ func TestMap_CastLearnedAndUnlearnedSkill(t *testing.T) {
 	if _, err := io.ReadFull(conn, notify); err != nil {
 		t.Fatalf("read ZC_NOTIFY_SKILL: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(notify[0:2]); got != uint16(ropacket.HeaderZCNOTIFYSKILL) {
+	if got := binary.LittleEndian.Uint16(notify[0:2]); got != uint16(ropacket.HeaderZCNOTIFYSKILL()) {
 		t.Fatalf("notify header = 0x%04x, want 0x01de", got)
 	}
 
 	// Cast an UNLEARNED skill (id=9999). The server silently ignores it (logs
 	// error). The conn must NOT close; a 300ms timeout confirms nothing was sent.
 	req2 := make([]byte, 10)
-	binary.LittleEndian.PutUint16(req2[0:], ropacket.HeaderCZUSESKILL)
+	binary.LittleEndian.PutUint16(req2[0:], ropacket.HeaderCZUSESKILL())
 	binary.LittleEndian.PutUint16(req2[2:], 1)
 	binary.LittleEndian.PutUint16(req2[4:], 9999)
 	binary.LittleEndian.PutUint32(req2[6:], 160010)
@@ -483,7 +484,7 @@ func TestMap_CastLearnedAndUnlearnedSkill(t *testing.T) {
 	conn.SetReadDeadline(time.Time{})
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	attack := make([]byte, 7)
-	binary.LittleEndian.PutUint16(attack[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint16(attack[0:], ropacket.HeaderCZACTIONREQUEST())
 	binary.LittleEndian.PutUint32(attack[2:], 160010) // targetGID
 	attack[6] = 0                                     // action: attack
 	if _, err := conn.Write(attack); err != nil {
@@ -521,7 +522,7 @@ func TestMap_SkillUpLearns(t *testing.T) {
 
 	// CZ_SKILLUP (4B): cmd 0x0112 + uint16 skillID 5.
 	req := make([]byte, 4)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZSKILLUP)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZSKILLUP())
 	binary.LittleEndian.PutUint16(req[2:], 5)
 	if _, err := conn.Write(req); err != nil {
 		t.Fatalf("send CZ_SKILLUP: %v", err)
@@ -532,7 +533,7 @@ func TestMap_SkillUpLearns(t *testing.T) {
 	if _, err := io.ReadFull(conn, upd); err != nil {
 		t.Fatalf("read ZC_SKILLINFO_UPDATE: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(upd[0:2]); got != ropacket.HeaderZCSKILLINFOUPDATE {
+	if got := binary.LittleEndian.Uint16(upd[0:2]); got != ropacket.HeaderZCSKILLINFOUPDATE() {
 		t.Fatalf("update cmd = 0x%04x, want 0x010e", got)
 	}
 	if got := binary.LittleEndian.Uint16(upd[2:4]); got != 5 {
@@ -572,8 +573,8 @@ func TestMap_RefuseEnterBadAuthOverTCP(t *testing.T) {
 		t.Fatalf("read reply header: %v", err)
 	}
 	got := binary.LittleEndian.Uint16(hdr)
-	if got != ropacket.HeaderZCREFUSEENTER {
-		t.Fatalf("response header = 0x%04x, want ZC_REFUSE_ENTER (0x%04x)", got, ropacket.HeaderZCREFUSEENTER)
+	if got != ropacket.HeaderZCREFUSEENTER() {
+		t.Fatalf("response header = 0x%04x, want ZC_REFUSE_ENTER (0x%04x)", got, ropacket.HeaderZCREFUSEENTER())
 	}
 }
 
@@ -592,8 +593,8 @@ func TestMap_RefuseEnterNoSessionOverTCP(t *testing.T) {
 		t.Fatalf("read reply header: %v", err)
 	}
 	got := binary.LittleEndian.Uint16(hdr)
-	if got != ropacket.HeaderZCREFUSEENTER {
-		t.Fatalf("response header = 0x%04x, want ZC_REFUSE_ENTER (0x%04x)", got, ropacket.HeaderZCREFUSEENTER)
+	if got != ropacket.HeaderZCREFUSEENTER() {
+		t.Fatalf("response header = 0x%04x, want ZC_REFUSE_ENTER (0x%04x)", got, ropacket.HeaderZCREFUSEENTER())
 	}
 }
 
@@ -613,13 +614,13 @@ func TestMap_Dispatch_MovementAfterEnter(t *testing.T) {
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	enterReply := awaitAcceptEnter(t, conn)
-	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
-		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER() {
+		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER())
 	}
 
 	// 2. CZ_REQUEST_MOVE → ZC_NOTIFY_PLAYERMOVE (12 bytes).
 	moveReq := make([]byte, 5)
-	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE())
 	moveReq[2] = 100 // packed dest X (low byte; decodePos handles the 3-byte packing)
 	moveReq[3] = 200 // packed dest Y
 	moveReq[4] = 0   // dir
@@ -630,8 +631,8 @@ func TestMap_Dispatch_MovementAfterEnter(t *testing.T) {
 	if _, err := io.ReadFull(conn, moveReply); err != nil {
 		t.Fatalf("read player-move reply: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE {
-		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE)
+	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE() {
+		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE())
 	}
 }
 
@@ -655,8 +656,8 @@ func TestMap_RegenEmitsParChange(t *testing.T) {
 	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	enterReply := awaitAcceptEnter(t, conn)
-	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
-		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER() {
+		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER())
 	}
 
 	// 2. Damage the PC (entered at full HP) by re-seeding it in the world; the
@@ -681,7 +682,7 @@ func TestMap_RegenEmitsParChange(t *testing.T) {
 	if _, err := io.ReadFull(conn, frames); err != nil {
 		t.Fatalf("read regen frames: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(frames[0:2]); got != ropacket.HeaderZCPARCHANGE {
+	if got := binary.LittleEndian.Uint16(frames[0:2]); got != ropacket.HeaderZCPARCHANGE() {
 		t.Fatalf("frame 0 header = 0x%04x, want ZC_PAR_CHANGE", got)
 	}
 	if got := binary.LittleEndian.Uint16(frames[2:4]); got != ropacket.SPHP {
@@ -690,7 +691,7 @@ func TestMap_RegenEmitsParChange(t *testing.T) {
 	if got := binary.LittleEndian.Uint32(frames[4:8]); got != 506 {
 		t.Fatalf("HP after regen = %d, want 506", got)
 	}
-	if got := binary.LittleEndian.Uint16(frames[8:10]); got != ropacket.HeaderZCPARCHANGE {
+	if got := binary.LittleEndian.Uint16(frames[8:10]); got != ropacket.HeaderZCPARCHANGE() {
 		t.Fatalf("frame 1 header = 0x%04x, want ZC_PAR_CHANGE", got)
 	}
 	if got := binary.LittleEndian.Uint16(frames[10:12]); got != ropacket.SPSP {
@@ -721,25 +722,26 @@ func TestMap_Dispatch_SitStandActionEcho(t *testing.T) {
 	// CZ_ACTION_REQUEST action=2 (sit), self-targeted at the player's own GID.
 	const sitAction byte = 2
 	req := make([]byte, 7)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST())
 	binary.LittleEndian.PutUint32(req[2:], 150001) // own GID
 	req[6] = sitAction
 	if _, err := conn.Write(req); err != nil {
 		t.Fatalf("send CZ_ACTION_REQUEST: %v", err)
 	}
 
-	resp := make([]byte, 11) // sizeZCActionResponse
+	resp := make([]byte, ropacket.NotifyActResponse{}.Size())
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		t.Fatalf("read ZC_ACTION_RESPONSE: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCACTIONRESPONSE {
-		t.Fatalf("action-response header = 0x%04x, want ZC_ACTION_RESPONSE (0x%04x)", got, ropacket.HeaderZCACTIONRESPONSE)
+	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCNotifyAct() {
+		t.Fatalf("action-response header = 0x%04x, want ZC_ACTION_RESPONSE (0x%04x)", got, ropacket.HeaderZCNotifyAct())
 	}
 	if got := binary.LittleEndian.Uint32(resp[2:6]); got != 150001 {
 		t.Fatalf("action-response GID = %d, want own GID 150001", got)
 	}
-	if resp[6] != sitAction {
-		t.Fatalf("action-response action = %d, want %d", resp[6], sitAction)
+	// The source's action byte sits at offset 29 (src/map/packets.hpp:1413).
+	if resp[29] != sitAction {
+		t.Fatalf("action-response action = %d, want %d", resp[29], sitAction)
 	}
 }
 
@@ -784,8 +786,8 @@ func TestMap_MobAttacksPlayer(t *testing.T) {
 	if _, err := io.ReadFull(conn, act); err != nil {
 		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT {
-		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT)
+	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT() {
+		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT())
 	}
 	if got := binary.LittleEndian.Uint32(act[2:6]); got != mobGID {
 		t.Fatalf("ZC_NOTIFY_ACT srcID = %d, want mob GID %d", got, mobGID)
@@ -804,7 +806,7 @@ func TestMap_MobAttacksPlayer(t *testing.T) {
 	if _, err := io.ReadFull(conn, par); err != nil {
 		t.Fatalf("read ZC_PAR_CHANGE frames: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(par[0:2]); got != ropacket.HeaderZCPARCHANGE {
+	if got := binary.LittleEndian.Uint16(par[0:2]); got != ropacket.HeaderZCPARCHANGE() {
 		t.Fatalf("frame 0 header = 0x%04x, want ZC_PAR_CHANGE", got)
 	}
 	if got := binary.LittleEndian.Uint16(par[2:4]); got != ropacket.SPHP {
@@ -887,8 +889,8 @@ func TestMap_MobChasesPlayer(t *testing.T) {
 		if _, err := io.ReadFull(conn, frame); err != nil {
 			t.Fatalf("chase step %d: read ZC_UNIT_WALKING: %v", step, err)
 		}
-		if got := binary.LittleEndian.Uint16(frame[0:2]); got != ropacket.HeaderZCUNITWALKING {
-			t.Fatalf("chase step %d: header = 0x%04x, want ZC_UNIT_WALKING (0x%04x)", step, got, ropacket.HeaderZCUNITWALKING)
+		if got := binary.LittleEndian.Uint16(frame[0:2]); got != ropacket.HeaderZCUNITWALKING() {
+			t.Fatalf("chase step %d: header = 0x%04x, want ZC_UNIT_WALKING (0x%04x)", step, got, ropacket.HeaderZCUNITWALKING())
 		}
 		if frame[4] != mobObjType {
 			t.Fatalf("chase step %d: ObjectType = %d, want MOB (%d)", step, frame[4], mobObjType)
@@ -918,8 +920,8 @@ func TestMap_MobChasesPlayer(t *testing.T) {
 	if _, err := io.ReadFull(conn, act); err != nil {
 		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT {
-		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT)
+	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT() {
+		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT())
 	}
 	dmg := int32(binary.LittleEndian.Uint32(act[22:26]))
 	if dmg <= 0 {
@@ -998,8 +1000,8 @@ func TestMap_MobKillsPlayerRespawns(t *testing.T) {
 	if _, err := io.ReadFull(conn, act); err != nil {
 		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT {
-		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT)
+	if got := binary.LittleEndian.Uint16(act[0:2]); got != ropacket.HeaderZCNOTIFYACT() {
+		t.Fatalf("ZC_NOTIFY_ACT header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYACT())
 	}
 	if got := binary.LittleEndian.Uint32(act[2:6]); got != mobGID {
 		t.Fatalf("ZC_NOTIFY_ACT srcID = %d, want mob GID %d", got, mobGID)
@@ -1023,8 +1025,8 @@ func TestMap_MobKillsPlayerRespawns(t *testing.T) {
 	if _, err := io.ReadFull(conn, van); err != nil {
 		t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(van[0:2]); got != ropacket.HeaderZCNOTIFYVANISH {
-		t.Fatalf("ZC_NOTIFY_VANISH header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYVANISH)
+	if got := binary.LittleEndian.Uint16(van[0:2]); got != ropacket.HeaderZCNOTIFYVANISH() {
+		t.Fatalf("ZC_NOTIFY_VANISH header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCNOTIFYVANISH())
 	}
 	if got := binary.LittleEndian.Uint32(van[2:6]); got != 150001 {
 		t.Fatalf("ZC_NOTIFY_VANISH GID = %d, want player GID 150001", got)
@@ -1050,8 +1052,8 @@ func TestMap_MobKillsPlayerRespawns(t *testing.T) {
 
 	// ZC_ACCEPT_ENTER (13 B): the player's own client relocates to the save point.
 	enter := awaitAcceptEnter(t, conn)
-	if got := binary.LittleEndian.Uint16(enter[0:2]); got != ropacket.HeaderZCACCEPTENTER {
-		t.Fatalf("ZC_ACCEPT_ENTER header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	if got := binary.LittleEndian.Uint16(enter[0:2]); got != ropacket.HeaderZCACCEPTENTER() {
+		t.Fatalf("ZC_ACCEPT_ENTER header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER())
 	}
 	// posDir[3] at [6:9] packs (x,y,dir); decode to confirm the save cell (1,1).
 	x := int16((uint16(enter[6]) << 2) | (uint16(enter[7]) >> 6))      //nolint:gosec // G115: wire bit layout; coords are non-negative.
@@ -1110,7 +1112,7 @@ func TestMap_Restart_Respawn(t *testing.T) {
 
 	// CZ_RESTART type=0 (respawn): cmd 0x00b2 + type byte.
 	restart := make([]byte, 3)
-	binary.LittleEndian.PutUint16(restart[0:], ropacket.HeaderCZRESTART)
+	binary.LittleEndian.PutUint16(restart[0:], ropacket.HeaderCZRESTART())
 	restart[2] = 0 // czRestartRespawn
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := conn.Write(restart); err != nil {
@@ -1128,8 +1130,8 @@ func TestMap_Restart_Respawn(t *testing.T) {
 
 	// ZC_ACCEPT_ENTER (13 B): the client relocates to the save point (1,1).
 	enter := awaitAcceptEnter(t, conn)
-	if got := binary.LittleEndian.Uint16(enter[0:2]); got != ropacket.HeaderZCACCEPTENTER {
-		t.Fatalf("ZC_ACCEPT_ENTER header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	if got := binary.LittleEndian.Uint16(enter[0:2]); got != ropacket.HeaderZCACCEPTENTER() {
+		t.Fatalf("ZC_ACCEPT_ENTER header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER())
 	}
 	x := int16((uint16(enter[6]) << 2) | (uint16(enter[7]) >> 6))      //nolint:gosec // G115: wire bit layout; coords are non-negative.
 	y := int16((uint16(enter[7]&0x3f) << 4) | (uint16(enter[8]) >> 4)) //nolint:gosec // G115: wire bit layout; coords are non-negative.
@@ -1177,7 +1179,7 @@ func TestMap_Restart_ReturnToCharSelect(t *testing.T) {
 
 	// CZ_RESTART type=1 (return to char-select).
 	restart := make([]byte, 3)
-	binary.LittleEndian.PutUint16(restart[0:], ropacket.HeaderCZRESTART)
+	binary.LittleEndian.PutUint16(restart[0:], ropacket.HeaderCZRESTART())
 	restart[2] = 1 // czRestartReturnToSelect
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := conn.Write(restart); err != nil {
@@ -1189,8 +1191,8 @@ func TestMap_Restart_ReturnToCharSelect(t *testing.T) {
 	if _, err := io.ReadFull(conn, ack); err != nil {
 		t.Fatalf("read ZC_RESTART_ACK: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCRESTARTACK {
-		t.Fatalf("ZC_RESTART_ACK header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCRESTARTACK)
+	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCRESTARTACK() {
+		t.Fatalf("ZC_RESTART_ACK header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCRESTARTACK())
 	}
 	if ack[2] != 1 {
 		t.Fatalf("ZC_RESTART_ACK type = %d, want 1 (leave-for-char-select)", ack[2])
@@ -1239,21 +1241,21 @@ func TestMap_Dispatch_AttackMob(t *testing.T) {
 
 	// CZ_ACTION_REQUEST action=0x07 (attack) targeting the mob.
 	req := make([]byte, 7)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST())
 	binary.LittleEndian.PutUint32(req[2:], mobGID)
 	req[6] = 0x07
 	if _, err := conn.Write(req); err != nil {
 		t.Fatalf("send CZ_ACTION_REQUEST: %v", err)
 	}
 
-	resp := make([]byte, 11)
+	resp := make([]byte, ropacket.NotifyActResponse{}.Size())
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		t.Fatalf("read ZC_ACTION_RESPONSE: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCACTIONRESPONSE {
-		t.Fatalf("action-response header = 0x%04x, want ZC_ACTION_RESPONSE (0x%04x)", got, ropacket.HeaderZCACTIONRESPONSE)
+	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCNotifyAct() {
+		t.Fatalf("action-response header = 0x%04x, want ZC_ACTION_RESPONSE (0x%04x)", got, ropacket.HeaderZCNotifyAct())
 	}
-	if got := binary.LittleEndian.Uint32(resp[7:11]); got != mobGID {
+	if got := binary.LittleEndian.Uint32(resp[6:10]); got != mobGID {
 		t.Fatalf("action-response targetGID = %d, want mob GID %d", got, mobGID)
 	}
 }
@@ -1304,16 +1306,17 @@ func TestMap_KillMobGrantsEXP(t *testing.T) {
 
 	// CZ_ACTION_REQUEST action=0x07 (attack) targeting the mob.
 	req := make([]byte, 7)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST())
 	binary.LittleEndian.PutUint32(req[2:], mobGID)
 	req[6] = 0x07
 	if _, err := conn.Write(req); err != nil {
 		t.Fatalf("send CZ_ACTION_REQUEST: %v", err)
 	}
 
-	// ZC_ACTION_RESPONSE (11B): the attack echo.
-	if _, err := io.ReadFull(conn, make([]byte, 11)); err != nil {
-		t.Fatalf("read ZC_ACTION_RESPONSE: %v", err)
+	// The attack echo is the source's ZC_NOTIFY_ACT (34B): the source
+	// broadcasts an action as that packet (src/map/packets.hpp:1413).
+	if _, err := io.ReadFull(conn, make([]byte, ropacket.NotifyActResponse{}.Size())); err != nil {
+		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
 	}
 	// ZC_NOTIFY_VANISH (7B): the dead mob leaves the map.
 	if _, err := io.ReadFull(conn, make([]byte, 7)); err != nil {
@@ -1338,7 +1341,7 @@ func TestMap_KillMobGrantsEXP(t *testing.T) {
 	if _, err := io.ReadFull(conn, exp); err != nil {
 		t.Fatalf("read EXP frames: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(exp[0:2]); got != ropacket.HeaderZCLONGLONGPARCHANGE {
+	if got := binary.LittleEndian.Uint16(exp[0:2]); got != ropacket.HeaderZCLONGLONGPARCHANGE() {
 		t.Errorf("base-exp frame header = 0x%04x, want ZC_LONGLONGPAR_CHANGE (0x0acb)", got)
 	}
 	if got := binary.LittleEndian.Uint16(exp[2:4]); got != ropacket.SPBaseExp {
@@ -1347,7 +1350,7 @@ func TestMap_KillMobGrantsEXP(t *testing.T) {
 	if got := binary.LittleEndian.Uint64(exp[4:12]); got != baseExp {
 		t.Errorf("base-exp amount = %d, want %d", got, baseExp)
 	}
-	if got := binary.LittleEndian.Uint16(exp[12:14]); got != ropacket.HeaderZCLONGLONGPARCHANGE {
+	if got := binary.LittleEndian.Uint16(exp[12:14]); got != ropacket.HeaderZCLONGLONGPARCHANGE() {
 		t.Errorf("job-exp frame header = 0x%04x, want ZC_LONGLONGPAR_CHANGE (0x0acb)", got)
 	}
 	if got := binary.LittleEndian.Uint16(exp[14:16]); got != ropacket.SPJobExp {
@@ -1414,7 +1417,7 @@ func TestMap_Dispatch_CastAttackSkill(t *testing.T) {
 	// CZ_USE_SKILL2 (0x0438, 10B): cmd + int16 skillLv + uint16 skillID + uint32 targetID.
 	const skillID = 5
 	req := make([]byte, 10)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILL)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILL())
 	binary.LittleEndian.PutUint16(req[2:], 1) // skillLv
 	binary.LittleEndian.PutUint16(req[4:], skillID)
 	binary.LittleEndian.PutUint32(req[6:], mobGID)
@@ -1427,8 +1430,8 @@ func TestMap_Dispatch_CastAttackSkill(t *testing.T) {
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		t.Fatalf("read ZC_NOTIFY_SKILL: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCNOTIFYSKILL {
-		t.Fatalf("notify-skill header = 0x%04x, want ZC_NOTIFY_SKILL (0x%04x)", got, ropacket.HeaderZCNOTIFYSKILL)
+	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCNOTIFYSKILL() {
+		t.Fatalf("notify-skill header = 0x%04x, want ZC_NOTIFY_SKILL (0x%04x)", got, ropacket.HeaderZCNOTIFYSKILL())
 	}
 	if got := binary.LittleEndian.Uint16(resp[2:4]); got != skillID {
 		t.Fatalf("notify-skill SKID = %d, want %d", got, skillID)
@@ -1453,7 +1456,7 @@ func TestMap_Dispatch_CastAttackSkill(t *testing.T) {
 func castSkillHit(t *testing.T, c net.Conn, targetGID uint32) int32 {
 	t.Helper()
 	req := make([]byte, 10)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILL)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILL())
 	binary.LittleEndian.PutUint16(req[2:], 1) // skillLv
 	binary.LittleEndian.PutUint16(req[4:], 5) // SM_BASH
 	binary.LittleEndian.PutUint32(req[6:], targetGID)
@@ -1465,8 +1468,8 @@ func castSkillHit(t *testing.T, c net.Conn, targetGID uint32) int32 {
 	if _, err := io.ReadFull(c, resp); err != nil {
 		t.Fatalf("read ZC_NOTIFY_SKILL: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCNOTIFYSKILL {
-		t.Fatalf("notify-skill header = 0x%04x, want ZC_NOTIFY_SKILL (0x%04x)", got, ropacket.HeaderZCNOTIFYSKILL)
+	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCNOTIFYSKILL() {
+		t.Fatalf("notify-skill header = 0x%04x, want ZC_NOTIFY_SKILL (0x%04x)", got, ropacket.HeaderZCNOTIFYSKILL())
 	}
 	return int32(binary.LittleEndian.Uint32(resp[24:28])) //nolint:gosec // G115: damage is a bounded game value
 }
@@ -1511,7 +1514,7 @@ func TestMap_Dispatch_EquipIncreasesDamage(t *testing.T) {
 
 	// 2. Equip the Knife: CZ_REQ_WEAR_EQUIP_V5 (0x0998, index 1, right hand).
 	wear := make([]byte, 8)
-	binary.LittleEndian.PutUint16(wear[0:], ropacket.HeaderCZREQWEAREQUIPV5)
+	binary.LittleEndian.PutUint16(wear[0:], ropacket.HeaderCZREQWEAREQUIPV5())
 	binary.LittleEndian.PutUint16(wear[2:], 2)               // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint32(wear[4:], equip.HandRight) // EQP position
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
@@ -1522,7 +1525,7 @@ func TestMap_Dispatch_EquipIncreasesDamage(t *testing.T) {
 	if _, err := io.ReadFull(conn, ack); err != nil {
 		t.Fatalf("read ZC_REQ_WEAR_EQUIP_ACK_V5: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCREQWEAREQUIPACKV5 {
+	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCREQWEAREQUIPACKV5() {
 		t.Fatalf("wear-ack header = 0x%04x, want ZC_REQ_WEAR_EQUIP_ACK_V5 (0x0999)", got)
 	}
 	if got := binary.LittleEndian.Uint32(ack[4:8]); got != equip.HandRight {
@@ -1582,7 +1585,7 @@ func TestMap_Dispatch_UseItemHeals(t *testing.T) {
 
 	// 3. Send CZ_USE_ITEM2 (0x0439, 8B): cmd + inventory index 1 + AID.
 	useReq := make([]byte, 8)
-	binary.LittleEndian.PutUint16(useReq[0:], ropacket.HeaderCZUSEITEM2)
+	binary.LittleEndian.PutUint16(useReq[0:], ropacket.HeaderCZUSEITEM2())
 	binary.LittleEndian.PutUint16(useReq[2:], 2)       // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint32(useReq[4:], 2000001) // AID
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
@@ -1598,7 +1601,7 @@ func TestMap_Dispatch_UseItemHeals(t *testing.T) {
 		t.Fatalf("read use-item response: %v", err)
 	}
 	// PAR_CHANGE HP: 500 + 45 = 545.
-	if got := binary.LittleEndian.Uint16(out[0:2]); got != ropacket.HeaderZCPARCHANGE {
+	if got := binary.LittleEndian.Uint16(out[0:2]); got != ropacket.HeaderZCPARCHANGE() {
 		t.Fatalf("frame 0 header = 0x%04x, want ZC_PAR_CHANGE", got)
 	}
 	if got := binary.LittleEndian.Uint16(out[2:4]); got != ropacket.SPHP {
@@ -1608,7 +1611,7 @@ func TestMap_Dispatch_UseItemHeals(t *testing.T) {
 		t.Fatalf("HP after potion = %d, want 545", got)
 	}
 	// PAR_CHANGE SP: the potion heals 0 SP, so SP echoes its unchanged value (100).
-	if got := binary.LittleEndian.Uint16(out[8:10]); got != ropacket.HeaderZCPARCHANGE {
+	if got := binary.LittleEndian.Uint16(out[8:10]); got != ropacket.HeaderZCPARCHANGE() {
 		t.Fatalf("frame 1 header = 0x%04x, want ZC_PAR_CHANGE", got)
 	}
 	if got := binary.LittleEndian.Uint16(out[10:12]); got != ropacket.SPSP {
@@ -1620,7 +1623,7 @@ func TestMap_Dispatch_UseItemHeals(t *testing.T) {
 	// ZC_USE_ITEM_ACK2: index=2 (the client index we sent, echoed back verbatim
 	// — rAthena emits client_index(serverRow), clif.cpp:4484), itemID=501,
 	// AID=2000001, amount=0, result=1 (success).
-	if got := binary.LittleEndian.Uint16(out[16:18]); got != ropacket.HeaderZCUSEITEMACK2 {
+	if got := binary.LittleEndian.Uint16(out[16:18]); got != ropacket.HeaderZCUSEITEMACK2() {
 		t.Fatalf("ack header = 0x%04x, want ZC_USE_ITEM_ACK2 (0x01c8)", got)
 	}
 	if got := binary.LittleEndian.Uint16(out[18:20]); got != 2 {
@@ -1679,7 +1682,7 @@ func TestMap_Dispatch_CastGroundSkill(t *testing.T) {
 		castY   = 110
 	)
 	req := make([]byte, 11)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILLTOPOS)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZUSESKILLTOPOS())
 	binary.LittleEndian.PutUint16(req[2:], 1) // skillLv
 	binary.LittleEndian.PutUint16(req[4:], skillID)
 	binary.LittleEndian.PutUint16(req[6:], castX) // xPos
@@ -1695,8 +1698,8 @@ func TestMap_Dispatch_CastGroundSkill(t *testing.T) {
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		t.Fatalf("read ZC_NOTIFY_GROUNDSKILL: %v (handler did not emit the cast visual, or closed the conn)", err)
 	}
-	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCNOTIFYGROUNDSKILL {
-		t.Fatalf("ground-skill header = 0x%04x, want ZC_NOTIFY_GROUNDSKILL (0x%04x)", got, ropacket.HeaderZCNOTIFYGROUNDSKILL)
+	if got := binary.LittleEndian.Uint16(resp[0:2]); got != ropacket.HeaderZCNOTIFYGROUNDSKILL() {
+		t.Fatalf("ground-skill header = 0x%04x, want ZC_NOTIFY_GROUNDSKILL (0x%04x)", got, ropacket.HeaderZCNOTIFYGROUNDSKILL())
 	}
 	if got := binary.LittleEndian.Uint16(resp[2:4]); got != skillID {
 		t.Fatalf("ground-skill SKID = %d, want %d", got, skillID)
@@ -1715,7 +1718,7 @@ func TestMap_Dispatch_CastGroundSkill(t *testing.T) {
 	// and gets its ZC_NOTIFY_PLAYERMOVE reply, proving the handler did not close
 	// or desync the connection.
 	moveReq := make([]byte, 5)
-	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE())
 	moveReq[2] = 55  // dest x
 	moveReq[3] = 111 // dest y
 	moveReq[4] = 0   // dest dir
@@ -1727,8 +1730,8 @@ func TestMap_Dispatch_CastGroundSkill(t *testing.T) {
 	if _, err := io.ReadFull(conn, moveReply); err != nil {
 		t.Fatalf("read player-move reply after ground-skill: %v (conn closed by handler?)", err)
 	}
-	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE {
-		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE)
+	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE() {
+		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE())
 	}
 }
 
@@ -1762,14 +1765,14 @@ func TestMap_Dispatch_PickupFloorItem(t *testing.T) {
 		fi := spawn.DropItem(nameID, 1, "new_1-1", worlddomain.Position{X: 53, Y: 111}, 0)
 		// CZ_ITEM_PICKUP (0x0362, 6B), targeting the dropped GroundID.
 		req := make([]byte, 6)
-		binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZITEMTAKE0362)
+		binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZITEMTAKE0362())
 		binary.LittleEndian.PutUint32(req[2:], fi.GroundID)
 		if _, err := conn.Write(req); err != nil {
 			t.Fatalf("send CZ_ITEM_PICKUP: %v", err)
 		}
 		cmd, frame := nextServerFrame(t, conn, 3*time.Second)
-		if cmd != ropacket.HeaderZCItemPickupAck {
-			t.Fatalf("pickup-ack opcode = 0x%04x, want ZC_ITEM_PICKUP_ACK (0x%04x)", cmd, ropacket.HeaderZCItemPickupAck)
+		if cmd != ropacket.HeaderZCItemPickupAck() {
+			t.Fatalf("pickup-ack opcode = 0x%04x, want ZC_ITEM_PICKUP_ACK (0x%04x)", cmd, ropacket.HeaderZCItemPickupAck())
 		}
 		if len(frame) != 70 {
 			t.Fatalf("pickup-ack length = %d, want 70", len(frame))
@@ -1820,18 +1823,18 @@ func TestMap_Dispatch_DropItem(t *testing.T) {
 	// CZ_ITEM_PICKUP it into the player's inventory (slot 1).
 	seed := spawn.DropItem(512, 3, "new_1-1", worlddomain.Position{X: 53, Y: 111}, 0)
 	pickup := make([]byte, 6)
-	binary.LittleEndian.PutUint16(pickup[0:], ropacket.HeaderCZITEMTAKE0362)
+	binary.LittleEndian.PutUint16(pickup[0:], ropacket.HeaderCZITEMTAKE0362())
 	binary.LittleEndian.PutUint32(pickup[2:], seed.GroundID)
 	if _, err := conn.Write(pickup); err != nil {
 		t.Fatalf("send seed CZ_ITEM_PICKUP: %v", err)
 	}
-	if _, err := io.ReadFull(conn, make([]byte, 70)); err != nil { // sizeZCItemPickupAck
+	if _, err := io.ReadFull(conn, make([]byte, 70)); err != nil { // sizeZCItemPickupAck()
 		t.Fatalf("read seed pickup-ack: %v", err)
 	}
 
 	// CZ_ITEM_DROP (0x0363, 6B): drop 1 unit from inventory slot 1.
 	dropReq := make([]byte, 6)
-	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
+	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363())
 	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint16(dropReq[4:], 1) // amount
 	if _, err := conn.Write(dropReq); err != nil {
@@ -1839,12 +1842,12 @@ func TestMap_Dispatch_DropItem(t *testing.T) {
 	}
 
 	// Expect ZC_ITEM_THROW_ACK (6B, SELF) + ZC_ITEM_FALL_ENTRY (24B).
-	throwAck := make([]byte, 6) // sizeZCItemThrowAck
+	throwAck := make([]byte, 6) // sizeZCItemThrowAck()
 	if _, err := io.ReadFull(conn, throwAck); err != nil {
 		t.Fatalf("read ZC_ITEM_THROW_ACK: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(throwAck[0:2]); got != ropacket.HeaderZCItemThrowAck {
-		t.Fatalf("throw-ack header = 0x%04x, want ZC_ITEM_THROW_ACK (0x%04x)", got, ropacket.HeaderZCItemThrowAck)
+	if got := binary.LittleEndian.Uint16(throwAck[0:2]); got != ropacket.HeaderZCItemThrowAck() {
+		t.Fatalf("throw-ack header = 0x%04x, want ZC_ITEM_THROW_ACK (0x%04x)", got, ropacket.HeaderZCItemThrowAck())
 	}
 	if got := binary.LittleEndian.Uint16(throwAck[2:4]); got != 2 {
 		t.Fatalf("throw-ack index = %d, want 2 (the client index we sent, echoed)", got)
@@ -1852,14 +1855,16 @@ func TestMap_Dispatch_DropItem(t *testing.T) {
 	if got := binary.LittleEndian.Uint16(throwAck[4:6]); got != 1 {
 		t.Fatalf("throw-ack count = %d, want 1", got)
 	}
-	fallEntry := make([]byte, 24) // sizeZCItemFallEntry
+	fallEntry := make([]byte, ropacket.SizeZCItemFallEntry())
 	if _, err := io.ReadFull(conn, fallEntry); err != nil {
 		t.Fatalf("read ZC_ITEM_FALL_ENTRY: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(fallEntry[0:2]); got != ropacket.HeaderZCItemFallEntry {
-		t.Fatalf("fall-entry header = 0x%04x, want ZC_ITEM_FALL_ENTRY (0x%04x)", got, ropacket.HeaderZCItemFallEntry)
+	if got := binary.LittleEndian.Uint16(fallEntry[0:2]); got != ropacket.HeaderZCItemFallEntry() {
+		t.Fatalf("fall-entry header = 0x%04x, want ZC_ITEM_FALL_ENTRY (0x%04x)", got, ropacket.HeaderZCItemFallEntry())
 	}
-	if got := binary.LittleEndian.Uint32(fallEntry[6:10]); got != 512 {
+	// The source's frame is "<id>.L <name id>.W <type>.W ..." (src/map/clif.cpp:864),
+	// so the name id is a uint16 at offset 6.
+	if got := binary.LittleEndian.Uint16(fallEntry[6:8]); got != 512 {
 		t.Fatalf("fall-entry nameID = %d, want 512", got)
 	}
 
@@ -1898,7 +1903,7 @@ func TestMap_Dispatch_DropOutOfRangeKeepsConnection(t *testing.T) {
 	// 2. CZ_ITEM_DROP (0x0363, 6B) against slot 1, which the player does not own
 	//    (no items seeded) → handler logs + returns; no reply, connection kept.
 	dropReq := make([]byte, 6)
-	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
+	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363())
 	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint16(dropReq[4:], 1) // amount
 	if _, err := conn.Write(dropReq); err != nil {
@@ -1908,7 +1913,7 @@ func TestMap_Dispatch_DropOutOfRangeKeepsConnection(t *testing.T) {
 	// 3. CZ_REQUEST_MOVE on the same connection. If the rejected drop had closed
 	//    the socket, this write or the reply read fails with EOF.
 	moveReq := make([]byte, 5)
-	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE())
 	moveReq[2] = 100 // dest x
 	moveReq[3] = 200 // dest y
 	moveReq[4] = 0   // dest dir
@@ -1921,8 +1926,8 @@ func TestMap_Dispatch_DropOutOfRangeKeepsConnection(t *testing.T) {
 	if _, err := io.ReadFull(conn, moveReply); err != nil {
 		t.Fatalf("read player-move reply after rejected drop: %v (conn likely closed)", err)
 	}
-	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE {
-		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE)
+	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE() {
+		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE())
 	}
 }
 
@@ -1954,7 +1959,7 @@ func TestMap_Dispatch_InputEditDlgStrVariableFrameKeepsConnection(t *testing.T) 
 	const value = "goAthena"
 	pktLen := 8 + len(value) + 1 // header(8) + value + NUL
 	strReq := make([]byte, pktLen)
-	binary.LittleEndian.PutUint16(strReq[0:], ropacket.HeaderCZINPUTEDITDLGSTR)
+	binary.LittleEndian.PutUint16(strReq[0:], ropacket.HeaderCZINPUTEDITDLGSTR())
 	binary.LittleEndian.PutUint16(strReq[2:], uint16(pktLen)) //nolint:gosec // G115: bounded by pktLen (<256).
 	binary.LittleEndian.PutUint32(strReq[4:], 0)              // NpcID: no dialog active
 	copy(strReq[8:], value)
@@ -1967,7 +1972,7 @@ func TestMap_Dispatch_InputEditDlgStrVariableFrameKeepsConnection(t *testing.T) 
 	//    been read with the wrong length, its trailing bytes would be parsed as
 	//    this opcode and the reply read would fail or mismatch.
 	moveReq := make([]byte, 5)
-	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE())
 	moveReq[2] = 100 // dest x
 	moveReq[3] = 200 // dest y
 	moveReq[4] = 0   // dest dir
@@ -1980,8 +1985,8 @@ func TestMap_Dispatch_InputEditDlgStrVariableFrameKeepsConnection(t *testing.T) 
 	if _, err := io.ReadFull(conn, moveReply); err != nil {
 		t.Fatalf("read player-move reply after inputstr: %v (conn likely closed / stream desynced)", err)
 	}
-	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE {
-		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x) (variable frame mis-lengthed?)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE)
+	if got := binary.LittleEndian.Uint16(moveReply[0:2]); got != ropacket.HeaderZCNOTIFYPLAYERMOVE() {
+		t.Fatalf("player-move header = 0x%04x, want ZC_NOTIFY_PLAYERMOVE (0x%04x) (variable frame mis-lengthed?)", got, ropacket.HeaderZCNOTIFYPLAYERMOVE())
 	}
 }
 
@@ -2018,13 +2023,13 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	sendCZEnter(t, conn, 2000001, gid, 0x11111111)
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	enterReply := awaitAcceptEnter(t, conn)
-	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER {
-		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER)
+	if got := binary.LittleEndian.Uint16(enterReply[0:2]); got != ropacket.HeaderZCACCEPTENTER() {
+		t.Fatalf("accept-enter header = 0x%04x, want 0x%04x", got, ropacket.HeaderZCACCEPTENTER())
 	}
 
 	// 2. CZ_ACK_SELECT_DEALTYPE (Buy) on the dev shop NPC → ZC_PC_PURCHASE_ITEMLIST.
 	ack := make([]byte, 7)
-	binary.LittleEndian.PutUint16(ack[0:], ropacket.HeaderCZACKSELECTDEALTYPE)
+	binary.LittleEndian.PutUint16(ack[0:], ropacket.HeaderCZACKSELECTDEALTYPE())
 	binary.LittleEndian.PutUint32(ack[2:], shop.DevShopGID)
 	ack[6] = 0 // type = Buy
 	if _, err := conn.Write(ack); err != nil {
@@ -2034,8 +2039,8 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	if _, err := io.ReadFull(conn, hdr); err != nil {
 		t.Fatalf("read purchase-list header: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(hdr[0:2]); got != ropacket.HeaderZCPCPURCHASEITEMLIST {
-		t.Fatalf("purchase-list header = 0x%04x, want ZC_PC_PURCHASE_ITEMLIST (0x%04x)", got, ropacket.HeaderZCPCPURCHASEITEMLIST)
+	if got := binary.LittleEndian.Uint16(hdr[0:2]); got != ropacket.HeaderZCPCPURCHASEITEMLIST() {
+		t.Fatalf("purchase-list header = 0x%04x, want ZC_PC_PURCHASE_ITEMLIST (0x%04x)", got, ropacket.HeaderZCPCPURCHASEITEMLIST())
 	}
 	listLen := int(binary.LittleEndian.Uint16(hdr[2:4]))
 	if listLen < 4 {
@@ -2056,7 +2061,7 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 
 	// 3. CZ_PC_PURCHASE_ITEMLIST: buy 1 Red Potion (variable: cmd + len + entry).
 	pur := make([]byte, 10) // 4 header + 6 (itemId uint32 + amount uint16)
-	binary.LittleEndian.PutUint16(pur[0:], ropacket.HeaderCZPCPURCHASEITEMLIST)
+	binary.LittleEndian.PutUint16(pur[0:], ropacket.HeaderCZPCPURCHASEITEMLIST())
 	binary.LittleEndian.PutUint16(pur[2:], 10)  // packet length
 	binary.LittleEndian.PutUint32(pur[4:], 501) // itemId
 	binary.LittleEndian.PutUint16(pur[8:], 1)   // amount
@@ -2072,8 +2077,8 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 	// desync here. rAthena's order is clif_additem per grant (clif.cpp:2836-2901)
 	// and only then the result byte.
 	addCmd, addFrame := nextServerFrame(t, conn, 3*time.Second)
-	if addCmd != ropacket.HeaderZCItemPickupAck {
-		t.Fatalf("buy frame 1 opcode = 0x%04x, want 0x%04x (ZC_ITEM_PICKUP_ACK) — the grant did not re-sync the bag grid", addCmd, ropacket.HeaderZCItemPickupAck)
+	if addCmd != ropacket.HeaderZCItemPickupAck() {
+		t.Fatalf("buy frame 1 opcode = 0x%04x, want 0x%04x (ZC_ITEM_PICKUP_ACK) — the grant did not re-sync the bag grid", addCmd, ropacket.HeaderZCItemPickupAck())
 	}
 	if len(addFrame) != 70 {
 		t.Fatalf("buy frame 1 length = %d, want 70", len(addFrame))
@@ -2093,8 +2098,8 @@ func TestMap_Dispatch_ShopBuyRoundTrip(t *testing.T) {
 
 	// 3b. ...and only then the purchase result byte.
 	resCmd, resFrame := nextServerFrame(t, conn, 3*time.Second)
-	if resCmd != ropacket.HeaderZCPCPURCHASERESULT {
-		t.Fatalf("buy frame 2 opcode = 0x%04x, want 0x%04x (ZC_PC_PURCHASE_RESULT)", resCmd, ropacket.HeaderZCPCPURCHASERESULT)
+	if resCmd != ropacket.HeaderZCPCPURCHASERESULT() {
+		t.Fatalf("buy frame 2 opcode = 0x%04x, want 0x%04x (ZC_PC_PURCHASE_RESULT)", resCmd, ropacket.HeaderZCPCPURCHASERESULT())
 	}
 	if len(resFrame) != 3 {
 		t.Fatalf("buy frame 2 length = %d, want 3", len(resFrame))
@@ -2167,15 +2172,15 @@ func TestMap_Dispatch_ShopSellRoundTrip(t *testing.T) {
 
 	// 2. CZ_ACK_SELECT_DEALTYPE (Sell) → ZC_PC_SELL_ITEMLIST.
 	ack := make([]byte, 7)
-	binary.LittleEndian.PutUint16(ack[0:], ropacket.HeaderCZACKSELECTDEALTYPE)
+	binary.LittleEndian.PutUint16(ack[0:], ropacket.HeaderCZACKSELECTDEALTYPE())
 	binary.LittleEndian.PutUint32(ack[2:], shop.DevShopGID)
 	ack[6] = 1 // type = Sell
 	if _, err := conn.Write(ack); err != nil {
 		t.Fatalf("send CZ_ACK_SELECT_DEALTYPE: %v", err)
 	}
 	listCmd, listFrame := nextServerFrame(t, conn, 3*time.Second)
-	if listCmd != ropacket.HeaderZCPCSELLITEMLIST {
-		t.Fatalf("sell-list opcode = 0x%04x, want ZC_PC_SELL_ITEMLIST (0x%04x)", listCmd, ropacket.HeaderZCPCSELLITEMLIST)
+	if listCmd != ropacket.HeaderZCPCSELLITEMLIST() {
+		t.Fatalf("sell-list opcode = 0x%04x, want ZC_PC_SELL_ITEMLIST (0x%04x)", listCmd, ropacket.HeaderZCPCSELLITEMLIST())
 	}
 	// The list must offer the seeded row at client index 2 with the shop's
 	// SellPrice (25z); otherwise the sell request below would address a slot the
@@ -2193,7 +2198,7 @@ func TestMap_Dispatch_ShopSellRoundTrip(t *testing.T) {
 	// 3. CZ_PC_SELL_ITEMLIST: sell 1 unit from client index 2 (4 header + one
 	// 4-byte entry: uint16 index + uint16 amount).
 	sell := make([]byte, 8)
-	binary.LittleEndian.PutUint16(sell[0:], ropacket.HeaderCZPCSELLITEMLIST)
+	binary.LittleEndian.PutUint16(sell[0:], ropacket.HeaderCZPCSELLITEMLIST())
 	binary.LittleEndian.PutUint16(sell[2:], 8) // packet length
 	binary.LittleEndian.PutUint16(sell[4:], 2) // client index
 	binary.LittleEndian.PutUint16(sell[6:], 1) // amount
@@ -2205,8 +2210,8 @@ func TestMap_Dispatch_ShopSellRoundTrip(t *testing.T) {
 	// uint16 index + int16 count), deleteType 6 = "Item sold", index echoed from
 	// the request, count = the amount removed.
 	delCmd, delFrame := nextServerFrame(t, conn, 3*time.Second)
-	if delCmd != ropacket.HeaderZCDeleteItemFromBody {
-		t.Fatalf("sell frame 1 opcode = 0x%04x, want 0x%04x (ZC_DELETE_ITEM_FROM_BODY) — the sale did not re-sync the bag grid", delCmd, ropacket.HeaderZCDeleteItemFromBody)
+	if delCmd != ropacket.HeaderZCDeleteItemFromBody() {
+		t.Fatalf("sell frame 1 opcode = 0x%04x, want 0x%04x (ZC_DELETE_ITEM_FROM_BODY) — the sale did not re-sync the bag grid", delCmd, ropacket.HeaderZCDeleteItemFromBody())
 	}
 	if len(delFrame) != 8 {
 		t.Fatalf("sell frame 1 length = %d, want 8", len(delFrame))
@@ -2223,8 +2228,8 @@ func TestMap_Dispatch_ShopSellRoundTrip(t *testing.T) {
 
 	// 3b. ...then the sell result byte.
 	resCmd, resFrame := nextServerFrame(t, conn, 3*time.Second)
-	if resCmd != ropacket.HeaderZCPCSELLRESULT {
-		t.Fatalf("sell frame 2 opcode = 0x%04x, want 0x%04x (ZC_PC_SELL_RESULT)", resCmd, ropacket.HeaderZCPCSELLRESULT)
+	if resCmd != ropacket.HeaderZCPCSELLRESULT() {
+		t.Fatalf("sell frame 2 opcode = 0x%04x, want 0x%04x (ZC_PC_SELL_RESULT)", resCmd, ropacket.HeaderZCPCSELLRESULT())
 	}
 	if len(resFrame) != 3 {
 		t.Fatalf("sell frame 2 length = %d, want 3", len(resFrame))
@@ -2335,7 +2340,7 @@ func sendRaw(t *testing.T, c net.Conn, frame []byte) {
 // desyncs (the appear frame precedes attack/AI frames).
 func drainMobAppearFrame(t *testing.T, c net.Conn) {
 	t.Helper()
-	readTradeFrame(t, c, ropacket.HeaderZCSPAWNUNIT, 107)
+	readTradeFrame(t, c, ropacket.HeaderZCSPAWNUNIT(), 107)
 }
 
 // packMoveDest encodes (x, y) into the kRO 3-byte packed position carried by
@@ -2381,26 +2386,26 @@ func TestMap_Dispatch_TradeItemSwap(t *testing.T) {
 	// Player 1 also receives player 2's spawn (ZC_SPAWN_UNIT): the enter handler
 	// now broadcasts the newcomer to neighbors. Drain it off conn1 so the
 	// subsequent trade frames read cleanly.
-	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107)
+	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT(), 107)
 	// Player 2 (the newcomer) also receives player 1's spawn via the Phase-11
 	// enter-sight back-fill. Drain it off conn2.
-	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT, 107)
+	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT(), 107)
 
 	// 2. Player 1 requests a trade with player 2. Real wire format: the TARGET
 	//    (player 2) gets ZC_REQ_EXCHANGE_ITEM; the requester gets nothing yet.
 	reqFrame := make([]byte, 6)
-	binary.LittleEndian.PutUint16(reqFrame[0:], ropacket.HeaderCZTRADEREQUEST)
+	binary.LittleEndian.PutUint16(reqFrame[0:], ropacket.HeaderCZTRADEREQUEST())
 	binary.LittleEndian.PutUint32(reqFrame[2:], 150002)
 	sendRaw(t, conn1, reqFrame)
-	readTradeFrame(t, conn2, ropacket.HeaderZCREQEXCHANGEITEM, 32)
+	readTradeFrame(t, conn2, ropacket.HeaderZCREQEXCHANGEITEM(), 32)
 
 	// 3. Player 2 accepts (CZ_TRADE_ACK type=3). Both get ZC_ACK_EXCHANGE_ITEM.
 	ackFrame := make([]byte, 3)
-	binary.LittleEndian.PutUint16(ackFrame[0:], ropacket.HeaderCZTRADEACK)
+	binary.LittleEndian.PutUint16(ackFrame[0:], ropacket.HeaderCZTRADEACK())
 	ackFrame[2] = ropacket.CZTradeAckAccept
 	sendRaw(t, conn2, ackFrame)
-	ack1 := readTradeFrame(t, conn1, ropacket.HeaderZCACKEXCHANGEITEM, 9)
-	ack2 := readTradeFrame(t, conn2, ropacket.HeaderZCACKEXCHANGEITEM, 9)
+	ack1 := readTradeFrame(t, conn1, ropacket.HeaderZCACKEXCHANGEITEM(), 9)
+	ack2 := readTradeFrame(t, conn2, ropacket.HeaderZCACKEXCHANGEITEM(), 9)
 	if ack1[2] != ropacket.TradeAckAccept || ack2[2] != ropacket.TradeAckAccept {
 		t.Fatalf("trade ack result = %d/%d, want %d", ack1[2], ack2[2], ropacket.TradeAckAccept)
 	}
@@ -2408,23 +2413,23 @@ func TestMap_Dispatch_TradeItemSwap(t *testing.T) {
 	// 4. Player 1 stages the potion (slot 1, amount 1). Self gets the per-add ack,
 	//    partner gets the staged view.
 	addFrame := make([]byte, 8)
-	binary.LittleEndian.PutUint16(addFrame[0:], ropacket.HeaderCZADDEXCHANGEITEM)
+	binary.LittleEndian.PutUint16(addFrame[0:], ropacket.HeaderCZADDEXCHANGEITEM())
 	binary.LittleEndian.PutUint16(addFrame[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint32(addFrame[4:], 1) // amount
 	sendRaw(t, conn1, addFrame)
-	selfAck := readTradeFrame(t, conn1, ropacket.HeaderZCACKADDEXCHANGEITEM, 5)
+	selfAck := readTradeFrame(t, conn1, ropacket.HeaderZCACKADDEXCHANGEITEM(), 5)
 	if selfAck[4] != ropacket.TradeItemAddSuccess {
 		t.Fatalf("add-item self result = %d, want %d", selfAck[4], ropacket.TradeItemAddSuccess)
 	}
-	readTradeFrame(t, conn2, ropacket.HeaderZCADDEXCHANGEITEM, 62)
+	readTradeFrame(t, conn2, ropacket.HeaderZCADDEXCHANGEITEM(), 62)
 
 	// 5. Player 1 presses OK → both get ZC_CONCLUDE_EXCHANGE_ITEM (Who=0 to p1,
 	//    Who=1 to p2).
 	okFrame := make([]byte, 2)
-	binary.LittleEndian.PutUint16(okFrame[0:], ropacket.HeaderCZTRADEOK)
+	binary.LittleEndian.PutUint16(okFrame[0:], ropacket.HeaderCZTRADEOK())
 	sendRaw(t, conn1, okFrame)
-	conc1a := readTradeFrame(t, conn1, ropacket.HeaderZCCONCLUDEEXCHANGEITEM, 3)
-	conc2a := readTradeFrame(t, conn2, ropacket.HeaderZCCONCLUDEEXCHANGEITEM, 3)
+	conc1a := readTradeFrame(t, conn1, ropacket.HeaderZCCONCLUDEEXCHANGEITEM(), 3)
+	conc2a := readTradeFrame(t, conn2, ropacket.HeaderZCCONCLUDEEXCHANGEITEM(), 3)
 	if conc1a[2] != 0 || conc2a[2] != 1 {
 		t.Fatalf("first OK conclude who = %d/%d, want 0/1", conc1a[2], conc2a[2])
 	}
@@ -2432,8 +2437,8 @@ func TestMap_Dispatch_TradeItemSwap(t *testing.T) {
 	// 6. Player 2 presses OK → both locked → atomic conclude swap. Both get a
 	//    conclude notification; player 2 (the locker) Who=0, player 1 Who=1.
 	sendRaw(t, conn2, okFrame)
-	conc2b := readTradeFrame(t, conn2, ropacket.HeaderZCCONCLUDEEXCHANGEITEM, 3)
-	conc1b := readTradeFrame(t, conn1, ropacket.HeaderZCCONCLUDEEXCHANGEITEM, 3)
+	conc2b := readTradeFrame(t, conn2, ropacket.HeaderZCCONCLUDEEXCHANGEITEM(), 3)
+	conc1b := readTradeFrame(t, conn1, ropacket.HeaderZCCONCLUDEEXCHANGEITEM(), 3)
 	if conc2b[2] != 0 || conc1b[2] != 1 {
 		t.Fatalf("second OK conclude who = %d/%d, want 0/1", conc2b[2], conc1b[2])
 	}
@@ -2496,26 +2501,26 @@ func TestMap_Dispatch_SharedWorld_Visibility(t *testing.T) {
 	awaitAcceptEnter(t, conn1)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
 	awaitAcceptEnter(t, conn2)
-	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107) // A sees B spawn in.
+	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT(), 107) // A sees B spawn in.
 	// B also sees A: the Phase-11 enter-sight back-fill sends one ZC_SPAWN_UNIT
 	// per existing nearby PC to the newcomer's own conn on enter. Drain it before
 	// the move-broadcast read below.
-	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT, 107) // B sees A on enter.
+	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT(), 107) // B sees A on enter.
 
 	// 2. A moves. A's own conn gets the 12-byte self-ack (ZC_NOTIFY_PLAYERMOVE);
 	//    B's conn gets the 114-byte walk broadcast (ZC_UNIT_WALKING) carrying A's
 	//    GID — the core "shared world" win.
 	moveReq := make([]byte, 5)
-	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE())
 	dest := packMoveDest(55, 111) // dest adjacent to B at {54,111}
 	copy(moveReq[2:], dest[:])
 	sendRaw(t, conn1, moveReq)
 
 	// A: self-ack only (0x0087), NOT the walk (0x09fd) — A is the excluded mover.
-	readTradeFrame(t, conn1, ropacket.HeaderZCNOTIFYPLAYERMOVE, 12)
+	readTradeFrame(t, conn1, ropacket.HeaderZCNOTIFYPLAYERMOVE(), 12)
 
 	// B: the walk broadcast with A's GID at offset [9:13].
-	walk := readTradeFrame(t, conn2, ropacket.HeaderZCUNITWALKING, 114)
+	walk := readTradeFrame(t, conn2, ropacket.HeaderZCUNITWALKING(), 114)
 	if got := binary.LittleEndian.Uint32(walk[9:13]); got != 150001 {
 		t.Fatalf("walk broadcast GID = %d, want mover A's GID 150001", got)
 	}
@@ -2523,13 +2528,13 @@ func TestMap_Dispatch_SharedWorld_Visibility(t *testing.T) {
 	// 3. A drops an item. B's conn sees the floor item land (ZC_ITEM_FALL_ENTRY);
 	//    A's own conn gets the throw-ack+fall burst (not asserted here).
 	dropReq := make([]byte, 6)
-	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
+	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363())
 	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint16(dropReq[4:], 1) // amount
 	sendRaw(t, conn1, dropReq)
 
-	drop := readTradeFrame(t, conn2, ropacket.HeaderZCItemFallEntry, 24)
-	if got := binary.LittleEndian.Uint32(drop[6:10]); got != 501 {
+	drop := readTradeFrame(t, conn2, ropacket.HeaderZCItemFallEntry(), ropacket.SizeZCItemFallEntry())
+	if got := binary.LittleEndian.Uint16(drop[6:8]); got != 501 {
 		t.Fatalf("drop broadcast nameID = %d, want Red Potion 501", got)
 	}
 }
@@ -2622,7 +2627,7 @@ func TestMap_KillMobLevelsUp(t *testing.T) {
 	drainMobAppearFrame(t, conn)
 
 	req := make([]byte, 7)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST())
 	binary.LittleEndian.PutUint32(req[2:], mobGID)
 	req[6] = 0x07
 	if _, err := conn.Write(req); err != nil {
@@ -2632,8 +2637,11 @@ func TestMap_KillMobLevelsUp(t *testing.T) {
 	// Drain in order: attack echo, vanish, the level-up burst (6×8B ZC_PAR_CHANGE:
 	// level, maxima, healed vitals, status points — 2 level-ups × 3 points = 6),
 	// then the two EXP frames (12B each).
-	if _, err := io.ReadFull(conn, make([]byte, 11)); err != nil {
-		t.Fatalf("read ZC_ACTION_RESPONSE: %v", err)
+	//
+	// The attack echo is the source's ZC_NOTIFY_ACT (34B): the source
+	// broadcasts an action as that packet (src/map/packets.hpp:1413).
+	if _, err := io.ReadFull(conn, make([]byte, ropacket.NotifyActResponse{}.Size())); err != nil {
+		t.Fatalf("read ZC_NOTIFY_ACT: %v", err)
 	}
 	if _, err := io.ReadFull(conn, make([]byte, 7)); err != nil {
 		t.Fatalf("read ZC_NOTIFY_VANISH: %v", err)
@@ -2703,7 +2711,7 @@ func TestMap_StatusChangeAllocates(t *testing.T) {
 
 	// CZ_STATUS_CHANGE (5B): cmd 0x00bb + SP_STR(13) + amount 1.
 	req := make([]byte, 5)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZSTATUSCHANGE)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZSTATUSCHANGE())
 	binary.LittleEndian.PutUint16(req[2:], ropacket.SPStr)
 	req[4] = 1
 	if _, err := conn.Write(req); err != nil {
@@ -2715,7 +2723,7 @@ func TestMap_StatusChangeAllocates(t *testing.T) {
 	if _, err := io.ReadFull(conn, ack); err != nil {
 		t.Fatalf("read ack: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCSTATUSCHANGEACK {
+	if got := binary.LittleEndian.Uint16(ack[0:2]); got != ropacket.HeaderZCSTATUSCHANGEACK() {
 		t.Fatalf("ack cmd = 0x%04x, want 0x00bc", got)
 	}
 	if got := binary.LittleEndian.Uint16(ack[2:4]); got != ropacket.SPStr {
@@ -2779,30 +2787,30 @@ func TestMap_NeighborSeesPickup(t *testing.T) {
 	awaitAcceptEnter(t, conn1)
 	sendCZEnter(t, conn2, 2000002, 150002, 0x33333333)
 	awaitAcceptEnter(t, conn2)
-	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT, 107)
-	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT, 107)
+	readTradeFrame(t, conn1, ropacket.HeaderZCSPAWNUNIT(), 107)
+	readTradeFrame(t, conn2, ropacket.HeaderZCSPAWNUNIT(), 107)
 
 	// B drops (1 Red Potion) so a floor item exists at B's cell.
 	dropReq := make([]byte, 6)
-	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363)
+	binary.LittleEndian.PutUint16(dropReq[0:], ropacket.HeaderCZDROPITEM0363())
 	binary.LittleEndian.PutUint16(dropReq[2:], 2) // client index (server row 0 + 2)
 	binary.LittleEndian.PutUint16(dropReq[4:], 1)
 	sendRaw(t, conn2, dropReq)
 	// B gets the throw-ack + fall-entry burst; A gets the fall-entry broadcast.
-	readTradeFrame(t, conn2, ropacket.HeaderZCItemThrowAck, 6)
-	fallA := readTradeFrame(t, conn1, ropacket.HeaderZCItemFallEntry, 24)
-	_ = readTradeFrame(t, conn2, ropacket.HeaderZCItemFallEntry, 24)
+	readTradeFrame(t, conn2, ropacket.HeaderZCItemThrowAck(), 6)
+	fallA := readTradeFrame(t, conn1, ropacket.HeaderZCItemFallEntry(), ropacket.SizeZCItemFallEntry())
+	_ = readTradeFrame(t, conn2, ropacket.HeaderZCItemFallEntry(), ropacket.SizeZCItemFallEntry())
 	groundID := binary.LittleEndian.Uint32(fallA[2:6])
 
 	// B picks it up.
 	pick := make([]byte, 6)
-	binary.LittleEndian.PutUint16(pick[0:], ropacket.HeaderCZITEMTAKE0362)
+	binary.LittleEndian.PutUint16(pick[0:], ropacket.HeaderCZITEMTAKE0362())
 	binary.LittleEndian.PutUint32(pick[2:], groundID)
 	sendRaw(t, conn2, pick)
 	// B's own ack.
-	readTradeFrame(t, conn2, ropacket.HeaderZCItemPickupAck, 70)
+	readTradeFrame(t, conn2, ropacket.HeaderZCItemPickupAck(), 70)
 	// A sees the item leave the ground.
-	dis := readTradeFrame(t, conn1, ropacket.HeaderZCItemDisappear, 6)
+	dis := readTradeFrame(t, conn1, ropacket.HeaderZCItemDisappear(), 6)
 	if got := binary.LittleEndian.Uint32(dis[2:6]); got != groundID {
 		t.Fatalf("disappear AID = %d, want %d", got, groundID)
 	}
@@ -2829,7 +2837,7 @@ func TestMap_EnterShowsExistingFloorItems(t *testing.T) {
 	if _, err := io.ReadFull(conn, entry); err != nil {
 		t.Fatalf("read ZC_ITEM_ENTRY: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(entry[0:2]); got != ropacket.HeaderZCItemEntry {
+	if got := binary.LittleEndian.Uint16(entry[0:2]); got != ropacket.HeaderZCItemEntry() {
 		t.Fatalf("entry header = 0x%04x, want 0x009d", got)
 	}
 	if got := binary.LittleEndian.Uint32(entry[2:6]); got != fi.GroundID {
@@ -2841,10 +2849,10 @@ func TestMap_EnterShowsExistingFloorItems(t *testing.T) {
 
 	// And the swept item is actually pickable through the normal verb.
 	pick := make([]byte, 6)
-	binary.LittleEndian.PutUint16(pick[0:], ropacket.HeaderCZITEMTAKE0362)
+	binary.LittleEndian.PutUint16(pick[0:], ropacket.HeaderCZITEMTAKE0362())
 	binary.LittleEndian.PutUint32(pick[2:], fi.GroundID)
 	sendRaw(t, conn, pick)
-	readTradeFrame(t, conn, ropacket.HeaderZCItemPickupAck, 70)
+	readTradeFrame(t, conn, ropacket.HeaderZCItemPickupAck(), 70)
 }
 
 // TestMap_MobRespawnVisible proves the mob-respawn appear broadcast: after a
@@ -2876,13 +2884,13 @@ func TestMap_MobRespawnVisible(t *testing.T) {
 
 	// Killing attack.
 	req := make([]byte, 7)
-	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST)
+	binary.LittleEndian.PutUint16(req[0:], ropacket.HeaderCZACTIONREQUEST())
 	binary.LittleEndian.PutUint32(req[2:], 160050)
 	req[6] = 0x07
 	sendRaw(t, conn, req)
 
-	readTradeFrame(t, conn, ropacket.HeaderZCACTIONRESPONSE, 11)
-	readTradeFrame(t, conn, ropacket.HeaderZCNOTIFYVANISH, 7)
+	readTradeFrame(t, conn, ropacket.HeaderZCNotifyAct(), ropacket.NotifyActResponse{}.Size())
+	readTradeFrame(t, conn, ropacket.HeaderZCNOTIFYVANISH(), 7)
 	// Level-up burst (6x8B) + 2 EXP frames (12B each), as in the EXP test.
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	leftover := make([]byte, 6*8+2*12)
@@ -2892,7 +2900,7 @@ func TestMap_MobRespawnVisible(t *testing.T) {
 
 	// The respawn timer fires within 300ms; the revived mob's ZC_SPAWN_UNIT
 	// (107B) arrives without any mob action or client request.
-	respawn := readTradeFrame(t, conn, ropacket.HeaderZCSPAWNUNIT, 107)
+	respawn := readTradeFrame(t, conn, ropacket.HeaderZCSPAWNUNIT(), 107)
 	if got := binary.LittleEndian.Uint32(respawn[9:13]); got != 160050 {
 		t.Fatalf("respawn spawn-unit GID = %d, want mob GID 160050", got)
 	}
@@ -2928,8 +2936,8 @@ func TestMap_AnnounceReachesClient(t *testing.T) {
 	if _, err := io.ReadFull(conn, head); err != nil {
 		t.Fatalf("read ZC_BROADCAST header: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(head[0:2]); got != ropacket.HeaderZCBROADCAST {
-		t.Fatalf("header = 0x%04x, want 0x%04x (ZC_BROADCAST)", got, ropacket.HeaderZCBROADCAST)
+	if got := binary.LittleEndian.Uint16(head[0:2]); got != ropacket.HeaderZCBROADCAST() {
+		t.Fatalf("header = 0x%04x, want 0x%04x (ZC_BROADCAST)", got, ropacket.HeaderZCBROADCAST())
 	}
 	total := int(binary.LittleEndian.Uint16(head[2:4]))
 	if total < 5 {
@@ -3013,7 +3021,7 @@ func TestMap_AnnounceMapReachesMapOnly(t *testing.T) {
 	if _, err := io.ReadFull(conn, head); err != nil {
 		t.Fatalf("read ZC_BROADCAST header: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(head[0:2]); got != ropacket.HeaderZCBROADCAST {
+	if got := binary.LittleEndian.Uint16(head[0:2]); got != ropacket.HeaderZCBROADCAST() {
 		t.Fatalf("header = 0x%04x, want ZC_BROADCAST", got)
 	}
 }

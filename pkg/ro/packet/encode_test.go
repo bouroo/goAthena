@@ -15,7 +15,7 @@ import (
 func acceptHeaderBytes(loginID1, aid, loginID2, lastIP uint32, lastLogin string, sex uint8, token string) []byte {
 	out := make([]byte, acceptHeaderSize)
 	pos := 0
-	writeLE16(out[pos:], HeaderACACCEPTLOGIN)
+	writeLE16(out[pos:], HeaderACACCEPTLOGIN())
 	pos += 2
 	// packetLength is filled in by the caller (depends on char-server count).
 	pos += 2

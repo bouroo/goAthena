@@ -39,13 +39,13 @@ type RefuseEnterResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 3).
 func (r RefuseEnterResponse) Size() int {
-	return sizeHCRefuseEnter
+	return sizeHCRefuseEnter()
 }
 
 // Encode writes the HC_REFUSE_ENTER packet to w.
 func (r RefuseEnterResponse) Encode(w io.Writer) error {
-	buf := make([]byte, sizeHCRefuseEnter)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderHCREFUSEENTER)
+	buf := make([]byte, sizeHCRefuseEnter())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCREFUSEENTER())
 	buf[2] = r.Error
 
 	if _, err := w.Write(buf); err != nil {
@@ -72,13 +72,13 @@ type RefuseMakeCharResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 3).
 func (r RefuseMakeCharResponse) Size() int {
-	return sizeHCRefuseMakeChar
+	return sizeHCRefuseMakeChar()
 }
 
 // Encode writes the HC_REFUSE_MAKECHAR packet to w.
 func (r RefuseMakeCharResponse) Encode(w io.Writer) error {
-	buf := make([]byte, sizeHCRefuseMakeChar)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderHCREFUSEMAKECHAR)
+	buf := make([]byte, sizeHCRefuseMakeChar())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCREFUSEMAKECHAR())
 	buf[2] = r.Error
 
 	if _, err := w.Write(buf); err != nil {
@@ -101,7 +101,7 @@ type AcceptMakeCharResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 177).
 func (r AcceptMakeCharResponse) Size() int {
-	return sizeHCAcceptMakeChar
+	return sizeHCAcceptMakeChar()
 }
 
 // Encode writes the HC_ACCEPT_MAKECHAR packet to w. Returns a wrapped error
@@ -113,8 +113,8 @@ func (r AcceptMakeCharResponse) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: encode HC_ACCEPT_MAKECHAR: %w", err)
 	}
 
-	buf := make([]byte, sizeHCAcceptMakeChar)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderHCACCEPTMAKECHAR)
+	buf := make([]byte, sizeHCAcceptMakeChar())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCACCEPTMAKECHAR())
 	copy(buf[2:], charBuf[:])
 
 	if _, err := w.Write(buf); err != nil {
@@ -150,7 +150,7 @@ type NotifyZoneServerResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 156).
 func (r NotifyZoneServerResponse) Size() int {
-	return sizeHCNotifyZone
+	return sizeHCNotifyZone()
 }
 
 // Encode writes the HC_NOTIFY_ZONESVR packet to w. Returns a wrapped error
@@ -161,9 +161,9 @@ func (r NotifyZoneServerResponse) Encode(w io.Writer) error {
 		return err
 	}
 
-	buf := make([]byte, sizeHCNotifyZone)
-	// int16 packetType = 0x0ac5 (HeaderHCNOTIFYZONESVR).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderHCNOTIFYZONESVR)
+	buf := make([]byte, sizeHCNotifyZone())
+	// int16 packetType = 0x0ac5 (HeaderHCNOTIFYZONESVR()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCNOTIFYZONESVR())
 	// uint32 CID at offset 2.
 	binary.LittleEndian.PutUint32(buf[2:], r.CID)
 	// char mapname[16] at offset 6 — zero-padded.
@@ -212,7 +212,7 @@ func (r CharDeleteReservedResponse) Size() int { return sizeHCCharDeleteReserved
 // Encode writes HC_DELETE_CHAR3_RESERVED packet w.
 func (r CharDeleteReservedResponse) Encode(w io.Writer) error {
 	buf := make([]byte, sizeHCCharDeleteReserved)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderHCDELETECHAR3RESERVED)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCDELETECHAR3RESERVED())
 	binary.LittleEndian.PutUint32(buf[2:], r.CID)
 	binary.LittleEndian.PutUint32(buf[6:], uint32(r.Result)) //nolint:gosec // wire is int32; r.Result is int32.
 	binary.LittleEndian.PutUint32(buf[10:], r.Date)
@@ -239,7 +239,7 @@ func (r CharDeleteResponse) Size() int { return sizeHCCharDelete }
 // Encode writes HC_DELETE_CHAR3 packet w.
 func (r CharDeleteResponse) Encode(w io.Writer) error {
 	buf := make([]byte, sizeHCCharDelete)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderHCDELETECHAR3)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCDELETECHAR3())
 	binary.LittleEndian.PutUint32(buf[2:], r.CID)
 	binary.LittleEndian.PutUint32(buf[6:], uint32(r.Result)) //nolint:gosec // wire is int32; r.Result is int32.
 	if _, err := w.Write(buf); err != nil {
@@ -264,7 +264,7 @@ func (r CharDeleteCancelResponse) Size() int { return sizeHCCharDeleteCancel }
 // Encode writes HC_DELETE_CHAR3_CANCEL packet w.
 func (r CharDeleteCancelResponse) Encode(w io.Writer) error {
 	buf := make([]byte, sizeHCCharDeleteCancel)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderHCDELETECHAR3CANCEL)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderHCDELETECHAR3CANCEL())
 	binary.LittleEndian.PutUint32(buf[2:], r.CID)
 	binary.LittleEndian.PutUint32(buf[6:], uint32(r.Result)) //nolint:gosec // wire is int32; r.Result is int32.
 	if _, err := w.Write(buf); err != nil {
@@ -314,8 +314,8 @@ func (r AcceptEnterResponse) Encode(w io.Writer) error {
 	buf := make([]byte, r.Size())
 	pos := 0
 
-	// int16 packetType = 0x006b (HeaderHCACCEPTENTER).
-	binary.LittleEndian.PutUint16(buf[pos:], HeaderHCACCEPTENTER)
+	// int16 packetType = 0x006b (HeaderHCACCEPTENTER()).
+	binary.LittleEndian.PutUint16(buf[pos:], HeaderHCACCEPTENTER())
 	pos += 2
 	// int16 packetLength = total wire length (validated by validate).
 	binary.LittleEndian.PutUint16(buf[pos:], uint16(r.Size())) //nolint:gosec // validated by r.validate()

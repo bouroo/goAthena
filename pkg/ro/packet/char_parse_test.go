@@ -13,8 +13,8 @@ func TestParseCHEnter(t *testing.T) {
 	// Known 17-byte frame: cmd 0x0065, AID 0xAAAAAAAA, login_id1 0xBBBBBBBB,
 	// login_id2 0xCCCCCCCC, reserved[14:16] = 0, sex 0x01.
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCHEnter)
-		writeLE16(f[0:], HeaderCHENTER)
+		f := make([]byte, sizeCHEnter())
+		writeLE16(f[0:], HeaderCHENTER())
 		writeLE32(f[2:], 0xAAAAAAAA)
 		writeLE32(f[6:], 0xBBBBBBBB)
 		writeLE32(f[10:], 0xCCCCCCCC)
@@ -42,7 +42,7 @@ func TestParseCHEnter(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCHEnter-1),
+			frame:      make([]byte, sizeCHEnter()-1),
 			wantErr:    true,
 			wantErrSub: "16",
 		},
@@ -55,8 +55,8 @@ func TestParseCHEnter(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCHEnter)
-				writeLE16(f[0:], HeaderCHSELECTCHAR) // 0x0066 instead of 0x0065
+				f := make([]byte, sizeCHEnter())
+				writeLE16(f[0:], HeaderCHSELECTCHAR()) // 0x0066 instead of 0x0065
 				return f
 			}(),
 			wantErr:    true,
@@ -65,8 +65,8 @@ func TestParseCHEnter(t *testing.T) {
 		{
 			name: "oversize frame reports byte count",
 			frame: func() []byte {
-				f := make([]byte, sizeCHEnter+1)
-				writeLE16(f[0:], HeaderCHENTER)
+				f := make([]byte, sizeCHEnter()+1)
+				writeLE16(f[0:], HeaderCHENTER())
 				return f
 			}(),
 			wantErr:    true,
@@ -103,8 +103,8 @@ func TestParseCHSelectChar(t *testing.T) {
 
 	// Known 3-byte frame: cmd 0x0066, slot 0x05.
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCHSelectChar)
-		writeLE16(f[0:], HeaderCHSELECTCHAR)
+		f := make([]byte, sizeCHSelectChar())
+		writeLE16(f[0:], HeaderCHSELECTCHAR())
 		f[2] = 0x05
 		return f
 	}()
@@ -125,8 +125,8 @@ func TestParseCHSelectChar(t *testing.T) {
 		{
 			name: "zero slot",
 			frame: func() []byte {
-				f := make([]byte, sizeCHSelectChar)
-				writeLE16(f[0:], HeaderCHSELECTCHAR)
+				f := make([]byte, sizeCHSelectChar())
+				writeLE16(f[0:], HeaderCHSELECTCHAR())
 				return f
 			}(),
 			wantErr: false,
@@ -134,7 +134,7 @@ func TestParseCHSelectChar(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCHSelectChar-1),
+			frame:      make([]byte, sizeCHSelectChar()-1),
 			wantErr:    true,
 			wantErrSub: "2",
 		},
@@ -147,8 +147,8 @@ func TestParseCHSelectChar(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCHSelectChar)
-				writeLE16(f[0:], HeaderCHENTER) // 0x0065 instead of 0x0066
+				f := make([]byte, sizeCHSelectChar())
+				writeLE16(f[0:], HeaderCHENTER()) // 0x0065 instead of 0x0066
 				return f
 			}(),
 			wantErr:    true,

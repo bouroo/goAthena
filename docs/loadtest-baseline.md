@@ -17,6 +17,19 @@ docker compose up -d goathena   # wait for /readyz :8080, seed per Taskfile
 go run ./cmd/loadgen -conns 2 -rate 2 -duration 15s
 ```
 
+The harness speaks the selected source pack's protocol: `-source` and
+`-variant` (or `LOADGEN_SOURCE` / `LOADGEN_VARIANT`) name the pack and the
+client family, and the harness installs that protocol set before it builds
+its first frame. The defaults are the primary target: `thailand` / `re`.
+
+```sh
+# the Thai fork, the ragexeRE client (the default)
+go run ./cmd/loadgen -conns 10 -rate 2 -duration 15s
+
+# upstream master, the modern client
+go run ./cmd/loadgen -conns 10 -rate 2 -duration 15s -source upstream -variant main
+```
+
 ## Environment
 
 - goAthena @ the commit stamped in handoff §5 (this baseline's code commit)
@@ -40,6 +53,24 @@ go run ./cmd/loadgen -conns 2 -rate 2 -duration 15s
   burst plus ~1/s refill passes, everything above it is silently dropped and
   reported as throttle (a denial is silence by design — no reply, so the
   attack cannot probe the limiter).
+
+### Source-pack matrix (2026-11-08)
+
+The login path was re-verified on every (source pack × client family)
+combination after the protocol layer moved to the source pack's own runtime
+table. Each run: the harness's `-source`/`-variant`, the server's
+`ZONE_CLIENT_SOURCE`/`ZONE_CLIENT_VARIANT`, the limiter at its default
+(5 burst / 1 per s, so a single IP is throttled above that).
+
+| Source pack | Family | Conns × rate | Duration | Success | Refused | Throttle | Errors |
+|---|---|---|---|---|---|---|---|
+| thailand | re | 10 × 2/s | 10s | 14 | 0 | 49 | 0 |
+| thailand | main | 5 × 2/s | 8s | 12 | 0 | 18 | 0 |
+| upstream | re | 5 × 2/s | 8s | 12 | 0 | 17 | 0 |
+
+Zero refused and zero errors on all four: the harness's frame and the
+server's reply agree under every protocol set. The throttle count is the
+limiter doing its job against 10 connections from one IP.
 
 ## What the first baseline run caught (fixed in the same commit)
 

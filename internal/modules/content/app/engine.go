@@ -34,6 +34,9 @@ type Engine struct {
 	world     domain.ScriptWorld
 	inventory domain.ScriptInventory
 	quest     domain.ScriptQuest
+	// storage is the warehouse port behind the `openstorage` builtin. nil
+	// makes the builtin a no-op.
+	storage domain.ScriptStorage
 	// items is the kernel item_db registry the getiteminfo builtin reads. nil
 	// (no item_db loaded) makes every lookup an unknown item.
 	items *itemdb.Registry
@@ -52,6 +55,23 @@ type Engine struct {
 // may be nil: getiteminfo then reports every item as unknown.
 func NewEngine(scripts *script.CompiledScriptSet, npcs domain.NPCStore, world domain.ScriptWorld, inventory domain.ScriptInventory, quest domain.ScriptQuest, items *itemdb.Registry, log *slog.Logger) *Engine {
 	return &Engine{scripts: scripts, npcs: npcs, world: world, inventory: inventory, quest: quest, items: items, log: log, sessions: make(map[uint32]*domain.DialogSession)}
+}
+
+// SetStorage attaches the warehouse port behind the `openstorage` builtin.
+// The gateway calls it right after it builds the MapServer (the gateway owns
+// the player's connection and the storage frames), so the content module never
+// imports the gateway. A nil port leaves the builtin a no-op.
+func (e *Engine) SetStorage(port domain.ScriptStorage) {
+	e.mu.Lock()
+	e.storage = port
+	e.mu.Unlock()
+}
+
+// storagePort returns the warehouse port, nil when none is wired.
+func (e *Engine) storagePort() domain.ScriptStorage {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.storage
 }
 
 // StartDialog resolves the NPC's script, creates a dialog session, and runs the
@@ -75,9 +95,9 @@ func (e *Engine) StartDialog(accountID, charID, npcGID uint32, writer domain.Pac
 		e.log.Debug("content: dialog already active", "accountID", accountID)
 		return
 	}
-	sess := &domain.DialogSession{NpcID: npcGID, CharID: charID, Writer: writer, Signal: make(chan domain.DialogSignal, 1)}
+	sess := &domain.DialogSession{NpcID: npcGID, AccountID: accountID, CharID: charID, Writer: writer, Signal: make(chan domain.DialogSignal, 1)}
 	e.put(accountID, sess)
-	host := &ScriptHost{session: sess, world: e.world, inventory: e.inventory, quest: e.quest, items: e.items, log: e.log}
+	host := &ScriptHost{session: sess, world: e.world, inventory: e.inventory, quest: e.quest, storage: e.storagePort(), items: e.items, log: e.log}
 	// The VM runs scripts reached from the client (NPC clicks, dialog input), so
 	// a panic inside it must cost this one player's dialog — runScript's own
 	// defer still unregisters the session — rather than the process.
@@ -149,7 +169,10 @@ type ScriptHost struct {
 	inventory domain.ScriptInventory
 	quest     domain.ScriptQuest
 	items     *itemdb.Registry
-	log       *slog.Logger
+	// storage is the warehouse port behind the `openstorage` builtin. nil
+	// (no gateway storage wired) makes the builtin a no-op.
+	storage domain.ScriptStorage
+	log     *slog.Logger
 }
 
 // Mes sends a ZC_SAY_DIALOG2 dialog line. Non-blocking.
@@ -397,6 +420,22 @@ func (h *ScriptHost) ItemInfo(item script.Value, info int) script.Value {
 		return script.StrVal(entry.AegisName)
 	}
 	return script.IntVal(entry.Info(info))
+}
+
+// OpenStorage opens the dialog's player's warehouse (kafra storage) — the
+// source's BUILDIN_FUNC(openstorage) (src/map/script.cpp:10958), which calls
+// storage_storageopen on the player running the script. The source opens the
+// warehouse from the NPC script; there is no client request that opens it.
+//
+// The gateway owns the connection and the storage frames, so the burst is
+// emitted through the ScriptStorage port. A nil port (no storage wired) makes
+// the builtin a no-op — the script continues, exactly like the source's
+// "no player -> return" guard.
+func (h *ScriptHost) OpenStorage() {
+	if h.storage == nil {
+		return
+	}
+	h.storage.OpenStorage(h.session.AccountID, h.session.CharID)
 }
 
 // lookupItem resolves a getiteminfo item argument to its item_db entry, or nil

@@ -22,16 +22,16 @@ import (
 
 // charEnterFrameSize is the wire length of CH_ENTER (0x0065): 2 cmd +
 // 4 AID + 4 loginID1 + 4 loginID2 + 2 reserved + 1 sex = 17. Matches
-// pkg/ro/packet sizeCHEnter (unexported there).
+// pkg/ro/packet sizeCHEnter() (unexported there).
 const charEnterFrameSize = 17
 
 // charSelectFrameSize is the wire length of CH_SELECT_CHAR (0x0066):
-// 2 cmd + 1 slot = 3. Matches pkg/ro/packet sizeCHSelectChar.
+// 2 cmd + 1 slot = 3. Matches pkg/ro/packet sizeCHSelectChar().
 const charSelectFrameSize = 3
 
 // charMakeFrameSize is the wire length of CH_MAKE_CHAR (0x0a39):
 // 2 cmd + 24 name + 1 slot + 2 hair_color + 2 hair_style + 4 job + 1 sex = 36.
-// Matches pkg/ro/packet sizeCHMakeChar.
+// Matches pkg/ro/packet sizeCHMakeChar().
 const charMakeFrameSize = 36
 
 // charDeleteReservedFrameSize is the wire length of CH_DELETE_CHAR3_RESERVED
@@ -121,12 +121,12 @@ type charHandler struct {
 // post-auth.
 func charHandlers() map[uint16]charHandler {
 	return map[uint16]charHandler{
-		ropacket.HeaderCHENTER:               {size: charEnterFrameSize, fn: (*CharServer).handleEnter},
-		ropacket.HeaderCHSELECTCHAR:          {size: charSelectFrameSize, fn: (*CharServer).handleSelectChar},
-		ropacket.HeaderCHMAKECHAR:            {size: charMakeFrameSize, fn: (*CharServer).handleMakeChar},
-		ropacket.HeaderCHDELETECHAR3RESERVED: {size: charDeleteReservedFrameSize, fn: (*CharServer).handleDeleteReserved},
-		ropacket.HeaderCHDELETECHAR3:         {size: charDeleteFrameSize, fn: (*CharServer).handleDelete},
-		ropacket.HeaderCHDELETECHAR3CANCEL:   {size: charDeleteCancelFrameSize, fn: (*CharServer).handleDeleteCancel},
+		ropacket.HeaderCHENTER():               {size: charEnterFrameSize, fn: (*CharServer).handleEnter},
+		ropacket.HeaderCHSELECTCHAR():          {size: charSelectFrameSize, fn: (*CharServer).handleSelectChar},
+		ropacket.HeaderCHMAKECHAR():            {size: charMakeFrameSize, fn: (*CharServer).handleMakeChar},
+		ropacket.HeaderCHDELETECHAR3RESERVED(): {size: charDeleteReservedFrameSize, fn: (*CharServer).handleDeleteReserved},
+		ropacket.HeaderCHDELETECHAR3():         {size: charDeleteFrameSize, fn: (*CharServer).handleDelete},
+		ropacket.HeaderCHDELETECHAR3CANCEL():   {size: charDeleteCancelFrameSize, fn: (*CharServer).handleDeleteCancel},
 	}
 }
 

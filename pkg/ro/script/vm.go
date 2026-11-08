@@ -90,6 +90,14 @@ type Host interface {
 	// one string column and answers with a string Value (rAthena's
 	// script_pushstrcopy); every other code yields an integer.
 	ItemInfo(item Value, info int) Value
+
+	// OpenStorage opens the dialog's player's warehouse (kafra storage).
+	// The source opens the warehouse from the NPC script — BUILDIN_FUNC
+	// (openstorage) calls storage_storageopen (src/map/script.cpp:10958),
+	// which sends the two item lists and the item count; there is no client
+	// request that opens the warehouse. The call is a no-op when no storage
+	// is wired (the gateway's storage service is optional), never a panic.
+	OpenStorage()
 }
 
 // control tells the VM how a builtin affected script flow after it returns.

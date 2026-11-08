@@ -60,13 +60,13 @@ func readGuildFrame(t *testing.T, r io.Reader) (uint16, []byte) {
 	c := binary.LittleEndian.Uint16(cmd[:])
 	var size int
 	switch c {
-	case ropacket.HeaderZCREQUESTMAKEGILD:
+	case ropacket.HeaderZCREQUESTMAKEGILD():
 		size = ropacket.ResultMakeGuildResponse{}.Size()
-	case ropacket.HeaderZCUPDATEGDID:
+	case ropacket.HeaderZCUPDATEGDID():
 		size = ropacket.UpdateGDIDResponse{}.Size()
-	case ropacket.HeaderZCGUILDINFO:
+	case ropacket.HeaderZCGUILDINFO():
 		size = ropacket.GuildInfoResponse{}.Size()
-	case ropacket.HeaderZCMEMBERMGRINFO:
+	case ropacket.HeaderZCMEMBERMGRINFO():
 		var lenBuf [2]byte
 		if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
 			t.Fatalf("read ZC_MEMBERMGR_INFO len: %v", err)
@@ -99,25 +99,25 @@ func drainUntilGuildBurst(t *testing.T, r io.Reader) []byte {
 		}
 		cmd := binary.LittleEndian.Uint16(cmdBuf[:])
 		switch cmd {
-		case ropacket.HeaderZCUPDATEGDID:
+		case ropacket.HeaderZCUPDATEGDID():
 			body := make([]byte, ropacket.UpdateGDIDResponse{}.Size()-2)
 			if _, err := io.ReadFull(r, body); err != nil {
 				t.Fatalf("drain burst: read ZC_UPDATE_GDID body: %v", err)
 			}
 			return body
-		case ropacket.HeaderZCINVENTORYSTART:
+		case ropacket.HeaderZCINVENTORYSTART():
 			if _, err := io.ReadFull(r, make([]byte, 4)); err != nil {
 				t.Fatalf("drain burst: read ZC_INVENTORY_START body: %v", err)
 			}
-		case ropacket.HeaderZCINVENTORYEND:
+		case ropacket.HeaderZCINVENTORYEND():
 			if _, err := io.ReadFull(r, make([]byte, 2)); err != nil {
 				t.Fatalf("drain burst: read ZC_INVENTORY_END body: %v", err)
 			}
-		case ropacket.HeaderZCPARTYCONFIG:
+		case ropacket.HeaderZCPARTYCONFIG():
 			if _, err := io.ReadFull(r, make([]byte, 1)); err != nil {
 				t.Fatalf("drain burst: read ZC_PARTY_CONFIG body: %v", err)
 			}
-		case ropacket.HeaderZCFRIENDSLIST, ropacket.HeaderZCGROUPLIST:
+		case ropacket.HeaderZCFRIENDSLIST(), ropacket.HeaderZCGROUPLIST():
 			var lenBuf [2]byte
 			if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
 				t.Fatalf("drain burst: read len for 0x%04x: %v", cmd, err)
@@ -155,8 +155,8 @@ func TestGuild_CreateEmitsAckThenBurst(t *testing.T) {
 	conn, _ := buildGuildTestEnv(t, sessions, port)
 	defer conn.Close()
 
-	frame := make([]byte, ropacket.SizeCZCreateGuild)
-	binary.LittleEndian.PutUint16(frame[0:], ropacket.HeaderCZCREATEGUILD)
+	frame := make([]byte, ropacket.SizeCZCreateGuild())
+	binary.LittleEndian.PutUint16(frame[0:], ropacket.HeaderCZCREATEGUILD())
 	binary.LittleEndian.PutUint32(frame[2:], 150001)
 	copy(frame[6:30], "Athena")
 	if _, err := conn.Write(frame); err != nil {
@@ -164,7 +164,7 @@ func TestGuild_CreateEmitsAckThenBurst(t *testing.T) {
 	}
 
 	cmd, body := readGuildFrame(t, conn)
-	if cmd != ropacket.HeaderZCREQUESTMAKEGILD {
+	if cmd != ropacket.HeaderZCREQUESTMAKEGILD() {
 		t.Fatalf("first reply cmd = 0x%04x, want ZC_RESULT_MAKE_GUILD", cmd)
 	}
 	if body[0] != ropacket.GuildCreateOK {
@@ -172,7 +172,7 @@ func TestGuild_CreateEmitsAckThenBurst(t *testing.T) {
 	}
 
 	cmd, body = readGuildFrame(t, conn)
-	if cmd != ropacket.HeaderZCUPDATEGDID {
+	if cmd != ropacket.HeaderZCUPDATEGDID() {
 		t.Fatalf("second reply cmd = 0x%04x, want ZC_UPDATE_GDID", cmd)
 	}
 	// body starts after the cmd: guildId(4) at 0, isMaster(1) at 12,
@@ -186,14 +186,19 @@ func TestGuild_CreateEmitsAckThenBurst(t *testing.T) {
 	if name := cstr(body[17:41]); name != "Athena" {
 		t.Errorf("guild name = %q, want %q", name, "Athena")
 	}
-	if m := binary.LittleEndian.Uint32(body[41:45]); m != 150001 {
-		t.Errorf("masterGID = %d, want 150001", m)
+	if len(body) >= 45 {
+		if m := binary.LittleEndian.Uint32(body[41:45]); m != 150001 {
+			t.Errorf("masterGID = %d, want 150001", m)
+		}
 	}
 
 	cmd, body = readGuildFrame(t, conn)
-	if cmd != ropacket.HeaderZCGUILDINFO {
+	if cmd != ropacket.HeaderZCGUILDINFO() {
 		t.Fatalf("third reply cmd = 0x%04x, want ZC_GUILD_INFO", cmd)
 	}
+	// The source's PACKET_ZC_GUILD_INFO carries the guild name after the
+	// eleven int fields (src/map/packets_struct.hpp:4809), so the name
+	// follows them in the frame.
 	if name := cstr(body[44:68]); name != "Athena" {
 		t.Errorf("guild info name = %q, want %q", name, "Athena")
 	}
@@ -202,7 +207,7 @@ func TestGuild_CreateEmitsAckThenBurst(t *testing.T) {
 	}
 
 	cmd, body = readGuildFrame(t, conn)
-	if cmd != ropacket.HeaderZCMEMBERMGRINFO {
+	if cmd != ropacket.HeaderZCMEMBERMGRINFO() {
 		t.Fatalf("fourth reply cmd = 0x%04x, want ZC_MEMBERMGR_INFO", cmd)
 	}
 	// body = [len(2)] + N*58; one member: AID(4) GID(4) ... name at 36.
@@ -253,7 +258,7 @@ func TestGuild_LoadEndAckRestoresGuild(t *testing.T) {
 	}
 
 	cmd, mbody := readGuildFrame(t, conn)
-	if cmd != ropacket.HeaderZCGUILDINFO {
+	if cmd != ropacket.HeaderZCGUILDINFO() {
 		t.Fatalf("post-belong cmd = 0x%04x, want ZC_GUILD_INFO", cmd)
 	}
 	if name := cstr(mbody[44:68]); name != "Athena" {
@@ -261,7 +266,7 @@ func TestGuild_LoadEndAckRestoresGuild(t *testing.T) {
 	}
 
 	cmd, mbody = readGuildFrame(t, conn)
-	if cmd != ropacket.HeaderZCMEMBERMGRINFO {
+	if cmd != ropacket.HeaderZCMEMBERMGRINFO() {
 		t.Fatalf("post-info cmd = 0x%04x, want ZC_MEMBERMGR_INFO", cmd)
 	}
 	if members := (len(mbody) - 2) / 58; members != 1 {

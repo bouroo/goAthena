@@ -80,7 +80,7 @@ func startCharListener(t *testing.T, port int, sessions *charinfra.MemorySession
 func sendCHEnter(t *testing.T, c net.Conn, aid, id1, id2 uint32, sex uint8) {
 	t.Helper()
 	buf := make([]byte, 17)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHENTER)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHENTER())
 	binary.LittleEndian.PutUint32(buf[2:], aid)
 	binary.LittleEndian.PutUint32(buf[6:], id1)
 	binary.LittleEndian.PutUint32(buf[10:], id2)
@@ -100,7 +100,7 @@ func drainAcceptEnter(t *testing.T, c net.Conn) {
 	if _, err := io.ReadFull(c, hdr); err != nil {
 		t.Fatalf("read accept-enter header: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(hdr); got != ropacket.HeaderHCACCEPTENTER {
+	if got := binary.LittleEndian.Uint16(hdr); got != ropacket.HeaderHCACCEPTENTER() {
 		t.Fatalf("want HC_ACCEPT_ENTER before next packet, got 0x%04x", got)
 	}
 	n := int(binary.LittleEndian.Uint16(hdr[2:4]))
@@ -126,7 +126,7 @@ func drainAcceptEnter(t *testing.T, c net.Conn) {
 func sendCHMakeChar(t *testing.T, c net.Conn, name string, slot, sex uint8) {
 	t.Helper()
 	buf := make([]byte, 36)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHMAKECHAR)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHMAKECHAR())
 	copy(buf[2:26], name) // remainder stays zero-padded
 	buf[26] = slot
 	buf[35] = sex
@@ -140,7 +140,7 @@ func sendCHMakeChar(t *testing.T, c net.Conn, name string, slot, sex uint8) {
 func sendCHSelectChar(t *testing.T, c net.Conn, slot uint8) {
 	t.Helper()
 	buf := make([]byte, 3)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHSELECTCHAR)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHSELECTCHAR())
 	buf[2] = slot
 	c.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := c.Write(buf); err != nil {
@@ -167,8 +167,8 @@ func TestChar_AcceptEnterOverTCP(t *testing.T) {
 		t.Fatalf("read reply header: %v", err)
 	}
 	got := binary.LittleEndian.Uint16(hdr)
-	if got != ropacket.HeaderHCACCEPTENTER {
-		t.Fatalf("response header = 0x%04x, want HC_ACCEPT_ENTER (0x%04x)", got, ropacket.HeaderHCACCEPTENTER)
+	if got != ropacket.HeaderHCACCEPTENTER() {
+		t.Fatalf("response header = 0x%04x, want HC_ACCEPT_ENTER (0x%04x)", got, ropacket.HeaderHCACCEPTENTER())
 	}
 }
 
@@ -192,8 +192,8 @@ func TestChar_RefuseEnterBadSessionOverTCP(t *testing.T) {
 		t.Fatalf("read reply header: %v", err)
 	}
 	got := binary.LittleEndian.Uint16(hdr)
-	if got != ropacket.HeaderHCREFUSEENTER {
-		t.Fatalf("response header = 0x%04x, want HC_REFUSE_ENTER (0x%04x)", got, ropacket.HeaderHCREFUSEENTER)
+	if got != ropacket.HeaderHCREFUSEENTER() {
+		t.Fatalf("response header = 0x%04x, want HC_REFUSE_ENTER (0x%04x)", got, ropacket.HeaderHCREFUSEENTER())
 	}
 }
 
@@ -219,8 +219,8 @@ func TestChar_MakeCharAcceptOverTCP(t *testing.T) {
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		t.Fatalf("read accept-makechar: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCACCEPTMAKECHAR {
-		t.Fatalf("response header = 0x%04x, want HC_ACCEPT_MAKECHAR (0x%04x)", got, ropacket.HeaderHCACCEPTMAKECHAR)
+	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCACCEPTMAKECHAR() {
+		t.Fatalf("response header = 0x%04x, want HC_ACCEPT_MAKECHAR (0x%04x)", got, ropacket.HeaderHCACCEPTMAKECHAR())
 	}
 	// CHARACTER_INFO.name[24] begins at offset 108; preceded by the 2-byte cmd.
 	const nameOff = 2 + 108
@@ -251,8 +251,8 @@ func TestChar_MakeCharRefuseNameTakenOverTCP(t *testing.T) {
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		t.Fatalf("read refuse-makechar: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCREFUSEMAKECHAR {
-		t.Fatalf("response header = 0x%04x, want HC_REFUSE_MAKECHAR (0x%04x)", got, ropacket.HeaderHCREFUSEMAKECHAR)
+	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCREFUSEMAKECHAR() {
+		t.Fatalf("response header = 0x%04x, want HC_REFUSE_MAKECHAR (0x%04x)", got, ropacket.HeaderHCREFUSEMAKECHAR())
 	}
 	if resp[2] != 0x00 {
 		t.Fatalf("refuse error = 0x%02x, want 0x00 (charname already exists)", resp[2])
@@ -282,8 +282,8 @@ func TestChar_SelectCharNotifyZoneOverTCP(t *testing.T) {
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		t.Fatalf("read notify-zone: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCNOTIFYZONESVR {
-		t.Fatalf("response header = 0x%04x, want HC_NOTIFY_ZONESVR (0x%04x)", got, ropacket.HeaderHCNOTIFYZONESVR)
+	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCNOTIFYZONESVR() {
+		t.Fatalf("response header = 0x%04x, want HC_NOTIFY_ZONESVR (0x%04x)", got, ropacket.HeaderHCNOTIFYZONESVR())
 	}
 	// mapName[16] begins at offset 6.
 	if got := string(resp[6 : 6+7]); got != "new_1-1" {
@@ -303,7 +303,7 @@ func sendCHDeleteReserved(t *testing.T, conn net.Conn, cid uint32) {
 	t.Helper()
 	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 6)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHDELETECHAR3RESERVED)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHDELETECHAR3RESERVED())
 	binary.LittleEndian.PutUint32(buf[2:], cid)
 	if _, err := conn.Write(buf); err != nil {
 		t.Fatalf("write CH_DELETE_CHAR3_RESERVED: %v", err)
@@ -319,8 +319,8 @@ func readHCDeleteReserved(t *testing.T, conn net.Conn) (cid uint32, result int32
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		t.Fatalf("read HC_DELETE_CHAR3_RESERVED: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCDELETECHAR3RESERVED {
-		t.Fatalf("response header = 0x%04x, want HC_DELETE_CHAR3_RESERVED (0x%04x)", got, ropacket.HeaderHCDELETECHAR3RESERVED)
+	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCDELETECHAR3RESERVED() {
+		t.Fatalf("response header = 0x%04x, want HC_DELETE_CHAR3_RESERVED (0x%04x)", got, ropacket.HeaderHCDELETECHAR3RESERVED())
 	}
 	return binary.LittleEndian.Uint32(resp[2:6]),
 		int32(binary.LittleEndian.Uint32(resp[6:10])),
@@ -335,7 +335,7 @@ func sendCHDelete(t *testing.T, conn net.Conn, cid uint32, birthdate []byte) {
 		t.Fatalf("birthdate must be 6 bytes, got %d", len(birthdate))
 	}
 	buf := make([]byte, 12)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHDELETECHAR3)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHDELETECHAR3())
 	binary.LittleEndian.PutUint32(buf[2:], cid)
 	copy(buf[6:], birthdate)
 	if _, err := conn.Write(buf); err != nil {
@@ -352,8 +352,8 @@ func readHCDelete(t *testing.T, conn net.Conn) (cid uint32, result int32) {
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		t.Fatalf("read HC_DELETE_CHAR3: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCDELETECHAR3 {
-		t.Fatalf("response header = 0x%04x, want HC_DELETE_CHAR3 (0x%04x)", got, ropacket.HeaderHCDELETECHAR3)
+	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCDELETECHAR3() {
+		t.Fatalf("response header = 0x%04x, want HC_DELETE_CHAR3 (0x%04x)", got, ropacket.HeaderHCDELETECHAR3())
 	}
 	return binary.LittleEndian.Uint32(resp[2:6]),
 		int32(binary.LittleEndian.Uint32(resp[6:10]))
@@ -364,7 +364,7 @@ func sendCHDeleteCancel(t *testing.T, conn net.Conn, cid uint32) {
 	t.Helper()
 	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 6)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHDELETECHAR3CANCEL)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCHDELETECHAR3CANCEL())
 	binary.LittleEndian.PutUint32(buf[2:], cid)
 	if _, err := conn.Write(buf); err != nil {
 		t.Fatalf("write CH_DELETE_CHAR3_CANCEL: %v", err)
@@ -380,8 +380,8 @@ func readHCDeleteCancel(t *testing.T, conn net.Conn) (cid uint32, result int32) 
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		t.Fatalf("read HC_DELETE_CHAR3_CANCEL: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCDELETECHAR3CANCEL {
-		t.Fatalf("response header = 0x%04x, want HC_DELETE_CHAR3_CANCEL (0x%04x)", got, ropacket.HeaderHCDELETECHAR3CANCEL)
+	if got := binary.LittleEndian.Uint16(resp); got != ropacket.HeaderHCDELETECHAR3CANCEL() {
+		t.Fatalf("response header = 0x%04x, want HC_DELETE_CHAR3_CANCEL (0x%04x)", got, ropacket.HeaderHCDELETECHAR3CANCEL())
 	}
 	return binary.LittleEndian.Uint32(resp[2:6]),
 		int32(binary.LittleEndian.Uint32(resp[6:10]))
@@ -400,7 +400,7 @@ func drainAcceptEnterUntilCharCount(t *testing.T, conn net.Conn, n int) (chars [
 		if _, err := io.ReadFull(conn, hdr); err != nil {
 			t.Fatalf("read HC_ACCEPT_ENTER header: %v", err)
 		}
-		if got := binary.LittleEndian.Uint16(hdr); got != ropacket.HeaderHCACCEPTENTER {
+		if got := binary.LittleEndian.Uint16(hdr); got != ropacket.HeaderHCACCEPTENTER() {
 			t.Fatalf("want HC_ACCEPT_ENTER, got 0x%04x", got)
 		}
 		pktLen := int(binary.LittleEndian.Uint16(hdr[2:4]))
@@ -559,7 +559,7 @@ func TestCharDeleteFlow_Accept_CorrectBirthdate(t *testing.T) {
 	if _, err := io.ReadFull(conn2, hdr); err != nil {
 		t.Fatalf("read HC_ACCEPT_ENTER: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(hdr); got != ropacket.HeaderHCACCEPTENTER {
+	if got := binary.LittleEndian.Uint16(hdr); got != ropacket.HeaderHCACCEPTENTER() {
 		t.Fatalf("want HC_ACCEPT_ENTER, got 0x%04x", got)
 	}
 	pktLen := int(binary.LittleEndian.Uint16(hdr[2:4]))
@@ -630,7 +630,7 @@ func TestCharDeleteFlow_Cancel(t *testing.T) {
 	if _, err := io.ReadFull(conn3, hdr); err != nil {
 		t.Fatalf("read HC_ACCEPT_ENTER: %v", err)
 	}
-	if got := binary.LittleEndian.Uint16(hdr); got != ropacket.HeaderHCACCEPTENTER {
+	if got := binary.LittleEndian.Uint16(hdr); got != ropacket.HeaderHCACCEPTENTER() {
 		t.Fatalf("want HC_ACCEPT_ENTER, got 0x%04x", got)
 	}
 	pktLen := int(binary.LittleEndian.Uint16(hdr[2:4]))

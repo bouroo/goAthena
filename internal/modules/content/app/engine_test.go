@@ -147,8 +147,8 @@ func TestScriptHost_Warp(t *testing.T) {
 		t.Fatalf("frames = %d, want 1 (ZC_NPCACK_MAPMOVE)", len(w.frames))
 	}
 	fr := w.frames[0]
-	if got := binary.LittleEndian.Uint16(fr[0:]); got != ropacket.HeaderZCNPCACKMAPMOVE {
-		t.Errorf("header = %#x, want %#x", got, ropacket.HeaderZCNPCACKMAPMOVE)
+	if got := binary.LittleEndian.Uint16(fr[0:]); got != ropacket.HeaderZCNPCACKMAPMOVE() {
+		t.Errorf("header = %#x, want %#x", got, ropacket.HeaderZCNPCACKMAPMOVE())
 	}
 	if got := strings.TrimRight(string(fr[2:18]), "\x00"); got != "prontera" { // map name zero-padded in a 16-byte slot
 		t.Errorf("map name = %q, want %q", got, "prontera")
@@ -185,8 +185,8 @@ func TestScriptHost_WarpRemoteZoneRedirects(t *testing.T) {
 		t.Fatalf("frames = %d, want 1 (ZC_NPCACK_SERVERMOVE)", len(w.frames))
 	}
 	fr := w.frames[0]
-	if got := binary.LittleEndian.Uint16(fr[0:]); got != ropacket.HeaderZCNPCACKSERVERMOVE {
-		t.Errorf("header = %#x, want %#x", got, ropacket.HeaderZCNPCACKSERVERMOVE)
+	if got := binary.LittleEndian.Uint16(fr[0:]); got != ropacket.HeaderZCNPCACKSERVERMOVE() {
+		t.Errorf("header = %#x, want %#x", got, ropacket.HeaderZCNPCACKSERVERMOVE())
 	}
 	if len(fr) != 156 {
 		t.Errorf("frame len = %d, want 156", len(fr))
@@ -241,8 +241,8 @@ func TestScriptHost_PercentHeal(t *testing.T) {
 		t.Fatalf("frames = %d, want 1 (HP+SP ZC_PAR_CHANGE)", len(w.frames))
 	}
 	fr := w.frames[0] // two 8-byte ParChange packets concatenated
-	if binary.LittleEndian.Uint16(fr[0:]) != ropacket.HeaderZCPARCHANGE {
-		t.Errorf("hp packet header = %#x, want %#x", binary.LittleEndian.Uint16(fr[0:]), ropacket.HeaderZCPARCHANGE)
+	if binary.LittleEndian.Uint16(fr[0:]) != ropacket.HeaderZCPARCHANGE() {
+		t.Errorf("hp packet header = %#x, want %#x", binary.LittleEndian.Uint16(fr[0:]), ropacket.HeaderZCPARCHANGE())
 	}
 	if got := binary.LittleEndian.Uint16(fr[2:]); got != ropacket.SPHP {
 		t.Errorf("hp varID = %d, want SP_HP(%d)", got, ropacket.SPHP)
@@ -312,10 +312,10 @@ func TestScriptHost_CompiledWarpHealScript(t *testing.T) {
 	if len(w.frames) != 2 {
 		t.Fatalf("frames = %d, want 2 (heal then warp)", len(w.frames))
 	}
-	if got := binary.LittleEndian.Uint16(w.frames[0][0:]); got != ropacket.HeaderZCPARCHANGE {
+	if got := binary.LittleEndian.Uint16(w.frames[0][0:]); got != ropacket.HeaderZCPARCHANGE() {
 		t.Errorf("frame 0 header = %#x, want ZC_PAR_CHANGE", got)
 	}
-	if got := binary.LittleEndian.Uint16(w.frames[1][0:]); got != ropacket.HeaderZCNPCACKMAPMOVE {
+	if got := binary.LittleEndian.Uint16(w.frames[1][0:]); got != ropacket.HeaderZCNPCACKMAPMOVE() {
 		t.Errorf("frame 1 header = %#x, want ZC_NPCACK_MAPMOVE", got)
 	}
 }
@@ -339,7 +339,7 @@ func TestScriptHost_InputStr(t *testing.T) {
 	if len(w.frames) != 1 {
 		t.Fatalf("frames = %d, want 1 (ZC_OPEN_EDITDLGSTR)", len(w.frames))
 	}
-	if got := binary.LittleEndian.Uint16(w.frames[0][0:]); got != ropacket.HeaderZCOPENEDITDLGSTR {
+	if got := binary.LittleEndian.Uint16(w.frames[0][0:]); got != ropacket.HeaderZCOPENEDITDLGSTR() {
 		t.Errorf("frame 0 header = %#x, want ZC_OPEN_EDITDLGSTR", got)
 	}
 }
@@ -375,7 +375,7 @@ func TestScriptHost_Input(t *testing.T) {
 	if len(w.frames) != 1 {
 		t.Fatalf("frames = %d, want 1 (ZC_OPEN_EDITDLG)", len(w.frames))
 	}
-	if got := binary.LittleEndian.Uint16(w.frames[0][0:]); got != ropacket.HeaderZCOPENEDITDLG {
+	if got := binary.LittleEndian.Uint16(w.frames[0][0:]); got != ropacket.HeaderZCOPENEDITDLG() {
 		t.Errorf("frame 0 header = %#x, want ZC_OPEN_EDITDLG", got)
 	}
 }
@@ -497,4 +497,45 @@ func TestScriptHost_ItemInfo_NilRegistry(t *testing.T) {
 	if got := h.ItemInfo(script.IntVal(1101), itemdb.InfoBuy); got.Int != -1 {
 		t.Errorf("Info with nil registry = %+v, want -1", got)
 	}
+}
+
+// fakeScriptStorage records the `openstorage` calls the ScriptHost forwards to
+// the gateway's storage action.
+type fakeScriptStorage struct {
+	calls []storageCall
+}
+
+type storageCall struct {
+	accountID uint32
+	charID    uint32
+}
+
+func (f *fakeScriptStorage) OpenStorage(accountID, charID uint32) {
+	f.calls = append(f.calls, storageCall{accountID, charID})
+}
+
+// TestScriptHost_OpenStorage proves the content module's ScriptHost reaches
+// the gateway's warehouse action through the ScriptStorage port, carrying both
+// ids (the warehouse is account-scoped; the connection is per char).
+func TestScriptHost_OpenStorage(t *testing.T) {
+	st := &fakeScriptStorage{}
+	w := &captureWriter{}
+	sess := &domain.DialogSession{AccountID: 2000001, CharID: 150001, Writer: w, Signal: make(chan domain.DialogSignal, 1)}
+	h := &ScriptHost{session: sess, storage: st, log: slog.Default()}
+
+	h.OpenStorage()
+
+	if len(st.calls) != 1 {
+		t.Fatalf("OpenStorage calls = %d, want 1", len(st.calls))
+	}
+	if st.calls[0].accountID != 2000001 || st.calls[0].charID != 150001 {
+		t.Errorf("call = %+v, want {2000001 150001}", st.calls[0])
+	}
+}
+
+// TestScriptHost_OpenStorageNoPort proves the nil-port path is a no-op rather
+// than a panic: the gateway's storage service is optional.
+func TestScriptHost_OpenStorageNoPort(t *testing.T) {
+	h, _ := newTestHost(nil, 150001)
+	h.OpenStorage() // must not panic
 }

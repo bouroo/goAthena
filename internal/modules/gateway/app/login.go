@@ -23,7 +23,7 @@ import (
 
 // loginFrameSize is the wire length of a CA_LOGIN packet (0x0064): 2 cmd +
 // 4 version + 24 userid + 24 pass + 1 clienttype. Matches pkg/ro/packet
-// sizeCALogin (kept unexported there).
+// sizeCALogin() (kept unexported there).
 const loginFrameSize = 55
 
 // rAthena AC_REFUSE_LOGIN result codes (loginclif.cpp comment block).
@@ -92,7 +92,7 @@ func (s *LoginServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
 			defer closeOnPanic(s.log, "login.handleLogin", c)
 			// One span per login attempt, so a Grafana panel can show an
 			// authentication spike (see docs/security-audit.md F-08).
-			fctx, span := traces.Frame(context.Background(), "CA_LOGIN", ropacket.HeaderCALOGIN)
+			fctx, span := traces.Frame(context.Background(), "CA_LOGIN", ropacket.HeaderCALOGIN())
 			defer span.End(nil)
 			s.handleLogin(fctx, c, cp, ip)
 		}()

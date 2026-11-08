@@ -8,63 +8,117 @@ package packet
 // (a legacy pre-2017 form and a modern PACKETVER >= 20170315 form).
 // Both are registered so the gateway can parse either client variant
 // and encode either server variant.
-const (
-	// C→S — client → login server.
-	HeaderCACONNECTINFOCHANGED uint16 = 0x0200
-	HeaderCAEXEHASHCHECK       uint16 = 0x0204
-	HeaderCAREQHASH            uint16 = 0x01db
-	HeaderCALOGIN              uint16 = 0x0064
-	HeaderCALOGIN2             uint16 = 0x01dd
-	HeaderCALOGIN3             uint16 = 0x01fa
-	HeaderCALOGIN4             uint16 = 0x027c
-	HeaderCALOGINPCBANG        uint16 = 0x0277
-	HeaderCALOGINCHANNEL       uint16 = 0x02b0
-	HeaderCASSOLOGINREQ        uint16 = 0x0825
-	HeaderCTAUTH               uint16 = 0x0acf
 
-	// S→C — login server → client.
-	HeaderSCNOTIFYBAN      uint16 = 0x0081
-	HeaderACACKHASH        uint16 = 0x01dc
-	HeaderACACCEPTLOGINOld uint16 = 0x0069
-	HeaderACACCEPTLOGIN    uint16 = 0x0ac4
-	HeaderACREFUSELOGINOld uint16 = 0x006a
-	HeaderACREFUSELOGIN    uint16 = 0x083e
-)
+// C→S — client → login server.
+// HeaderCACONNECTINFOCHANGED is the source pack's own opcode for this packet.
+func HeaderCACONNECTINFOCHANGED() uint16 { return opcode("CA_CONNECT_INFO_CHANGED") }
+
+// HeaderCAEXEHASHCHECK is the source pack's own opcode for this packet.
+func HeaderCAEXEHASHCHECK() uint16 { return opcode("CA_EXE_HASHCHECK") }
+
+// HeaderCAREQHASH is the source pack's own opcode for this packet.
+func HeaderCAREQHASH() uint16 { return opcode("CA_REQ_HASH") }
+
+// HeaderCALOGIN is the source pack's own opcode for this packet.
+func HeaderCALOGIN() uint16 { return opcode("CA_LOGIN") }
+
+// HeaderCALOGIN2 is the source pack's own opcode for this packet.
+func HeaderCALOGIN2() uint16 { return opcode("CA_LOGIN2") }
+
+// HeaderCALOGIN3 is the source pack's own opcode for this packet.
+func HeaderCALOGIN3() uint16 { return opcode("CA_LOGIN3") }
+
+// HeaderCALOGIN4 is the source pack's own opcode for this packet.
+func HeaderCALOGIN4() uint16 { return opcode("CA_LOGIN4") }
+
+// HeaderCALOGINPCBANG is the source pack's own opcode for this packet.
+func HeaderCALOGINPCBANG() uint16 { return opcode("CA_LOGIN_PCBANG") }
+
+// HeaderCALOGINCHANNEL is the source pack's own opcode for this packet.
+func HeaderCALOGINCHANNEL() uint16 { return opcode("CA_LOGIN_CHANNEL") }
+
+// HeaderCASSOLOGINREQ is the source pack's own opcode for this packet.
+func HeaderCASSOLOGINREQ() uint16 { return opcode("CA_SSO_LOGIN_REQ") }
+
+// HeaderCTAUTH is the source pack's own opcode for this packet.
+func HeaderCTAUTH() uint16 { return opcode("CT_AUTH") }
+
+// S→C — login server → client.
+// HeaderSCNOTIFYBAN is the source pack's own opcode for this packet.
+func HeaderSCNOTIFYBAN() uint16 { return opcode("SC_NOTIFY_BAN") }
+
+// HeaderACACKHASH is the source pack's own opcode for this packet.
+func HeaderACACKHASH() uint16 { return opcode("AC_ACK_HASH") }
+
+// HeaderACACCEPTLOGINOld is the source pack's own opcode for this packet.
+func HeaderACACCEPTLOGINOld() uint16 { return opcode("owner_dead") }
+
+// HeaderACACCEPTLOGIN is the source pack's own opcode for this packet.
+func HeaderACACCEPTLOGIN() uint16 { return opcode("AC_ACCEPT_LOGIN") }
+
+// HeaderACREFUSELOGINOld is the source pack's own opcode for this packet.
+func HeaderACREFUSELOGINOld() uint16 { return opcode("CZ_ENTER2") }
+
+// HeaderACREFUSELOGIN is the source pack's own opcode for this packet.
+func HeaderACREFUSELOGIN() uint16 { return opcode("AC_REFUSE_LOGIN") }
 
 // Fixed on-wire byte lengths derived from the packed struct layouts in
 // rathena/src/common/packets.hpp. Constants used:
 //
 //	NAME_LENGTH         = 24  (mmo.hpp:154)
 //	WEB_AUTH_TOKEN_LENGTH = 17 (mmo.hpp:121)
-const (
-	// sizeCAConnectInfoChanged = sizeof(int16) + NAME_LENGTH = 2 + 24 = 26.
-	sizeCAConnectInfoChanged = 26
-	// sizeCAExeHashcheck = sizeof(int16) + hash[16] = 2 + 16 = 18.
-	sizeCAExeHashcheck = 18
-	// sizeCAReqHash = sizeof(int16) = 2.
-	sizeCAReqHash = 2
-	// sizeCALogin = sizeof(int16) + version(4) + username(24) + password(24) + clienttype(1) = 55.
-	sizeCALogin = 55
-	// sizeCALoginPCBang = int16 + version(4) + username(24) + password(24) + clienttype(1) + ip(16) + mac(13) = 84.
-	sizeCALoginPCBang = 84
-	// sizeCALoginChannel = int16 + version(4) + username(24) + password(24) + clienttype(1) + ip(16) + mac(13) + is_gravity(1) = 85.
-	sizeCALoginChannel = 85
-	// sizeCALogin2 = int16 + version(4) + username(24) + passwordMD5(16) + clienttype(1) = 47.
-	sizeCALogin2 = 47
-	// sizeCALogin3 = sizeCALogin2 + clientinfo(1) = 48.
-	sizeCALogin3 = 48
-	// sizeCALogin4 = int16 + version(4) + username(24) + passwordMD5(16) + clienttype(1) + mac(13) = 60.
-	sizeCALogin4 = 60
-	// sizeCTAuth = int16 + unknown[66] = 68.
-	sizeCTAuth = 68
 
-	// sizeSCNotifyBan = int16 + result(1) = 3.
-	sizeSCNotifyBan = 3
-	// sizeACRefuseLoginOld = int16 + error(1) + unblock_time[20] = 23.
-	sizeACRefuseLoginOld = 23
-	// sizeACRefuseLogin = int16 + error(4) + unblock_time[20] = 26.
-	sizeACRefuseLogin = 26
-)
+// sizeCAConnectInfoChanged() = sizeof(int16) + NAME_LENGTH = 2 + 24 = 26.
+// sizeCAConnectInfoChanged is the source pack's own length for this packet.
+func sizeCAConnectInfoChanged() int { return packetLengthOf(512) }
+
+// sizeCAExeHashcheck() = sizeof(int16) + hash[16] = 2 + 16 = 18.
+// sizeCAExeHashcheck is the source pack's own length for this packet.
+func sizeCAExeHashcheck() int { return packetLengthOf(516) }
+
+// sizeCAReqHash() = sizeof(int16) = 2.
+// sizeCAReqHash is the source pack's own length for this packet.
+func sizeCAReqHash() int { return packetLengthOf(475) }
+
+// sizeCALogin() = sizeof(int16) + version(4) + username(24) + password(24) + clienttype(1) = 55.
+// sizeCALogin is the source pack's own length for this packet.
+func sizeCALogin() int { return packetLengthOf(100) }
+
+// sizeCALoginPCBang() = int16 + version(4) + username(24) + password(24) + clienttype(1) + ip(16) + mac(13) = 84.
+// sizeCALoginPCBang is the source pack's own length for this packet.
+func sizeCALoginPCBang() int { return packetLengthOf(631) }
+
+// sizeCALoginChannel() = int16 + version(4) + username(24) + password(24) + clienttype(1) + ip(16) + mac(13) + is_gravity(1) = 85.
+// sizeCALoginChannel is the source pack's own length for this packet.
+func sizeCALoginChannel() int { return packetLengthOf(688) }
+
+// sizeCALogin2() = int16 + version(4) + username(24) + passwordMD5(16) + clienttype(1) = 47.
+// sizeCALogin2 is the source pack's own length for this packet.
+func sizeCALogin2() int { return packetLengthOf(477) }
+
+// sizeCALogin3() = sizeCALogin2() + clientinfo(1) = 48.
+// sizeCALogin3 is the source pack's own length for this packet.
+func sizeCALogin3() int { return packetLengthOf(506) }
+
+// sizeCALogin4() = int16 + version(4) + username(24) + passwordMD5(16) + clienttype(1) + mac(13) = 60.
+// sizeCALogin4 is the source pack's own length for this packet.
+func sizeCALogin4() int { return packetLengthOf(636) }
+
+// sizeCTAuth() = int16 + unknown[66] = 68.
+// sizeCTAuth is the source pack's own length for this packet.
+func sizeCTAuth() int { return layout("PACKET_CT_AUTH") }
+
+// sizeSCNotifyBan() = int16 + result(1) = 3.
+// sizeSCNotifyBan is the source pack's own length for this packet.
+func sizeSCNotifyBan() int { return layout("PACKET_SC_NOTIFY_BAN") }
+
+// sizeACRefuseLoginOld() = int16 + error(1) + unblock_time[20] = 23.
+// sizeACRefuseLoginOld is the source pack's own length for this packet.
+func sizeACRefuseLoginOld() int { return packetLengthOf(106) }
+
+// sizeACRefuseLogin() = int16 + error(4) + unblock_time[20] = 26.
+// sizeACRefuseLogin is the source pack's own length for this packet.
+func sizeACRefuseLogin() int { return layout("PACKET_AC_REFUSE_LOGIN") }
 
 // NewLoginServerDB returns a packet database pre-populated with all known
 // login-server packet definitions (both directions).
@@ -88,69 +142,69 @@ func NewLoginServerDB() *DB {
 
 	// --- C→S: mirrors rathena/src/login/loginclif.cpp:483-498 verbatim.
 	db.Register(Definition{
-		ID:        HeaderCACONNECTINFOCHANGED,
+		ID:        HeaderCACONNECTINFOCHANGED(),
 		Name:      "CA_CONNECT_INFO_CHANGED",
-		Length:    sizeCAConnectInfoChanged,
+		Length:    sizeCAConnectInfoChanged(),
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCAEXEHASHCHECK,
+		ID:        HeaderCAEXEHASHCHECK(),
 		Name:      "CA_EXE_HASHCHECK",
-		Length:    sizeCAExeHashcheck,
+		Length:    sizeCAExeHashcheck(),
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCALOGIN,
+		ID:        HeaderCALOGIN(),
 		Name:      "CA_LOGIN",
-		Length:    sizeCALogin,
+		Length:    sizeCALogin(),
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCALOGINPCBANG,
+		ID:        HeaderCALOGINPCBANG(),
 		Name:      "CA_LOGIN_PCBANG",
-		Length:    sizeCALoginPCBang,
+		Length:    sizeCALoginPCBang(),
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCALOGINCHANNEL,
+		ID:        HeaderCALOGINCHANNEL(),
 		Name:      "CA_LOGIN_CHANNEL",
-		Length:    sizeCALoginChannel,
+		Length:    sizeCALoginChannel(),
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCALOGIN2,
+		ID:        HeaderCALOGIN2(),
 		Name:      "CA_LOGIN2",
-		Length:    sizeCALogin2,
+		Length:    sizeCALogin2(),
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCALOGIN3,
+		ID:        HeaderCALOGIN3(),
 		Name:      "CA_LOGIN3",
-		Length:    sizeCALogin3,
+		Length:    sizeCALogin3(),
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCALOGIN4,
+		ID:        HeaderCALOGIN4(),
 		Name:      "CA_LOGIN4",
-		Length:    sizeCALogin4,
+		Length:    sizeCALogin4(),
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCASSOLOGINREQ,
+		ID:        HeaderCASSOLOGINREQ(),
 		Name:      "CA_SSO_LOGIN_REQ",
 		Length:    VariableLength,
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCAREQHASH,
+		ID:        HeaderCAREQHASH(),
 		Name:      "CA_REQ_HASH",
-		Length:    sizeCAReqHash,
+		Length:    sizeCAReqHash(),
 		Direction: DirectionClientToServer,
 	})
 	db.Register(Definition{
-		ID:        HeaderCTAUTH,
+		ID:        HeaderCTAUTH(),
 		Name:      "CT_AUTH",
-		Length:    sizeCTAuth,
+		Length:    sizeCTAuth(),
 		Direction: DirectionClientToServer,
 	})
 
@@ -158,13 +212,13 @@ func NewLoginServerDB() *DB {
 	// LoginPacketDatabase but constructed inline (loginclif.cpp sends these
 	// with socket_send).
 	db.Register(Definition{
-		ID:        HeaderSCNOTIFYBAN,
+		ID:        HeaderSCNOTIFYBAN(),
 		Name:      "SC_NOTIFY_BAN",
-		Length:    sizeSCNotifyBan,
+		Length:    sizeSCNotifyBan(),
 		Direction: DirectionServerToClient,
 	})
 	db.Register(Definition{
-		ID:        HeaderACACKHASH,
+		ID:        HeaderACACKHASH(),
 		Name:      "AC_ACK_HASH",
 		Length:    VariableLength,
 		Direction: DirectionServerToClient,
@@ -173,7 +227,7 @@ func NewLoginServerDB() *DB {
 	// int16 packetLength + login_id1..sex + PACKET_AC_ACCEPT_LOGIN_sub[]
 	// trailing flexible array → variable length.
 	db.Register(Definition{
-		ID:        HeaderACACCEPTLOGINOld,
+		ID:        HeaderACACCEPTLOGINOld(),
 		Name:      "AC_ACCEPT_LOGIN_OLD",
 		Length:    VariableLength,
 		Direction: DirectionServerToClient,
@@ -182,21 +236,21 @@ func NewLoginServerDB() *DB {
 	// adds token[WEB_AUTH_TOKEN_LENGTH] before the char_servers[] flexible
 	// array → variable length.
 	db.Register(Definition{
-		ID:        HeaderACACCEPTLOGIN,
+		ID:        HeaderACACCEPTLOGIN(),
 		Name:      "AC_ACCEPT_LOGIN",
 		Length:    VariableLength,
 		Direction: DirectionServerToClient,
 	})
 	db.Register(Definition{
-		ID:        HeaderACREFUSELOGINOld,
+		ID:        HeaderACREFUSELOGINOld(),
 		Name:      "AC_REFUSE_LOGIN_OLD",
-		Length:    sizeACRefuseLoginOld,
+		Length:    sizeACRefuseLoginOld(),
 		Direction: DirectionServerToClient,
 	})
 	db.Register(Definition{
-		ID:        HeaderACREFUSELOGIN,
+		ID:        HeaderACREFUSELOGIN(),
 		Name:      "AC_REFUSE_LOGIN",
-		Length:    sizeACRefuseLogin,
+		Length:    sizeACRefuseLogin(),
 		Direction: DirectionServerToClient,
 	})
 

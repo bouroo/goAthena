@@ -18,8 +18,8 @@ func TestParseCZAckSelectDealType(t *testing.T) {
 	t.Parallel()
 
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZAckSelectDealtype)
-		writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE)
+		f := make([]byte, sizeCZAckSelectDealtype())
+		writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE())
 		writeLE32(f[2:], 0x068E36C2) // 110000002 = rAthena START_NPC_NUM + 2
 		f[6] = 0x00                  // type=Buy
 		return f
@@ -41,8 +41,8 @@ func TestParseCZAckSelectDealType(t *testing.T) {
 		{
 			name: "valid type=Sell",
 			frame: func() []byte {
-				f := make([]byte, sizeCZAckSelectDealtype)
-				writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE)
+				f := make([]byte, sizeCZAckSelectDealtype())
+				writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE())
 				writeLE32(f[2:], 0x068E36C2)
 				f[6] = 0x01
 				return f
@@ -53,8 +53,8 @@ func TestParseCZAckSelectDealType(t *testing.T) {
 		{
 			name: "valid type=Cancel",
 			frame: func() []byte {
-				f := make([]byte, sizeCZAckSelectDealtype)
-				writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE)
+				f := make([]byte, sizeCZAckSelectDealtype())
+				writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE())
 				writeLE32(f[2:], 0x068E36C2)
 				f[6] = 0x02
 				return f
@@ -64,7 +64,7 @@ func TestParseCZAckSelectDealType(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZAckSelectDealtype-1),
+			frame:      make([]byte, sizeCZAckSelectDealtype()-1),
 			wantErr:    true,
 			wantErrSub: "6",
 		},
@@ -77,8 +77,8 @@ func TestParseCZAckSelectDealType(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZAckSelectDealtype)
-				writeLE16(f[0:], HeaderCZCONTACTNPC)
+				f := make([]byte, sizeCZAckSelectDealtype())
+				writeLE16(f[0:], HeaderCZCONTACTNPC())
 				return f
 			}(),
 			wantErr:    true,
@@ -113,8 +113,8 @@ func TestParseCZAckSelectDealType(t *testing.T) {
 func TestParseCZAckSelectDealType_AcceptsTrailingBytes(t *testing.T) {
 	t.Parallel()
 
-	base := make([]byte, sizeCZAckSelectDealtype)
-	writeLE16(base[0:], HeaderCZACKSELECTDEALTYPE)
+	base := make([]byte, sizeCZAckSelectDealtype())
+	writeLE16(base[0:], HeaderCZACKSELECTDEALTYPE())
 	writeLE32(base[2:], 0x068E36C2)
 	base[6] = 0x00
 	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
@@ -136,7 +136,7 @@ func TestParseCZPCPurchaseItemList(t *testing.T) {
 	// amount=10.
 	oneItem := func() []byte {
 		f := make([]byte, 4+sizeShopBuyEntry)
-		writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST)
+		writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST())
 		writeLE16(f[2:], 4+sizeShopBuyEntry)
 		writeLE32(f[4:], 501)
 		writeLE16(f[8:], 10)
@@ -147,7 +147,7 @@ func TestParseCZPCPurchaseItemList(t *testing.T) {
 	// then 502 x20.
 	twoItems := func() []byte {
 		f := make([]byte, 4+2*sizeShopBuyEntry)
-		writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST)
+		writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST())
 		writeLE16(f[2:], 4+2*sizeShopBuyEntry)
 		writeLE32(f[4:], 501)
 		writeLE16(f[8:], 10)
@@ -159,7 +159,7 @@ func TestParseCZPCPurchaseItemList(t *testing.T) {
 	// Empty list: 4-byte header, packetLength=4, no entries.
 	empty := func() []byte {
 		f := make([]byte, 4)
-		writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST)
+		writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST())
 		writeLE16(f[2:], 4)
 		return f
 	}()
@@ -212,7 +212,7 @@ func TestParseCZPCPurchaseItemList(t *testing.T) {
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
 				f := make([]byte, 4+sizeShopBuyEntry)
-				writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE)
+				writeLE16(f[0:], HeaderCZACKSELECTDEALTYPE())
 				return f
 			}(),
 			wantErr:    true,
@@ -224,7 +224,7 @@ func TestParseCZPCPurchaseItemList(t *testing.T) {
 				// 4-byte header + 1 stray byte (5 bytes total) — not a
 				// whole multiple of 6.
 				f := make([]byte, 5)
-				writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST)
+				writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST())
 				return f
 			}(),
 			wantErr:    true,
@@ -269,7 +269,7 @@ func TestParseCZPCPurchaseItemList_AcceptsTrailingBytes(t *testing.T) {
 	// for the parser since (13 - 4) % 6 != 0 — test that the parser
 	// flags misalignment rather than dropping the tail silently).
 	base := make([]byte, 4+sizeShopBuyEntry)
-	writeLE16(base[0:], HeaderCZPCPURCHASEITEMLIST)
+	writeLE16(base[0:], HeaderCZPCPURCHASEITEMLIST())
 	writeLE16(base[2:], 4+sizeShopBuyEntry)
 	writeLE32(base[4:], 501)
 	writeLE16(base[8:], 10)
@@ -300,9 +300,9 @@ func TestParseCZPCSellItemList(t *testing.T) {
 
 	// One entry: cmd 0x00c9, packetLength=4+4=8, index=5, amount=3.
 	oneEntry := func() []byte {
-		f := make([]byte, 4+sizeCZPCSellItemListEntry)
-		writeLE16(f[0:], HeaderCZPCSELLITEMLIST)
-		writeLE16(f[2:], 4+sizeCZPCSellItemListEntry)
+		f := make([]byte, 4+sizeCZPCSellItemListEntry())
+		writeLE16(f[0:], HeaderCZPCSELLITEMLIST())
+		writeLE16(f[2:], uint16(4+sizeCZPCSellItemListEntry())) //nolint:gosec // the length is a two-byte field.
 		writeLE16(f[4:], 5)
 		writeLE16(f[6:], 3)
 		return f
@@ -310,9 +310,9 @@ func TestParseCZPCSellItemList(t *testing.T) {
 
 	// Two entries: cmd 0x00c9, packetLength=4+8=12.
 	twoEntries := func() []byte {
-		f := make([]byte, 4+2*sizeCZPCSellItemListEntry)
-		writeLE16(f[0:], HeaderCZPCSELLITEMLIST)
-		writeLE16(f[2:], 4+2*sizeCZPCSellItemListEntry)
+		f := make([]byte, 4+2*sizeCZPCSellItemListEntry())
+		writeLE16(f[0:], HeaderCZPCSELLITEMLIST())
+		writeLE16(f[2:], uint16(4+2*sizeCZPCSellItemListEntry())) //nolint:gosec // the length is a two-byte field.
 		writeLE16(f[4:], 5)
 		writeLE16(f[6:], 3)
 		writeLE16(f[8:], 11)
@@ -323,7 +323,7 @@ func TestParseCZPCSellItemList(t *testing.T) {
 	// Empty list: 4-byte header, packetLength=4, no entries.
 	empty := func() []byte {
 		f := make([]byte, 4)
-		writeLE16(f[0:], HeaderCZPCSELLITEMLIST)
+		writeLE16(f[0:], HeaderCZPCSELLITEMLIST())
 		writeLE16(f[2:], 4)
 		return f
 	}()
@@ -375,8 +375,8 @@ func TestParseCZPCSellItemList(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, 4+sizeCZPCSellItemListEntry)
-				writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST)
+				f := make([]byte, 4+sizeCZPCSellItemListEntry())
+				writeLE16(f[0:], HeaderCZPCPURCHASEITEMLIST())
 				return f
 			}(),
 			wantErr:    true,
@@ -388,7 +388,7 @@ func TestParseCZPCSellItemList(t *testing.T) {
 				// 4-byte header + 1 stray byte (5 bytes total) — not a
 				// whole multiple of 4.
 				f := make([]byte, 5)
-				writeLE16(f[0:], HeaderCZPCSELLITEMLIST)
+				writeLE16(f[0:], HeaderCZPCSELLITEMLIST())
 				return f
 			}(),
 			wantErr:    true,
@@ -458,8 +458,8 @@ func TestParseCZEnter(t *testing.T) {
 	// Known 19-byte frame: cmd 0x0072, AID 0xAAAAAAAA, CID 0xBBBBBBBB,
 	// authCode 0xCCCCCCCC, clientTime 0xDDDDDDDD, sex 0x01.
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZEnter)
-		writeLE16(f[0:], HeaderCZENTER)
+		f := make([]byte, sizeCZEnter())
+		writeLE16(f[0:], HeaderCZENTER())
 		writeLE32(f[2:], 0xAAAAAAAA)
 		writeLE32(f[6:], 0xBBBBBBBB)
 		writeLE32(f[10:], 0xCCCCCCCC)
@@ -489,7 +489,7 @@ func TestParseCZEnter(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZEnter-1),
+			frame:      make([]byte, sizeCZEnter()-1),
 			wantErr:    true,
 			wantErrSub: "18",
 		},
@@ -502,8 +502,8 @@ func TestParseCZEnter(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZEnter)
-				writeLE16(f[0:], HeaderCZREQUESTMOVE) // 0x0085 instead of 0x0072
+				f := make([]byte, sizeCZEnter())
+				writeLE16(f[0:], HeaderCZREQUESTMOVE()) // 0x0085 instead of 0x0072
 				return f
 			}(),
 			wantErr:    true,
@@ -541,8 +541,8 @@ func TestParseCZEnter_AcceptsTrailingBytes(t *testing.T) {
 	// The parser allows trailing bytes after the fixed 19-byte header so
 	// the gateway can hand in a buffered frame without first stripping the
 	// tail.
-	base := make([]byte, sizeCZEnter)
-	writeLE16(base[0:], HeaderCZENTER)
+	base := make([]byte, sizeCZEnter())
+	writeLE16(base[0:], HeaderCZENTER())
 	writeLE32(base[2:], 0x01020304)
 	writeLE32(base[6:], 0x05060708)
 	writeLE32(base[10:], 0x090A0B0C)
@@ -571,8 +571,8 @@ func TestParseCZRequestMove(t *testing.T) {
 
 	// Known 5-byte frame: cmd 0x0085, dest = encodePos(150, 200) = [37, 140, 131].
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZRequestMove)
-		writeLE16(f[0:], HeaderCZREQUESTMOVE)
+		f := make([]byte, sizeCZRequestMove())
+		writeLE16(f[0:], HeaderCZREQUESTMOVE())
 		var pos [3]byte
 		encodePos(pos[:], 150, 200, 0)
 		copy(f[2:], pos[:])
@@ -597,7 +597,7 @@ func TestParseCZRequestMove(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZRequestMove-1),
+			frame:      make([]byte, sizeCZRequestMove()-1),
 			wantErr:    true,
 			wantErrSub: "4",
 		},
@@ -610,8 +610,8 @@ func TestParseCZRequestMove(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZRequestMove)
-				writeLE16(f[0:], HeaderCZENTER) // 0x0072 instead of 0x0085
+				f := make([]byte, sizeCZRequestMove())
+				writeLE16(f[0:], HeaderCZENTER()) // 0x0072 instead of 0x0085
 				return f
 			}(),
 			wantErr:    true,
@@ -620,8 +620,8 @@ func TestParseCZRequestMove(t *testing.T) {
 		{
 			name: "dest at origin decodes to 0,0",
 			frame: func() []byte {
-				f := make([]byte, sizeCZRequestMove)
-				writeLE16(f[0:], HeaderCZREQUESTMOVE)
+				f := make([]byte, sizeCZRequestMove())
+				writeLE16(f[0:], HeaderCZREQUESTMOVE())
 				return f
 			}(),
 			wantErr: false,
@@ -661,8 +661,8 @@ func TestParseCZRequestTime(t *testing.T) {
 
 	// Known 6-byte frame: cmd 0x007e, clientTick = 0xDEADBEEF.
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZRequestTime)
-		writeLE16(f[0:], HeaderCZREQUESTTIME)
+		f := make([]byte, sizeCZRequestTime())
+		writeLE16(f[0:], HeaderCZREQUESTTIME())
 		writeLE32(f[2:], 0xDEADBEEF)
 		return f
 	}()
@@ -684,7 +684,7 @@ func TestParseCZRequestTime(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZRequestTime-1),
+			frame:      make([]byte, sizeCZRequestTime()-1),
 			wantErr:    true,
 			wantErrSub: "5",
 		},
@@ -697,8 +697,8 @@ func TestParseCZRequestTime(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZRequestTime)
-				writeLE16(f[0:], HeaderCZENTER) // 0x0072 instead of 0x007e
+				f := make([]byte, sizeCZRequestTime())
+				writeLE16(f[0:], HeaderCZENTER()) // 0x0072 instead of 0x007e
 				return f
 			}(),
 			wantErr:    true,
@@ -730,6 +730,17 @@ func TestParseCZRequestTime(t *testing.T) {
 	}
 }
 
+// globalFrame builds a CZ_GLOBAL_MESSAGE frame of the given length, with
+// the opcode the installed source pack resolves.
+func globalFrame(length int) []byte {
+	f := make([]byte, length)
+	writeLE16(f[0:], HeaderCZGLOBALMESSAGE())
+	if length >= 4 {
+		writeLE16(f[2:], uint16(length))
+	}
+	return f
+}
+
 func TestParseCZGlobalMessage(t *testing.T) {
 	t.Parallel()
 
@@ -737,7 +748,12 @@ func TestParseCZGlobalMessage(t *testing.T) {
 	// in correctly (7) so callers that also decode the length slot get
 	// the expected value.
 	goodFrame := func() []byte {
-		f := []byte{0x8c, 0x00, 0x07, 0x00, 'h', 'i', 0x00}
+		f := make([]byte, 7)
+		writeLE16(f[0:], HeaderCZGLOBALMESSAGE())
+		writeLE16(f[2:], 7)
+		f[4] = 'h'
+		f[5] = 'i'
+		f[6] = 0x00
 		return f
 	}()
 
@@ -765,7 +781,7 @@ func TestParseCZGlobalMessage(t *testing.T) {
 		},
 		{
 			name:       "empty body returns error",
-			frame:      []byte{0x8c, 0x00, 0x04, 0x00},
+			frame:      globalFrame(4),
 			wantErr:    true,
 			wantErrSub: "empty message",
 		},
@@ -785,7 +801,7 @@ func TestParseCZGlobalMessage(t *testing.T) {
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
 				f := make([]byte, 6)
-				writeLE16(f[0:], HeaderCZACTIONREQUEST) // 0x0089 instead of 0x008c
+				writeLE16(f[0:], HeaderCZACTIONREQUEST()) // 0x0089 instead of 0x008c
 				return f
 			}(),
 			wantErr:    true,
@@ -793,28 +809,38 @@ func TestParseCZGlobalMessage(t *testing.T) {
 		},
 		{
 			name: "body without NUL terminator decodes to full body",
-			frame: []byte{
-				0x8c, 0x00, 0x07, 0x00,
-				'h', 'e', 'l',
-			},
+			frame: func() []byte {
+				f := globalFrame(7)
+				f[4] = 'h'
+				f[5] = 'e'
+				f[6] = 'l'
+				return f
+			}(),
 			wantErr: false,
 			want:    CZGlobalMessageRequest{Message: "hel"},
 		},
 		{
 			name: "packetLength smaller than header reports too-short length",
-			frame: []byte{
-				0x8c, 0x00, 0x03, 0x00,
-				'h', 'i', 0x00,
-			},
+			frame: func() []byte {
+				f := globalFrame(6)
+				writeLE16(f[2:], 3)
+				f[4] = 'h'
+				f[5] = 'i'
+				return f
+			}(),
 			wantErr:    true,
 			wantErrSub: "packet length 3 too short",
 		},
 		{
 			name: "packetLength larger than frame reports frame/len mismatch",
-			frame: []byte{
-				0x8c, 0x00, 0x10, 0x00,
-				'h', 'i', 0x00,
-			},
+			frame: func() []byte {
+				f := globalFrame(7)
+				writeLE16(f[2:], 0x10)
+				f[4] = 'h'
+				f[5] = 'i'
+				f[6] = 0x00
+				return f
+			}(),
 			wantErr:    true,
 			wantErrSub: "frame length 7 shorter than packet length 16",
 		},
@@ -823,11 +849,13 @@ func TestParseCZGlobalMessage(t *testing.T) {
 			// Header says 7 bytes; the trailing 0xAA 0xBB belong to a
 			// subsequent buffered packet and must not leak into the
 			// parsed message body.
-			frame: []byte{
-				0x8c, 0x00, 0x07, 0x00,
-				'h', 'i', 0x00,
-				0xAA, 0xBB,
-			},
+			frame: func() []byte {
+				f := globalFrame(7)
+				f[4] = 'h'
+				f[5] = 'i'
+				f[6] = 0x00
+				return append(f, 0xAA, 0xBB)
+			}(),
 			wantErr: false,
 			want:    CZGlobalMessageRequest{Message: "hi"},
 		},
@@ -871,7 +899,7 @@ func buildCZWhisper(nick, msg string, packetLenOverride int) []byte {
 		plen = packetLenOverride
 	}
 	f := make([]byte, 0, total)
-	f = append(f, byte(HeaderCZWHISPER), byte(HeaderCZWHISPER>>8))
+	f = append(f, byte(HeaderCZWHISPER()), byte(HeaderCZWHISPER()>>8))
 	f = append(f, byte(plen), byte(plen>>8))
 	f = append(f, body...)
 	return f
@@ -906,7 +934,7 @@ func TestParseCZWhisper(t *testing.T) {
 				nick := make([]byte, 24)
 				copy(nick, "Al")
 				f := make([]byte, 28)
-				writeLE16(f[0:], HeaderCZWHISPER)
+				writeLE16(f[0:], HeaderCZWHISPER())
 				writeLE16(f[2:], 28)
 				copy(f[4:], nick)
 				return f
@@ -924,7 +952,7 @@ func TestParseCZWhisper(t *testing.T) {
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
 				f := buildCZWhisper("Alice", "hi", 0)
-				writeLE16(f[0:], HeaderCZACTIONREQUEST) // 0x0089
+				writeLE16(f[0:], HeaderCZACTIONREQUEST()) // 0x0089
 				return f
 			}(),
 			wantErr:    true,
@@ -998,7 +1026,7 @@ func TestZCWhisperResponse_Encode(t *testing.T) {
 	}).Encode(&buf))
 
 	out := buf.Bytes()
-	assert.Equal(t, uint16(HeaderZCWHISPER), binary.LittleEndian.Uint16(out[0:2]), "opcode 0x09de")
+	assert.Equal(t, uint16(HeaderZCWHISPER()), binary.LittleEndian.Uint16(out[0:2]), "opcode 0x09de")
 	// total = 4 + 4(GID) + 24(sender) + 1(isAdmin) + 5(msg) + 1(NUL) = 39
 	assert.Equal(t, 39, len(out), "full frame length")
 	assert.Equal(t, uint32(0xDEADBEEF), binary.LittleEndian.Uint32(out[4:8]), "senderGID")
@@ -1014,7 +1042,7 @@ func TestZCAckWhisperResponse_Encode(t *testing.T) {
 
 	out := buf.Bytes()
 	assert.Len(t, out, 7, "ZC_ACK_WHISPER fixed 7 bytes")
-	assert.Equal(t, uint16(HeaderZCACKWHISPER), binary.LittleEndian.Uint16(out[0:2]), "opcode 0x09df")
+	assert.Equal(t, uint16(HeaderZCACKWHISPER()), binary.LittleEndian.Uint16(out[0:2]), "opcode 0x09df")
 	assert.Equal(t, uint8(1), out[2], "result byte")
 	assert.Equal(t, uint32(0x1234), binary.LittleEndian.Uint32(out[3:7]), "CID")
 	assert.Equal(t, 7, (ZCAckWhisperResponse{}).Size(), "Size()==7")
@@ -1026,8 +1054,8 @@ func TestParseCZInputEditDlg(t *testing.T) {
 	// Known 10-byte frame: cmd 0x0143, NpcID = 0x0A0B0C0D, value = -1234
 	// (signed int32; an inputnum can submit a negative before clamping).
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZInputEditDlg)
-		writeLE16(f[0:], HeaderCZINPUTEDITDLG)
+		f := make([]byte, sizeCZInputEditDlg())
+		writeLE16(f[0:], HeaderCZINPUTEDITDLG())
 		writeLE32(f[2:], 0x0A0B0C0D)
 		neg := int32(-1234)
 		writeLE32(f[6:], uint32(neg)) //nolint:gosec // signed int32 bit pattern on the wire
@@ -1049,14 +1077,14 @@ func TestParseCZInputEditDlg(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZInputEditDlg-1),
+			frame:      make([]byte, sizeCZInputEditDlg()-1),
 			wantErr:    true,
 			wantErrSub: "want at least 10",
 		},
 		{
 			name: "wrong cmd reports opcode",
 			frame: func() []byte {
-				f := make([]byte, sizeCZInputEditDlg)
+				f := make([]byte, sizeCZInputEditDlg())
 				writeLE16(f[0:], 0x00b8)
 				return f
 			}(),
@@ -1084,7 +1112,7 @@ func TestCZInputEditDlgRequest_EncodeRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	in := CZInputEditDlgRequest{NpcID: 110000, Value: 4242}
 	require.NoError(t, in.Encode(&buf))
-	assert.Len(t, buf.Bytes(), sizeCZInputEditDlg, "CZ_INPUT_EDITDLG fixed 10 bytes")
+	assert.Len(t, buf.Bytes(), sizeCZInputEditDlg(), "CZ_INPUT_EDITDLG fixed 10 bytes")
 	out, err := ParseCZInputEditDlg(buf.Bytes())
 	require.NoError(t, err)
 	assert.Equal(t, in, out, "encode → parse round-trips the numeric input")
@@ -1096,8 +1124,8 @@ func TestParseCZInputEditDlgStr(t *testing.T) {
 	// Valid variable-length frame: cmd 0x01d5, packetLen, NpcID, "hello"+NUL.
 	goodFrame := func() []byte {
 		msg := append([]byte("hello"), 0)
-		f := make([]byte, sizeCZInputEditDlgStrMin+len(msg))
-		writeLE16(f[0:], HeaderCZINPUTEDITDLGSTR)
+		f := make([]byte, sizeCZInputEditDlgStrMin()+len(msg))
+		writeLE16(f[0:], HeaderCZINPUTEDITDLGSTR())
 		writeLE16(f[2:], uint16(len(f))) //nolint:gosec // packetLength
 		writeLE32(f[4:], 0x0A0B0C0D)
 		copy(f[8:], msg)
@@ -1119,16 +1147,16 @@ func TestParseCZInputEditDlgStr(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZInputEditDlgStrMin-1),
+			frame:      make([]byte, sizeCZInputEditDlgStrMin()-1),
 			wantErr:    true,
 			wantErrSub: "want at least 8",
 		},
 		{
 			name: "header-only length is rejected (no value bytes)",
 			frame: func() []byte {
-				f := make([]byte, sizeCZInputEditDlgStrMin)
-				writeLE16(f[0:], HeaderCZINPUTEDITDLGSTR)
-				writeLE16(f[2:], sizeCZInputEditDlgStrMin) // declares no payload
+				f := make([]byte, sizeCZInputEditDlgStrMin())
+				writeLE16(f[0:], HeaderCZINPUTEDITDLGSTR())
+				writeLE16(f[2:], uint16(sizeCZInputEditDlgStrMin())) //nolint:gosec // the length is a two-byte field. // declares no payload
 				return f
 			}(),
 			wantErr:    true,
@@ -1137,8 +1165,8 @@ func TestParseCZInputEditDlgStr(t *testing.T) {
 		{
 			name: "packetLength exceeding frame is rejected",
 			frame: func() []byte {
-				f := make([]byte, sizeCZInputEditDlgStrMin+2)
-				writeLE16(f[0:], HeaderCZINPUTEDITDLGSTR)
+				f := make([]byte, sizeCZInputEditDlgStrMin()+2)
+				writeLE16(f[0:], HeaderCZINPUTEDITDLGSTR())
 				writeLE16(f[2:], 999) // larger than the frame
 				return f
 			}(),
@@ -1182,9 +1210,9 @@ func TestParseCZInputEditDlgStr_TruncatesToChatboxSize(t *testing.T) {
 	// rAthena safestrncpy's into a CHATBOX_SIZE buffer (npcInputStrMax), so an
 	// oversized value is truncated to npcInputStrMax-1 visible bytes.
 	oversized := bytes.Repeat([]byte("x"), 100) // exceeds npcInputStrMax-1 (70)
-	pktLen := sizeCZInputEditDlgStrMin + len(oversized)
+	pktLen := sizeCZInputEditDlgStrMin() + len(oversized)
 	frame := make([]byte, pktLen)
-	writeLE16(frame[0:], HeaderCZINPUTEDITDLGSTR)
+	writeLE16(frame[0:], HeaderCZINPUTEDITDLGSTR())
 	writeLE16(frame[2:], uint16(pktLen))
 	writeLE32(frame[4:], 0x0A0B0C0D)
 	copy(frame[8:], oversized)
@@ -1202,10 +1230,10 @@ func TestOpenEditDlgResponse_Encode(t *testing.T) {
 		hdr  uint16
 		enc  func(b *bytes.Buffer) error
 	}{
-		{"ZC_OPEN_EDITDLG", HeaderZCOPENEDITDLG, func(b *bytes.Buffer) error {
+		{"ZC_OPEN_EDITDLG", HeaderZCOPENEDITDLG(), func(b *bytes.Buffer) error {
 			return (OpenEditDlgResponse{NpcID: 0x11223344}).Encode(b)
 		}},
-		{"ZC_OPEN_EDITDLGSTR", HeaderZCOPENEDITDLGSTR, func(b *bytes.Buffer) error {
+		{"ZC_OPEN_EDITDLGSTR", HeaderZCOPENEDITDLGSTR(), func(b *bytes.Buffer) error {
 			return (OpenEditDlgStrResponse{NpcID: 0x11223344}).Encode(b)
 		}},
 	} {
@@ -1229,8 +1257,8 @@ func TestParseCZActionRequest(t *testing.T) {
 	// Known 7-byte frame: cmd 0x0089, targetGID = 0xAABBCCDD,
 	// action = 0x01 (sit per goAthena M11 mapping).
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZActionRequest)
-		writeLE16(f[0:], HeaderCZACTIONREQUEST)
+		f := make([]byte, sizeCZActionRequest())
+		writeLE16(f[0:], HeaderCZACTIONREQUEST())
 		writeLE32(f[2:], 0xAABBCCDD)
 		f[6] = 0x01
 		return f
@@ -1254,7 +1282,7 @@ func TestParseCZActionRequest(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZActionRequest-1),
+			frame:      make([]byte, sizeCZActionRequest()-1),
 			wantErr:    true,
 			wantErrSub: "6",
 		},
@@ -1267,8 +1295,8 @@ func TestParseCZActionRequest(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZActionRequest)
-				writeLE16(f[0:], HeaderCZGLOBALMESSAGE) // 0x008c instead of 0x0089
+				f := make([]byte, sizeCZActionRequest())
+				writeLE16(f[0:], HeaderCZGLOBALMESSAGE()) // 0x008c instead of 0x0089
 				return f
 			}(),
 			wantErr:    true,
@@ -1277,8 +1305,8 @@ func TestParseCZActionRequest(t *testing.T) {
 		{
 			name: "action selector 0 (stand) decodes verbatim",
 			frame: func() []byte {
-				f := make([]byte, sizeCZActionRequest)
-				writeLE16(f[0:], HeaderCZACTIONREQUEST)
+				f := make([]byte, sizeCZActionRequest())
+				writeLE16(f[0:], HeaderCZACTIONREQUEST())
 				writeLE32(f[2:], 0x00000001)
 				f[6] = 0x00
 				return f
@@ -1321,8 +1349,8 @@ func TestParseCZActionRequest(t *testing.T) {
 func TestParseCZActionRequest_AcceptsTrailingBytes(t *testing.T) {
 	t.Parallel()
 
-	base := make([]byte, sizeCZActionRequest)
-	writeLE16(base[0:], HeaderCZACTIONREQUEST)
+	base := make([]byte, sizeCZActionRequest())
+	writeLE16(base[0:], HeaderCZACTIONREQUEST())
 	writeLE32(base[2:], 0x01020304)
 	base[6] = 0x01
 	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
@@ -1343,8 +1371,8 @@ func TestParseCZChangeDir(t *testing.T) {
 	// Known 5-byte frame: cmd 0x009b, headDir 0x0001 (CW),
 	// dir 0x04 (south — rathena/src/map/clif.cpp:11571-11578).
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZChangeDir)
-		writeLE16(f[0:], HeaderCZCHANGEDIR)
+		f := make([]byte, sizeCZChangeDir())
+		writeLE16(f[0:], HeaderCZCHANGEDIR())
 		writeLE16(f[2:], 0x0001)
 		f[4] = 0x04
 		return f
@@ -1368,7 +1396,7 @@ func TestParseCZChangeDir(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZChangeDir-1),
+			frame:      make([]byte, sizeCZChangeDir()-1),
 			wantErr:    true,
 			wantErrSub: "4",
 		},
@@ -1381,8 +1409,8 @@ func TestParseCZChangeDir(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZChangeDir)
-				writeLE16(f[0:], HeaderCZACTIONREQUEST) // 0x0089 instead of 0x009b
+				f := make([]byte, sizeCZChangeDir())
+				writeLE16(f[0:], HeaderCZACTIONREQUEST()) // 0x0089 instead of 0x009b
 				return f
 			}(),
 			wantErr:    true,
@@ -1391,8 +1419,8 @@ func TestParseCZChangeDir(t *testing.T) {
 		{
 			name: "all-zero headDir and dir decodes verbatim",
 			frame: func() []byte {
-				f := make([]byte, sizeCZChangeDir)
-				writeLE16(f[0:], HeaderCZCHANGEDIR)
+				f := make([]byte, sizeCZChangeDir())
+				writeLE16(f[0:], HeaderCZCHANGEDIR())
 				return f
 			}(),
 			wantErr: false,
@@ -1430,8 +1458,8 @@ func TestParseCZChangeDir(t *testing.T) {
 func TestParseCZChangeDir_AcceptsTrailingBytes(t *testing.T) {
 	t.Parallel()
 
-	base := make([]byte, sizeCZChangeDir)
-	writeLE16(base[0:], HeaderCZCHANGEDIR)
+	base := make([]byte, sizeCZChangeDir())
+	writeLE16(base[0:], HeaderCZCHANGEDIR())
 	writeLE16(base[2:], 0x0002)
 	base[4] = 0x07
 	frame := append(append([]byte{}, base...), 0xAA, 0xBB)
@@ -1451,8 +1479,8 @@ func TestParseCZReqEmotion(t *testing.T) {
 
 	// Known 3-byte frame: cmd 0x00bf, emotion_type 0x02 (ET_CRY).
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZReqEmotion)
-		writeLE16(f[0:], HeaderCZREQEMOTION)
+		f := make([]byte, sizeCZReqEmotion())
+		writeLE16(f[0:], HeaderCZREQEMOTION())
 		f[2] = 0x02
 		return f
 	}()
@@ -1472,7 +1500,7 @@ func TestParseCZReqEmotion(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZReqEmotion-1),
+			frame:      make([]byte, sizeCZReqEmotion()-1),
 			wantErr:    true,
 			wantErrSub: "2",
 		},
@@ -1485,8 +1513,8 @@ func TestParseCZReqEmotion(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZReqEmotion)
-				writeLE16(f[0:], HeaderCZCHANGEDIR) // 0x009b instead of 0x00bf
+				f := make([]byte, sizeCZReqEmotion())
+				writeLE16(f[0:], HeaderCZCHANGEDIR()) // 0x009b instead of 0x00bf
 				return f
 			}(),
 			wantErr:    true,
@@ -1495,8 +1523,8 @@ func TestParseCZReqEmotion(t *testing.T) {
 		{
 			name: "all-zero emotion type decodes verbatim",
 			frame: func() []byte {
-				f := make([]byte, sizeCZReqEmotion)
-				writeLE16(f[0:], HeaderCZREQEMOTION)
+				f := make([]byte, sizeCZReqEmotion())
+				writeLE16(f[0:], HeaderCZREQEMOTION())
 				return f
 			}(),
 			wantErr: false,
@@ -1534,8 +1562,8 @@ func TestParseCZReqEmotion(t *testing.T) {
 func TestParseCZReqEmotion_AcceptsTrailingBytes(t *testing.T) {
 	t.Parallel()
 
-	base := make([]byte, sizeCZReqEmotion)
-	writeLE16(base[0:], HeaderCZREQEMOTION)
+	base := make([]byte, sizeCZReqEmotion())
+	writeLE16(base[0:], HeaderCZREQEMOTION())
 	base[2] = 0x07
 	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
 
@@ -1553,8 +1581,8 @@ func TestParseCZGetCharNameRequest(t *testing.T) {
 	t.Parallel()
 
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZGetCharNameRequest)
-		writeLE16(f[0:], HeaderCZGETCHARNAMEREQUEST)
+		f := make([]byte, sizeCZGetCharNameRequest())
+		writeLE16(f[0:], HeaderCZGETCHARNAMEREQUEST())
 		writeLE32(f[2:], 0xDEADBEEF)
 		return f
 	}()
@@ -1574,7 +1602,7 @@ func TestParseCZGetCharNameRequest(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZGetCharNameRequest-1),
+			frame:      make([]byte, sizeCZGetCharNameRequest()-1),
 			wantErr:    true,
 			wantErrSub: "5",
 		},
@@ -1587,8 +1615,8 @@ func TestParseCZGetCharNameRequest(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZGetCharNameRequest)
-				writeLE16(f[0:], HeaderCZREQUESTMOVE)
+				f := make([]byte, sizeCZGetCharNameRequest())
+				writeLE16(f[0:], HeaderCZREQUESTMOVE())
 				return f
 			}(),
 			wantErr:    true,
@@ -1623,8 +1651,8 @@ func TestParseCZGetCharNameRequest(t *testing.T) {
 func TestParseCZGetCharNameRequest_AcceptsTrailingBytes(t *testing.T) {
 	t.Parallel()
 
-	base := make([]byte, sizeCZGetCharNameRequest)
-	writeLE16(base[0:], HeaderCZGETCHARNAMEREQUEST)
+	base := make([]byte, sizeCZGetCharNameRequest())
+	writeLE16(base[0:], HeaderCZGETCHARNAMEREQUEST())
 	writeLE32(base[2:], 0xCAFEBABE)
 	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
 
@@ -1642,8 +1670,8 @@ func TestParseCZRestart(t *testing.T) {
 	t.Parallel()
 
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZRestart)
-		writeLE16(f[0:], HeaderCZRESTART)
+		f := make([]byte, sizeCZRestart())
+		writeLE16(f[0:], HeaderCZRESTART())
 		f[2] = 0x01
 		return f
 	}()
@@ -1664,8 +1692,8 @@ func TestParseCZRestart(t *testing.T) {
 		{
 			name: "valid frame type=0",
 			frame: func() []byte {
-				f := make([]byte, sizeCZRestart)
-				writeLE16(f[0:], HeaderCZRESTART)
+				f := make([]byte, sizeCZRestart())
+				writeLE16(f[0:], HeaderCZRESTART())
 				f[2] = 0x00
 				return f
 			}(),
@@ -1674,7 +1702,7 @@ func TestParseCZRestart(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZRestart-1),
+			frame:      make([]byte, sizeCZRestart()-1),
 			wantErr:    true,
 			wantErrSub: "2",
 		},
@@ -1687,8 +1715,8 @@ func TestParseCZRestart(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZRestart)
-				writeLE16(f[0:], HeaderCZREQUESTMOVE)
+				f := make([]byte, sizeCZRestart())
+				writeLE16(f[0:], HeaderCZREQUESTMOVE())
 				return f
 			}(),
 			wantErr:    true,
@@ -1723,8 +1751,8 @@ func TestParseCZRestart(t *testing.T) {
 func TestParseCZRestart_AcceptsTrailingBytes(t *testing.T) {
 	t.Parallel()
 
-	base := make([]byte, sizeCZRestart)
-	writeLE16(base[0:], HeaderCZRESTART)
+	base := make([]byte, sizeCZRestart())
+	writeLE16(base[0:], HeaderCZRESTART())
 	base[2] = 0x01
 	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
 
@@ -1742,8 +1770,8 @@ func TestParseCZContactNPC(t *testing.T) {
 	t.Parallel()
 
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZContactNPC)
-		writeLE16(f[0:], HeaderCZCONTACTNPC)
+		f := make([]byte, sizeCZContactNPC())
+		writeLE16(f[0:], HeaderCZCONTACTNPC())
 		writeLE32(f[2:], 0x068E36C1) // 110000001 = rAthena START_NPC_NUM + 1
 		f[6] = 0x01
 		return f
@@ -1764,7 +1792,7 @@ func TestParseCZContactNPC(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZContactNPC-1),
+			frame:      make([]byte, sizeCZContactNPC()-1),
 			wantErr:    true,
 			wantErrSub: "6",
 		},
@@ -1777,8 +1805,8 @@ func TestParseCZContactNPC(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZContactNPC)
-				writeLE16(f[0:], HeaderCZREQUESTMOVE)
+				f := make([]byte, sizeCZContactNPC())
+				writeLE16(f[0:], HeaderCZREQUESTMOVE())
 				return f
 			}(),
 			wantErr:    true,
@@ -1813,8 +1841,8 @@ func TestParseCZContactNPC(t *testing.T) {
 func TestParseCZContactNPC_AcceptsTrailingBytes(t *testing.T) {
 	t.Parallel()
 
-	base := make([]byte, sizeCZContactNPC)
-	writeLE16(base[0:], HeaderCZCONTACTNPC)
+	base := make([]byte, sizeCZContactNPC())
+	writeLE16(base[0:], HeaderCZCONTACTNPC())
 	writeLE32(base[2:], 0x068E36C1)
 	base[6] = 0x01
 	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
@@ -1833,8 +1861,8 @@ func TestParseCZReqNextScript(t *testing.T) {
 	t.Parallel()
 
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZReqNextScript)
-		writeLE16(f[0:], HeaderCZREQNEXTSCRIPT)
+		f := make([]byte, sizeCZReqNextScript())
+		writeLE16(f[0:], HeaderCZREQNEXTSCRIPT())
 		writeLE32(f[2:], 0x068E36C1)
 		return f
 	}()
@@ -1854,7 +1882,7 @@ func TestParseCZReqNextScript(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZReqNextScript-1),
+			frame:      make([]byte, sizeCZReqNextScript()-1),
 			wantErr:    true,
 			wantErrSub: "5",
 		},
@@ -1867,8 +1895,8 @@ func TestParseCZReqNextScript(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZReqNextScript)
-				writeLE16(f[0:], HeaderCZREQUESTMOVE)
+				f := make([]byte, sizeCZReqNextScript())
+				writeLE16(f[0:], HeaderCZREQUESTMOVE())
 				return f
 			}(),
 			wantErr:    true,
@@ -1903,8 +1931,8 @@ func TestParseCZReqNextScript(t *testing.T) {
 func TestParseCZReqNextScript_AcceptsTrailingBytes(t *testing.T) {
 	t.Parallel()
 
-	base := make([]byte, sizeCZReqNextScript)
-	writeLE16(base[0:], HeaderCZREQNEXTSCRIPT)
+	base := make([]byte, sizeCZReqNextScript())
+	writeLE16(base[0:], HeaderCZREQNEXTSCRIPT())
 	writeLE32(base[2:], 0x068E36C1)
 	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
 
@@ -1922,8 +1950,8 @@ func TestParseCZCloseDialog(t *testing.T) {
 	t.Parallel()
 
 	goodFrame := func() []byte {
-		f := make([]byte, sizeCZCloseDialog)
-		writeLE16(f[0:], HeaderCZCLOSEDIALOG)
+		f := make([]byte, sizeCZCloseDialog())
+		writeLE16(f[0:], HeaderCZCLOSEDIALOG())
 		writeLE32(f[2:], 0x068E36C1)
 		return f
 	}()
@@ -1943,7 +1971,7 @@ func TestParseCZCloseDialog(t *testing.T) {
 		},
 		{
 			name:       "short frame reports byte count",
-			frame:      make([]byte, sizeCZCloseDialog-1),
+			frame:      make([]byte, sizeCZCloseDialog()-1),
 			wantErr:    true,
 			wantErrSub: "5",
 		},
@@ -1956,8 +1984,8 @@ func TestParseCZCloseDialog(t *testing.T) {
 		{
 			name: "wrong cmd reports unexpected cmd id",
 			frame: func() []byte {
-				f := make([]byte, sizeCZCloseDialog)
-				writeLE16(f[0:], HeaderCZREQUESTMOVE)
+				f := make([]byte, sizeCZCloseDialog())
+				writeLE16(f[0:], HeaderCZREQUESTMOVE())
 				return f
 			}(),
 			wantErr:    true,
@@ -1992,8 +2020,8 @@ func TestParseCZCloseDialog(t *testing.T) {
 func TestParseCZCloseDialog_AcceptsTrailingBytes(t *testing.T) {
 	t.Parallel()
 
-	base := make([]byte, sizeCZCloseDialog)
-	writeLE16(base[0:], HeaderCZCLOSEDIALOG)
+	base := make([]byte, sizeCZCloseDialog())
+	writeLE16(base[0:], HeaderCZCLOSEDIALOG())
 	writeLE32(base[2:], 0x068E36C1)
 	frame := append(append([]byte{}, base...), 0xAA, 0xBB, 0xCC)
 
@@ -2014,8 +2042,8 @@ func TestParseCZCloseDialog_AcceptsTrailingBytes(t *testing.T) {
 func TestParseCZDropItem(t *testing.T) {
 	t.Parallel()
 
-	frame := make([]byte, sizeCZDropItem)
-	writeLE16(frame[0:], HeaderCZDROPITEM0363)
+	frame := make([]byte, sizeCZDropItem())
+	writeLE16(frame[0:], HeaderCZDROPITEM0363())
 	writeLE16(frame[2:], 17)  // inventory index
 	writeLE16(frame[4:], 200) // amount
 
@@ -2038,7 +2066,7 @@ func TestParseCZDropItem_RejectsBadLength(t *testing.T) {
 	for _, n := range []int{0, 1, 4, 5, 7, 8} {
 		frame := make([]byte, n)
 		if n >= 2 {
-			writeLE16(frame[0:], HeaderCZDROPITEM0363)
+			writeLE16(frame[0:], HeaderCZDROPITEM0363())
 		}
 		if _, err := ParseCZDropItem(frame); err == nil {
 			t.Errorf("ParseCZDropItem(%d bytes) err = nil, want error", n)
@@ -2051,7 +2079,7 @@ func TestCZChooseMenuRequest_EncodeRoundTrip(t *testing.T) {
 	in := CZChooseMenuRequest{NpcID: 0x12345678, Selected: 2}
 	var buf bytes.Buffer
 	require.NoError(t, in.Encode(&buf))
-	assert.Len(t, buf.Bytes(), sizeCZChooseMenu, "CZ_CHOOSE_MENU fixed 7 bytes")
+	assert.Len(t, buf.Bytes(), sizeCZChooseMenu(), "CZ_CHOOSE_MENU fixed 7 bytes")
 	out, err := ParseCZChooseMenu(buf.Bytes())
 	require.NoError(t, err)
 	assert.Equal(t, in, out, "encode → parse round-trips the menu choice")

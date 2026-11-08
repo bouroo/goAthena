@@ -23,8 +23,8 @@ func TestCALoginRequest_Encode_RoundTrip(t *testing.T) {
 	if err := req.Encode(&buf); err != nil {
 		t.Fatalf("Encode err = %v, want nil", err)
 	}
-	if got := buf.Len(); got != sizeCALogin {
-		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCALogin)
+	if got := buf.Len(); got != sizeCALogin() {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCALogin())
 	}
 
 	got, err := ParseCALogin(buf.Bytes())
@@ -45,8 +45,8 @@ func TestCALoginRequest_Encode_ZeroValues(t *testing.T) {
 	if err := req.Encode(&buf); err != nil {
 		t.Fatalf("Encode err = %v, want nil", err)
 	}
-	if got := buf.Len(); got != sizeCALogin {
-		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCALogin)
+	if got := buf.Len(); got != sizeCALogin() {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCALogin())
 	}
 
 	got, err := ParseCALogin(buf.Bytes())

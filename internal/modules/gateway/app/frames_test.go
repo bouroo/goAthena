@@ -40,7 +40,11 @@ import (
 
 // serverFrames is the wire-size authority for this suite — the map server's own
 // dispatch database, so the harness and the server cannot disagree.
-var serverFrames = ropacket.NewMapServerDB()
+//
+// It is a function, not a package-level var: the database resolves its
+// opcodes from the installed protocol set, and a package-level var would
+// resolve before the boot installs that set.
+func serverFrames() *ropacket.DB { return ropacket.NewMapServerDB() }
 
 // serverFrameSize resolves the total on-wire length of a server→client frame.
 //
@@ -51,7 +55,7 @@ var serverFrames = ropacket.NewMapServerDB()
 //
 // ropacket.VariableLength (-1) means the frame carries its own length slot.
 func serverFrameSize(cmd uint16) (int, error) {
-	def, ok := serverFrames.Lookup(cmd)
+	def, ok := serverFrames().Lookup(cmd)
 	if !ok {
 		return 0, fmt.Errorf("opcode 0x%04x is not in the map-server packet DB", cmd)
 	}
@@ -154,7 +158,7 @@ func scanServerFrame(t *testing.T, c net.Conn, want uint16, within time.Duration
 // helper is what makes the suite correct whether or not that holds.
 func awaitAcceptEnter(t *testing.T, c net.Conn) []byte {
 	t.Helper()
-	frame := scanServerFrame(t, c, ropacket.HeaderZCACCEPTENTER, 3*time.Second)
+	frame := scanServerFrame(t, c, ropacket.HeaderZCACCEPTENTER(), 3*time.Second)
 	if len(frame) != 13 {
 		t.Fatalf("ZC_ACCEPT_ENTER length = %d, want 13", len(frame))
 	}
@@ -197,18 +201,18 @@ func TestServerFrameSize_ReadsThePacketDB(t *testing.T) {
 		cmd  uint16
 		want int
 	}{
-		{"ZC_ACCEPT_ENTER", ropacket.HeaderZCACCEPTENTER, 13},
-		{"ZC_SPAWN_UNIT", ropacket.HeaderZCSPAWNUNIT, 107},
+		{"ZC_ACCEPT_ENTER", ropacket.HeaderZCACCEPTENTER(), 13},
+		{"ZC_SPAWN_UNIT", ropacket.HeaderZCSPAWNUNIT(), 107},
 		// Registered in Phase 43: the map server has always emitted this on a
 		// warp portal, but the DB never declared it, so the warp test's reader
 		// could not frame the one frame that test exists to assert.
-		{"ZC_NPCACK_MAPMOVE", ropacket.HeaderZCNPCACKMAPMOVE, 22},
-		{"ZC_PAR_CHANGE", ropacket.HeaderZCPARCHANGE, 8},
-		{"ZC_NOTIFY_TIME", ropacket.HeaderZCNOTIFYTIME, 6},
-		{"ZC_EMOTION", ropacket.HeaderZCEMOTION, 7},
-		{"ZC_SETTING_WHISPER_PC", ropacket.HeaderZCSETTINGWHISPERPC, 4},
-		{"ZC_WHISPER_LIST", ropacket.HeaderZCWHISPERLIST, ropacket.VariableLength},
-		{"ZC_NOTIFY_CHAT", ropacket.HeaderZCNOTIFYCHAT, ropacket.VariableLength},
+		{"ZC_NPCACK_MAPMOVE", ropacket.HeaderZCNPCACKMAPMOVE(), 22},
+		{"ZC_PAR_CHANGE", ropacket.HeaderZCPARCHANGE(), 8},
+		{"ZC_NOTIFY_TIME", ropacket.HeaderZCNOTIFYTIME(), 6},
+		{"ZC_EMOTION", ropacket.HeaderZCEMOTION(), 7},
+		{"ZC_SETTING_WHISPER_PC", ropacket.HeaderZCSETTINGWHISPERPC(), 4},
+		{"ZC_WHISPER_LIST", ropacket.HeaderZCWHISPERLIST(), ropacket.VariableLength},
+		{"ZC_NOTIFY_CHAT", ropacket.HeaderZCNOTIFYCHAT(), ropacket.VariableLength},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := serverFrameSize(tc.cmd)
@@ -228,9 +232,9 @@ func TestServerFrameSize_ReadsThePacketDB(t *testing.T) {
 // readers used to report — ninety-odd bytes after the stream had already gone
 // wrong.
 func TestServerFrameSize_ClientOpcodeIsADesync(t *testing.T) {
-	_, err := serverFrameSize(ropacket.HeaderCZWHISPER)
+	_, err := serverFrameSize(ropacket.HeaderCZWHISPER())
 	if err == nil {
-		t.Fatalf("serverFrameSize(CZ_WHISPER 0x%04x) accepted a client→server opcode, want a desync error", ropacket.HeaderCZWHISPER)
+		t.Fatalf("serverFrameSize(CZ_WHISPER 0x%04x) accepted a client→server opcode, want a desync error", ropacket.HeaderCZWHISPER())
 	}
 	if !bytes.Contains([]byte(err.Error()), []byte("desynced")) {
 		t.Fatalf("error = %q, want it to name the desync", err)
@@ -256,7 +260,7 @@ func TestReadServerFrame_FixedFrameHasNoLengthSlot(t *testing.T) {
 	par := ropacket.ParChangeResponse{VarID: ropacket.SPHP, Count: 42}
 	first := encodeFrame(t, par, "ZC_PAR_CHANGE")
 	timeFrame := make([]byte, 6)
-	binary.LittleEndian.PutUint16(timeFrame[0:], ropacket.HeaderZCNOTIFYTIME)
+	binary.LittleEndian.PutUint16(timeFrame[0:], ropacket.HeaderZCNOTIFYTIME())
 	binary.LittleEndian.PutUint32(timeFrame[2:], 987654)
 
 	client, server := net.Pipe()
@@ -265,8 +269,8 @@ func TestReadServerFrame_FixedFrameHasNoLengthSlot(t *testing.T) {
 	go func() { _, _ = server.Write(append(append([]byte{}, first...), timeFrame...)) }()
 
 	cmd1, got1 := nextServerFrame(t, client, 2*time.Second)
-	if cmd1 != ropacket.HeaderZCPARCHANGE {
-		t.Fatalf("frame 1 opcode = 0x%04x, want 0x%04x (ZC_PAR_CHANGE)", cmd1, ropacket.HeaderZCPARCHANGE)
+	if cmd1 != ropacket.HeaderZCPARCHANGE() {
+		t.Fatalf("frame 1 opcode = 0x%04x, want 0x%04x (ZC_PAR_CHANGE)", cmd1, ropacket.HeaderZCPARCHANGE())
 	}
 	if len(got1) != 8 {
 		t.Fatalf("frame 1 length = %d, want 8 (a reader trusting bytes [2:4] reads %d)", len(got1), par.VarID)
@@ -276,8 +280,8 @@ func TestReadServerFrame_FixedFrameHasNoLengthSlot(t *testing.T) {
 	}
 
 	cmd2, got2 := nextServerFrame(t, client, 2*time.Second)
-	if cmd2 != ropacket.HeaderZCNOTIFYTIME {
-		t.Fatalf("frame 2 opcode = 0x%04x, want 0x%04x (ZC_NOTIFY_TIME)", cmd2, ropacket.HeaderZCNOTIFYTIME)
+	if cmd2 != ropacket.HeaderZCNOTIFYTIME() {
+		t.Fatalf("frame 2 opcode = 0x%04x, want 0x%04x (ZC_NOTIFY_TIME)", cmd2, ropacket.HeaderZCNOTIFYTIME())
 	}
 	if len(got2) != 6 {
 		t.Fatalf("frame 2 length = %d, want 6", len(got2))
@@ -301,8 +305,8 @@ func TestReadServerFrame_VariableFrameUsesItsSlot(t *testing.T) {
 	go func() { _, _ = server.Write(list) }()
 
 	cmd, got := nextServerFrame(t, client, 2*time.Second)
-	if cmd != ropacket.HeaderZCINVENTORYITEMLISTNORMAL {
-		t.Fatalf("opcode = 0x%04x, want 0x%04x", cmd, ropacket.HeaderZCINVENTORYITEMLISTNORMAL)
+	if cmd != ropacket.HeaderZCINVENTORYITEMLISTNORMAL() {
+		t.Fatalf("opcode = 0x%04x, want 0x%04x", cmd, ropacket.HeaderZCINVENTORYITEMLISTNORMAL())
 	}
 	if len(got) != len(list) {
 		t.Fatalf("length = %d, want %d (the declared slot)", len(got), len(list))
@@ -315,7 +319,7 @@ func TestReadServerFrame_VariableFrameUsesItsSlot(t *testing.T) {
 func TestScanServerFrame_PastAMisorderedSpawnUnit(t *testing.T) {
 	spawn := spawnUnitFrame(t, 150001, "Peer")
 	accept := acceptEnterFrame(t)
-	if binary.LittleEndian.Uint16(spawn[0:2]) != ropacket.HeaderZCSPAWNUNIT {
+	if binary.LittleEndian.Uint16(spawn[0:2]) != ropacket.HeaderZCSPAWNUNIT() {
 		t.Fatalf("built frame is not a spawn-unit")
 	}
 
@@ -328,7 +332,7 @@ func TestScanServerFrame_PastAMisorderedSpawnUnit(t *testing.T) {
 	if len(got) != 13 {
 		t.Fatalf("accept-enter length = %d, want 13", len(got))
 	}
-	if binary.LittleEndian.Uint16(got[0:2]) != ropacket.HeaderZCACCEPTENTER {
-		t.Fatalf("opcode = 0x%04x, want 0x%04x", binary.LittleEndian.Uint16(got[0:2]), ropacket.HeaderZCACCEPTENTER)
+	if binary.LittleEndian.Uint16(got[0:2]) != ropacket.HeaderZCACCEPTENTER() {
+		t.Fatalf("opcode = 0x%04x, want 0x%04x", binary.LittleEndian.Uint16(got[0:2]), ropacket.HeaderZCACCEPTENTER())
 	}
 }

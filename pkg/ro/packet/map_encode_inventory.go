@@ -179,7 +179,7 @@ func (r InventoryListNormalResponse) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: write ZC_INVENTORY_ITEMLIST_NORMAL: too many items (%d)", len(r.Items))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTNORMAL)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTNORMAL())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
 	buf[4] = 0 // invType = INVTYPE_INVENTORY
 	for i, it := range r.Items {
@@ -221,7 +221,7 @@ func (r InventoryListEquipResponse) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: write ZC_INVENTORY_ITEMLIST_EQUIP: too many items (%d)", len(r.Items))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTEQUIP)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTEQUIP())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
 	buf[4] = 0 // invType = INVTYPE_INVENTORY
 	for i, it := range r.Items {
@@ -265,17 +265,17 @@ type ReqWearEquipAckResponse struct {
 
 // Size returns the on-wire byte length that Encode will write
 // (always 11).
-func (r ReqWearEquipAckResponse) Size() int { return sizeZCReqWearEquipAckV5 }
+func (r ReqWearEquipAckResponse) Size() int { return sizeZCReqWearEquipAckV5() }
 
 // Encode writes the ZC_REQ_WEAR_EQUIP_ACK_V5 packet to w.
 func (r ReqWearEquipAckResponse) Encode(w io.Writer) error {
-	var buf [sizeZCReqWearEquipAckV5]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQWEAREQUIPACKV5)
+	buf := make([]byte, sizeZCReqWearEquipAckV5())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQWEAREQUIPACKV5())
 	binary.LittleEndian.PutUint16(buf[2:], r.Index)
 	binary.LittleEndian.PutUint32(buf[4:], r.WearLocation)
 	binary.LittleEndian.PutUint16(buf[8:], r.ItemSpriteNumber)
 	buf[10] = r.Result
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_REQ_WEAR_EQUIP_ACK_V5: %w", err)
 	}
 	return nil
@@ -309,16 +309,16 @@ type ReqTakeoffEquipAckResponse struct {
 
 // Size returns the on-wire byte length that Encode will write
 // (always 9).
-func (r ReqTakeoffEquipAckResponse) Size() int { return sizeZCReqTakeoffEquipAck }
+func (r ReqTakeoffEquipAckResponse) Size() int { return sizeZCReqTakeoffEquipAck() }
 
 // Encode writes the ZC_REQ_TAKEOFF_EQUIP_ACK packet to w.
 func (r ReqTakeoffEquipAckResponse) Encode(w io.Writer) error {
-	var buf [sizeZCReqTakeoffEquipAck]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQTAKEOFFEQUIPACK)
+	buf := make([]byte, sizeZCReqTakeoffEquipAck())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREQTAKEOFFEQUIPACK())
 	binary.LittleEndian.PutUint16(buf[2:], r.Index)
 	binary.LittleEndian.PutUint32(buf[4:], r.WearLocation)
 	buf[8] = r.Flag
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_REQ_TAKEOFF_EQUIP_ACK: %w", err)
 	}
 	return nil
@@ -359,18 +359,18 @@ type UseItemAck2Response struct {
 
 // Size returns the on-wire byte length that Encode will write
 // (always 13).
-func (r UseItemAck2Response) Size() int { return sizeZCUseItemAck2 }
+func (r UseItemAck2Response) Size() int { return sizeZCUseItemAck2() }
 
 // Encode writes the ZC_USE_ITEM_ACK2 packet to w.
 func (r UseItemAck2Response) Encode(w io.Writer) error {
-	var buf [sizeZCUseItemAck2]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCUSEITEMACK2)
+	buf := make([]byte, sizeZCUseItemAck2())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCUSEITEMACK2())
 	binary.LittleEndian.PutUint16(buf[2:], r.Index)
 	binary.LittleEndian.PutUint16(buf[4:], r.ItemID)
 	binary.LittleEndian.PutUint32(buf[6:], r.AID)
 	binary.LittleEndian.PutUint16(buf[10:], r.Amount)
 	buf[12] = r.Result
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_USE_ITEM_ACK2: %w", err)
 	}
 	return nil

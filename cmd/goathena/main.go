@@ -17,6 +17,7 @@ import (
 	"github.com/bouroo/goAthena/internal/config"
 	"github.com/bouroo/goAthena/internal/infrastructure/db"
 	"github.com/bouroo/goAthena/internal/shared/log"
+	"github.com/bouroo/goAthena/pkg/ro/protocol"
 )
 
 func main() {
@@ -159,6 +160,13 @@ func serve(args []string) error {
 	}
 	logger := log.New(cfg.Log)
 
+	// The packet layer resolves every opcode and every wire length from
+	// the installed protocol set, so the set goes in before the app
+	// builds.
+	if err := installProtocol(cfg.Zone); err != nil {
+		return err
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -170,6 +178,25 @@ func serve(args []string) error {
 	if err := a.Run(ctx); err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
+	return nil
+}
+
+// installProtocol installs the protocol set the zone configuration names.
+//
+// The source pack and the client family are operator choices: the Thai
+// fork and upstream master each declare their packet headers per client
+// family, so the pair the operator names is the pair the wire protocol
+// comes from.
+func installProtocol(zone config.ZoneConfig) error {
+	source, ok := protocol.Sources[zone.ClientSource]
+	if !ok {
+		return fmt.Errorf("client_source %q is not a known source pack", zone.ClientSource)
+	}
+	variant, ok := protocol.Variants[zone.ClientVariant]
+	if !ok {
+		return fmt.Errorf("client_variant %q is not a known client family", zone.ClientVariant)
+	}
+	protocol.Install(source, variant)
 	return nil
 }
 
@@ -187,6 +214,13 @@ func serveEconomy(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	logger := log.New(cfg.Log)
+
+	// The packet layer resolves every opcode and every wire length from
+	// the installed protocol set, so the set goes in before the app
+	// builds.
+	if err := installProtocol(cfg.Zone); err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
