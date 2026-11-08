@@ -457,6 +457,7 @@ directory (remote = real address) and keeps the client-side seam unchanged.
 | Agones Fleet manifests | `deploy/k3s/base/zone-fleet.yaml` + `deploy/k3s/base/single/gameserver.yaml` + `transit/agones/fleet_manifest_test.go` | ✅ — two-Fleet manifest (prontera/geffen map sets) + a single-shard GameServer; `Dynamic` port policy (Agones picks an open host port and the shard advertises the one it was allocated — a `Static` policy pinned the host port and allowed one shard per node); `self_name` read from the pod label `agones.dev/gameserver` via the downward API; probes on `/healthz`+`/readyz`; the test decodes each document with the Agones API's own YAML decoder and runs `Validate` + `ApplyDefaults`, asserting the `game` port name, the port policy and the `goathena.dev/maps` annotation the directory reads (it caught the missing `spec.strategy.type`, and the policy regression when it was flipped back to `Static`). The manifests live under `deploy/k3s/` — the tree that is actually applied; the older `deploy/agones/` tree was removed rather than left to drift. |
 | Fleet `MapDirectory` | `transit/agones` + `transit/static` | ✅ — `zone.directory.mode` `local\|agones\|static`; agones resolves Ready GameServers (maps CSV annotation `goathena.dev/maps` or `goathena.dev/map-<name>` labels, `game` port) via in-cluster creds or KUBECONFIG (Swarm path); static parses `routes` map→host:port; fatal boot error on non-local dial failure |
 | Fleet cross-node admission | ✅ done | The shard advertises the address Agones assigned it. `internal/infrastructure/agones/allocation.go` reads the allocation from the sidecar (`GetGameServer`) at boot — the node address and the assigned host port — and `gateway.MapEndpointResolver` carries it into the char server's handshake. The port policy is **Dynamic**, so Agones picks an open host port and a node can carry several shards; a Static policy pinned the host port to the container port and allowed one shard per node. The advertised address is runtime state: the pod's IP is assigned after the manifest is written, so no env var can express it. |
+| Tier 2 — small self-hosted fleet | `deploy/tier2/compose.yml` + `scripts/verify-tier2.sh` + `cmd/charselect` | ✅ — the middle rung of the ladder: two goathena nodes over one shared Postgres/Valkey/NATS, each serving a disjoint set of maps, finding each other through a static route table (`zone.directory.mode=static`: each node names the maps served by *another* node, and that node's address; a map with no route is served by this process, so the table is the fleet minus one and no node redirects a client to itself). The route table reaches the client through the per-map address handoff — the char server resolves the endpoint for the character's *own* map. `task verify-tier2` proves both nodes carry this tree's commit stamp, both are healthy, a login is accepted through the shared session store, and **a character on a remote map is handed the other node's address** (the real handshake, driven by `cmd/charselect`). |
 | Tier 3 K8s deployment | `deploy/k3s/` + `scripts/verify-k3s.sh` + `scripts/crdschema/` | ✅ — the whole tier: namespace, Secret, ConfigMap, the client-facing and control-plane Services, Postgres (with its volume), Valkey, NATS, the OTel collector, the per-map-set Fleets, the `FleetAutoscaler`s, and a TCP ingress; dev, prod and single overlays. Every resource is validated against the real API schema (`kubeconform -strict`), with the Agones CRD schemas extracted from the Agones release manifest because the built-in catalog does not carry Agones. The overlays: dev 21, prod 24, single 17 — all valid, in Linux and macOS alike. |
 | Tier 1 compose verification | `task verify-tier1` + `task stack-up` | ✅ — proves the running container carries *this tree's* commit stamp, that `/healthz` `/readyz` `/version` `/metrics` all answer 200, and that a login is accepted. The check exists because `docker compose up` reuses the last image: a stale image served an older commit whose `/metrics` 404'd and refused every login while `/healthz` stayed green. The stack looked up and the app was not the app. `task stack-up` rebuilds with `--no-cache`. |
 | The autoscaler scales on the players | `internal/infrastructure/agones/counter.go` + `internal/app/counter.go` + `WorldService.OnlinePlayerCount` | ✅ — the shard publishes its connected-player count to the sidecar every 10s (the beta SDK's `UpdateCounter`); Agones aggregates it across the fleet; the `FleetAutoscaler`'s **Counter** policy sizes the fleet by it (aggregate capacity covers the aggregate players, 10% spare). The count is the world's live player registry, and it counts player characters only — a mob is not a player. The `Buffer` and `Schedule` policies stay alongside it: they cover the load the counter cannot see, since a shard that is up but not yet loaded still has to exist before its first player arrives. The counter's name is a contract between three places (the Fleet's `spec.template.spec.counters.players`, the name the shard publishes, and the policy's `key`), and the manifest test asserts all three agree — a typo in any one leaves the autoscaler scaling on a counter that does not exist. |
@@ -498,44 +499,21 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
    carries an IPv4, so a cluster-internal address cannot be what a public
    client is handed.
 
-6. **The released image carries no build stamp.** `cd.yml`'s build step
-   passes no `build-args`, so every published image reports
-   `goathena dev (commit none, built unknown)` at `/version` — the
-   Containerfile's `ARG` defaults. This is pre-existing and long-standing
-   (every release from `v0.1.0-beta.15` on), and it costs the one
-   property the release is supposed to have: a consumer cannot tell which
-   commit an image serves. `task verify-tier1` catches a stale image
-   because the *compose* build passes `COMMIT`/`BUILD_TIME`; the release
-   build does not, so the gap is invisible to the gates. The fix is three
-   lines in `cd.yml`:
+6. ~~**The released image carries no build stamp.**~~ ✅ closed in
+   `v0.1.0-beta.20` — `cd.yml`'s build step passes `build-args`
+   (`VERSION`/`COMMIT`/`BUILD_TIME`), so a published image reports the
+   commit it was built from at `/version` instead of the Containerfile's
+   `ARG` defaults. `VERSION` is the tag without its `v` (`0.1.0-beta.20`),
+   which is what the metadata-action's semver `{{version}}` yields — the
+   same form as the image's own tag.
 
-   ```yaml
-   with:
-     build-args: |
-       VERSION=${{ github.ref_name }}
-       COMMIT=${{ github.sha }}
-       BUILD_TIME=${{ github.event.repository.updated_at }}
-   ```
-
-   `VERSION` should be the tag without its `v` (`0.1.0-beta.19`), to match
-   the image's own tag. Not done here: it changes what every published
-   image reports, which is a release-surface decision rather than part of
-   the counter work.
-
-7. **The published image is amd64 only.** `cd.yml` builds it on
-   `ubuntu-latest` with no `platforms` matrix, so the image index carries
-   one `linux/amd64` entry. An arm64 node cannot pull it — the pull fails
-   with `no image found in image index for architecture "arm64"`. Every
-   release from `v0.1.0-beta.15` on has this, and it bites the Tier 3
-   story hardest: a k3s cluster on an Apple Silicon workstation or a
-   Graviton node cannot run the shards at all. The fix is a `platforms:`
-   matrix on the build step (`linux/amd64,linux/arm64`) plus a
-   QEMU-emulated arm64 build in the CI runner, which
-   `docker/setup-qemu-action` provides. Not done here: it doubles the
-   release's build time, and the arm64 binaries are not exercised by any
-   test on this machine.
-
-| Tier 2 — small self-hosted fleet | `deploy/tier2/compose.yml` + `scripts/verify-tier2.sh` + `cmd/charselect` | ✅ — the middle rung of the ladder: two goathena nodes over one shared Postgres/Valkey/NATS, each serving a disjoint set of maps, finding each other through a static route table (`zone.directory.mode=static`: each node names the maps served by *another* node, and that node's address; a map with no route is served by this process, so the table is the fleet minus one and no node redirects a client to itself). The route table reaches the client through the per-map address handoff — the char server resolves the endpoint for the character's *own* map. `task verify-tier2` proves both nodes carry this tree's commit stamp, both are healthy, a login is accepted through the shared session store, and **a character on a remote map is handed the other node's address** (the real handshake, driven by `cmd/charselect`). |
+7. ~~**The published image is amd64 only.**~~ ✅ closed in
+   `v0.1.0-beta.20` — the build step gained `platforms:
+   linux/amd64,linux/arm64` and the runner gained
+   `docker/setup-qemu-action`, so the arm64 half is built under
+   emulation. An arm64 node pulls the same tag. The cost is the
+   emulated build's time, which is why the publish job's timeout went
+   from 10 to 25 minutes.
 
 ---
 
@@ -601,12 +579,12 @@ brackets them, so a slow tick shows up as a slow frame.
 | M12: Agones fleet directory | ✅ done | `transit/agones` + `transit/static` + `zone.directory.mode` switch (this session); fleet YAML manifests remain M13. |
 | M12: cross-zone redirect v0 | ✅ done | Directory port + SERVERMOVE framing + warp-path branch (`67b4979`); Agones fleet directory = M13 prereq. |
 | M13: Agones SDK | ✅ done | Sidecar lifecycle (`internal/infrastructure/agones`) + fleet directory (`transit/agones`) + fleet/GameServer manifests (`deploy/k3s/`) + the advertised allocation + the player-count counter. The `deploy/agones/` tree was deleted; `deploy/k3s/` is the one tree. |
-| M13: release image carries no build stamp | L | `cd.yml` passes no `build-args`, so every published image reports `dev (commit none)`. Fix is 4 lines; see ticket 6 above. |
-| M13: release image is amd64 only | M | An arm64 node cannot pull it. Needs a `platforms:` matrix + QEMU; see ticket 7 above. |
+| M13: release image carries no build stamp | ✅ done | `cd.yml` passes `build-args`; a published image reports its commit at `/version` (from `v0.1.0-beta.20`). |
+| M13: release image is amd64 only | ✅ done | The build gained `platforms: linux/amd64,linux/arm64` + QEMU (from `v0.1.0-beta.20`). |
 | M14: threat model | M | One-shot. |
 | M14: load test harness | ✅ done | `cmd/loadgen` (wire-correct at 20250604) + `task loadtest` + recorded baseline (`28af5c3`). |
 | M14 F-07 frame cap | ✅ done | Packet DB `MaxLength` + gateway close-on-oversize (this commit). |
-| M13 Agones adapter | 🟡 partial | Sidecar lifecycle + fleet directory + manifests wired; the advertised map address from the allocation (SDK `GetGameServer`) + sharding keys remain — see § M13 Open. |
+| M13 Agones adapter | ✅ done | Sidecar lifecycle + fleet directory + manifests + the advertised map address from the allocation (SDK `GetGameServer`) + the player-count counter + the per-map address handoff. The sharding keys (which NATS subject a zone's traffic belongs on) remain — see § M13 Open. |
 | M13 economy over NATS | ✅ done | `economy.Service` seam + `remote.Proxy`/`Server` + `serve-economy` host; sharding keys remain. |
 | Release pipeline hardening | ✅ done | Deps cleared the trivy HIGH gate (`v0.1.0-beta.6`+); gosec/govulncheck in hook+CI (`5503b26`); tags gated main (`6a93c9c`); auto GitHub Release (`8af706e`); all live-verified through `v0.1.0-beta.8`. **The gate also fired for real**: `v0.1.0-beta.9`'s scan failed on 5 HIGH advisories the local govulncheck gate does not see (govulncheck reports only reachable vulnerabilities; the release scan reads the whole shipped binary). Fixed in `500fcf6` (golang:1.27.3, x/net v0.62.0, module Go directive 1.27.3) and released as `v0.1.0-beta.10`. **`latest` was dead**: cd.yml gates the `latest` tag on `is_default_branch`, but cd.yml fires on tag pushes and a tag push is never on the default branch — so `latest` was never published and stayed pinned to a stale image carrying 16 HIGH advisories. Fixed in `f8cfe80` (the rule now tracks the newest release unconditionally) plus a manual prune workflow (`.github/workflows/prune-image.yml`), because deleting a package version needs `packages: delete`, which only a workflow's own `GITHUB_TOKEN` has. | The registry was then pruned: every tag from beta.1 to beta.9 and every SHA-tagged build carried 8-20 HIGH and 1 CRITICAL advisory (the publish job only ever adds tags, so they accumulated), and only `latest`, `0.1.0-beta.10` and `0.1.0-beta.11` remain, all three scanning clean. **Released**: `v0.1.0-beta.11`, guard/publish/scan/release all green, prerelease live at https://github.com/bouroo/goAthena/releases/tag/v0.1.0-beta.11. **The Go bump broke CI's lint job** and the comment above the linter pin says exactly how: golangci-lint embeds its own type-checker, so a linter built against an older Go cannot read the newer stdlib's export data — v2.13.2 (built with go1.27.0) fails on Go 1.27.3 with `export data version 5 is greater than maximum supported version 4`, naming no project file. Fixed in `f1a4b18` (pin to v2.15.0; verified v2.14.0 and v2.15.0 read it, v2.13.2 does not). CI is green again on every job.
 
