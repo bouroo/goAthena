@@ -107,6 +107,15 @@ does: the release is `v0.1.0-beta.19` and the image is
 `type=semver`, and semver's `{{version}}` has no `v`. Pinning the
 release's own tag form gives `ImagePullBackOff` on every shard.
 
+The published image is **amd64 only** — the release workflow builds it on
+`ubuntu-latest` with no `platforms` matrix, so the manifest index carries
+one linux/amd64 entry. An arm64 node (an Apple Silicon workstation, an
+Ampere Graviton node) cannot pull it: the pull fails with `no image
+found in image index for architecture "arm64"`. On an arm64 cluster, the
+shards need an arm64 image — either a multi-arch build of the release
+workflow, or a locally built one pushed to a registry the cluster can
+reach.
+
 **3. The addresses the client is handed.** This is the one that bites.
 
 The client is told the char and map endpoints inside `AC_ACCEPT_LOGIN`,
