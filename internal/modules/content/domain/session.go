@@ -4,6 +4,8 @@ package domain
 
 import (
 	"context"
+
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 )
 
 // DialogSignal is the value sent over a dialog session's channel when the client
@@ -35,10 +37,31 @@ type ScriptWorld interface {
 	// WarpPlayer persists the player's destination map + tile. The caller emits
 	// ZC_NPCACK_MAPMOVE; the client reconnects and re-enters there.
 	WarpPlayer(charID uint32, mapName string, x, y int16) error
+	// ResolveZone returns the zone serving mapName via the transit
+	// MapDirectory (M12). A zero Zone means "this process" — the local warp
+	// path; a non-zero Zone carries the remote ip:port the redirect frame
+	// needs. ErrUnknownMap also means "no remote zone" (stay local).
+	ResolveZone(mapName string) (transitdomain.Zone, error)
+	// LeaveRemoteZone tears the char out of THIS zone's world on a cross-zone
+	// redirect: vitals/EXP persist, the offline row records the destination
+	// cell so the remote zone's EnterMap loads the player there.
+	LeaveRemoteZone(ctx context.Context, charID uint32, x, y int16) error
 	// HealPlayer restores HP and SP by hpPct/spPct percent of the player's
 	// maximums, clamped to [0, max], and returns the resulting (HP, SP) so the
 	// caller can emit the stat-change packets.
 	HealPlayer(charID uint32, hpPct, spPct int) (hp, sp int32, err error)
+	// Announce delivers an announcement to the players the flag's BC_* target
+	// bits select, anchored on anchorID — the NPC running the script when the
+	// flag carries BC_NPC, the dialog's player otherwise. The world module
+	// resolves the audience and hands it to the gateway, which owns the
+	// connections; the content module never sees them.
+	Announce(anchorID uint32, msg string, flag int)
+	// AnnounceMap delivers an announcement to every player on mapName, which is
+	// what rAthena's mapannounce selects (it ignores the flag's target bits).
+	AnnounceMap(mapName, msg string, flag int)
+	// HealAbs restores HP and SP by absolute amounts, clamped to [0, max]. It is
+	// the `heal` builtin's effect, distinct from HealPlayer's percentages.
+	HealAbs(charID uint32, hp, sp int) error
 }
 
 // ScriptInventory is the inventory capability the script VM bridge needs for
@@ -47,10 +70,9 @@ type ScriptWorld interface {
 // inventory service); isolating the port here keeps the content domain free of
 // inventory/app imports.
 //
-// Returned booleans mirror rAthena's BUILDIN_DEF(item/getitem/etc.) return
-// shape: true on success, false on rejection (full bag, missing stack, etc.).
-// The VM thread keeps running on either — the script author can branch on the
-// return value.
+// Returned booleans mirror rAthena's BUILDIN_DEF return shape: true on
+// success, false on rejection (full bag, missing stack, etc.). The VM thread
+// keeps running on either — the script author can branch on the return value.
 type ScriptInventory interface {
 	// GetItem grants amount units of nameID to charID. Returns false when the
 	// inventory cannot accept (weight/capacity exceeded) so the caller can
@@ -79,10 +101,13 @@ type ScriptInventory interface {
 // waiting for the client's response. CharID is the player's entity id (char_id)
 // so effect builtins can target the player in the world.
 type DialogSession struct {
-	NpcID  uint32
-	CharID uint32
-	Writer PacketWriter
-	Signal chan DialogSignal
+	NpcID uint32
+	// AccountID is the player's account (AID). The warehouse is an
+	// account-scoped store, so the storage port needs it alongside CharID.
+	AccountID uint32
+	CharID    uint32
+	Writer    PacketWriter
+	Signal    chan DialogSignal
 }
 
 // NPCStore resolves an NPC entity GID to its script name (so a click can find
@@ -117,6 +142,21 @@ type ScriptQuest interface {
 	// (`getvariableofnpc(npcName, varName)`). Same semantics as GetVar but
 	// the npcName is the argument, not the current NPC.
 	GetVarOfNPC(charID uint32, npcName, varName string) int64
+}
+
+// ScriptStorage is the warehouse capability the script VM bridge needs for
+// the `openstorage` builtin. It is implemented by the gateway (it owns the
+// player's connection and the storage frames); isolating the port here keeps
+// the content domain free of gateway imports.
+//
+// The warehouse is an account-scoped store (rAthena's kafra storage), so the
+// port carries both ids: charID addresses the player's live connection,
+// accountID selects the warehouse rows. A nil port disables the builtin.
+type ScriptStorage interface {
+	// OpenStorage opens the account's warehouse for the given player,
+	// emitting the storage item lists and the item count. It is a no-op
+	// when the player has no live connection or no storage is wired.
+	OpenStorage(accountID, charID uint32)
 }
 
 // CurrentNPCName returns the script name the current NPC dialog is running

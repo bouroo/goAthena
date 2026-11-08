@@ -62,19 +62,19 @@ func readFrame(t *testing.T, r io.Reader) (uint16, []byte) {
 	// Every party reply here has a fixed size except ZC_GROUP_LIST, which
 	// carries its length at offset 2 and is read by its own helper.
 	switch c {
-	case ropacket.HeaderZCACKMAKEGROUP:
+	case ropacket.HeaderZCACKMAKEGROUP():
 		body := make([]byte, ropacket.AckMakeGroupResponse{}.Size()-2)
 		if _, err := io.ReadFull(r, body); err != nil {
 			t.Fatalf("read ZC_ACK_MAKE_GROUP body: %v", err)
 		}
 		return c, body
-	case ropacket.HeaderZCPARTYCONFIG:
+	case ropacket.HeaderZCPARTYCONFIG():
 		body := make([]byte, ropacket.PartyConfigResponse{}.Size()-2)
 		if _, err := io.ReadFull(r, body); err != nil {
 			t.Fatalf("read ZC_PARTY_CONFIG body: %v", err)
 		}
 		return c, body
-	case ropacket.HeaderZCGROUPLIST:
+	case ropacket.HeaderZCGROUPLIST():
 		lenBuf := make([]byte, 2)
 		if _, err := io.ReadFull(r, lenBuf); err != nil {
 			t.Fatalf("read ZC_GROUP_LIST len: %v", err)
@@ -105,14 +105,14 @@ func TestParty_CreateEmitsAckThenRoster(t *testing.T) {
 
 	// CZ_MAKE_GROUP (0x00f9) is a fixed 26 bytes at this PACKETVER.
 	frame := make([]byte, 26)
-	binary.LittleEndian.PutUint16(frame[0:], ropacket.HeaderCZMAKEGROUP)
+	binary.LittleEndian.PutUint16(frame[0:], ropacket.HeaderCZMAKEGROUP())
 	copy(frame[2:26], "Athena")
 	if _, err := conn.Write(frame); err != nil {
 		t.Fatalf("send CZ_MAKE_GROUP: %v", err)
 	}
 
 	cmd, body := readFrame(t, conn)
-	if cmd != ropacket.HeaderZCACKMAKEGROUP {
+	if cmd != ropacket.HeaderZCACKMAKEGROUP() {
 		t.Fatalf("first reply cmd = 0x%04x, want ZC_ACK_MAKE_GROUP", cmd)
 	}
 	if body[0] != ropacket.PartyCreateOK {
@@ -120,7 +120,7 @@ func TestParty_CreateEmitsAckThenRoster(t *testing.T) {
 	}
 
 	cmd, body = readFrame(t, conn)
-	if cmd != ropacket.HeaderZCGROUPLIST {
+	if cmd != ropacket.HeaderZCGROUPLIST() {
 		t.Fatalf("second reply cmd = 0x%04x, want ZC_GROUP_LIST", cmd)
 	}
 	// body = [len(2)] + partyName(24) + N*54.
@@ -170,7 +170,7 @@ func TestParty_LoadEndAckRestoresRoster(t *testing.T) {
 	drainUntilPartyConfig(t, conn)
 
 	cmd, body := readFrame(t, conn)
-	if cmd != ropacket.HeaderZCGROUPLIST {
+	if cmd != ropacket.HeaderZCGROUPLIST() {
 		t.Fatalf("post-burst cmd = 0x%04x, want ZC_GROUP_LIST", cmd)
 	}
 	if name := cstr(body[2:26]); name != "Athena" {
@@ -194,18 +194,18 @@ func drainUntilPartyConfig(t *testing.T, r io.Reader) {
 		}
 		cmd := binary.LittleEndian.Uint16(cmdBuf[:])
 		switch cmd {
-		case ropacket.HeaderZCPARTYCONFIG:
+		case ropacket.HeaderZCPARTYCONFIG():
 			// Consume its single payload byte and stop.
 			if _, err := io.ReadFull(r, make([]byte, 1)); err != nil {
 				t.Fatalf("drain burst: read ZC_PARTY_CONFIG body: %v", err)
 			}
 			return
-		case ropacket.HeaderZCINVENTORYSTART:
+		case ropacket.HeaderZCINVENTORYSTART():
 			// 6 bytes total: cmd(2) + declared length(2) + invType(1) + name[0].
 			if _, err := io.ReadFull(r, make([]byte, 4)); err != nil {
 				t.Fatalf("drain burst: read ZC_INVENTORY_START body: %v", err)
 			}
-		case ropacket.HeaderZCINVENTORYEND:
+		case ropacket.HeaderZCINVENTORYEND():
 			// 4 bytes total: cmd(2) + invType(1) + flag(1); no length field.
 			if _, err := io.ReadFull(r, make([]byte, 2)); err != nil {
 				t.Fatalf("drain burst: read ZC_INVENTORY_END body: %v", err)

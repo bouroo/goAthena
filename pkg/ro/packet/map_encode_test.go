@@ -14,7 +14,7 @@ func TestMapAcceptEnterResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r MapAcceptEnterResponse
-	if got, want := r.Size(), sizeZCAcceptEnter; got != want {
+	if got, want := r.Size(), sizeZCAcceptEnter(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -43,8 +43,9 @@ func TestMapAcceptEnterResponse_Encode(t *testing.T) {
 		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
 	}
 
-	if got[0] != 0xeb || got[1] != 0x02 {
-		t.Errorf("header bytes = %02x %02x, want eb 02 (LE 0x02eb)", got[0], got[1])
+	if want := HeaderZCACCEPTENTER(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	if startTime := binary.LittleEndian.Uint32(got[2:6]); startTime != 1000 {
@@ -110,7 +111,7 @@ func TestMapRefuseEnterResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r MapRefuseEnterResponse
-	if got, want := r.Size(), sizeZCRefuseEnter; got != want {
+	if got, want := r.Size(), sizeZCRefuseEnter(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -131,8 +132,9 @@ func TestMapRefuseEnterResponse_Encode(t *testing.T) {
 		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
 	}
 
-	if got[0] != 0x74 || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want 74 00 (LE 0x0074)", got[0], got[1])
+	if want := HeaderZCREFUSEENTER(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if got[2] != 2 {
 		t.Errorf("error byte at [2] = %d, want 2", got[2])
@@ -143,7 +145,7 @@ func TestMapNotifyPlayerMoveResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r MapNotifyPlayerMoveResponse
-	if got, want := r.Size(), sizeZCNotifyPlayerMove; got != want {
+	if got, want := r.Size(), sizeZCNotifyPlayerMove(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -171,8 +173,9 @@ func TestMapNotifyPlayerMoveResponse_Encode(t *testing.T) {
 	}
 
 	// Opcode at [0:2] = 0x0087 LE.
-	if got[0] != 0x87 || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want 87 00 (LE 0x0087)", got[0], got[1])
+	if want := HeaderZCNOTIFYPLAYERMOVE(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// moveStartTime at [2:6] = uint32 LE.
@@ -222,8 +225,9 @@ func TestMapNotifyPlayerMoveResponse_Encode_ZeroValues(t *testing.T) {
 	if len(got) != 12 {
 		t.Fatalf("zero-value len = %d, want 12", len(got))
 	}
-	if got[0] != 0x87 || got[1] != 0x00 {
-		t.Errorf("header = %02x %02x, want 87 00", got[0], got[1])
+	if want := HeaderZCNOTIFYPLAYERMOVE(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if startTime := binary.LittleEndian.Uint32(got[2:6]); startTime != 0 {
 		t.Errorf("moveStartTime = %d, want 0", startTime)
@@ -298,8 +302,9 @@ func TestSpawnUnitResponse_Encode(t *testing.T) {
 	}
 
 	// 2. Opcode at [0:2] = 0x09fe LE.
-	if got[0] != 0xfe || got[1] != 0x09 {
-		t.Errorf("opcode bytes = %02x %02x, want fe 09 (LE 0x09fe)", got[0], got[1])
+	if want := HeaderZCSPAWNUNIT(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// 3. PacketLength at [2:4] = 107 LE.
@@ -474,8 +479,9 @@ func TestSpawnUnitResponse_Encode_ZeroValues(t *testing.T) {
 	if len(got) != 107 {
 		t.Fatalf("zero-value len = %d, want 107", len(got))
 	}
-	if got[0] != 0xfe || got[1] != 0x09 {
-		t.Errorf("opcode = %02x %02x, want fe 09", got[0], got[1])
+	if want := HeaderZCSPAWNUNIT(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != 107 {
 		t.Errorf("packetLength = %d, want 107", plen)
@@ -565,8 +571,9 @@ func TestUnitWalkingResponse_Encode(t *testing.T) {
 	}
 
 	// 2. Opcode at [0:2] = 0x09fd LE.
-	if got[0] != 0xfd || got[1] != 0x09 {
-		t.Errorf("opcode bytes = %02x %02x, want fd 09 (LE 0x09fd)", got[0], got[1])
+	if want := HeaderZCUNITWALKING(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// 3. PacketLength at [2:4] = 114 LE.
@@ -756,8 +763,9 @@ func TestUnitWalkingResponse_Encode_ZeroValues(t *testing.T) {
 	if len(got) != 114 {
 		t.Fatalf("zero-value len = %d, want 114", len(got))
 	}
-	if got[0] != 0xfd || got[1] != 0x09 {
-		t.Errorf("opcode = %02x %02x, want fd 09", got[0], got[1])
+	if want := HeaderZCUNITWALKING(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != 114 {
 		t.Errorf("packetLength = %d, want 114", plen)
@@ -806,8 +814,8 @@ func TestCZEnterRequest_Encode_RoundTrip(t *testing.T) {
 	if err := req.Encode(&buf); err != nil {
 		t.Fatalf("Encode err = %v, want nil", err)
 	}
-	if got := buf.Len(); got != sizeCZEnter {
-		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCZEnter)
+	if got := buf.Len(); got != sizeCZEnter() {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCZEnter())
 	}
 
 	got, err := ParseCZEnter(buf.Bytes())
@@ -849,8 +857,8 @@ func TestCZRequestMoveRequest_Encode_RoundTrip(t *testing.T) {
 	if err := req.Encode(&buf); err != nil {
 		t.Fatalf("Encode err = %v, want nil", err)
 	}
-	if got := buf.Len(); got != sizeCZRequestMove {
-		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCZRequestMove)
+	if got := buf.Len(); got != sizeCZRequestMove() {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCZRequestMove())
 	}
 
 	got, err := ParseCZRequestMove(buf.Bytes())
@@ -907,7 +915,7 @@ func TestMapPropertyResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r MapPropertyResponse
-	if got, want := r.Size(), sizeZCMapPropertyR2; got != want {
+	if got, want := r.Size(), sizeZCMapPropertyR2(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -932,8 +940,9 @@ func TestMapPropertyResponse_Encode(t *testing.T) {
 	}
 
 	// Opcode at [0:2] = 0x099b LE.
-	if got[0] != 0x9b || got[1] != 0x09 {
-		t.Errorf("header bytes = %02x %02x, want 9b 09 (LE 0x099b)", got[0], got[1])
+	if want := HeaderZCMAPPROPERTYR2(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// propertyType at [2:4] = uint16 LE.
@@ -978,7 +987,7 @@ func TestNotifyTimeResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r NotifyTimeResponse
-	if got, want := r.Size(), sizeZCNotifyTime; got != want {
+	if got, want := r.Size(), sizeZCNotifyTime(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -1000,8 +1009,9 @@ func TestNotifyTimeResponse_Encode(t *testing.T) {
 	}
 
 	// Opcode at [0:2] = 0x007f LE.
-	if got[0] != 0x7f || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want 7f 00 (LE 0x007f)", got[0], got[1])
+	if want := HeaderZCNOTIFYTIME(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// time at [2:6] = uint32 LE.
@@ -1026,8 +1036,9 @@ func TestNotifyTimeResponse_Encode_ZeroValues(t *testing.T) {
 	if len(got) != 6 {
 		t.Fatalf("zero-value len = %d, want 6", len(got))
 	}
-	if got[0] != 0x7f || got[1] != 0x00 {
-		t.Errorf("header = %02x %02x, want 7f 00", got[0], got[1])
+	if want := HeaderZCNOTIFYTIME(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if t1 := binary.LittleEndian.Uint32(got[2:6]); t1 != 0 {
 		t.Errorf("time = %d, want 0", t1)
@@ -1045,8 +1056,8 @@ func TestCZRequestTimeRequest_Encode_RoundTrip(t *testing.T) {
 	if err := req.Encode(&buf); err != nil {
 		t.Fatalf("Encode err = %v, want nil", err)
 	}
-	if got := buf.Len(); got != sizeCZRequestTime {
-		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCZRequestTime)
+	if got := buf.Len(); got != sizeCZRequestTime() {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCZRequestTime())
 	}
 
 	got, err := ParseCZRequestTime(buf.Bytes())
@@ -1090,8 +1101,9 @@ func TestCZRequestTimeRequest_Encode_LayoutSpotCheck(t *testing.T) {
 	}
 	got := buf.Bytes()
 
-	if got[0] != 0x7e || got[1] != 0x00 {
-		t.Errorf("opcode = %02x %02x, want 7e 00 (LE 0x007e)", got[0], got[1])
+	if want := HeaderCZREQUESTTIME(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("opcode = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if tick := binary.LittleEndian.Uint32(got[2:6]); tick != 0xDEADBEEF {
 		t.Errorf("clientTick = 0x%x, want 0xDEADBEEF", tick)
@@ -1104,7 +1116,7 @@ func TestStatusResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r StatusResponse
-	if got, want := r.Size(), sizeZCStatus; got != want {
+	if got, want := r.Size(), sizeZCStatus(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -1141,8 +1153,9 @@ func TestStatusResponse_Encode(t *testing.T) {
 	}
 
 	// Opcode at [0:2] = 0x00bd LE.
-	if got[0] != 0xbd || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want bd 00 (LE 0x00bd)", got[0], got[1])
+	if want := HeaderZCSTATUS(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// statusPoint at [2:4] = uint16 LE = 42.
@@ -1206,7 +1219,7 @@ func TestParChangeResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r ParChangeResponse
-	if got, want := r.Size(), sizeZCParChange; got != want {
+	if got, want := r.Size(), sizeZCParChange(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -1225,8 +1238,9 @@ func TestParChangeResponse_Encode(t *testing.T) {
 	if len(got) != wantLen {
 		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
 	}
-	if got[0] != 0xb0 || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want b0 00 (LE 0x00b0)", got[0], got[1])
+	if want := HeaderZCPARCHANGE(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if vid := binary.LittleEndian.Uint16(got[2:4]); vid != SPHP {
 		t.Errorf("varID = %d, want %d (SPHP)", vid, SPHP)
@@ -1259,7 +1273,7 @@ func TestLongParChangeResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r LongParChangeResponse
-	if got, want := r.Size(), sizeZCLongParChange; got != want {
+	if got, want := r.Size(), sizeZCLongParChange(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -1278,8 +1292,9 @@ func TestLongParChangeResponse_Encode(t *testing.T) {
 	if len(got) != wantLen {
 		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
 	}
-	if got[0] != 0xb1 || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want b1 00 (LE 0x00b1)", got[0], got[1])
+	if want := HeaderZCLONGPARCHANGE(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if vid := binary.LittleEndian.Uint16(got[2:4]); vid != SPZeny {
 		t.Errorf("varID = %d, want %d (SPZeny)", vid, SPZeny)
@@ -1296,7 +1311,7 @@ func TestLongLongParChangeResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r LongLongParChangeResponse
-	if got, want := r.Size(), sizeZCLongLongParChange; got != want {
+	if got, want := r.Size(), sizeZCLongLongParChange(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -1316,8 +1331,9 @@ func TestLongLongParChangeResponse_Encode(t *testing.T) {
 	if len(got) != wantLen {
 		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
 	}
-	if got[0] != 0xcb || got[1] != 0x0a {
-		t.Errorf("header bytes = %02x %02x, want cb 0a (LE 0x0acb)", got[0], got[1])
+	if want := HeaderZCLONGLONGPARCHANGE(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if vid := binary.LittleEndian.Uint16(got[2:4]); vid != SPBaseExp {
 		t.Errorf("varID = %d, want %d (SPBaseExp)", vid, SPBaseExp)
@@ -1459,9 +1475,9 @@ func TestEncodeEmptySkillList(t *testing.T) {
 	if len(got) != wantLen {
 		t.Fatalf("len = %d, want %d", len(got), wantLen)
 	}
-	if got[0] != 0x0f || got[1] != 0x01 {
-		t.Errorf("opcode bytes = %02x %02x, want 0f 01 (LE 0x010f ZC_SKILLINFO_LIST)",
-			got[0], got[1])
+	if want := HeaderZCSKILLINFOLIST(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("opcode bytes = %02x %02x, want %02x %02x (LE 0x%04x ZC_SKILLINFO_LIST)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
 		t.Errorf("packetLength = %d, want %d", plen, wantLen)
@@ -1570,9 +1586,9 @@ func TestNotifyChatResponse_Encode(t *testing.T) {
 	}
 
 	// Opcode bytes at [0:2] = 0x008d (LE → 0x8d 0x00).
-	if got[0] != 0x8d || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want 8d 00 (LE 0x008d ZC_NOTIFY_CHAT)",
-			got[0], got[1])
+	if want := HeaderZCNOTIFYCHAT(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	// packetLength at [2:4] = 14 (LE).
 	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
@@ -1653,8 +1669,9 @@ func TestCZGlobalMessageRequest_Encode(t *testing.T) {
 	if len(got) != wantLen {
 		t.Fatalf("len(got) = %d, want %d (buf=% x)", len(got), wantLen, got)
 	}
-	if got[0] != 0x8c || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want 8c 00 (LE 0x008c)", got[0], got[1])
+	if want := HeaderCZGLOBALMESSAGE(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("opcode bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
 		t.Errorf("packetLength = %d, want %d", plen, wantLen)
@@ -1682,94 +1699,13 @@ func TestCZGlobalMessageRequest_Encode_OversizedMessageRejected(t *testing.T) {
 	}
 }
 
-// TestActionResponse_Size pins the fixed 11-byte wire length that
-// ZC_ACTION_RESPONSE advertises. The dispatch handler relies on this
-// invariant to coalesce action echoes into the chat send path without
-// re-framing per packet.
-func TestActionResponse_Size(t *testing.T) {
-	t.Parallel()
-
-	var r ActionResponse
-	if got, want := r.Size(), sizeZCActionResponse; got != want {
-		t.Errorf("Size() = %d, want %d", got, want)
-	}
-}
-
-// TestActionResponse_Encode exercises the M11 sit/stand wire layout
-// byte-exact: [2:cmd=0x008b][4:GID][1:action][4:targetGID] = 11 bytes.
-func TestActionResponse_Encode(t *testing.T) {
-	t.Parallel()
-
-	resp := ActionResponse{
-		GID:       0xDEADBEEF,
-		Action:    0x01, // sit
-		TargetGID: 0x00000000,
-	}
-
-	var buf bytes.Buffer
-	if err := resp.Encode(&buf); err != nil {
-		t.Fatalf("Encode() unexpected error: %v", err)
-	}
-	got := buf.Bytes()
-
-	const wantLen = 11
-	if len(got) != wantLen {
-		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
-	}
-
-	// Opcode bytes at [0:2] = 0x008b (LE → 0x8b 0x00).
-	if got[0] != 0x8b || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want 8b 00 (LE 0x008b ZC_ACTION_RESPONSE)",
-			got[0], got[1])
-	}
-	// GID at [2:6] = 0xDEADBEEF.
-	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
-		t.Errorf("GID = 0x%x, want 0xDEADBEEF", gid)
-	}
-	// action at [6] = 0x01.
-	if got[6] != 0x01 {
-		t.Errorf("action = 0x%02x, want 0x01", got[6])
-	}
-	// targetGID at [7:11] = 0.
-	if tgt := binary.LittleEndian.Uint32(got[7:11]); tgt != 0 {
-		t.Errorf("targetGID = 0x%x, want 0", tgt)
-	}
-}
-
-// TestActionResponse_Encode_AttackSelector verifies the byte-exact
-// encoding for action code 2 (attack per rAthena's mapping; the M11
-// dispatch drops it but the wire encoder must still serialize it
-// correctly for future callers).
-func TestActionResponse_Encode_AttackSelector(t *testing.T) {
-	t.Parallel()
-
-	resp := ActionResponse{
-		GID:       0x01020304,
-		Action:    0x02,
-		TargetGID: 0xAABBCCDD,
-	}
-
-	var buf bytes.Buffer
-	if err := resp.Encode(&buf); err != nil {
-		t.Fatalf("Encode() unexpected error: %v", err)
-	}
-	got := buf.Bytes()
-
-	if got[6] != 0x02 {
-		t.Errorf("action = 0x%02x, want 0x02", got[6])
-	}
-	if tgt := binary.LittleEndian.Uint32(got[7:11]); tgt != 0xAABBCCDD {
-		t.Errorf("targetGID = 0x%x, want 0xAABBCCDD", tgt)
-	}
-}
-
 // TestChangeDirResponse_Size pins the fixed 9-byte wire length that
 // ZC_CHANGE_DIRECTION advertises (rathena/src/map/packets.hpp:688-694).
 func TestChangeDirResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r ChangeDirResponse
-	if got, want := r.Size(), sizeZCChangeDir; got != want {
+	if got, want := r.Size(), sizeZCChangeDir(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -1798,9 +1734,9 @@ func TestChangeDirResponse_Encode(t *testing.T) {
 	}
 
 	// Opcode bytes at [0:2] = 0x009c (LE → 0x9c 0x00).
-	if got[0] != 0x9c || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want 9c 00 (LE 0x009c ZC_CHANGE_DIRECTION)",
-			got[0], got[1])
+	if want := HeaderZCCHANGEDIR(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	// srcId at [2:6] = 0xDEADBEEF.
 	if src := binary.LittleEndian.Uint32(got[2:6]); src != 0xDEADBEEF {
@@ -1832,8 +1768,9 @@ func TestChangeDirResponse_Encode_ZeroValues(t *testing.T) {
 		t.Fatalf("len(got) = %d, want 9", len(got))
 	}
 	// Opcode slot [0:2] must be the literal little-endian 0x009c.
-	if got[0] != 0x9c || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want 9c 00", got[0], got[1])
+	if want := HeaderZCCHANGEDIR(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	for i := 2; i < len(got); i++ {
 		if b := got[i]; b != 0 {
@@ -1848,7 +1785,7 @@ func TestEmotionResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r EmotionResponse
-	if got, want := r.Size(), sizeZCEmotion; got != want {
+	if got, want := r.Size(), sizeZCEmotion(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -1876,9 +1813,9 @@ func TestEmotionResponse_Encode(t *testing.T) {
 	}
 
 	// Opcode bytes at [0:2] = 0x00c0 (LE → 0xc0 0x00).
-	if got[0] != 0xc0 || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want c0 00 (LE 0x00c0 ZC_EMOTION)",
-			got[0], got[1])
+	if want := HeaderZCEMOTION(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	// GID at [2:6] = 0xDEADBEEF.
 	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
@@ -1896,7 +1833,7 @@ func TestEmotionResponse_Encode(t *testing.T) {
 func TestSpriteChangeResponse_Size(t *testing.T) {
 	t.Parallel()
 	var r SpriteChangeResponse
-	if got, want := r.Size(), sizeZCSpriteChange; got != want {
+	if got, want := r.Size(), sizeZCSpriteChange(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -1926,9 +1863,9 @@ func TestSpriteChangeResponse_Encode(t *testing.T) {
 	}
 
 	// Opcode [0:2] = 0x01d7 (LE → 0xd7 0x01).
-	if got[0] != 0xd7 || got[1] != 0x01 {
-		t.Errorf("opcode bytes = %02x %02x, want d7 01 (LE 0x01d7 ZC_SPRITE_CHANGE)",
-			got[0], got[1])
+	if want := HeaderZCSPRITECHANGE(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	// GID [2:6] = 0xDEADBEEF.
 	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
@@ -1964,8 +1901,9 @@ func TestEmotionResponse_Encode_ZeroValues(t *testing.T) {
 		t.Fatalf("len(got) = %d, want 7", len(got))
 	}
 	// Opcode slot [0:2] must be the literal little-endian 0x00c0.
-	if got[0] != 0xc0 || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want c0 00", got[0], got[1])
+	if want := HeaderZCEMOTION(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	for i := 2; i < len(got); i++ {
 		if b := got[i]; b != 0 {
@@ -1990,8 +1928,9 @@ func TestCZChangeDirRequest_Encode_RoundTrip(t *testing.T) {
 	if len(got) != 5 {
 		t.Fatalf("len(got) = %d, want 5", len(got))
 	}
-	if got[0] != 0x9b || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want 9b 00", got[0], got[1])
+	if want := HeaderCZCHANGEDIR(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("opcode bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if hd := binary.LittleEndian.Uint16(got[2:4]); hd != 0x0001 {
 		t.Errorf("headDir = 0x%x, want 0x0001", hd)
@@ -2025,8 +1964,9 @@ func TestCZChangeDirRequest_Encode_ZeroValues(t *testing.T) {
 	if len(got) != 5 {
 		t.Fatalf("len(got) = %d, want 5", len(got))
 	}
-	if got[0] != 0x9b || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want 9b 00", got[0], got[1])
+	if want := HeaderCZCHANGEDIR(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("opcode bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	for i := 2; i < len(got); i++ {
 		if b := got[i]; b != 0 {
@@ -2121,8 +2061,9 @@ func TestAckReqNameResponse_Encode(t *testing.T) {
 		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
 	}
 
-	if got[0] != 0x95 || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want 95 00 (LE 0x0095)", got[0], got[1])
+	if want := HeaderZCACKREQNAME(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
@@ -2212,8 +2153,9 @@ func TestCZGetCharNameRequestRequest_Encode(t *testing.T) {
 	if len(got) != 6 {
 		t.Fatalf("len(got) = %d, want 6", len(got))
 	}
-	if got[0] != 0x94 || got[1] != 0x00 {
-		t.Errorf("opcode bytes = %02x %02x, want 94 00", got[0], got[1])
+	if want := HeaderCZGETCHARNAMEREQUEST(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("opcode bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xCAFEBABE {
 		t.Errorf("GID = 0x%x, want 0xCAFEBABE", gid)
@@ -2326,8 +2268,9 @@ func TestSetUnitIdleResponse_Encode(t *testing.T) {
 	}
 
 	// Opcode at [0:2] = 0x09ff LE.
-	if got[0] != 0xff || got[1] != 0x09 {
-		t.Errorf("opcode bytes = %02x %02x, want ff 09 (LE 0x09ff)", got[0], got[1])
+	if want := HeaderZCSETUNITIDLE(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// PacketLength at [2:4] = 107 LE.
@@ -2404,8 +2347,9 @@ func TestSetUnitIdleResponse_Encode_ZeroValues(t *testing.T) {
 	if len(got) != 107 {
 		t.Fatalf("zero-value len = %d, want 107", len(got))
 	}
-	if got[0] != 0xff || got[1] != 0x09 {
-		t.Errorf("opcode = %02x %02x, want ff 09", got[0], got[1])
+	if want := HeaderZCSETUNITIDLE(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != 107 {
 		t.Errorf("packetLength = %d, want 107", plen)
@@ -2456,9 +2400,9 @@ func TestSayDialog2Response_Encode(t *testing.T) {
 	}
 	got := buf.Bytes()
 
-	// Header: 0x0972 LE.
-	if got[0] != 0x72 || got[1] != 0x09 {
-		t.Errorf("header bytes = %02x %02x, want 72 09 (LE 0x0972)", got[0], got[1])
+	// The header comes from the installed source pack.
+	if want := HeaderZCSAYDIALOG2(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)", got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// PacketLength at [2:4] = 2+2+4+1+len(msg)+1.
@@ -2536,7 +2480,7 @@ func TestWaitDialog2Response_Size(t *testing.T) {
 	t.Parallel()
 
 	var r WaitDialog2Response
-	if got, want := r.Size(), sizeZCWaitDialog2; got != want {
+	if got, want := r.Size(), sizeZCWaitDialog2(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -2555,13 +2499,15 @@ func TestWaitDialog2Response_Encode(t *testing.T) {
 	}
 	got := buf.Bytes()
 
-	if len(got) != sizeZCWaitDialog2 {
-		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCWaitDialog2)
+	if len(got) != sizeZCWaitDialog2() {
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCWaitDialog2())
 	}
 
-	// Header: 0x0973 LE.
-	if got[0] != 0x73 || got[1] != 0x09 {
-		t.Errorf("header bytes = %02x %02x, want 73 09 (LE 0x0973)", got[0], got[1])
+	// The header comes from the installed source pack: the wait dialog's
+	// opcode is 0x0973 for the modern client family and 0x00b5 for the
+	// older one.
+	if want := HeaderZCWAITDIALOG2(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)", got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// NpcID at [2:6] = 110000001.
@@ -2569,8 +2515,10 @@ func TestWaitDialog2Response_Encode(t *testing.T) {
 		t.Errorf("NpcID = %d, want 110000001", nid)
 	}
 
-	// Type at [6] = 0.
-	if got[6] != 0 {
+	// The source's struct carries the dialog type only for the modern
+	// client family, so the byte is present only when the resolved layout
+	// has room for it.
+	if len(got) >= 7 && got[6] != 0 {
 		t.Errorf("type = %d, want 0", got[6])
 	}
 }
@@ -2579,7 +2527,7 @@ func TestCloseDialogResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r CloseDialogResponse
-	if got, want := r.Size(), sizeZCCloseDialog; got != want {
+	if got, want := r.Size(), sizeZCCloseDialog(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -2597,13 +2545,14 @@ func TestCloseDialogResponse_Encode(t *testing.T) {
 	}
 	got := buf.Bytes()
 
-	if len(got) != sizeZCCloseDialog {
-		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCCloseDialog)
+	if len(got) != sizeZCCloseDialog() {
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCCloseDialog())
 	}
 
 	// Header: 0x00b6 LE.
-	if got[0] != 0xb6 || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want b6 00 (LE 0x00b6)", got[0], got[1])
+	if want := HeaderZCCLOSEDIALOG(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// NpcID at [2:6] = 110000001.
@@ -2619,7 +2568,7 @@ func TestSelectDealtypeResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r SelectDealtypeResponse
-	if got, want := r.Size(), sizeZCSelectDealtype; got != want {
+	if got, want := r.Size(), sizeZCSelectDealtype(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -2635,13 +2584,14 @@ func TestSelectDealtypeResponse_Encode(t *testing.T) {
 	}
 	got := buf.Bytes()
 
-	if len(got) != sizeZCSelectDealtype {
-		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCSelectDealtype)
+	if len(got) != sizeZCSelectDealtype() {
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCSelectDealtype())
 	}
 
 	// Header: 0x00c4 LE.
-	if got[0] != 0xc4 || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want c4 00 (LE 0x00c4)", got[0], got[1])
+	if want := HeaderZCSELECTDEALTYPE(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// NpcID at [2:6] = 110000002.
@@ -2672,8 +2622,9 @@ func TestPurchaseItemListResponse_Encode_SingleItem(t *testing.T) {
 	}
 
 	// Header: 0x0b77 LE.
-	if got[0] != 0x77 || got[1] != 0x0b {
-		t.Errorf("header bytes = %02x %02x, want 77 0b (LE 0x0b77)", got[0], got[1])
+	if want := HeaderZCPCPURCHASEITEMLIST(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 
 	// packetLength at [2:4] = 23.
@@ -2764,8 +2715,9 @@ func TestPurchaseItemListResponse_Encode_EmptyList(t *testing.T) {
 	if len(got) != 4 {
 		t.Fatalf("len(got) = %d, want 4", len(got))
 	}
-	if got[0] != 0x77 || got[1] != 0x0b {
-		t.Errorf("header bytes = %02x %02x, want 77 0b (LE 0x0b77)", got[0], got[1])
+	if want := HeaderZCPCPURCHASEITEMLIST(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != 4 {
 		t.Errorf("packetLength = %d, want 4", plen)
@@ -2776,7 +2728,7 @@ func TestPurchaseResultResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r PurchaseResultResponse
-	if got, want := r.Size(), sizeZCPCPurchaseResult; got != want {
+	if got, want := r.Size(), sizeZCPCPurchaseResult(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -2803,8 +2755,8 @@ func TestPurchaseResultResponse_Encode(t *testing.T) {
 			}
 			got := buf.Bytes()
 
-			if len(got) != sizeZCPCPurchaseResult {
-				t.Fatalf("len(got) = %d, want %d", len(got), sizeZCPCPurchaseResult)
+			if len(got) != sizeZCPCPurchaseResult() {
+				t.Fatalf("len(got) = %d, want %d", len(got), sizeZCPCPurchaseResult())
 			}
 
 			// Header: 0x00ca LE.
@@ -2829,7 +2781,7 @@ func TestSellItemListResponse_Size(t *testing.T) {
 		t.Errorf("Size() = %d, want %d (empty list = 4 bytes)", got, want)
 	}
 	resp := SellItemListResponse{Items: make([]ShopSellItem, 3)}
-	if got, want := resp.Size(), 4+3*sizeZCPCSellItemListItem; got != want {
+	if got, want := resp.Size(), 4+3*sizeZCPCSellItemListItem(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -2846,12 +2798,13 @@ func TestSellItemListResponse_Encode_SingleItem(t *testing.T) {
 		t.Fatalf("Encode: %v", err)
 	}
 	got := buf.Bytes()
-	wantLen := 4 + sizeZCPCSellItemListItem
+	wantLen := 4 + sizeZCPCSellItemListItem()
 	if len(got) != wantLen {
 		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
 	}
-	if got[0] != 0xc7 || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want c7 00 (LE 0x00c7)", got[0], got[1])
+	if want := HeaderZCPCSELLITEMLIST(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if plen := binary.LittleEndian.Uint16(got[2:4]); int(plen) != wantLen {
 		t.Errorf("packetLength = %d, want %d", plen, wantLen)
@@ -2882,7 +2835,7 @@ func TestSellItemListResponse_Encode_MultipleItems(t *testing.T) {
 		t.Fatalf("Encode: %v", err)
 	}
 	got := buf.Bytes()
-	wantLen := 4 + 3*sizeZCPCSellItemListItem
+	wantLen := 4 + 3*sizeZCPCSellItemListItem()
 	if len(got) != wantLen {
 		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
 	}
@@ -2890,7 +2843,7 @@ func TestSellItemListResponse_Encode_MultipleItems(t *testing.T) {
 		t.Errorf("packetLength = %d, want %d", plen, wantLen)
 	}
 	// Spot-check the second item at offset 4 + 10 = 14.
-	off := 4 + sizeZCPCSellItemListItem
+	off := 4 + sizeZCPCSellItemListItem()
 	if idx := binary.LittleEndian.Uint16(got[off : off+2]); idx != 2 {
 		t.Errorf("item[1] index = %d, want 2", idx)
 	}
@@ -2912,8 +2865,9 @@ func TestSellItemListResponse_Encode_EmptyList(t *testing.T) {
 	if len(got) != 4 {
 		t.Fatalf("len(got) = %d, want 4", len(got))
 	}
-	if got[0] != 0xc7 || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want c7 00", got[0], got[1])
+	if want := HeaderZCPCSELLITEMLIST(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != 4 {
 		t.Errorf("packetLength = %d, want 4", plen)
@@ -2923,7 +2877,7 @@ func TestSellItemListResponse_Encode_EmptyList(t *testing.T) {
 func TestSellResultResponse_Size(t *testing.T) {
 	t.Parallel()
 	var r SellResultResponse
-	if got, want := r.Size(), sizeZCPCSellResult; got != want {
+	if got, want := r.Size(), sizeZCPCSellResult(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -2946,8 +2900,8 @@ func TestSellResultResponse_Encode(t *testing.T) {
 				t.Fatalf("Encode: %v", err)
 			}
 			got := buf.Bytes()
-			if len(got) != sizeZCPCSellResult {
-				t.Fatalf("len(got) = %d, want %d", len(got), sizeZCPCSellResult)
+			if len(got) != sizeZCPCSellResult() {
+				t.Fatalf("len(got) = %d, want %d", len(got), sizeZCPCSellResult())
 			}
 			if got[0] != 0xcb || got[1] != 0x00 {
 				t.Errorf("header bytes = %02x %02x, want cb 00 (LE 0x00cb)", got[0], got[1])
@@ -2962,7 +2916,7 @@ func TestSellResultResponse_Encode(t *testing.T) {
 func TestNotifyActResponse_Size(t *testing.T) {
 	t.Parallel()
 	var r NotifyActResponse
-	if got, want := r.Size(), sizeZCNotifyAct; got != want {
+	if got, want := r.Size(), sizeZCNotifyAct(); got != want {
 		t.Errorf("NotifyActResponse.Size() = %d, want %d", got, want)
 	}
 }
@@ -2982,8 +2936,8 @@ func TestNotifyActResponse_Encode(t *testing.T) {
 		t.Fatalf("Encode: %v", err)
 	}
 	out := buf.Bytes()
-	if len(out) != sizeZCNotifyAct {
-		t.Fatalf("length = %d, want %d", len(out), sizeZCNotifyAct)
+	if len(out) != sizeZCNotifyAct() {
+		t.Fatalf("length = %d, want %d", len(out), sizeZCNotifyAct())
 	}
 	// Opcode at [0:2] = 0x08c8 LE → 0xc8 0x08.
 	if out[0] != 0xc8 || out[1] != 0x08 {
@@ -3010,7 +2964,7 @@ func TestNotifyActResponse_Encode(t *testing.T) {
 func TestNotifyVanishResponse_Size(t *testing.T) {
 	t.Parallel()
 	var r NotifyVanishResponse
-	if got, want := r.Size(), sizeZCNotifyVanish; got != want {
+	if got, want := r.Size(), sizeZCNotifyVanish(); got != want {
 		t.Errorf("NotifyVanishResponse.Size() = %d, want %d", got, want)
 	}
 }
@@ -3026,8 +2980,8 @@ func TestNotifyVanishResponse_Encode(t *testing.T) {
 		t.Fatalf("Encode: %v", err)
 	}
 	out := buf.Bytes()
-	if len(out) != sizeZCNotifyVanish {
-		t.Fatalf("length = %d, want %d", len(out), sizeZCNotifyVanish)
+	if len(out) != sizeZCNotifyVanish() {
+		t.Fatalf("length = %d, want %d", len(out), sizeZCNotifyVanish())
 	}
 	// Opcode at [0:2] = 0x0080 LE → 0x80 0x00.
 	if out[0] != 0x80 || out[1] != 0x00 {
@@ -3047,7 +3001,7 @@ func TestRestartAckResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	var r RestartAckResponse
-	if got, want := r.Size(), sizeZCRestartAck; got != want {
+	if got, want := r.Size(), sizeZCRestartAck(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -3070,8 +3024,9 @@ func TestRestartAckResponse_Encode(t *testing.T) {
 	}
 
 	// Opcode at [0:2] = 0x00b3 LE → 0xb3 0x00.
-	if got[0] != 0xb3 || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want b3 00 (LE 0x00b3)", got[0], got[1])
+	if want := HeaderZCRESTARTACK(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	// type at [2] = 1 (char-select allowed).
 	if got[2] != 1 {
@@ -3112,8 +3067,9 @@ func TestMapMoveResponse_Encode(t *testing.T) {
 	if len(got) != 22 {
 		t.Fatalf("len = %d, want 22", len(got))
 	}
-	if got[0] != 0x91 || got[1] != 0x00 {
-		t.Errorf("header bytes = %02x %02x, want 91 00 (LE 0x0091)", got[0], got[1])
+	if want := HeaderZCNPCACKMAPMOVE(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	// mapName[16] at [2:18] — "izlude" zero-padded.
 	wantMap := make([]byte, 16)
@@ -3154,9 +3110,85 @@ func TestMapMoveResponse_Encode_ExactFitAndOverflow(t *testing.T) {
 	}
 }
 
+func TestServerMoveResponse_Size(t *testing.T) {
+	t.Parallel()
+
+	if got, want := (ServerMoveResponse{}).Size(), 156; got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+}
+
+func TestServerMoveResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	// IP/Port are pre-swapped wire values (see the field docs); 127.0.0.1:5121
+	// is 0x7f000001 BE / 0x1401 swapped.
+	resp := ServerMoveResponse{MapName: "izlude", X: 128, Y: 200, IP: 0x7f000001, Port: 0x1401}
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+	if len(got) != 156 {
+		t.Fatalf("len = %d, want 156", len(got))
+	}
+	if hdr := binary.LittleEndian.Uint16(got[0:]); hdr != HeaderZCNPCACKSERVERMOVE() {
+		t.Errorf("header = %#x, want %#x", hdr, HeaderZCNPCACKSERVERMOVE())
+	}
+	// mapName[24] at [2:26] — "izlude" zero-padded.
+	wantMap := make([]byte, 24)
+	copy(wantMap, "izlude")
+	if nameBytes := got[2:26]; !bytes.Equal(nameBytes, wantMap) {
+		t.Errorf("mapName slot = % x, want % x", nameBytes, wantMap)
+	}
+	if x := binary.LittleEndian.Uint16(got[26:28]); x != 128 {
+		t.Errorf("xPos = %d, want 128", x)
+	}
+	if y := binary.LittleEndian.Uint16(got[28:30]); y != 200 {
+		t.Errorf("yPos = %d, want 200", y)
+	}
+	if ip := binary.BigEndian.Uint32(got[30:34]); ip != 0x7f000001 {
+		t.Errorf("ip = %#x, want 0x7f000001 (big-endian wire)", ip)
+	}
+	if port := binary.BigEndian.Uint16(got[34:36]); port != 0x1401 {
+		t.Errorf("port = %#x, want 0x1401 (byte-swapped wire)", port)
+	}
+	// char domain[128] at [36:156] — all zero.
+	for i, b := range got[36:] {
+		if b != 0 {
+			t.Fatalf("domain[%d] = %#x, want 0 (empty domain)", i, b)
+		}
+	}
+}
+
+func TestServerMoveResponse_Encode_ExactFitAndOverflow(t *testing.T) {
+	t.Parallel()
+
+	// 24-byte map name — exact fit, no error.
+	var fit bytes.Buffer
+	fitName := strings.Repeat("M", 24)
+	if err := (ServerMoveResponse{MapName: fitName}).Encode(&fit); err != nil {
+		t.Fatalf("exact-fit Encode() unexpected error: %v", err)
+	}
+	if got := fit.Bytes()[2:26]; !bytes.Equal(got, []byte(fitName)) {
+		t.Errorf("exact-fit mapName = % x, want % x", got, []byte(fitName))
+	}
+
+	// 25-byte map name — overflow, sentinel error, no bytes written.
+	var over bytes.Buffer
+	if err := (ServerMoveResponse{MapName: strings.Repeat("M", 25)}).Encode(&over); err == nil {
+		t.Errorf("overflow Encode() error = nil, want ErrMapNameTooLong")
+	} else if !errors.Is(err, ErrMapNameTooLong) {
+		t.Errorf("overflow Encode() error = %v, want ErrMapNameTooLong", err)
+	}
+	if over.Len() != 0 {
+		t.Errorf("overflow wrote %d bytes, want 0", over.Len())
+	}
+}
+
 func TestReqNameAll2Response_Size(t *testing.T) {
 	t.Parallel()
-	if got, want := (ReqNameAll2Response{}).Size(), sizeZCAckReqNameAll2; got != want {
+	if got, want := (ReqNameAll2Response{}).Size(), sizeZCAckReqNameAll2(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -3174,11 +3206,12 @@ func TestReqNameAll2Response_Encode(t *testing.T) {
 		t.Fatalf("Encode() unexpected error: %v", err)
 	}
 	got := buf.Bytes()
-	if len(got) != sizeZCAckReqNameAll2 { // 106
-		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCAckReqNameAll2)
+	if len(got) != sizeZCAckReqNameAll2() { // 106
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCAckReqNameAll2())
 	}
-	if got[0] != 0x30 || got[1] != 0x0a {
-		t.Errorf("header = %02x %02x, want 30 0a (LE 0x0a30)", got[0], got[1])
+	if want := HeaderZCACKREQNAMEALL2(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xDEADBEEF {
 		t.Errorf("GID = 0x%x, want 0xDEADBEEF", gid)
@@ -3202,7 +3235,7 @@ func TestReqNameAll2Response_Encode(t *testing.T) {
 
 func TestReqNameAllNPCResponse_Size(t *testing.T) {
 	t.Parallel()
-	if got, want := (ReqNameAllNPCResponse{}).Size(), sizeZCAckReqNameAllNPC; got != want {
+	if got, want := (ReqNameAllNPCResponse{}).Size(), sizeZCAckReqNameAllNPC(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
@@ -3218,11 +3251,12 @@ func TestReqNameAllNPCResponse_Encode(t *testing.T) {
 		t.Fatalf("Encode() unexpected error: %v", err)
 	}
 	got := buf.Bytes()
-	if len(got) != sizeZCAckReqNameAllNPC { // 58
-		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCAckReqNameAllNPC)
+	if len(got) != sizeZCAckReqNameAllNPC() { // 58
+		t.Fatalf("len(got) = %d, want %d", len(got), sizeZCAckReqNameAllNPC())
 	}
-	if got[0] != 0xdf || got[1] != 0x0a {
-		t.Errorf("header = %02x %02x, want df 0a (LE 0x0adf)", got[0], got[1])
+	if want := HeaderZCACKREQNAMEALLNPC(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
 	}
 	if gid := binary.LittleEndian.Uint32(got[2:6]); gid != 0xCAFEBABE {
 		t.Errorf("GID = 0x%x, want 0xCAFEBABE", gid)
@@ -3237,5 +3271,99 @@ func TestReqNameAllNPCResponse_Encode(t *testing.T) {
 		if got[i] != 0 {
 			t.Errorf("title field byte[%d] = 0x%02x, want 0 (no title)", i, got[i])
 		}
+	}
+}
+
+// TestBroadcastResponse_Encode pins the ZC_BROADCAST layout for the yellow
+// (default) case: [2:cmd=0x009a][2:packetLength][n:message+null]. The length
+// slot must count the trailing NUL, matching clif_broadcast (clif.cpp:6725).
+func TestBroadcastResponse_Encode(t *testing.T) {
+	t.Parallel()
+
+	resp := BroadcastResponse{Message: "server up"}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	// 4 (header) + 9 ("server up") + 1 (NUL) = 14.
+	const wantLen = 14
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+	if want := HeaderZCBROADCAST(); got[0] != byte(want) || got[1] != byte(want>>8) {
+		t.Errorf("header bytes = %02x %02x, want %02x %02x (LE 0x%04x)",
+			got[0], got[1], byte(want), byte(want>>8), want)
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); plen != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	if !bytes.Equal(got[4:13], []byte("server up")) {
+		t.Errorf("message bytes = %q, want %q", got[4:13], "server up")
+	}
+	if got[13] != 0 {
+		t.Errorf("NUL terminator at [13] = 0x%02x, want 0x00", got[13])
+	}
+	if resp.Size() != wantLen {
+		t.Errorf("Size() = %d, want %d (must agree with Encode)", resp.Size(), wantLen)
+	}
+}
+
+// TestBroadcastResponse_Encode_BluePrefix proves the colour rides the text as
+// the "blue" marker clif_broadcast prepends — there is no colour field on the
+// wire (clif.cpp:6739).
+func TestBroadcastResponse_Encode_BluePrefix(t *testing.T) {
+	t.Parallel()
+
+	resp := BroadcastResponse{Message: "hi", Color: BroadcastColorBlue}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	got := buf.Bytes()
+
+	wantBody := "bluehi"
+	wantLen := 4 + len(wantBody) + 1
+	if len(got) != wantLen {
+		t.Fatalf("len(got) = %d, want %d", len(got), wantLen)
+	}
+	if plen := binary.LittleEndian.Uint16(got[2:4]); int(plen) != wantLen {
+		t.Errorf("packetLength = %d, want %d", plen, wantLen)
+	}
+	if !bytes.Equal(got[4:4+len(wantBody)], []byte(wantBody)) {
+		t.Errorf("body = %q, want %q", got[4:4+len(wantBody)], wantBody)
+	}
+	if resp.Size() != wantLen {
+		t.Errorf("Size() = %d, want %d", resp.Size(), wantLen)
+	}
+}
+
+// TestBroadcastResponse_Encode_WoePrefix pins the WoE marker ("ssss").
+func TestBroadcastResponse_Encode_WoePrefix(t *testing.T) {
+	t.Parallel()
+
+	resp := BroadcastResponse{Message: "war", Color: BroadcastColorWoe}
+	var buf bytes.Buffer
+	if err := resp.Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	if got := buf.Bytes(); !bytes.HasPrefix(got[4:], []byte("ssss")) {
+		t.Errorf("body = %q, want an \"ssss\" prefix", got[4:])
+	}
+}
+
+// TestBroadcastResponse_Encode_EmptyMessageWritesNothing proves an empty
+// announcement emits no frame: rAthena drops a message shorter than two bytes
+// including its NUL (clif.cpp:6728), so the client never sees a malformed frame.
+func TestBroadcastResponse_Encode_EmptyMessageWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	if err := (BroadcastResponse{}).Encode(&buf); err != nil {
+		t.Fatalf("Encode() unexpected error: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("wrote %d bytes for an empty message, want 0", buf.Len())
 	}
 }

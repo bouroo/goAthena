@@ -255,6 +255,14 @@ dialect, map file formats, the DB schema, and game-data YAMLs — is the upstrea
 Classic fork, checked out as `third_party/rathenaThailand`). It's read for
 reference only; nothing from it is vendored into goAthena.
 
+The Thai fork is the **primary** target; upstream master is the
+**compatibility** set. Which one a deployment speaks is operator
+configuration (`client_source` / `client_variant` in `config.yaml`), and
+the whole protocol layer resolves from the selected source at boot — every
+opcode and wire length comes from the source's own runtime packet table,
+never from a hand-copied constant. See
+[ADR 0004](docs/adr/0004-source-pack-is-the-protocol-authority.md) for why.
+
 Quick map (where to look in rAthena for a given concern):
 
 | Concern | rAthena path |

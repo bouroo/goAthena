@@ -16,6 +16,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/bouroo/goAthena/internal/config"
+	"github.com/bouroo/goAthena/internal/infrastructure/agones"
+	"github.com/bouroo/goAthena/internal/modules/transit"
 	"github.com/bouroo/goAthena/internal/shared/safe"
 )
 
@@ -27,6 +29,9 @@ type App struct {
 	server   *http.Server
 	deps     *deps
 	closeAll func()
+	// agonesPort is the Agones sidecar lifecycle (nil when not running as a
+	// fleet GameServer — local Podman / bare-metal runs are Agones-free).
+	agonesPort agones.Port
 }
 
 // New wires infrastructure and builds the echo control plane from configuration.
@@ -34,6 +39,14 @@ type App struct {
 // shutdown (echo v5 delegates serving to the caller).
 func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error) {
 	inj, d, closeAll := compose(ctx, cfg, log)
+	// The zone directory decides local-warp vs cross-zone redirect (M12).
+	// agones/static modes that fail to build are a fatal boot error — a
+	// misrouted fleet must not silently local-route every portal — and New
+	// is the first caller with a real error return.
+	if err := transit.RegisterMapDirectory(inj, cfg, log); err != nil {
+		closeAll()
+		return nil, fmt.Errorf("zone directory: %w", err)
+	}
 	_ = inj // feature modules resolve from it in M1+
 
 	e := echo.New()
@@ -46,7 +59,19 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		IdleTimeout:  cfg.HTTP.IdleTimeout,
 	}
 
-	a := &App{cfg: cfg, log: log, echo: e, server: server, deps: d, closeAll: closeAll}
+	// M13: when the process runs as an Agones GameServer (the sidecar injects
+	// its gRPC port), wire the lifecycle port. A sidecar that should exist but
+	// is unreachable fails the boot — Agones reschedules the pod — while a
+	// plain Podman/bare-metal run stays Agones-free.
+	var agonesPort agones.Port
+	if agones.Enabled() {
+		sc, err := agones.New()
+		if err != nil {
+			return nil, fmt.Errorf("agones sidecar: %w", err)
+		}
+		agonesPort = sc
+	}
+	a := &App{cfg: cfg, log: log, echo: e, server: server, deps: d, closeAll: closeAll, agonesPort: agonesPort}
 	a.routes()
 	return a, nil
 }
@@ -71,6 +96,9 @@ func (a *App) Run(ctx context.Context) error {
 		mapAddr := fmt.Sprintf("tcp://%s:%d", a.cfg.Gateway.LoginHost, a.cfg.Gateway.MapPort)
 		a.deps.mapSrv.Start(mapAddr)
 	}
+	// M13: all listeners are live — declare the GameServer ready for player
+	// allocations and stream health pings until shutdown.
+	a.agonesReady(ctx)
 	// The world tick loop drives natural HP/SP regen at the configured rate and
 	// advances mob AI (aggro + attack) on the same cadence, chained as a second
 	// update call so mobs and regen share one consistent snapshot per tick.
@@ -111,6 +139,8 @@ func (a *App) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		a.log.Info("shutdown signal received, draining", "timeout", a.cfg.App.ShutdownTimeout)
 	}
+	// M13: tell Agones to stop sending allocations while the drain runs.
+	a.agonesStop()
 
 	// Stop the world tick loop before draining listeners.
 	if a.deps.tick != nil {
@@ -126,6 +156,29 @@ func (a *App) Run(ctx context.Context) error {
 	a.Close()
 	a.log.Info("shutdown complete")
 	return nil
+}
+
+// agonesReady declares the GameServer ready and starts the health loop
+// (no-op when not running as an Agones GameServer).
+func (a *App) agonesReady(ctx context.Context) {
+	if a.agonesPort == nil {
+		return
+	}
+	if err := a.agonesPort.Ready(); err != nil {
+		a.log.Error("agones: ready failed — allocations may never arrive", "err", err)
+	}
+	agones.RunHealthLoop(ctx, a.log, a.agonesPort, agones.DefaultHealthInterval)
+}
+
+// agonesStop tells Agones to stop sending allocations during the drain
+// (no-op when not running as an Agones GameServer).
+func (a *App) agonesStop() {
+	if a.agonesPort == nil {
+		return
+	}
+	if err := a.agonesPort.ShutDown(); err != nil {
+		a.log.Warn("agones: shutdown", "err", err)
+	}
 }
 
 // routes wires the control-plane endpoints. /healthz is liveness (process up);

@@ -1,0 +1,40 @@
+-- Wave 12: rAthena `vip_storage` table (sql-files/main.sql, Thai Classic).
+-- The premium (VIP) storage the Thai fork adds: one row per stored item,
+-- mirroring the rAthena vip_storage schema verbatim (column names + types).
+-- The fork's battle_config.vip_storage_increase (conf/battle/player.conf:204)
+-- sizes the premium storage on top of MIN_STORAGE.
+CREATE TABLE IF NOT EXISTS `vip_storage` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `account_id` int unsigned NOT NULL DEFAULT 0,
+  `nameid` int unsigned NOT NULL DEFAULT 0,
+  `amount` smallint unsigned NOT NULL DEFAULT 0,
+  `equip` int unsigned NOT NULL DEFAULT 0,
+  `identify` smallint unsigned NOT NULL DEFAULT 0,
+  `refine` tinyint unsigned NOT NULL DEFAULT 0,
+  `attribute` tinyint unsigned NOT NULL DEFAULT 0,
+  `card0` int unsigned NOT NULL DEFAULT 0,
+  `card1` int unsigned NOT NULL DEFAULT 0,
+  `card2` int unsigned NOT NULL DEFAULT 0,
+  `card3` int unsigned NOT NULL DEFAULT 0,
+  `option_id0` smallint NOT NULL DEFAULT 0,
+  `option_val0` smallint NOT NULL DEFAULT 0,
+  `option_parm0` tinyint NOT NULL DEFAULT 0,
+  `option_id1` smallint NOT NULL DEFAULT 0,
+  `option_val1` smallint NOT NULL DEFAULT 0,
+  `option_parm1` tinyint NOT NULL DEFAULT 0,
+  `option_id2` smallint NOT NULL DEFAULT 0,
+  `option_val2` smallint NOT NULL DEFAULT 0,
+  `option_parm2` tinyint NOT NULL DEFAULT 0,
+  `option_id3` smallint NOT NULL DEFAULT 0,
+  `option_val3` smallint NOT NULL DEFAULT 0,
+  `option_parm3` tinyint NOT NULL DEFAULT 0,
+  `option_id4` smallint NOT NULL DEFAULT 0,
+  `option_val4` smallint NOT NULL DEFAULT 0,
+  `option_parm4` tinyint NOT NULL DEFAULT 0,
+  `expire_time` int unsigned NOT NULL DEFAULT 0,
+  `bound` tinyint unsigned NOT NULL DEFAULT 0,
+  `unique_id` bigint unsigned NOT NULL DEFAULT 0,
+  `enchantgrade` tinyint unsigned NOT NULL DEFAULT 0,
+  KEY `account_id` (`account_id`),
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB;

@@ -20,6 +20,10 @@ func Register(inj do.Injector, useMD5 bool) {
 		gdb := do.MustInvoke[*gorm.DB](i)
 		return infra.NewGORMAccountRepository(gdb), nil
 	})
+	do.Provide(inj, func(i do.Injector) (domain.AccountRepository, error) {
+		repo := do.MustInvoke[*infra.GORMAccountRepository](i)
+		return repo, nil
+	})
 	do.Provide(inj, func(i do.Injector) (domain.Authenticator, error) {
 		repo := do.MustInvoke[*infra.GORMAccountRepository](i)
 		return app.NewAuthService(repo, useMD5), nil

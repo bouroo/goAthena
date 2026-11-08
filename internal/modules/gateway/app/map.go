@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -23,8 +24,11 @@ import (
 	guildapp "github.com/bouroo/goAthena/internal/modules/social/guild/app"
 	mailapp "github.com/bouroo/goAthena/internal/modules/social/mail/app"
 	partyapp "github.com/bouroo/goAthena/internal/modules/social/party/app"
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
+	"github.com/bouroo/goAthena/internal/shared/metrics"
+	"github.com/bouroo/goAthena/internal/shared/traces"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
 	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
@@ -32,7 +36,7 @@ import (
 )
 
 // czEnterSize is the wire length of CZ_ENTER (0x0072): 2 cmd + 4 AID + 4 GID +
-// 4 authCode + 4 clientTime + 1 sex = 19. Matches pkg/ro/packet sizeCZEnter.
+// 4 authCode + 4 clientTime + 1 sex = 19. Matches pkg/ro/packet sizeCZEnter().
 const czEnterSize = 19
 
 // mapRefuseRejected mirrors rAthena REFUSE_ENTER_REJECTED (0).
@@ -124,6 +128,12 @@ type MapServer struct {
 	// frames on one thread; OnTraffic here runs each frame on its own
 	// goroutine). See lockMailOps.
 	mailOps sync.Map
+	// zones resolves a warp destination map to the zone process serving it
+	// (M12 cross-zone handoff). Optional: nil or a zero Zone resolve keeps the
+	// local-warp path (ZC_NPCACK_MAPMOVE); a remote zone redirects with
+	// ZC_NPCACK_SERVERMOVE. Set post-construction by DI root via
+	// SetZoneDirectory.
+	zones transitdomain.MapDirectory
 	// shopStore resolves an NPC GID to the shop name it sells (CZ_ACK_SELECT
 	// DEALTYPE carries an NPC id, not a shop name).
 	shopStore contentdomain.ShopStore
@@ -185,6 +195,18 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 		guildInvites: make(map[uint32]pendingGuildInvite),
 		mailStaging:  make(map[uint32]mailStaging),
 	}
+	// The source registers one handler under each client build's opcode and
+	// its runtime keeps them all, so a client may send any of them. The
+	// dispatch table names one opcode per handler; the rest are registered
+	// here so the server accepts the same set the source does.
+	for opcode, handler := range s.handlers {
+		for _, alt := range ropacket.ClientVariantOpcodes(opcode) {
+			if _, ok := s.handlers[alt]; ok {
+				continue
+			}
+			s.handlers[alt] = handler
+		}
+	}
 	// Regen advances server-side on the world tick loop; this sink bridges the
 	// changed vitals back to the player's client as ZC_PAR_CHANGE (mirrors the
 	// script percentheal path). A char with no live conn is a no-op.
@@ -206,6 +228,12 @@ func NewMapServer(world *worldapp.WorldService, spawn *worldapp.SpawnService, co
 	// the client's level display and bars update together. A headless harness
 	// (no leveling) is a no-op.
 	world.OnLevelUp = s.notifyLevelUp
+	// The announce/mapannounce script builtins resolve their audience in the
+	// world module (it owns the entity registry and AOI grids); this sink turns
+	// that recipient list into one ZC_BROADCAST written to each live
+	// connection. A recipient with no connection (offline, or on another
+	// map-server) is skipped. A harness with no announce scripts is a no-op.
+	world.OnAnnounce = s.notifyAnnounce
 	// Mob AI runs on the same world tick; this sink bridges a mob's landed hit
 	// back to the player as ZC_NOTIFY_ACT so the swing is visible and the target's
 	// HP bar drops. A headless harness (no mob AI) leaves mobs passive.
@@ -310,6 +338,33 @@ func (s *MapServer) notifyLevelUp(charID uint32, newLevel int16, maxHP, maxSP in
 	_ = ropacket.ParChangeResponse{VarID: ropacket.SPSP, Count: maxSP}.Encode(&buf)
 	_ = ropacket.ParChangeResponse{VarID: ropacket.SPStatusPoint, Count: int32(statusPoint)}.Encode(&buf) //nolint:gosec // G115: points bounded by level count, far below int32.
 	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// notifyAnnounce writes one ZC_BROADCAST carrying msg to every recipient's live
+// connection. It is the world's OnAnnounce sink: the world has already resolved
+// the audience (BC_SELF/MAP/AREA/ALL) and the gateway only owns the connection
+// map, so the frame is encoded once and fanned out — gnet copies the buffer into
+// each connection's write queue, so sharing it is safe. flag carries the
+// announce BC_* bits; only its colour bits reach the wire, matching
+// clif_broadcast (clif.cpp:6725). A recipient with no connection is skipped.
+func (s *MapServer) notifyAnnounce(recipients []uint32, msg string, flag int) {
+	resp := ropacket.BroadcastResponse{
+		Message: msg,
+		Color:   uint8(flag) & ropacket.BroadcastColorMask, //nolint:gosec // G115: BC_* bits are small.
+	}
+	if resp.Message == "" {
+		return // rAthena drops an empty announcement (clif.cpp:6728)
+	}
+	buf := make([]byte, resp.Size())
+	if err := resp.Encode(sliceWriter(buf)); err != nil {
+		s.log.Error("map: encode ZC_BROADCAST", "err", err)
+		return
+	}
+	for _, charID := range recipients {
+		if c, ok := s.connFor(charID); ok {
+			_ = c.AsyncWrite(buf, nil)
+		}
+	}
 }
 
 // notifyMobAttack is the MobAIService.OnMobAttack sink (mirrors notifyStatChange
@@ -558,7 +613,15 @@ func (s *MapServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
 		}
 		opcode := binary.LittleEndian.Uint16(hdr)
 		if h, ok := s.handlers[opcode]; ok {
-			n, ready := h.frameLen(c)
+			n, ready, oversize := h.frameLen(s, c)
+			if oversize {
+				// F-07: the declared length exceeds the packet DB's cap — the
+				// buffer reservation is the attack. Close rather than wait for
+				// bytes that would over-commit the connection.
+				s.log.Warn("map: variable frame exceeds length cap — closing",
+					"cmd", fmt.Sprintf("0x%04x", opcode))
+				return gnet.Close
+			}
 			if !ready {
 				return gnet.None // wait for the full frame (fixed or variable) to arrive
 			}
@@ -571,9 +634,15 @@ func (s *MapServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
 			// conn's context — and pass it in. Handlers must not read c.Context()
 			// off-loop, where gnet's conn.release() races it on close.
 			auth := authFromConn(c)
+			name := s.packetName(opcode)
 			go func() {
 				defer closeOnPanic(s.log, "map.dispatch", c)
-				h.fn(s, c, auth, cp)
+				// One span per decoded frame: the frame is the trace root (a
+				// client frame has no parent carrier), and everything the
+				// handler calls — a service, a bus request — nests under it.
+				fctx, span := traces.Frame(context.Background(), name, opcode)
+				defer span.End(nil)
+				h.fn(s, fctx, c, auth, cp)
 			}()
 			continue
 		}
@@ -586,8 +655,19 @@ func (s *MapServer) OnTraffic(c gnet.Conn) (action gnet.Action) {
 		if _, err := c.Discard(skip); err != nil {
 			return gnet.None
 		}
+		metrics.UnknownOpcodes.WithLabelValues("map", strconv.FormatBool(s.db.Has(opcode))).Inc()
 		s.log.Debug("map: skipping unhandled opcode", "cmd", fmt.Sprintf("0x%04x", opcode), "skip", skip)
 	}
+}
+
+// packetName returns the rAthena PACKET_* name for an opcode, or "" when the
+// packet DB does not know it. Span labels read better as CZ_ENTER than as a hex
+// command, but an unknown opcode is not an error here — it still gets a span.
+func (s *MapServer) packetName(opcode uint16) string {
+	if def, ok := s.db.Lookup(opcode); ok {
+		return def.Name
+	}
+	return ""
 }
 
 // unhandledSkip returns how many leading bytes to discard for an opcode that has
@@ -634,14 +714,14 @@ const aoiSweepRadius = aoi.DefaultBroadcastRadius - 1
 
 // handleEnter verifies the CZ_ENTER, admits the player into the world, and sends
 // the map-enter + self-spawn reply.
-func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
+func (s *MapServer) handleEnter(fctx context.Context, c gnet.Conn, _ *mapAuth, frame []byte) {
 	req, err := ropacket.ParseCZEnter(frame)
 	if err != nil {
 		s.log.Warn("map: unparseable CZ_ENTER", "err", err)
 		return
 	}
 	// Trust gate: verify the session exists and AuthCode matches loginID1.
-	sess, err := s.sess.GetSession(context.Background(), req.AccountID)
+	sess, err := s.sess.GetSession(fctx, req.AccountID)
 	if err != nil {
 		if errors.Is(err, chardomain.ErrSessionNotFound) {
 			s.writeRefuseEnter(c)
@@ -659,7 +739,7 @@ func (s *MapServer) handleEnter(c gnet.Conn, _ *mapAuth, frame []byte) {
 	}
 
 	// Admit: load the char's enter state and register it in the world.
-	entity, err := s.world.EnterMap(context.Background(), req.CharID)
+	entity, err := s.world.EnterMap(fctx, req.CharID)
 	if err != nil {
 		s.log.Error("map: enter world", "aid", req.AccountID, "gid", req.CharID, "err", err)
 		s.writeRefuseEnter(c)
@@ -765,7 +845,7 @@ type mapAuth struct {
 // handleStatusChange processes CZ_STATUS_CHANGE (0x00bb) — the client's request to
 // spend status points on a base stat. It delegates to the world service and sends
 // ZC_STATUS_CHANGE_ACK and ZC_PAR_CHANGE back to the client.
-func (s *MapServer) handleStatusChange(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleStatusChange(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_STATUS_CHANGE from unauthed conn")
 		return
@@ -1017,6 +1097,13 @@ func (s *MapServer) SetItemDB(db *itemdb.Registry) {
 // disconnect (matches the trade service's nil-tolerant pattern in NewMapServer).
 func (s *MapServer) SetStorage(st *worldapp.StorageService) {
 	s.storage = st
+}
+
+// SetZoneDirectory attaches the transit MapDirectory after construction so
+// the DI root can wire it without churning NewMapServer's many call sites.
+// nil keeps the local-warp behavior for every destination map.
+func (s *MapServer) SetZoneDirectory(dir transitdomain.MapDirectory) {
+	s.zones = dir
 }
 
 // Start runs the map listener in a goroutine.

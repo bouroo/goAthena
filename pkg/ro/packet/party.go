@@ -18,40 +18,56 @@ import (
 // NOTE on the S→C opcode band: at PACKETVER >= 20171207 the roster/member
 // packets switch to 0x0ae5/0x0ae4 (packets_struct.hpp:274-276). The older
 // 0x014a/0x0104/0x01e9/0x0a43 variants are NOT sent at 20250604.
-const (
-	// C→S opcodes (clif_packetdb.hpp:98-106).
-	HeaderCZMAKEGROUP           uint16 = 0x00f9 // CZ_MAKE_GROUP — clif_parse_CreateParty
-	HeaderCZMAKEGROUP2          uint16 = 0x01e8 // CZ_MAKE_GROUP2 — clif_parse_CreateParty2 (adds item rules)
-	HeaderCZREQJOINGROUP        uint16 = 0x00fc // CZ_REQ_JOIN_GROUP — clif_parse_PartyInvite (by account id)
-	HeaderCZJOINGROUP           uint16 = 0x00ff // CZ_JOIN_GROUP — clif_parse_ReplyPartyInvite
-	HeaderCZREQLEAVEGROUP       uint16 = 0x0100 // CZ_REQ_LEAVE_GROUP — clif_parse_LeaveParty
-	HeaderCZCHANGEGROUPEXPOPT   uint16 = 0x0102 // CZ_CHANGE_GROUPEXPOPTION — clif_parse_PartyChangeOption
-	HeaderCZREQEXPELGROUPMEMBER uint16 = 0x0103 // CZ_REQ_EXPEL_GROUP_MEMBER — clif_parse_RemovePartyMember
-	// S→C opcodes.
-	HeaderZCACKMAKEGROUP        uint16 = 0x00fa // ZC_ACK_MAKE_GROUP (packets_struct.hpp:5080)
-	HeaderZCPARTYJOINREQ        uint16 = 0x02c6 // ZC_PARTY_JOIN_REQ (packets_struct.hpp:5090, >=20070821)
-	HeaderZCPARTYJOINREQACK     uint16 = 0x02c5 // ZC_PARTY_JOIN_REQ_ACK (packets_struct.hpp:5101, >=20070821)
-	HeaderZCPARTYCONFIG         uint16 = 0x02c9 // ZC_PARTY_CONFIG (packets_struct.hpp:4040)
-	HeaderZCGROUPLIST           uint16 = 0x0ae5 // ZC_GROUP_LIST (packets_struct.hpp:276, >=20171207)
-	HeaderZCADDMEMBERTOGROUP    uint16 = 0x0ae4 // ZC_ADD_MEMBER_TO_GROUP (packets_struct.hpp:275, >=20171207)
-	HeaderZCDELETEMEMBERFROMGRP uint16 = 0x0105 // ZC_DELETE_MEMBER_FROM_GROUP (packets_struct.hpp:5164)
-)
+
+// C→S opcodes (clif_packetdb.hpp:98-106).
+// HeaderCZMAKEGROUP is the source pack's own opcode for this packet.
+func HeaderCZMAKEGROUP() uint16 { return opcode("CZ_MAKE_GROUP") }
+
+// HeaderCZMAKEGROUP2 is the source pack's own opcode for this packet.
+func HeaderCZMAKEGROUP2() uint16 { return opcode("CZ_MAKE_GROUP2") }
+
+// HeaderCZREQJOINGROUP is the source pack's own opcode for this packet.
+func HeaderCZREQJOINGROUP() uint16 { return opcode("CZ_REQ_JOIN_GROUP") }
+
+// HeaderCZJOINGROUP is the source pack's own opcode for this packet.
+func HeaderCZJOINGROUP() uint16 { return opcode("CZ_JOIN_GROUP") }
+
+// HeaderCZREQLEAVEGROUP is the source pack's own opcode for this packet.
+func HeaderCZREQLEAVEGROUP() uint16 { return opcode("CZ_REQ_LEAVE_GROUP") }
+
+// HeaderCZCHANGEGROUPEXPOPT is the source pack's own opcode for this packet.
+func HeaderCZCHANGEGROUPEXPOPT() uint16 {
+	return opcodeForHandler("clif_parse_PartyChangeOption", sizeCZChangeGroupExp(), []int{2})
+}
+
+// HeaderCZREQEXPELGROUPMEMBER is the source pack's own opcode for this packet.
+func HeaderCZREQEXPELGROUPMEMBER() uint16 { return opcode("CZ_REQ_EXPEL_GROUP_MEMBER") }
+
+// S→C opcodes.
+// HeaderZCACKMAKEGROUP is the source pack's own opcode for this packet.
+func HeaderZCACKMAKEGROUP() uint16 { return opcode("ZC_ACK_MAKE_GROUP") }
+
+// HeaderZCPARTYJOINREQ is the source pack's own opcode for this packet.
+func HeaderZCPARTYJOINREQ() uint16 { return opcode("ZC_PARTY_JOIN_REQ") }
+
+// HeaderZCPARTYJOINREQACK is the source pack's own opcode for this packet.
+func HeaderZCPARTYJOINREQACK() uint16 { return opcode("ZC_PARTY_JOIN_REQ_ACK") }
+
+// HeaderZCPARTYCONFIG is the source pack's own opcode for this packet.
+func HeaderZCPARTYCONFIG() uint16 { return opcode("ZC_PARTY_CONFIG") }
+
+// HeaderZCGROUPLIST is the source pack's own opcode for this packet.
+func HeaderZCGROUPLIST() uint16 { return opcode("partyinfo") }
+
+// HeaderZCADDMEMBERTOGROUP is the source pack's own opcode for this packet.
+func HeaderZCADDMEMBERTOGROUP() uint16 { return opcode("partymemberinfo") }
+
+// HeaderZCDELETEMEMBERFROMGRP is the source pack's own opcode for this packet.
+func HeaderZCDELETEMEMBERFROMGRP() uint16 { return opcode("ZC_DELETE_MEMBER_FROM_GROUP") }
 
 // On-wire byte sizes at PACKETVER 20250604.
 const (
-	sizeCZMakeGroup       = 26 // int16 cmd + char name[24] (packets.hpp:1929)
-	sizeCZMakeGroup2      = 28 // int16 cmd + name[24] + uint8 item_pickup + uint8 item_share
-	sizeCZReqJoinGroup    = 6  // int16 cmd + uint32 AID
-	sizeCZJoinGroup       = 10 // int16 cmd + uint32 party_id + int32 flag
-	sizeCZReqLeaveGroup   = 2  // int16 cmd only
-	sizeCZChangeGroupExp  = 6  // int16 cmd + int32 expflag (clif_packetdb.hpp:102 binds 0x0102,6)
-	sizeCZReqExpelMember  = 30 // int16 cmd + uint32 AID + char name[24]
-	sizeZCDeleteMember    = 31 // int16 cmd + int32 AID + char characterName[24] + int8 result
-	sizeZCPartyJoinReq    = 30 // int16 cmd + int GRID + char groupName[24]
-	sizeZCPartyJoinReqAck = 30 // int16 cmd + char characterName[24] + int result
-	sizeZCGroupListSub    = 54 // uint32 AID + uint32 GID + char playerName[24] + char mapName[16] + uint8 leader + uint8 offline + int16 class + int16 baseLevel
-	sizeZCAckMakeGroup    = 3  // int16 cmd + int8 result
-	sizeZCPartyConfig     = 3  // int16 cmd + uint8 denyPartyInvites
+	sizeZCGroupListSub = 54 // uint32 AID + uint32 GID + char playerName[24] + char mapName[16] + uint8 leader + uint8 offline + int16 class + int16 baseLevel
 	// sizeZCAddMemberToGroup = cmd(2) + AID(4) + GID(4) + leader(4) + class(2) +
 	// baseLevel(2) + x(2) + y(2) + offline(1) + partyName(24) + playerName(24) +
 	// mapName(16) + sharePickup(1) + shareLoot(1) = 89.
@@ -59,6 +75,42 @@ const (
 	// ZC_GROUP_LIST is variable: cmd(2) + packetLen(2) + partyName(24) + N*54.
 	sizeZCGroupListHeader = 28
 )
+
+// sizeCZMakeGroup is the source pack's own length for this packet.
+func sizeCZMakeGroup() int { return packetLengthOf(249) }
+
+// sizeCZMakeGroup2 is the source pack's own length for this packet.
+func sizeCZMakeGroup2() int { return packetLengthOf(488) }
+
+// sizeCZReqJoinGroup is the source pack's own length for this packet.
+func sizeCZReqJoinGroup() int { return packetLengthOf(252) }
+
+// sizeCZJoinGroup is the source pack's own length for this packet.
+func sizeCZJoinGroup() int { return packetLengthOf(255) }
+
+// sizeCZReqLeaveGroup is the source pack's own length for this packet.
+func sizeCZReqLeaveGroup() int { return packetLengthOf(256) }
+
+// sizeCZChangeGroupExp is the source pack's own length for this packet.
+func sizeCZChangeGroupExp() int { return packetLengthOf(258) }
+
+// sizeCZReqExpelMember is the source pack's own length for this packet.
+func sizeCZReqExpelMember() int { return packetLengthOf(259) }
+
+// sizeZCDeleteMember is the source pack's own length for this packet.
+func sizeZCDeleteMember() int { return layout("PACKET_ZC_DELETE_MEMBER_FROM_GROUP") }
+
+// sizeZCPartyJoinReq is the source pack's own length for this packet.
+func sizeZCPartyJoinReq() int { return layout("PACKET_ZC_PARTY_JOIN_REQ") }
+
+// sizeZCPartyJoinReqAck is the source pack's own length for this packet.
+func sizeZCPartyJoinReqAck() int { return packetLengthOf(709) }
+
+// sizeZCAckMakeGroup is the source pack's own length for this packet.
+func sizeZCAckMakeGroup() int { return layout("PACKET_ZC_ACK_MAKE_GROUP") }
+
+// sizeZCPartyConfig is the source pack's own length for this packet.
+func sizeZCPartyConfig() int { return layout("PACKET_ZC_PARTY_CONFIG") }
 
 // ZC_ACK_MAKE_GROUP result values (src/map/party.cpp:156,:183,:193 — the
 // clif_party_created argument). 0 is success; 2 means the char already belongs
@@ -110,12 +162,12 @@ type CZMakeGroup struct {
 
 // ParseCZMakeGroup decodes a CZ_MAKE_GROUP (0x00f9, 26B) frame.
 func ParseCZMakeGroup(frame []byte) (CZMakeGroup, error) {
-	return parseMakeGroup(frame, HeaderCZMAKEGROUP, sizeCZMakeGroup)
+	return parseMakeGroup(frame, HeaderCZMAKEGROUP(), sizeCZMakeGroup())
 }
 
 // ParseCZMakeGroup2 decodes a CZ_MAKE_GROUP2 (0x01e8, 28B) frame.
 func ParseCZMakeGroup2(frame []byte) (CZMakeGroup, error) {
-	return parseMakeGroup(frame, HeaderCZMAKEGROUP2, sizeCZMakeGroup2)
+	return parseMakeGroup(frame, HeaderCZMAKEGROUP2(), sizeCZMakeGroup2())
 }
 
 func parseMakeGroup(frame []byte, want uint16, size int) (CZMakeGroup, error) {
@@ -126,7 +178,7 @@ func parseMakeGroup(frame []byte, want uint16, size int) (CZMakeGroup, error) {
 		return CZMakeGroup{}, fmt.Errorf("packet: parse party create: unexpected cmd 0x%04x", cmd)
 	}
 	out := CZMakeGroup{Name: readNameField(frame, 2, 24)}
-	if size == sizeCZMakeGroup2 {
+	if size == sizeCZMakeGroup2() {
 		out.ItemPickup = frame[26]
 		out.ItemShare = frame[27]
 	}
@@ -135,10 +187,10 @@ func parseMakeGroup(frame []byte, want uint16, size int) (CZMakeGroup, error) {
 
 // Encode writes the CZ_MAKE_GROUP frame to w.
 func (m CZMakeGroup) Encode(w io.Writer) error {
-	var buf [sizeCZMakeGroup]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZMAKEGROUP)
-	writeNameField(buf[:], 2, m.Name)
-	if _, err := w.Write(buf[:]); err != nil {
+	buf := make([]byte, sizeCZMakeGroup())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZMAKEGROUP())
+	writeNameField(buf, 2, m.Name)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_MAKE_GROUP: %w", err)
 	}
 	return nil
@@ -152,10 +204,10 @@ type CZReqJoinGroup struct {
 
 // ParseCZReqJoinGroup decodes a CZ_REQ_JOIN_GROUP (0x00fc, 6B) frame.
 func ParseCZReqJoinGroup(frame []byte) (CZReqJoinGroup, error) {
-	if len(frame) < sizeCZReqJoinGroup {
-		return CZReqJoinGroup{}, fmt.Errorf("packet: parse CZ_REQ_JOIN_GROUP: want at least %d bytes, got %d", sizeCZReqJoinGroup, len(frame))
+	if len(frame) < sizeCZReqJoinGroup() {
+		return CZReqJoinGroup{}, fmt.Errorf("packet: parse CZ_REQ_JOIN_GROUP: want at least %d bytes, got %d", sizeCZReqJoinGroup(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQJOINGROUP {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQJOINGROUP() {
 		return CZReqJoinGroup{}, fmt.Errorf("packet: parse CZ_REQ_JOIN_GROUP: unexpected cmd 0x%04x", cmd)
 	}
 	return CZReqJoinGroup{AID: binary.LittleEndian.Uint32(frame[2:6])}, nil
@@ -163,10 +215,10 @@ func ParseCZReqJoinGroup(frame []byte) (CZReqJoinGroup, error) {
 
 // Encode writes the CZ_REQ_JOIN_GROUP frame to w.
 func (r CZReqJoinGroup) Encode(w io.Writer) error {
-	var buf [sizeCZReqJoinGroup]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQJOINGROUP)
+	buf := make([]byte, sizeCZReqJoinGroup())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQJOINGROUP())
 	binary.LittleEndian.PutUint32(buf[2:], r.AID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_REQ_JOIN_GROUP: %w", err)
 	}
 	return nil
@@ -181,10 +233,10 @@ type CZJoinGroup struct {
 
 // ParseCZJoinGroup decodes a CZ_JOIN_GROUP (0x00ff, 10B) frame.
 func ParseCZJoinGroup(frame []byte) (CZJoinGroup, error) {
-	if len(frame) < sizeCZJoinGroup {
-		return CZJoinGroup{}, fmt.Errorf("packet: parse CZ_JOIN_GROUP: want at least %d bytes, got %d", sizeCZJoinGroup, len(frame))
+	if len(frame) < sizeCZJoinGroup() {
+		return CZJoinGroup{}, fmt.Errorf("packet: parse CZ_JOIN_GROUP: want at least %d bytes, got %d", sizeCZJoinGroup(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZJOINGROUP {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZJOINGROUP() {
 		return CZJoinGroup{}, fmt.Errorf("packet: parse CZ_JOIN_GROUP: unexpected cmd 0x%04x", cmd)
 	}
 	return CZJoinGroup{
@@ -195,11 +247,11 @@ func ParseCZJoinGroup(frame []byte) (CZJoinGroup, error) {
 
 // Encode writes the CZ_JOIN_GROUP frame to w.
 func (r CZJoinGroup) Encode(w io.Writer) error {
-	var buf [sizeCZJoinGroup]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZJOINGROUP)
+	buf := make([]byte, sizeCZJoinGroup())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZJOINGROUP())
 	binary.LittleEndian.PutUint32(buf[2:], r.PartyID)
 	binary.LittleEndian.PutUint32(buf[6:], uint32(r.Flag)) //nolint:gosec // G115: wire int32; r.Flag is int32.
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_JOIN_GROUP: %w", err)
 	}
 	return nil
@@ -208,9 +260,9 @@ func (r CZJoinGroup) Encode(w io.Writer) error {
 // EncodeCZReqLeaveGroup writes the CZ_REQ_LEAVE_GROUP frame to w (a bare 2-byte
 // cmd; there is no body to parse — the handler validates the cmd only).
 func EncodeCZReqLeaveGroup(w io.Writer) error {
-	var buf [sizeCZReqLeaveGroup]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQLEAVEGROUP)
-	if _, err := w.Write(buf[:]); err != nil {
+	buf := make([]byte, sizeCZReqLeaveGroup())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQLEAVEGROUP())
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_REQ_LEAVE_GROUP: %w", err)
 	}
 	return nil
@@ -225,14 +277,14 @@ type PartyConfigResponse struct {
 }
 
 // Size returns the ZC_PARTY_CONFIG frame length.
-func (r PartyConfigResponse) Size() int { return sizeZCPartyConfig }
+func (r PartyConfigResponse) Size() int { return sizeZCPartyConfig() }
 
 // Encode writes ZC_PARTY_CONFIG to w.
 func (r PartyConfigResponse) Encode(w io.Writer) error {
-	var buf [sizeZCPartyConfig]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPARTYCONFIG)
+	buf := make([]byte, sizeZCPartyConfig())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPARTYCONFIG())
 	buf[2] = r.Deny
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_PARTY_CONFIG: %w", err)
 	}
 	return nil
@@ -248,10 +300,10 @@ type CZChangeGroupExpOption struct {
 
 // ParseCZChangeGroupExpOption decodes a CZ_CHANGE_GROUPEXPOPTION (0x0102, 6B) frame.
 func ParseCZChangeGroupExpOption(frame []byte) (CZChangeGroupExpOption, error) {
-	if len(frame) < sizeCZChangeGroupExp {
-		return CZChangeGroupExpOption{}, fmt.Errorf("packet: parse CZ_CHANGE_GROUPEXPOPTION: want at least %d bytes, got %d", sizeCZChangeGroupExp, len(frame))
+	if len(frame) < sizeCZChangeGroupExp() {
+		return CZChangeGroupExpOption{}, fmt.Errorf("packet: parse CZ_CHANGE_GROUPEXPOPTION: want at least %d bytes, got %d", sizeCZChangeGroupExp(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCHANGEGROUPEXPOPT {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCHANGEGROUPEXPOPT() {
 		return CZChangeGroupExpOption{}, fmt.Errorf("packet: parse CZ_CHANGE_GROUPEXPOPTION: unexpected cmd 0x%04x", cmd)
 	}
 	return CZChangeGroupExpOption{
@@ -268,10 +320,10 @@ type CZReqExpelGroupMember struct {
 
 // ParseCZReqExpelGroupMember decodes a CZ_REQ_EXPEL_GROUP_MEMBER (0x0103, 30B) frame.
 func ParseCZReqExpelGroupMember(frame []byte) (CZReqExpelGroupMember, error) {
-	if len(frame) < sizeCZReqExpelMember {
-		return CZReqExpelGroupMember{}, fmt.Errorf("packet: parse CZ_REQ_EXPEL_GROUP_MEMBER: want at least %d bytes, got %d", sizeCZReqExpelMember, len(frame))
+	if len(frame) < sizeCZReqExpelMember() {
+		return CZReqExpelGroupMember{}, fmt.Errorf("packet: parse CZ_REQ_EXPEL_GROUP_MEMBER: want at least %d bytes, got %d", sizeCZReqExpelMember(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQEXPELGROUPMEMBER {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQEXPELGROUPMEMBER() {
 		return CZReqExpelGroupMember{}, fmt.Errorf("packet: parse CZ_REQ_EXPEL_GROUP_MEMBER: unexpected cmd 0x%04x", cmd)
 	}
 	return CZReqExpelGroupMember{
@@ -291,14 +343,14 @@ type AckMakeGroupResponse struct {
 }
 
 // Size returns the on-wire byte length Encode will write (always 3).
-func (r AckMakeGroupResponse) Size() int { return sizeZCAckMakeGroup }
+func (r AckMakeGroupResponse) Size() int { return sizeZCAckMakeGroup() }
 
 // Encode writes ZC_ACK_MAKE_GROUP to w.
 func (r AckMakeGroupResponse) Encode(w io.Writer) error {
-	var buf [sizeZCAckMakeGroup]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKMAKEGROUP)
+	buf := make([]byte, sizeZCAckMakeGroup())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKMAKEGROUP())
 	buf[2] = r.Result
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_MAKE_GROUP: %w", err)
 	}
 	return nil
@@ -313,15 +365,15 @@ type PartyJoinReqResponse struct {
 }
 
 // Size returns the on-wire byte length Encode will write (always 30).
-func (r PartyJoinReqResponse) Size() int { return sizeZCPartyJoinReq }
+func (r PartyJoinReqResponse) Size() int { return sizeZCPartyJoinReq() }
 
 // Encode writes ZC_PARTY_JOIN_REQ to w.
 func (r PartyJoinReqResponse) Encode(w io.Writer) error {
-	var buf [sizeZCPartyJoinReq]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPARTYJOINREQ)
+	buf := make([]byte, sizeZCPartyJoinReq())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPARTYJOINREQ())
 	binary.LittleEndian.PutUint32(buf[2:], r.PartyID)
-	writeNameField(buf[:], 6, r.PartyName)
-	if _, err := w.Write(buf[:]); err != nil {
+	writeNameField(buf, 6, r.PartyName)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_PARTY_JOIN_REQ: %w", err)
 	}
 	return nil
@@ -337,15 +389,15 @@ type PartyJoinReqAckResponse struct {
 }
 
 // Size returns the on-wire byte length Encode will write (always 30).
-func (r PartyJoinReqAckResponse) Size() int { return sizeZCPartyJoinReqAck }
+func (r PartyJoinReqAckResponse) Size() int { return sizeZCPartyJoinReqAck() }
 
 // Encode writes ZC_PARTY_JOIN_REQ_ACK to w.
 func (r PartyJoinReqAckResponse) Encode(w io.Writer) error {
-	var buf [sizeZCPartyJoinReqAck]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPARTYJOINREQACK)
-	writeNameField(buf[:], 2, r.CharacterName)
+	buf := make([]byte, sizeZCPartyJoinReqAck())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPARTYJOINREQACK())
+	writeNameField(buf, 2, r.CharacterName)
 	binary.LittleEndian.PutUint32(buf[26:], uint32(r.Result)) //nolint:gosec // G115: wire int32; r.Result is int32.
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_PARTY_JOIN_REQ_ACK: %w", err)
 	}
 	return nil
@@ -364,16 +416,16 @@ type DeleteMemberFromGroupResponse struct {
 }
 
 // Size returns the on-wire byte length Encode will write (always 31).
-func (r DeleteMemberFromGroupResponse) Size() int { return sizeZCDeleteMember }
+func (r DeleteMemberFromGroupResponse) Size() int { return sizeZCDeleteMember() }
 
 // Encode writes ZC_DELETE_MEMBER_FROM_GROUP to w.
 func (r DeleteMemberFromGroupResponse) Encode(w io.Writer) error {
-	var buf [sizeZCDeleteMember]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCDELETEMEMBERFROMGRP)
+	buf := make([]byte, sizeZCDeleteMember())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCDELETEMEMBERFROMGRP())
 	binary.LittleEndian.PutUint32(buf[2:], r.AID)
-	writeNameField(buf[:], 6, r.CharacterName)
+	writeNameField(buf, 6, r.CharacterName)
 	buf[30] = byte(r.Result) //nolint:gosec // G115: wire int8; r.Result is int8.
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_DELETE_MEMBER_FROM_GROUP: %w", err)
 	}
 	return nil
@@ -408,7 +460,7 @@ func (r AddMemberToGroupResponse) Size() int { return sizeZCAddMemberToGroup }
 // Encode writes ZC_ADD_MEMBER_TO_GROUP to w.
 func (r AddMemberToGroupResponse) Encode(w io.Writer) error {
 	var buf [sizeZCAddMemberToGroup]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCADDMEMBERTOGROUP)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCADDMEMBERTOGROUP())
 	binary.LittleEndian.PutUint32(buf[2:], r.AID)
 	binary.LittleEndian.PutUint32(buf[6:], r.GID)
 	// leader: 0 = leader, 1 = normal (clif.cpp:7815).
@@ -468,7 +520,7 @@ func (r GroupListResponse) Encode(w io.Writer) error {
 		members = members[:MaxPartySize]
 	}
 	buf := make([]byte, sizeZCGroupListHeader+sizeZCGroupListSub*len(members))
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCGROUPLIST)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCGROUPLIST())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(len(buf))) //nolint:gosec // G115: bounded by MaxPartySize.
 	writeNameField(buf, 4, r.PartyName)
 	off := sizeZCGroupListHeader

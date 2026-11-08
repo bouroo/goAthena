@@ -14,6 +14,7 @@ import (
 	dialogdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
 	partydomain "github.com/bouroo/goAthena/internal/modules/social/party/domain"
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
 	worlddomain "github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/pkg/ro/equip"
@@ -34,24 +35,28 @@ type mapHandler struct {
 	// size is the fixed frame byte count for constant-length packets. Ignored
 	// when frameSize is non-nil.
 	size int
-	// frameSize, when set, derives the full frame length for a variable-length
-	// packet from the buffered bytes (its on-wire uint16 length at offset 2) and
-	// returns false until the whole frame has buffered. nil means use size.
-	frameSize func(c gnet.Conn) (int, bool)
+	// variable marks a length-prefixed frame: frameLen derives the full length
+	// from the on-wire uint16 at offset 2 and returns false until the whole
+	// frame has buffered. A declared length above the definition's cap is a
+	// protocol violation — the caller closes the connection.
+	variable bool
 	// fn receives the authed identity resolved on the eventloop so handlers never
 	// read c.Context() off-loop, where gnet's conn.release() races on close.
-	fn func(s *MapServer, c gnet.Conn, auth *mapAuth, frame []byte)
+	fn func(s *MapServer, fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte)
 }
 
-// frameLen returns the full frame byte count for this opcode and whether that
-// many bytes are already buffered. Fixed-length packets compare size directly;
-// variable-length packets delegate to frameSize. Callers (OnTraffic) read this
-// once and then Next(n), keeping the size decision in one place.
-func (h mapHandler) frameLen(c gnet.Conn) (n int, ready bool) {
-	if h.frameSize != nil {
-		return h.frameSize(c)
+// frameLen returns the full frame byte count for this opcode, whether that
+// many bytes are already buffered, and whether the frame declared a length
+// above its definition's cap (oversize: the caller must close the
+// connection — the buffer reservation is the attack, not the payload).
+// Fixed-length packets compare size directly; variable-length packets
+// delegate to the server's length-prefixed reader. Callers (OnTraffic) read
+// this once and then Next(n), keeping the size decision in one place.
+func (h mapHandler) frameLen(s *MapServer, c gnet.Conn) (n int, ready bool, oversize bool) {
+	if h.variable {
+		return s.variableFrameLen(c)
 	}
-	return h.size, c.InboundBuffered() >= h.size
+	return h.size, c.InboundBuffered() >= h.size, false
 }
 
 // mapHandlers is the opcode→handler table the map server dispatches against.
@@ -60,99 +65,98 @@ func (h mapHandler) frameLen(c gnet.Conn) (n int, ready bool) {
 // trust gate); the rest are only valid post-auth.
 func mapHandlers() map[uint16]mapHandler {
 	return map[uint16]mapHandler{
-		0x0072:                               {size: czEnterSize, fn: (*MapServer).handleEnterFrame},
-		0x007d:                               {size: 2, fn: (*MapServer).handleLoadEndAck},
-		0x0085:                               {size: 5, fn: (*MapServer).handleRequestMove},
-		0x0089:                               {size: 7, fn: (*MapServer).handleActionRequest},                                  // CZ_ACTION_REQUEST
-		0x0090:                               {size: 7, fn: (*MapServer).handleContactNPC},                                     // CZ_CONTACT_NPC (NPC click)
-		ropacket.HeaderCZRESTART:             {size: 3, fn: (*MapServer).handleRestart},                                        // CZ_RESTART (respawn / return to char-select)
-		ropacket.HeaderCZSTATUSCHANGE:        {size: 5, fn: (*MapServer).handleStatusChange},                                   // CZ_STATUS_CHANGE (stat allocation)
-		0x00b8:                               {size: 7, fn: (*MapServer).handleChooseMenu},                                     // CZ_CHOOSE_MENU
-		0x00b9:                               {size: 6, fn: (*MapServer).handleReqNextScript},                                  // CZ_REQ_NEXT_SCRIPT
-		0x0143:                               {size: 10, fn: (*MapServer).handleInputEditDlg},                                  // CZ_INPUT_EDITDLG
-		0x01d5:                               {frameSize: variableFrameSize, fn: (*MapServer).handleInputEditDlgStr},           // CZ_INPUT_EDITDLGSTR (variable length)
-		0x0146:                               {size: 6, fn: (*MapServer).handleCloseDialog},                                    // CZ_CLOSE_DIALOG
-		ropacket.HeaderCZACKSELECTDEALTYPE:   {size: 7, fn: (*MapServer).handleAckSelectDealtype},                              // CZ_ACK_SELECT_DEALTYPE (NPC shop open)
-		ropacket.HeaderCZPCPURCHASEITEMLIST:  {frameSize: variableFrameSize, fn: (*MapServer).handlePurchaseItemList},          // CZ_PC_PURCHASE_ITEMLIST (variable)
-		ropacket.HeaderCZPCSELLITEMLIST:      {frameSize: variableFrameSize, fn: (*MapServer).handleSellItemList},              // CZ_PC_SELL_ITEMLIST (variable)
-		0x0362:                               {size: 6, fn: (*MapServer).handleItemPickup},                                     // CZ_ITEM_PICKUP @ 20250604
-		0x0363:                               {size: 6, fn: (*MapServer).handleItemDrop},                                       // CZ_ITEM_DROP @ 20250604
-		0x0439:                               {size: 8, fn: (*MapServer).handleUseItem},                                        // CZ_USE_ITEM2 @ 20250604 (cmd+index+AID)
-		0x0438:                               {size: 10, fn: (*MapServer).handleUseSkill2},                                     // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
-		0x0af4:                               {size: 11, fn: (*MapServer).handleUseSkillToPos},                                 // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
-		ropacket.HeaderCZSKILLUP:             {size: 4, fn: (*MapServer).handleSkillUp},                                        // CZ_SKILLUP (skill learn)
-		ropacket.HeaderCZTRADEREQUEST:        {size: 6, fn: (*MapServer).handleTradeRequest},                                   // CZ_TRADE_REQUEST 0x00e4 (cmd+targetGID)
-		ropacket.HeaderCZTRADEACK:            {size: 3, fn: (*MapServer).handleTradeAck},                                       // CZ_TRADE_ACK 0x00e6 (cmd+type)
-		ropacket.HeaderCZADDEXCHANGEITEM:     {size: 8, fn: (*MapServer).handleAddExchangeItem},                                // CZ_ADD_EXCHANGE_ITEM 0x00e8 (cmd+index+amount)
-		ropacket.HeaderCZTRADEOK:             {size: 2, fn: (*MapServer).handleTradeOK},                                        // CZ_TRADE_OK 0x00eb (cmd only)
-		ropacket.HeaderCZTRADECANCEL:         {size: 2, fn: (*MapServer).handleTradeCancel},                                    // CZ_TRADE_CANCEL 0x00ed (cmd only)
-		ropacket.HeaderCZREQWEAREQUIPV5:      {size: 8, fn: (*MapServer).handleReqWearEquip},                                   // CZ_REQ_WEAR_EQUIP_V5 0x0998 (cmd+index+position)
-		ropacket.HeaderCZREQTAKEOFFEQUIP:     {size: 4, fn: (*MapServer).handleReqTakeoffEquip},                                // CZ_REQ_TAKEOFF_EQUIP 0x00ab (cmd+index)
-		ropacket.HeaderCZWHISPER:             {frameSize: variableFrameSize, fn: (*MapServer).handleWhisper},                   // CZ_WHISPER 0x0096 (variable)
-		ropacket.HeaderCZGLOBALMESSAGE:       {frameSize: variableFrameSize, fn: (*MapServer).handleGlobalMessage},             // CZ_GLOBAL_MESSAGE 0x008c (variable)
-		ropacket.HeaderCZGETCHARNAMEREQUEST:  {size: 6, fn: (*MapServer).handleGetCharNameRequest},                             // CZ_GETCHARNAMEREQUEST 0x0094
-		ropacket.HeaderCZREQUESTTIME:         {size: 6, fn: (*MapServer).handleRequestTime},                                    // CZ_REQUEST_TIME 0x007e (clock ping)
-		ropacket.HeaderCZREQEMOTION:          {size: 3, fn: (*MapServer).handleReqEmotion},                                     // CZ_REQ_EMOTION 0x00bf (emotion icon)
-		ropacket.HeaderCZCHANGEDIR:           {size: 5, fn: (*MapServer).handleChangeDir},                                      // CZ_CHANGE_DIR 0x009b (facing)
-		ropacket.HeaderCZPMIGNORE:            {size: 27, fn: (*MapServer).handlePMIgnore},                                      // CZ_PMIgnore 0x00cf (/ex /in)
-		ropacket.HeaderCZSETTINGWHISPERSTATE: {size: 3, fn: (*MapServer).handleSettingWhisperState},                            // CZ_SETTING_WHISPER_STATE 0x00d0 (/exall /inall)
-		ropacket.HeaderCZREQWHISPERLIST:      {size: 2, fn: (*MapServer).handleReqWhisperList},                                 // CZ_REQ_WHISPER_LIST 0x00d3 (/wl)
-		ropacket.HeaderCZREQOPENSTORE2:       {size: ropacket.SizeCZReqOpenStore2, fn: (*MapServer).handleReqOpenStore2},       // CZ_REQ_OPENSTORE2 0x07e4 (cmd+accountName)
-		ropacket.HeaderCZCLOSESTORE:          {size: 2, fn: (*MapServer).handleCloseStore},                                     // CZ_CLOSE_STORE 0x07e5 (cmd only)
-		ropacket.HeaderCZMOVEITEMTOSTORE2:    {size: ropacket.SizeCZMoveItemToStore2, fn: (*MapServer).handleMoveItemToStore2}, // CZ_MOVE_ITEM_TO_STORE2 0x07e6 (cmd+index+amount)
-		ropacket.HeaderCZMOVEITEMTOBODY2:     {size: ropacket.SizeCZMoveItemToBody2, fn: (*MapServer).handleMoveItemToBody2},   // CZ_MOVE_ITEM_TO_BODY2 0x07e7 (cmd+index+amount)
+		ropacket.HeaderCZENTER():                   {size: czEnterSize, fn: (*MapServer).handleEnterFrame},
+		ropacket.HeaderCZNOTIFYACTORINIT():         {size: 2, fn: (*MapServer).handleLoadEndAck},
+		ropacket.HeaderCZREQUESTMOVE():             {size: 5, fn: (*MapServer).handleRequestMove},
+		ropacket.HeaderCZACTIONREQUEST():           {size: 7, fn: (*MapServer).handleActionRequest},           // CZ_ACTION_REQUEST
+		ropacket.HeaderCZCONTACTNPC():              {size: 7, fn: (*MapServer).handleContactNPC},              // CZ_CONTACT_NPC (NPC click)
+		ropacket.HeaderCZRESTART():                 {size: 3, fn: (*MapServer).handleRestart},                 // CZ_RESTART (respawn / return to char-select)
+		ropacket.HeaderCZSTATUSCHANGE():            {size: 5, fn: (*MapServer).handleStatusChange},            // CZ_STATUS_CHANGE (stat allocation)
+		ropacket.HeaderCZCHOOSEMENU():              {size: 7, fn: (*MapServer).handleChooseMenu},              // CZ_CHOOSE_MENU
+		ropacket.HeaderCZREQNEXTSCRIPT():           {size: 6, fn: (*MapServer).handleReqNextScript},           // CZ_REQ_NEXT_SCRIPT
+		ropacket.HeaderCZINPUTEDITDLG():            {size: 10, fn: (*MapServer).handleInputEditDlg},           // CZ_INPUT_EDITDLG
+		ropacket.HeaderCZINPUTEDITDLGSTR():         {variable: true, fn: (*MapServer).handleInputEditDlgStr},  // CZ_INPUT_EDITDLGSTR (variable length)
+		ropacket.HeaderCZCLOSEDIALOG():             {size: 6, fn: (*MapServer).handleCloseDialog},             // CZ_CLOSE_DIALOG
+		ropacket.HeaderCZACKSELECTDEALTYPE():       {size: 7, fn: (*MapServer).handleAckSelectDealtype},       // CZ_ACK_SELECT_DEALTYPE (NPC shop open)
+		ropacket.HeaderCZPCPURCHASEITEMLIST():      {variable: true, fn: (*MapServer).handlePurchaseItemList}, // CZ_PC_PURCHASE_ITEMLIST (variable)
+		ropacket.HeaderCZPCSELLITEMLIST():          {variable: true, fn: (*MapServer).handleSellItemList},     // CZ_PC_SELL_ITEMLIST (variable)
+		ropacket.HeaderCZITEMPICKUP():              {size: 6, fn: (*MapServer).handleItemPickup},              // CZ_ITEM_PICKUP @ 20250604
+		ropacket.HeaderCZDROPITEM0363():            {size: 6, fn: (*MapServer).handleItemDrop},                // CZ_ITEM_DROP @ 20250604
+		ropacket.HeaderCZUSEITEM2():                {size: 8, fn: (*MapServer).handleUseItem},                 // CZ_USE_ITEM2 @ 20250604 (cmd+index+AID)
+		ropacket.HeaderCZUSESKILL():                {size: 10, fn: (*MapServer).handleUseSkill2},              // CZ_USE_SKILL2 @ 20250604 (clif_shuffle.hpp:4750)
+		ropacket.HeaderCZUSESKILLTOPOS():           {size: 11, fn: (*MapServer).handleUseSkillToPos},          // CZ_USE_SKILL_TOPOS @ 20250604 (clif_packetdb.hpp:1905)
+		ropacket.HeaderCZSKILLUP():                 {size: 4, fn: (*MapServer).handleSkillUp},                 // CZ_SKILLUP (skill learn)
+		ropacket.HeaderCZTRADEREQUEST():            {size: 6, fn: (*MapServer).handleTradeRequest},            // CZ_TRADE_REQUEST 0x00e4 (cmd+targetGID)
+		ropacket.HeaderCZTRADEACK():                {size: 3, fn: (*MapServer).handleTradeAck},                // CZ_TRADE_ACK 0x00e6 (cmd+type)
+		ropacket.HeaderCZADDEXCHANGEITEM():         {size: 8, fn: (*MapServer).handleAddExchangeItem},         // CZ_ADD_EXCHANGE_ITEM 0x00e8 (cmd+index+amount)
+		ropacket.HeaderCZTRADEOK():                 {size: 2, fn: (*MapServer).handleTradeOK},                 // CZ_TRADE_OK 0x00eb (cmd only)
+		ropacket.HeaderCZTRADECANCEL():             {size: 2, fn: (*MapServer).handleTradeCancel},             // CZ_TRADE_CANCEL 0x00ed (cmd only)
+		ropacket.HeaderCZREQWEAREQUIPV5():          {size: 8, fn: (*MapServer).handleReqWearEquip},            // CZ_REQ_WEAR_EQUIP_V5 0x0998 (cmd+index+position)
+		ropacket.HeaderCZREQTAKEOFFEQUIP():         {size: 4, fn: (*MapServer).handleReqTakeoffEquip},         // CZ_REQ_TAKEOFF_EQUIP 0x00ab (cmd+index)
+		ropacket.HeaderCZWHISPER():                 {variable: true, fn: (*MapServer).handleWhisper},          // CZ_WHISPER 0x0096 (variable)
+		ropacket.HeaderCZGLOBALMESSAGE():           {variable: true, fn: (*MapServer).handleGlobalMessage},    // CZ_GLOBAL_MESSAGE 0x008c (variable)
+		ropacket.HeaderCZGETCHARNAMEREQUEST():      {size: 6, fn: (*MapServer).handleGetCharNameRequest},      // CZ_GETCHARNAMEREQUEST 0x0094
+		ropacket.HeaderCZREQUESTTIME():             {size: 6, fn: (*MapServer).handleRequestTime},             // CZ_REQUEST_TIME 0x007e (clock ping)
+		ropacket.HeaderCZREQEMOTION():              {size: 3, fn: (*MapServer).handleReqEmotion},              // CZ_REQ_EMOTION 0x00bf (emotion icon)
+		ropacket.HeaderCZCHANGEDIR():               {size: 5, fn: (*MapServer).handleChangeDir},               // CZ_CHANGE_DIR 0x009b (facing)
+		ropacket.HeaderCZPMIGNORE():                {size: 27, fn: (*MapServer).handlePMIgnore},               // CZ_PMIgnore 0x00cf (/ex /in)
+		ropacket.HeaderCZSETTINGWHISPERSTATE():     {size: 3, fn: (*MapServer).handleSettingWhisperState},     // CZ_SETTING_WHISPER_STATE 0x00d0 (/exall /inall)
+		ropacket.HeaderCZREQWHISPERLIST():          {size: 2, fn: (*MapServer).handleReqWhisperList},          // CZ_REQ_WHISPER_LIST 0x00d3 (/wl)
+		ropacket.HeaderCZCLOSESTORE():              {size: 2, fn: (*MapServer).handleCloseStore},              // CZ_CLOSE_STORE 0x0193 (cmd only)
+		ropacket.HeaderCZMOVEITEMFROMBODYTOSTORE(): {size: 8, fn: (*MapServer).handleMoveItemToStore},         // CZ_MOVE_ITEM_FROM_BODY_TO_STORE 0x0364 (cmd+index+amount)
+		ropacket.HeaderCZMOVEITEMFROMSTORETOBODY(): {size: 8, fn: (*MapServer).handleMoveItemToBody},          // CZ_MOVE_ITEM_FROM_STORE_TO_BODY 0x0365 (cmd+index+amount)
 		// M11: party (group) family. Both create variants are dispatched because
 		// the client picks one by build; CZ_CHANGE_GROUPEXPOPTION is leader-only.
-		ropacket.HeaderCZMAKEGROUP:           {size: 26, fn: (*MapServer).handleMakeGroup},           // CZ_MAKE_GROUP 0x00f9 (cmd+name)
-		ropacket.HeaderCZMAKEGROUP2:          {size: 28, fn: (*MapServer).handleMakeGroup},           // CZ_MAKE_GROUP2 0x01e8 (cmd+name+pickup+share)
-		ropacket.HeaderCZREQJOINGROUP:        {size: 6, fn: (*MapServer).handleReqJoinGroup},         // CZ_REQ_JOIN_GROUP 0x00fc (cmd+AID)
-		ropacket.HeaderCZJOINGROUP:           {size: 10, fn: (*MapServer).handleJoinGroup},           // CZ_JOIN_GROUP 0x00ff (cmd+partyID+flag)
-		ropacket.HeaderCZREQLEAVEGROUP:       {size: 2, fn: (*MapServer).handleLeaveGroup},           // CZ_REQ_LEAVE_GROUP 0x0100 (cmd only)
-		ropacket.HeaderCZCHANGEGROUPEXPOPT:   {size: 6, fn: (*MapServer).handleChangeGroupExpOption}, // CZ_CHANGE_GROUPEXPOPTION 0x0102 (cmd+expflag)
-		ropacket.HeaderCZREQEXPELGROUPMEMBER: {size: 30, fn: (*MapServer).handleExpelGroupMember},    // CZ_REQ_EXPEL_GROUP_MEMBER 0x0103 (cmd+AID+name)
+		ropacket.HeaderCZMAKEGROUP():           {size: 26, fn: (*MapServer).handleMakeGroup},           // CZ_MAKE_GROUP 0x00f9 (cmd+name)
+		ropacket.HeaderCZMAKEGROUP2():          {size: 28, fn: (*MapServer).handleMakeGroup},           // CZ_MAKE_GROUP2 0x01e8 (cmd+name+pickup+share)
+		ropacket.HeaderCZREQJOINGROUP():        {size: 6, fn: (*MapServer).handleReqJoinGroup},         // CZ_REQ_JOIN_GROUP 0x00fc (cmd+AID)
+		ropacket.HeaderCZJOINGROUP():           {size: 10, fn: (*MapServer).handleJoinGroup},           // CZ_JOIN_GROUP 0x00ff (cmd+partyID+flag)
+		ropacket.HeaderCZREQLEAVEGROUP():       {size: 2, fn: (*MapServer).handleLeaveGroup},           // CZ_REQ_LEAVE_GROUP 0x0100 (cmd only)
+		ropacket.HeaderCZCHANGEGROUPEXPOPT():   {size: 6, fn: (*MapServer).handleChangeGroupExpOption}, // CZ_CHANGE_GROUPEXPOPTION 0x0102 (cmd+expflag)
+		ropacket.HeaderCZREQEXPELGROUPMEMBER(): {size: 30, fn: (*MapServer).handleExpelGroupMember},    // CZ_REQ_EXPEL_GROUP_MEMBER 0x0103 (cmd+AID+name)
 		// M11: friend family. Add is by display name; the reply names the inviter
 		// pair; delete names the friend pair (all three clif_packetdb.hpp:257-263).
-		ropacket.HeaderCZFRIENDSADD:    {size: 26, fn: (*MapServer).handleFriendsAdd},    // CZ_ADD_FRIENDS 0x0202 (cmd+name)
-		ropacket.HeaderCZFRIENDSDELETE: {size: 10, fn: (*MapServer).handleFriendsRemove}, // CZ_DELETE_FRIENDS 0x0203 (cmd+AID+CID)
-		ropacket.HeaderCZFRIENDSREPLY:  {size: 14, fn: (*MapServer).handleFriendsReply},  // CZ_ACK_REQ_ADD_FRIENDS 0x0208 (cmd+AID+CID+reply)
+		ropacket.HeaderCZFRIENDSADD():    {size: 26, fn: (*MapServer).handleFriendsAdd},    // CZ_ADD_FRIENDS 0x0202 (cmd+name)
+		ropacket.HeaderCZFRIENDSDELETE(): {size: 10, fn: (*MapServer).handleFriendsRemove}, // CZ_DELETE_FRIENDS 0x0203 (cmd+AID+CID)
+		ropacket.HeaderCZFRIENDSREPLY():  {size: 14, fn: (*MapServer).handleFriendsReply},  // CZ_ACK_REQ_ADD_FRIENDS 0x0208 (cmd+AID+CID+reply)
 		// M11: guild family. Create/leave/ban/disorganize/invite/reply are
 		// fixed-length; guild chat is length-prefixed. MenuInterface is the
 		// guild-window permission poll (clif_packetdb.hpp:150-159, 171).
-		ropacket.HeaderCZCREATEGUILD:        {size: ropacket.SizeCZCreateGuild, fn: (*MapServer).handleCreateGuild},           // CZ_REQ_MAKE_GUILD 0x0165 (cmd+charID+name)
-		ropacket.HeaderCZREQJOINGUILD:       {size: ropacket.SizeCZReqJoinGuild, fn: (*MapServer).handleGuildInvite},          // CZ_REQ_JOIN_GUILD 0x0168 (cmd+AID+inviterAID+inviterCID)
-		ropacket.HeaderCZJOINGUILD:          {size: ropacket.SizeCZJoinGuild, fn: (*MapServer).handleGuildReplyInvite},        // CZ_JOIN_GUILD 0x016b (cmd+guildID+answer)
-		ropacket.HeaderCZREQLEAVEGUILD:      {size: ropacket.SizeCZGuildLeave, fn: (*MapServer).handleGuildLeave},             // CZ_REQ_LEAVE_GUILD 0x0159 (cmd+guildID+AID+CID+reason)
-		ropacket.HeaderCZREQBANGUILD:        {size: ropacket.SizeCZGuildBan, fn: (*MapServer).handleGuildBan},                 // CZ_REQ_BAN_GUILD 0x015b (same shape)
-		ropacket.HeaderCZREQDISORGANIZEGILD: {size: ropacket.SizeCZGuildBreak, fn: (*MapServer).handleGuildBreak},             // CZ_REQ_DISORGANIZE_GUILD 0x015d (cmd+key)
-		ropacket.HeaderCZGUILDCHAT:          {frameSize: variableFrameSize, fn: (*MapServer).handleGuildChat},                 // CZ_GUILD_CHAT 0x017e (cmd+len+msg)
-		ropacket.HeaderCZGUILDCHECKMASTER:   {size: ropacket.SizeCZGuildCheckMaster, fn: (*MapServer).handleGuildCheckMaster}, // CZ_REQ_GUILD_MENUINTERFACE 0x014d (cmd)
+		ropacket.HeaderCZCREATEGUILD():        {size: ropacket.SizeCZCreateGuild(), fn: (*MapServer).handleCreateGuild},           // CZ_REQ_MAKE_GUILD 0x0165 (cmd+charID+name)
+		ropacket.HeaderCZREQJOINGUILD():       {size: ropacket.SizeCZReqJoinGuild(), fn: (*MapServer).handleGuildInvite},          // CZ_REQ_JOIN_GUILD 0x0168 (cmd+AID+inviterAID+inviterCID)
+		ropacket.HeaderCZJOINGUILD():          {size: ropacket.SizeCZJoinGuild(), fn: (*MapServer).handleGuildReplyInvite},        // CZ_JOIN_GUILD 0x016b (cmd+guildID+answer)
+		ropacket.HeaderCZREQLEAVEGUILD():      {size: ropacket.SizeCZGuildLeave(), fn: (*MapServer).handleGuildLeave},             // CZ_REQ_LEAVE_GUILD 0x0159 (cmd+guildID+AID+CID+reason)
+		ropacket.HeaderCZREQBANGUILD():        {size: ropacket.SizeCZGuildBan(), fn: (*MapServer).handleGuildBan},                 // CZ_REQ_BAN_GUILD 0x015b (same shape)
+		ropacket.HeaderCZREQDISORGANIZEGILD(): {size: ropacket.SizeCZGuildBreak(), fn: (*MapServer).handleGuildBreak},             // CZ_REQ_DISORGANIZE_GUILD 0x015d (cmd+key)
+		ropacket.HeaderCZGUILDCHAT():          {variable: true, fn: (*MapServer).handleGuildChat},                                 // CZ_GUILD_CHAT 0x017e (cmd+len+msg)
+		ropacket.HeaderCZGUILDCHECKMASTER():   {size: ropacket.SizeCZGuildCheckMaster(), fn: (*MapServer).handleGuildCheckMaster}, // CZ_REQ_GUILD_MENUINTERFACE 0x014d (cmd)
 		// M11: mail (RODEX) family. The five refreshinbox opcodes share a
 		// handler (clif_parse_Mail_refreshinbox); read/delete share a shape;
 		// the two send opcodes are variable-length (strings follow the
 		// fixed header); the name-check verbs share a shape.
-		ropacket.HeaderCZOPENMAILBOX:     {size: ropacket.SizeCZOpenMailbox, fn: (*MapServer).handleOpenMailbox},         // CZ_OPEN_MAILBOX 0x09e8 (cmd+mail id.Q)
-		ropacket.HeaderCZCLOSEMAILBOX:    {size: 2, fn: (*MapServer).handleCloseMailbox},                                 // CZ_CLOSE_MAILBOX 0x09e9 (no-op, clif_parse_dull)
-		ropacket.HeaderCZREQREADMAIL:     {size: ropacket.SizeCZReadDeleteMail, fn: (*MapServer).handleReadMail},         // CZ_REQ_READ_MAIL 0x09ea (cmd+tab.B+mail id.Q)
-		ropacket.HeaderCZREQNEXTMAILLIST: {size: ropacket.SizeCZOpenMailbox, fn: (*MapServer).handleOpenMailbox},         // CZ_REQ_NEXT_MAIL_LIST 0x09ee (refreshinbox)
-		ropacket.HeaderCZREQREFRESHMAILL: {size: ropacket.SizeCZOpenMailbox, fn: (*MapServer).handleOpenMailbox},         // CZ_REQ_REFRESH_MAIL_LIST 0x09ef (refreshinbox)
-		ropacket.HeaderCZREQZENYFROMMAIL: {size: ropacket.SizeCZGetAttach, fn: (*MapServer).handleCollectZeny},           // CZ_REQ_ZENY_FROM_MAIL 0x09f1 (cmd+mail id.Q+tab.B)
-		ropacket.HeaderCZREQITEMFROMMAIL: {size: ropacket.SizeCZGetAttach, fn: (*MapServer).handleCollectItems},          // CZ_REQ_ITEM_FROM_MAIL 0x09f3 (cmd+mail id.Q+tab.B)
-		ropacket.HeaderCZREQDELETEMAIL:   {size: ropacket.SizeCZReadDeleteMail, fn: (*MapServer).handleDeleteMail},       // CZ_REQ_DELETE_MAIL 0x09f5 (cmd+tab.B+mail id.Q)
-		ropacket.HeaderCZREQCANCELWRITE:  {size: 2, fn: (*MapServer).handleCancelWriteMail},                              // CZ_REQ_CANCEL_WRITE_MAIL 0x0a03 (cmd)
-		ropacket.HeaderCZREQADDITEMMAIL:  {size: ropacket.SizeCZMailItem, fn: (*MapServer).handleAddItemToMail},          // CZ_REQ_ADD_ITEM_TO_MAIL 0x0a04 (cmd+index.W+count.W)
-		ropacket.HeaderCZREQREMOVEITEMMA: {size: ropacket.SizeCZMailItem, fn: (*MapServer).handleRemoveItemFromMail},     // CZ_REQ_REMOVE_ITEM_MAIL 0x0a06 (cmd+index.W+count.W)
-		ropacket.HeaderCZREQOPENWRITEMAI: {size: ropacket.SizeCZOpenWriteMail, fn: (*MapServer).handleOpenWriteMail},     // CZ_REQ_OPEN_WRITE_MAIL 0x0a08 (cmd+name.24B)
-		ropacket.HeaderCZCHECKRECEIVENAM: {size: ropacket.SizeCZOpenWriteMail, fn: (*MapServer).handleCheckReceiverName}, // CZ_CHECK_RECEIVE_CHARACTER_NAME 0x0a13 (cmd+name.24B)
-		ropacket.HeaderCZREQWRITEMAIL:    {frameSize: variableFrameSize, fn: (*MapServer).handleWriteMail},               // CZ_REQ_WRITE_MAIL 0x09ec (variable)
-		ropacket.HeaderCZREQWRITEMAIL2:   {frameSize: variableFrameSize, fn: (*MapServer).handleWriteMail},               // CZ_REQ_WRITE_MAIL2 0x0a6e (variable)
-		ropacket.HeaderCZOPENMAILBOX2:    {size: ropacket.SizeCZOpenMailbox2, fn: (*MapServer).handleOpenMailbox},        // CZ_OPEN_MAILBOX2 0x0ac0 (cmd+mail id.Q+unknown.16B)
-		ropacket.HeaderCZREFRESHMAILLIST: {size: ropacket.SizeCZOpenMailbox2, fn: (*MapServer).handleOpenMailbox},        // CZ_REQ_REFRESH_MAIL_LIST2 0x0ac1 (refreshinbox)
-		ropacket.HeaderCZCHECKNAME2:      {size: ropacket.SizeCZCheckName2, fn: (*MapServer).handleCheckReceiverName},    // CZ_CHECKNAME2 0x0b97 (cmd+name.24B+own_char.B)
+		ropacket.HeaderCZOPENMAILBOX():     {size: ropacket.SizeCZOpenMailbox(), fn: (*MapServer).handleOpenMailbox},         // CZ_OPEN_MAILBOX 0x09e8 (cmd+mail id.Q)
+		ropacket.HeaderCZCLOSEMAILBOX():    {size: 2, fn: (*MapServer).handleCloseMailbox},                                   // CZ_CLOSE_MAILBOX 0x09e9 (no-op, clif_parse_dull)
+		ropacket.HeaderCZREQREADMAIL():     {size: ropacket.SizeCZReadDeleteMail(), fn: (*MapServer).handleReadMail},         // CZ_REQ_READ_MAIL 0x09ea (cmd+tab.B+mail id.Q)
+		ropacket.HeaderCZREQNEXTMAILLIST(): {size: ropacket.SizeCZOpenMailbox(), fn: (*MapServer).handleOpenMailbox},         // CZ_REQ_NEXT_MAIL_LIST 0x09ee (refreshinbox)
+		ropacket.HeaderCZREQREFRESHMAILL(): {size: ropacket.SizeCZOpenMailbox(), fn: (*MapServer).handleOpenMailbox},         // CZ_REQ_REFRESH_MAIL_LIST 0x09ef (refreshinbox)
+		ropacket.HeaderCZREQZENYFROMMAIL(): {size: ropacket.SizeCZGetAttach(), fn: (*MapServer).handleCollectZeny},           // CZ_REQ_ZENY_FROM_MAIL 0x09f1 (cmd+mail id.Q+tab.B)
+		ropacket.HeaderCZREQITEMFROMMAIL(): {size: ropacket.SizeCZGetAttach(), fn: (*MapServer).handleCollectItems},          // CZ_REQ_ITEM_FROM_MAIL 0x09f3 (cmd+mail id.Q+tab.B)
+		ropacket.HeaderCZREQDELETEMAIL():   {size: ropacket.SizeCZReadDeleteMail(), fn: (*MapServer).handleDeleteMail},       // CZ_REQ_DELETE_MAIL 0x09f5 (cmd+tab.B+mail id.Q)
+		ropacket.HeaderCZREQCANCELWRITE():  {size: 2, fn: (*MapServer).handleCancelWriteMail},                                // CZ_REQ_CANCEL_WRITE_MAIL 0x0a03 (cmd)
+		ropacket.HeaderCZREQADDITEMMAIL():  {size: ropacket.SizeCZMailItem(), fn: (*MapServer).handleAddItemToMail},          // CZ_REQ_ADD_ITEM_TO_MAIL 0x0a04 (cmd+index.W+count.W)
+		ropacket.HeaderCZREQREMOVEITEMMA(): {size: ropacket.SizeCZMailItem(), fn: (*MapServer).handleRemoveItemFromMail},     // CZ_REQ_REMOVE_ITEM_MAIL 0x0a06 (cmd+index.W+count.W)
+		ropacket.HeaderCZREQOPENWRITEMAI(): {size: ropacket.SizeCZOpenWriteMail(), fn: (*MapServer).handleOpenWriteMail},     // CZ_REQ_OPEN_WRITE_MAIL 0x0a08 (cmd+name.24B)
+		ropacket.HeaderCZCHECKRECEIVENAM(): {size: ropacket.SizeCZOpenWriteMail(), fn: (*MapServer).handleCheckReceiverName}, // CZ_CHECK_RECEIVE_CHARACTER_NAME 0x0a13 (cmd+name.24B)
+		ropacket.HeaderCZREQWRITEMAIL():    {variable: true, fn: (*MapServer).handleWriteMail},                               // CZ_REQ_WRITE_MAIL 0x09ec (variable)
+		ropacket.HeaderCZREQWRITEMAIL2():   {variable: true, fn: (*MapServer).handleWriteMail},                               // CZ_REQ_WRITE_MAIL2 0x0a6e (variable)
+		ropacket.HeaderCZOPENMAILBOX2():    {size: ropacket.SizeCZOpenMailbox2(), fn: (*MapServer).handleOpenMailbox},        // CZ_OPEN_MAILBOX2 0x0ac0 (cmd+mail id.Q+unknown.16B)
+		ropacket.HeaderCZREFRESHMAILLIST(): {size: ropacket.SizeCZOpenMailbox2(), fn: (*MapServer).handleOpenMailbox},        // CZ_REQ_REFRESH_MAIL_LIST2 0x0ac1 (refreshinbox)
+		ropacket.HeaderCZCHECKNAME2():      {size: ropacket.SizeCZCheckName2(), fn: (*MapServer).handleCheckReceiverName},    // CZ_CHECKNAME2 0x0b97 (cmd+name.24B+own_char.B)
 	}
 }
 
 // handleContactNPC starts an NPC dialog script on click (CZ_CONTACT_NPC 0x0090).
-func (s *MapServer) handleContactNPC(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleContactNPC(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -165,7 +169,7 @@ func (s *MapServer) handleContactNPC(c gnet.Conn, auth *mapAuth, frame []byte) {
 	// clif_parse_NpcClicked → npc_click shop branch): reply ZC_SELECT_DEALTYPE
 	// and wait for CZ_ACK_SELECT_DEALTYPE.
 	if s.shops != nil && s.shopStore != nil {
-		if _, isShop := s.shopStore.ShopForNPC(context.Background(), req.AID); isShop {
+		if _, isShop := s.shopStore.ShopForNPC(fctx, req.AID); isShop {
 			var buf bytes.Buffer
 			_ = ropacket.SelectDealtypeResponse{NpcID: req.AID}.Encode(&buf) //nolint:errcheck // buffer write cannot fail
 			_ = c.AsyncWrite(buf.Bytes(), nil)
@@ -176,7 +180,7 @@ func (s *MapServer) handleContactNPC(c gnet.Conn, auth *mapAuth, frame []byte) {
 }
 
 // handleReqNextScript advances an active dialog (CZ_REQ_NEXT_SCRIPT 0x00b9).
-func (s *MapServer) handleReqNextScript(_ gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleReqNextScript(_ context.Context, _ gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		return
 	}
@@ -184,7 +188,7 @@ func (s *MapServer) handleReqNextScript(_ gnet.Conn, auth *mapAuth, _ []byte) {
 }
 
 // handleChooseMenu delivers a menu selection (CZ_CHOOSE_MENU 0x00b8).
-func (s *MapServer) handleChooseMenu(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleChooseMenu(_ context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -196,7 +200,7 @@ func (s *MapServer) handleChooseMenu(_ gnet.Conn, auth *mapAuth, frame []byte) {
 }
 
 // handleInputEditDlg delivers a numeric input (CZ_INPUT_EDITDLG 0x0143).
-func (s *MapServer) handleInputEditDlg(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleInputEditDlg(_ context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -210,7 +214,7 @@ func (s *MapServer) handleInputEditDlg(_ gnet.Conn, auth *mapAuth, frame []byte)
 // handleInputEditDlgStr delivers a text input (CZ_INPUT_EDITDLGSTR 0x01d5). The
 // frame is already detached and length-resolved by the dispatcher; this mirrors
 // the numeric handler, substituting the raw string value for a decimal string.
-func (s *MapServer) handleInputEditDlgStr(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleInputEditDlgStr(_ context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -221,29 +225,39 @@ func (s *MapServer) handleInputEditDlgStr(_ gnet.Conn, auth *mapAuth, frame []by
 	s.content.Signal(auth.accountID, dialogdomain.DialogSignal{Input: req.Value})
 }
 
-// variableFrameSize derives the full byte length of a length-prefixed variable
+// variableFrameLen derives the full byte length of a length-prefixed variable
 // packet by reading its uint16 total-length field at offset 2 — the rAthena
-// convention for non-constant-length frames (CZ_INPUT_EDITDLGSTR 0x01d5 today).
-// It returns false until the whole frame has buffered. A malformed length
-// smaller than its own header resyncs over the 2-byte opcode (matching
-// unhandledSkip), so the dispatcher never spins on a zero-length read.
-func variableFrameSize(c gnet.Conn) (int, bool) {
+// convention for non-constant-length frames (CZ_GLOBAL_MESSAGE, whisper,
+// mail send, purchase lists). It returns ready=false until the whole frame
+// has buffered, and oversize=true (caller closes) when the declared length
+// exceeds the packet DB's cap for the opcode: the buffer reservation itself
+// is the attack (F-07). A malformed length smaller than its own header
+// resyncs over the 2-byte opcode (matching unhandledSkip), so the dispatcher
+// never spins on a zero-length read.
+func (s *MapServer) variableFrameLen(c gnet.Conn) (n int, ready bool, oversize bool) {
 	prefix, err := c.Peek(4)
 	if err != nil {
-		return 0, false // length field not fully buffered yet
+		return 0, false, false // length field not fully buffered yet
 	}
-	n := int(binary.LittleEndian.Uint16(prefix[2:4]))
+	n = int(binary.LittleEndian.Uint16(prefix[2:4]))
+	capLen := ropacket.MaxVariableLength
+	if def, ok := s.db.Lookup(binary.LittleEndian.Uint16(prefix[0:2])); ok {
+		capLen = def.InboundCap()
+	}
+	if n > capLen {
+		return 0, false, true
+	}
 	if n < 4 {
-		return 2, true // malformed length prefix: resync over the header
+		return 2, true, false // malformed length prefix: resync over the header
 	}
 	if c.InboundBuffered() < n {
-		return 0, false // wait for the rest of the frame
+		return 0, false, false // wait for the rest of the frame
 	}
-	return n, true
+	return n, true, false
 }
 
 // handleCloseDialog cancels an active dialog (CZ_CLOSE_DIALOG 0x0146).
-func (s *MapServer) handleCloseDialog(_ gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleCloseDialog(_ context.Context, _ gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		return
 	}
@@ -275,7 +289,7 @@ const (
 // threads that name for the following purchase/sell frames (which carry item
 // entries, not the NPC id), and emits the priced buy list (Buy) or sell list
 // (Sell). Cancel and unknown NPCs are no-ops that keep the connection alive.
-func (s *MapServer) handleAckSelectDealtype(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleAckSelectDealtype(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ACK_SELECT_DEALTYPE from unauthed conn")
 		return
@@ -289,7 +303,7 @@ func (s *MapServer) handleAckSelectDealtype(c gnet.Conn, auth *mapAuth, frame []
 		s.log.Warn("map: parse CZ_ACK_SELECT_DEALTYPE", "err", err)
 		return
 	}
-	shopName, ok := s.shopStore.ShopForNPC(context.Background(), req.NpcID)
+	shopName, ok := s.shopStore.ShopForNPC(fctx, req.NpcID)
 	if !ok {
 		s.log.Debug("map: CZ_ACK_SELECT_DEALTYPE for non-shop NPC", "npc", req.NpcID)
 		return
@@ -300,7 +314,7 @@ func (s *MapServer) handleAckSelectDealtype(c gnet.Conn, auth *mapAuth, frame []
 	case dealTypeBuy:
 		s.writePurchaseItemList(c, shopName)
 	case dealTypeSell:
-		s.writeSellItemList(context.Background(), c, shopName, auth.accountID, auth.charID)
+		s.writeSellItemList(fctx, c, shopName, auth.accountID, auth.charID)
 	default:
 		// dealTypeCancel (2) and any unknown value: close the deal window, no list.
 	}
@@ -320,7 +334,7 @@ func (s *MapServer) handleAckSelectDealtype(c gnet.Conn, auth *mapAuth, frame []
 // add-item frame with the destination slot (clif.cpp:2836-2901); the buy result
 // byte follows (clif_npc_buy_result, clif.cpp:12343). Without that frame the
 // client never learns its bag changed and keeps a stale grid.
-func (s *MapServer) handlePurchaseItemList(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handlePurchaseItemList(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_PC_PURCHASE_ITEMLIST from unauthed conn")
 		return
@@ -341,16 +355,15 @@ func (s *MapServer) handlePurchaseItemList(c gnet.Conn, auth *mapAuth, frame []b
 		s.writePurchaseResult(c, shopResultFailed)
 		return
 	}
-	ctx := context.Background()
 	result := shopResultSuccess
 	for _, e := range req.Entries {
-		granted, err := s.shops.Buy(ctx, auth.charID, shopName, e.ItemID, int(e.Amount))
+		granted, err := s.shops.Buy(fctx, auth.charID, shopName, e.ItemID, int(e.Amount))
 		if err != nil {
 			s.log.Warn("map: shop buy", "shop", shopName, "item", e.ItemID, "amount", e.Amount, "err", err)
 			result = shopResultFailed
 			break
 		}
-		slot, ok := s.clientIndexForItem(ctx, auth.accountID, auth.charID, granted.ID)
+		slot, ok := s.clientIndexForItem(fctx, auth.accountID, auth.charID, granted.ID)
 		if !ok {
 			// The row was just written, so this is an internal inconsistency
 			// (a failed reload), not a client error. Suppressing the frame is
@@ -382,7 +395,7 @@ func (s *MapServer) handlePurchaseItemList(c gnet.Conn, auth *mapAuth, frame []b
 // order: npc_selllist calls pc_delitem (npc.cpp:3090-3114), which calls
 // clif_delitem (pc.cpp:6170 → clif.cpp:2915-2928), and the sell result byte
 // follows (clif_npc_sell_result, clif.cpp:12352).
-func (s *MapServer) handleSellItemList(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleSellItemList(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_PC_SELL_ITEMLIST from unauthed conn")
 		return
@@ -403,8 +416,7 @@ func (s *MapServer) handleSellItemList(c gnet.Conn, auth *mapAuth, frame []byte)
 		s.writeSellResult(c, shopResultFailed)
 		return
 	}
-	ctx := context.Background()
-	items, err := s.inv.LoadByChar(ctx, auth.accountID, auth.charID)
+	items, err := s.inv.LoadByChar(fctx, auth.accountID, auth.charID)
 	if err != nil {
 		s.log.Error("map: load inventory for sell", "err", err)
 		s.writeSellResult(c, shopResultFailed)
@@ -427,7 +439,7 @@ func (s *MapServer) handleSellItemList(c gnet.Conn, auth *mapAuth, frame []byte)
 			result = shopResultFailed
 			break
 		}
-		if err := s.shops.Sell(ctx, auth.charID, it.ID, it.NameID, int(e.Amount), price); err != nil {
+		if err := s.shops.Sell(fctx, auth.charID, it.ID, it.NameID, int(e.Amount), price); err != nil {
 			s.log.Warn("map: shop sell", "shop", shopName, "item", it.NameID, "amount", e.Amount, "err", err)
 			result = shopResultFailed
 			break
@@ -596,8 +608,8 @@ func (s *MapServer) writeSellResult(c gnet.Conn, result uint8) {
 
 // handleEnterFrame wraps handleEnter to satisfy the dispatch signature (the
 // frame is already detached from gnet's ring buffer by the caller).
-func (s *MapServer) handleEnterFrame(c gnet.Conn, auth *mapAuth, frame []byte) {
-	s.handleEnter(c, auth, frame)
+func (s *MapServer) handleEnterFrame(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
+	s.handleEnter(fctx, c, auth, frame)
 }
 
 // handleLoadEndAck handles CZ_NOTIFY_ACTORINIT (0x007d, 2B cmd-only). This is
@@ -607,7 +619,7 @@ func (s *MapServer) handleEnterFrame(c gnet.Conn, auth *mapAuth, frame []byte) {
 // The item lists are populated from the character's real inventory rows
 // (writeInventoryLists); before Phase 42 they were the empty forms, which left
 // the client's bag grid permanently empty for a character who owned items.
-func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleLoadEndAck(fctx context.Context, c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		s.log.Warn("map: LoadEndAck from unauthed conn")
 		return
@@ -628,8 +640,8 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	// party window until the next membership change.
 	burst = append(burst, encodePartyConfig(0)...)
 	if s.party != nil {
-		if p, perr := s.party.GetByMember(context.Background(), auth.charID); perr == nil {
-			if members, merr := s.party.Members(context.Background(), p.ID); merr == nil {
+		if p, perr := s.party.GetByMember(fctx, auth.charID); perr == nil {
+			if members, merr := s.party.Members(fctx, p.ID); merr == nil {
 				burst = s.appendGroupList(burst, p, members)
 			}
 		}
@@ -638,7 +650,7 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	// (clif.cpp:15355-15391): the whole list first, then one online
 	// ZC_FRIENDS_STATE per friend the map registry reports connected.
 	if s.friend != nil {
-		if friends, ferr := s.friend.List(context.Background(), auth.charID); ferr == nil {
+		if friends, ferr := s.friend.List(fctx, auth.charID); ferr == nil {
 			burst = s.appendFriendsList(burst, friends)
 		}
 		s.notifyFriendsOnline(auth.charID, auth.accountID, playerName(s.world, auth.charID), true)
@@ -649,7 +661,7 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	// populated. A char without a guild gets nothing (rAthena skips on null
 	// guild).
 	if s.guild != nil {
-		if g, gerr := s.guild.GetByMember(context.Background(), auth.charID); gerr == nil {
+		if g, gerr := s.guild.GetByMember(fctx, auth.charID); gerr == nil {
 			burst = s.appendGuildBurst(burst, g)
 		}
 	}
@@ -659,7 +671,7 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 	// here (rAthena requests it lazily on window open via
 	// CZ_REQ_REFRESH_MAIL_LIST).
 	if s.mail != nil {
-		if n, merr := s.mail.UnreadCount(context.Background(), auth.charID); merr == nil && n > 0 {
+		if n, merr := s.mail.UnreadCount(fctx, auth.charID); merr == nil && n > 0 {
 			var icon bytes.Buffer
 			if ierr := ropacket.EncodeZCNotifyUnreadMail(&icon, true); ierr == nil {
 				burst = append(burst, icon.Bytes()...)
@@ -685,7 +697,7 @@ func (s *MapServer) handleLoadEndAck(c gnet.Conn, auth *mapAuth, _ []byte) {
 // conn. OnClose fires on the close and is a clean no-op: LeaveMap is idempotent on
 // an already-removed entity. Best-effort on the leave path — a LeaveMap failure is
 // logged, the ack is still sent, and the conn still closes.
-func (s *MapServer) handleRestart(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleRestart(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -702,7 +714,7 @@ func (s *MapServer) handleRestart(c gnet.Conn, auth *mapAuth, frame []byte) {
 			return
 		}
 	case czRestartReturnToSelect:
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(fctx, 5*time.Second)
 		defer cancel()
 		if err := s.world.LeaveMap(ctx, auth.charID); err != nil {
 			s.log.Error("map: leave world on CZ_RESTART", "gid", auth.charID, "err", err)
@@ -720,7 +732,7 @@ func (s *MapServer) handleRestart(c gnet.Conn, auth *mapAuth, frame []byte) {
 // raise one learned-skill level, gated by the job's skill tree. On success it sends
 // ZC_SKILLINFO_UPDATE (11B) plus a ParChange(SPSkillPoint). On failure it drops
 // silently — no reply packet, connection stays open — per rAthena convention.
-func (s *MapServer) handleSkillUp(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleSkillUp(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -729,7 +741,7 @@ func (s *MapServer) handleSkillUp(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Debug("map: parse CZ_SKILLUP", "err", err)
 		return
 	}
-	newLevel, spCost, rng, upgradable, err := s.skills.LearnSkill(context.Background(), auth.charID, req.SkillID)
+	newLevel, spCost, rng, upgradable, err := s.skills.LearnSkill(fctx, auth.charID, req.SkillID)
 	if err != nil {
 		s.log.Debug("map: LearnSkill", "gid", auth.charID, "skillID", req.SkillID, "err", err)
 		return
@@ -771,7 +783,7 @@ func (s *MapServer) writeRestartAck(c gnet.Conn, ackType uint8) {
 // packed destination, move the entity in the world, and reply
 // ZC_NOTIFY_PLAYERMOVE. Full AOI broadcast to neighbors lands with the
 // connection-registry in M4b.
-func (s *MapServer) handleRequestMove(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleRequestMove(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_REQUEST_MOVE from unauthed conn")
 		return
@@ -821,32 +833,77 @@ func (s *MapServer) handleRequestMove(c gnet.Conn, auth *mapAuth, frame []byte) 
 	}
 }
 
-// relocateThroughPortal moves a player through a warp portal: destination
-// persists via WarpPlayer, the source-map neighbors see the player vanish, and
-// the client receives ZC_NPCACK_MAPMOVE to relocate. The destination-side
-// appear/back-fill happens when the client re-enters through handleEnter
-// (same contract as the script `warp` builtin).
+// relocateThroughPortal moves a player through a warp portal. The zone
+// directory resolves the destination map first: a remote zone redirects the
+// client with ZC_NPCACK_SERVERMOVE (rAthena clif_changemapserver — the client
+// reconnects to that zone's ip:port); the local case is the pre-M12 behavior
+// (RelocatePlayer + ZC_NPCACK_MAPMOVE, destination-side appear/back-fill on
+// the client's re-enter through handleEnter).
 func (s *MapServer) relocateThroughPortal(c gnet.Conn, charID uint32, def script.WarpDef) {
 	e, err := s.world.Get(worlddomain.EntityID(charID)) //nolint:gosec // G115: charID is a char_id (uint32).
 	if err != nil {
 		return // left between move and portal check
 	}
 	fromMap, fromPos := e.Map, e.Pos
+	// Cross-zone redirect (M12): the destination map belongs to another zone
+	// process — persist the destination, tear the player out of this zone,
+	// and point the client at the remote ip:port. Unknown map degrades to
+	// local: a zone without the map is a directory misconfiguration, and
+	// dropping the walk is worse than relocating inside this zone.
+	if s.redirectToRemoteZone(c, charID, def, fromMap, fromPos) {
+		return
+	}
 	if err := s.world.RelocatePlayer(charID, def.DestMap, int16(def.DestX), int16(def.DestY)); err != nil { //nolint:gosec // G115: portal coords are map-tile bounds.
 		s.log.Warn("map: portal warp", "charID", charID, "dest", def.DestMap, "err", err)
 		return
 	}
 	// Source-map farewell: neighbors stop seeing the player at the trigger cell.
+	s.broadcastVanish(fromMap, fromPos, charID)
+	var buf bytes.Buffer
+	_ = ropacket.MapMoveResponse{MapName: def.DestMap, X: uint16(def.DestX), Y: uint16(def.DestY)}.Encode(&buf) //nolint:errcheck,gosec // G115: portal coords fit; encode cannot fail on a bytes.Buffer.
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+}
+
+// redirectToRemoteZone runs the cross-zone leg of a portal warp and reports
+// whether it handled the relocation. A nil directory, an unknown map, or a
+// zero Zone (local) all report false so the caller runs the local warp.
+func (s *MapServer) redirectToRemoteZone(c gnet.Conn, charID uint32, def script.WarpDef, fromMap string, fromPos worlddomain.Position) bool {
+	if s.zones == nil {
+		return false
+	}
+	zone, err := s.zones.Resolve(def.DestMap)
+	if err != nil || zone == (transitdomain.Zone{}) {
+		return false
+	}
+	// Persist the destination map+cell (the remote zone's EnterMap loads it
+	// from the shared char row), then tear the player out of this zone's
+	// world with the offline row stamped at the destination cell.
+	dest := worlddomain.Position{X: int16(def.DestX), Y: int16(def.DestY)} //nolint:gosec // G115: portal coords are map-tile bounds.
+	if perr := s.world.SetPosition(context.Background(), charID, def.DestMap, dest); perr != nil {
+		s.log.Warn("map: cross-zone persist", "charID", charID, "dest", def.DestMap, "err", perr)
+		return true
+	}
+	if rerr := s.world.LeaveRemoteZone(context.Background(), charID, int16(def.DestX), int16(def.DestY)); rerr != nil { //nolint:gosec // G115: portal coords are map-tile bounds.
+		s.log.Warn("map: cross-zone leave", "charID", charID, "dest", def.DestMap, "err", rerr)
+		return true
+	}
+	s.broadcastVanish(fromMap, fromPos, charID)
+	var buf bytes.Buffer
+	_ = ropacket.ServerMoveResponse{MapName: def.DestMap, X: uint16(def.DestX), Y: uint16(def.DestY), IP: zone.IPv4, Port: zone.Port}.Encode(&buf) //nolint:errcheck,gosec // G115: portal coords fit; encode cannot fail on a bytes.Buffer.
+	_ = c.AsyncWrite(buf.Bytes(), nil)
+	return true
+}
+
+// broadcastVanish tells the source map's neighbors the player vanished
+// (ZC_NOTIFY_VANISH) — shared by the local and cross-zone portal paths.
+func (s *MapServer) broadcastVanish(fromMap string, fromPos worlddomain.Position, charID uint32) {
 	vanish := ropacket.NotifyVanishResponse{GID: charID, Type: ropacket.VanishDead}
 	vbuf := make([]byte, vanish.Size())
 	if err := vanish.Encode(sliceWriter(vbuf)); err != nil {
 		s.log.Error("map: encode portal vanish", "err", err)
-	} else {
-		s.broadcast(vbuf, fromMap, fromPos, charID)
+		return
 	}
-	var buf bytes.Buffer
-	_ = ropacket.MapMoveResponse{MapName: def.DestMap, X: uint16(def.DestX), Y: uint16(def.DestY)}.Encode(&buf) //nolint:errcheck,gosec // G115: portal coords fit; encode cannot fail on a bytes.Buffer.
-	_ = c.AsyncWrite(buf.Bytes(), nil)
+	s.broadcast(vbuf, fromMap, fromPos, charID)
 }
 
 // objectTypePC is the ZC_SPAWN_UNIT / ZC_UNIT_WALKING object-type byte for a
@@ -962,7 +1019,7 @@ func encodeSpawnUnit(s *MapServer, r ropacket.SpawnUnitResponse) ([]byte, bool) 
 // handleItemPickup handles CZ_ITEM_PICKUP (0x0362, 6B): parse GroundID, look up
 // the floor item, remove it from the ground, add it to the player's inventory,
 // and reply ZC_ITEM_PICKUP_ACK.
-func (s *MapServer) handleItemPickup(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleItemPickup(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ITEM_PICKUP from unauthed conn")
 		return
@@ -977,7 +1034,7 @@ func (s *MapServer) handleItemPickup(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Debug("map: pickup (not found)", "gid", req.GroundID)
 		return // item already taken or gone — client re-syncs
 	}
-	added, err := s.inv.Add(context.Background(), auth.charID, fi.NameID, int(fi.Amount))
+	added, err := s.inv.Add(fctx, auth.charID, fi.NameID, int(fi.Amount))
 	if err != nil {
 		s.log.Error("map: pickup add inventory", "err", err)
 		return
@@ -986,7 +1043,7 @@ func (s *MapServer) handleItemPickup(c gnet.Conn, auth *mapAuth, frame []byte) {
 	// value: rAthena writes packet.index = client_index(n) for the row
 	// pc_additem chose (clif_additem, clif.cpp:2897), and a hardcoded 0 would
 	// tell every pickup it became the first grid slot.
-	slot, ok := s.clientIndexForItem(context.Background(), auth.accountID, auth.charID, added.ID)
+	slot, ok := s.clientIndexForItem(fctx, auth.accountID, auth.charID, added.ID)
 	if !ok {
 		s.log.Error("map: picked-up row has no resolvable bag slot", "nameID", fi.NameID, "row", added.ID)
 		return
@@ -1016,7 +1073,7 @@ func (s *MapServer) handleItemPickup(c gnet.Conn, auth *mapAuth, frame []byte) {
 // by ItemID, not index, so the row resolves against the ordered list LoadByChar
 // returns — which is the same order handleLoadEndAck's init burst assigns
 // (Phase 42), so the client's slot and this row now agree.
-func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleItemDrop(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ITEM_DROP from unauthed conn")
 		return
@@ -1030,7 +1087,7 @@ func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: CZ_ITEM_DROP zero amount", "index", req.InventoryIndex)
 		return
 	}
-	items, err := s.inv.LoadByChar(context.Background(), auth.accountID, auth.charID)
+	items, err := s.inv.LoadByChar(fctx, auth.accountID, auth.charID)
 	if err != nil {
 		s.log.Error("map: drop load inventory", "err", err)
 		return
@@ -1045,7 +1102,7 @@ func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: CZ_ITEM_DROP amount over stack", "index", req.InventoryIndex, "want", req.Amount, "have", item.Amount)
 		return
 	}
-	if err := s.inv.Remove(context.Background(), item.ID, int(req.Amount)); err != nil {
+	if err := s.inv.Remove(fctx, item.ID, int(req.Amount)); err != nil {
 		s.log.Warn("map: drop remove inventory", "err", err, "id", item.ID)
 		return
 	}
@@ -1095,7 +1152,7 @@ func (s *MapServer) handleItemDrop(c gnet.Conn, auth *mapAuth, frame []byte) {
 // ack, because the exact rAthena failure-encoding for the V5 ack (which field
 // carries the success/fail byte varies by client era) is uncertain; emitting a
 // wrong failure byte could wedge the client's equip slot.
-func (s *MapServer) handleReqWearEquip(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleReqWearEquip(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_REQ_WEAR_EQUIP from unauthed conn")
 		return
@@ -1106,7 +1163,7 @@ func (s *MapServer) handleReqWearEquip(c gnet.Conn, auth *mapAuth, frame []byte)
 		return
 	}
 	serverRow := int(ropacket.ServerIndex(req.Index))
-	if err := s.equip.Equip(context.Background(), auth.accountID, auth.charID, serverRow, req.Position); err != nil {
+	if err := s.equip.Equip(fctx, auth.accountID, auth.charID, serverRow, req.Position); err != nil {
 		s.log.Warn("map: wear equip", "gid", auth.charID, "index", req.Index, "err", err)
 		return
 	}
@@ -1139,7 +1196,7 @@ func (s *MapServer) handleReqWearEquip(c gnet.Conn, auth *mapAuth, frame []byte)
 // (clif.cpp:4484), which is the value the client originally sent. On a validation
 // failure (sentinel error) it emits the ack with Result=0 and keeps the
 // connection alive — the failure encoding is known.
-func (s *MapServer) handleUseItem(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleUseItem(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_USE_ITEM2 from unauthed conn")
 		return
@@ -1150,7 +1207,7 @@ func (s *MapServer) handleUseItem(c gnet.Conn, auth *mapAuth, frame []byte) {
 		return
 	}
 	serverRow := int(ropacket.ServerIndex(req.Index))
-	ack, err := s.itemUse.Use(context.Background(), auth.accountID, auth.charID, serverRow)
+	ack, err := s.itemUse.Use(fctx, auth.accountID, auth.charID, serverRow)
 	if err != nil {
 		s.log.Warn("map: use item", "gid", auth.charID, "index", req.Index, "err", err)
 		s.writeUseItemAck(c, auth.accountID, req.Index, 0, 0, 0)
@@ -1184,7 +1241,7 @@ func (s *MapServer) writeUseItemAck(c gnet.Conn, aid uint32, clientIndex, itemID
 // ZC_REQ_TAKEOFF_EQUIP_ACK with flag=0 (success on the wire — the byte is
 // inverted for PACKETVER >= 20110824 so 0 = success). On failure it logs and
 // keeps the connection alive.
-func (s *MapServer) handleReqTakeoffEquip(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleReqTakeoffEquip(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_REQ_TAKEOFF_EQUIP from unauthed conn")
 		return
@@ -1200,7 +1257,7 @@ func (s *MapServer) handleReqTakeoffEquip(c gnet.Conn, auth *mapAuth, frame []by
 		s.log.Warn("map: takeoff index out of range", "gid", auth.charID, "index", req.Index)
 		return
 	}
-	if err := s.equip.Unequip(context.Background(), auth.accountID, auth.charID, serverRow); err != nil {
+	if err := s.equip.Unequip(fctx, auth.accountID, auth.charID, serverRow); err != nil {
 		s.log.Warn("map: takeoff equip", "gid", auth.charID, "index", req.Index, "err", err)
 		return
 	}
@@ -1264,7 +1321,7 @@ func (s *MapServer) equipSprite(serverRow int, position uint32, auth *mapAuth) u
 // echoes the action, and — when the hit kills a mob — drives the death loop:
 // drops + despawn (SpawnService.OnMobDeath) then a ZC_NOTIFY_VANISH + one
 // ZC_ITEM_ENTRY per rolled drop.
-func (s *MapServer) handleActionRequest(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleActionRequest(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ACTION_REQUEST from unauthed conn")
 		return
@@ -1303,9 +1360,14 @@ func (s *MapServer) handleActionRequest(c gnet.Conn, auth *mapAuth, frame []byte
 	}
 }
 
-// sendActionResponse encodes and writes ZC_ACTION_RESPONSE (the action echo).
+// sendActionResponse encodes and writes ZC_NOTIFY_ACT (the action echo).
+//
+// The source broadcasts a sit, stand, or attack action as
+// PACKET_ZC_NOTIFY_ACT (src/map/packets.hpp:1413; clif_sitting and
+// clif_standing in src/map/clif.cpp:5331-5358), so the echo goes through
+// that packet: the action byte is the source's own damage type.
 func (s *MapServer) sendActionResponse(c gnet.Conn, charID uint32, action uint8, targetGID uint32) {
-	resp := ropacket.ActionResponse{GID: charID, Action: action, TargetGID: targetGID}
+	resp := ropacket.NotifyActResponse{SrcID: charID, TargetID: targetGID, Type: action}
 	out := make([]byte, resp.Size())
 	if err := resp.Encode(sliceWriter(out)); err != nil {
 		s.log.Error("map: encode action-response", "err", err)
@@ -1437,7 +1499,7 @@ func (s *MapServer) dropDeadSharers(awards map[uint32][2]uint64) map[uint32][2]u
 // USESKILL_FAIL_* wire codes are not yet defined in the packet layer, a known
 // gap — no wire value is invented). When the hit kills a mob, the same
 // drop/despawn loop as CZ_ACTION_REQUEST runs.
-func (s *MapServer) handleUseSkill2(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleUseSkill2(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_USE_SKILL2 from unauthed conn")
 		return
@@ -1490,7 +1552,7 @@ func (s *MapServer) handleUseSkill2(c gnet.Conn, auth *mapAuth, frame []byte) {
 // kernel future work and deliberately not faked here: only the single nearest
 // mob is affected. Validation failures are logged, surface ZC_ACK_TOUSESKILL only
 // for the verified SP-insufficient cause, and never close the connection.
-func (s *MapServer) handleUseSkillToPos(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleUseSkillToPos(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_USE_SKILL_TOPOS from unauthed conn")
 		return
@@ -1626,7 +1688,7 @@ func (s *MapServer) sendSkillFail(c gnet.Conn, skillID uint16, castErr error) {
 // dialog (ZC_REQ_EXCHANGE_ITEM carries the requester's name/AID/level — the real
 // wire format sends this to the TARGET only, never the requester). On failure the
 // requester gets a ZC_ACK_EXCHANGE_ITEM reject reason.
-func (s *MapServer) handleTradeRequest(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleTradeRequest(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_TRADE_REQUEST from unauthed conn")
 		return
@@ -1641,7 +1703,7 @@ func (s *MapServer) handleTradeRequest(c gnet.Conn, auth *mapAuth, frame []byte)
 		return
 	}
 	targetGID := req.TargetGID
-	if err := s.trade.Request(context.Background(), auth.charID, targetGID); err != nil {
+	if err := s.trade.Request(fctx, auth.charID, targetGID); err != nil {
 		s.writeTradeAck(c, tradeAckResult(err), 0, 0)
 		s.log.Debug("map: trade request rejected", "req", auth.charID, "tgt", targetGID, "err", err)
 		return
@@ -1650,7 +1712,7 @@ func (s *MapServer) handleTradeRequest(c gnet.Conn, auth *mapAuth, frame []byte)
 	// target's dialog, then deliver it to the target's connection.
 	reqEnt, gerr := s.world.Get(worlddomain.EntityID(auth.charID))
 	if gerr != nil {
-		s.trade.Cancel(context.Background(), auth.charID)
+		s.trade.Cancel(fctx, auth.charID)
 		s.log.Error("map: resolve requester entity for trade", "gid", auth.charID, "err", gerr)
 		return
 	}
@@ -1658,7 +1720,7 @@ func (s *MapServer) handleTradeRequest(c gnet.Conn, auth *mapAuth, frame []byte)
 	if !ok {
 		// Target is an online PC (Request verified it) but not reachable through
 		// the conn-registry shim — tear the session down and reject the requester.
-		s.trade.Cancel(context.Background(), auth.charID)
+		s.trade.Cancel(fctx, auth.charID)
 		s.writeTradeAck(c, ropacket.TradeAckCharNotExist, 0, 0)
 		return
 	}
@@ -1670,7 +1732,7 @@ func (s *MapServer) handleTradeRequest(c gnet.Conn, auth *mapAuth, frame []byte)
 // sides get ZC_ACK_EXCHANGE_ITEM(Accept) carrying the OTHER party's AID/level; on
 // cancel both get ZC_CANCEL_EXCHANGE_ITEM. The ack-sender is the target (the one
 // whose dialog was opened); its partner is the requester.
-func (s *MapServer) handleTradeAck(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleTradeAck(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_TRADE_ACK from unauthed conn")
 		return
@@ -1687,12 +1749,12 @@ func (s *MapServer) handleTradeAck(c gnet.Conn, auth *mapAuth, frame []byte) {
 	accept := req.Type == ropacket.CZTradeAckAccept
 	// Resolve the partner BEFORE Ack: an accept leaves both sessions active, but a
 	// cancel tears both down.
-	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
+	partnerID, ok := s.trade.Partner(fctx, auth.charID)
 	if !ok {
 		s.log.Debug("map: CZ_TRADE_ACK with no active trade", "gid", auth.charID)
 		return
 	}
-	if err := s.trade.Ack(context.Background(), auth.charID, accept); err != nil {
+	if err := s.trade.Ack(fctx, auth.charID, accept); err != nil {
 		s.log.Debug("map: trade ack failed", "gid", auth.charID, "err", err)
 		return
 	}
@@ -1716,7 +1778,7 @@ func (s *MapServer) handleTradeAck(c gnet.Conn, auth *mapAuth, frame []byte) {
 // sender's side (CZ_ADD_EXCHANGE_ITEM 0x00e8). On success the SENDER gets
 // ZC_ACK_ADD_EXCHANGE_ITEM(Success) and the PARTNER gets ZC_ADD_EXCHANGE_ITEM (the
 // staged view); on failure only the sender is told.
-func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleAddExchangeItem(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_ADD_EXCHANGE_ITEM from unauthed conn")
 		return
@@ -1730,7 +1792,7 @@ func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []by
 		s.log.Warn("map: parse CZ_ADD_EXCHANGE_ITEM", "err", err)
 		return
 	}
-	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
+	partnerID, ok := s.trade.Partner(fctx, auth.charID)
 	if !ok {
 		s.writeAckAddItem(c, req.Index, ropacket.TradeItemAddCanceled)
 		s.log.Debug("map: CZ_ADD_EXCHANGE_ITEM with no active trade", "gid", auth.charID)
@@ -1741,11 +1803,10 @@ func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []by
 	// must be dispatched here, before ServerIndex turns 0 into a wrapped row. For
 	// an item index the wire value is a client index (server row + 2,
 	// clif.cpp:122-128).
-	ctx := context.Background()
 	var res worldapp.AddItemResult
 	if req.Index == 0 {
 		var err error
-		res, err = s.trade.AddZeny(ctx, auth.charID, int(req.Amount)) //nolint:gosec // G115: wire amount is a small positive
+		res, err = s.trade.AddZeny(fctx, auth.charID, int(req.Amount)) //nolint:gosec // G115: wire amount is a small positive
 		if err != nil {
 			s.writeAckAddItem(c, req.Index, tradeItemAddResult(err))
 			s.log.Debug("map: trade add-zeny rejected", "gid", auth.charID, "err", err)
@@ -1753,7 +1814,7 @@ func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []by
 		}
 	} else {
 		var err error
-		res, err = s.trade.AddItem(ctx, auth.charID, int(ropacket.ServerIndex(req.Index)), int(req.Index), int(req.Amount)) //nolint:gosec // G115: wire index/amount are small positives
+		res, err = s.trade.AddItem(fctx, auth.charID, int(ropacket.ServerIndex(req.Index)), int(req.Index), int(req.Amount)) //nolint:gosec // G115: wire index/amount are small positives
 		if err != nil {
 			s.writeAckAddItem(c, req.Index, tradeItemAddResult(err))
 			s.log.Debug("map: trade add-item rejected", "gid", auth.charID, "err", err)
@@ -1772,7 +1833,7 @@ func (s *MapServer) handleAddExchangeItem(c gnet.Conn, auth *mapAuth, frame []by
 // swap; the lock notifications are still emitted. A conclude failure (the known
 // verify-then-swap TOCTOU window) rolls back, cancels both sessions, and tells both
 // sides the trade was cancelled.
-func (s *MapServer) handleTradeOK(c gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleTradeOK(fctx context.Context, c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_TRADE_OK from unauthed conn")
 		return
@@ -1781,12 +1842,12 @@ func (s *MapServer) handleTradeOK(c gnet.Conn, auth *mapAuth, _ []byte) {
 		s.log.Debug("map: trade not wired, ignoring CZ_TRADE_OK")
 		return
 	}
-	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
+	partnerID, ok := s.trade.Partner(fctx, auth.charID)
 	if !ok {
 		s.log.Debug("map: CZ_TRADE_OK with no active trade", "gid", auth.charID)
 		return
 	}
-	concluded, err := s.trade.OK(context.Background(), auth.charID)
+	concluded, err := s.trade.OK(fctx, auth.charID)
 	if err != nil {
 		s.writeTradeCancel(c)
 		if pc, ok := s.connFor(partnerID); ok {
@@ -1807,7 +1868,7 @@ func (s *MapServer) handleTradeOK(c gnet.Conn, auth *mapAuth, _ []byte) {
 // handleTradeCancel tears down the sender's trade (CZ_TRADE_CANCEL 0x00ed) and
 // tells both sides via ZC_CANCEL_EXCHANGE_ITEM. A no-op when the sender is not
 // trading.
-func (s *MapServer) handleTradeCancel(c gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleTradeCancel(fctx context.Context, c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_TRADE_CANCEL from unauthed conn")
 		return
@@ -1815,8 +1876,8 @@ func (s *MapServer) handleTradeCancel(c gnet.Conn, auth *mapAuth, _ []byte) {
 	if s.trade == nil {
 		return
 	}
-	partnerID, ok := s.trade.Partner(context.Background(), auth.charID)
-	s.trade.Cancel(context.Background(), auth.charID)
+	partnerID, ok := s.trade.Partner(fctx, auth.charID)
+	s.trade.Cancel(fctx, auth.charID)
 	s.writeTradeCancel(c)
 	if ok {
 		if pc, ok := s.connFor(partnerID); ok {
@@ -1939,35 +2000,62 @@ func tradeItemAddResult(err error) uint8 {
 
 // --- storage handlers (M9 warehouse) ---
 
-// handleReqOpenStore2 opens the warehouse UI (CZ_REQ_OPENSTORE2 0x07e4). The
-// server sends the warehouse's current contents as ZC_STORE_NORMALITEMLIST +
-// ZC_STORE_EQUIPMENTITEMLIST so the client can populate the warehouse grid.
+// openStorage sends the warehouse-open burst to the player.
 //
-// Without the storage service wired, the handler is a no-op (matches the trade
-// nil-tolerant pattern). With it wired, the handler reads the account's
-// warehouse rows and emits the two list frames.
-func (s *MapServer) handleReqOpenStore2(c gnet.Conn, auth *mapAuth, _ []byte) {
-	if auth == nil {
-		s.log.Warn("map: CZ_REQ_OPENSTORE2 from unauthed conn")
-		return
-	}
+// The source opens the warehouse from the NPC script
+// (src/map/script.cpp:10966 calls storage_storageopen), and
+// storage_storageopen sends the two item lists and then the item count
+// (src/map/storage.cpp:147-148). There is no client request that opens the
+// warehouse, so the burst is a server-side action.
+//
+// Without the storage service wired, the action is a no-op (matches the trade
+// nil-tolerant pattern). With it wired, it reads the account's warehouse rows
+// and emits the frames.
+//
+// accountID selects the warehouse rows (the warehouse is an account-scoped
+// store); the caller resolves the connection.
+func (s *MapServer) openStorage(fctx context.Context, c gnet.Conn, accountID uint32) {
 	if s.storage == nil {
-		s.log.Debug("map: storage not wired, ignoring CZ_REQ_OPENSTORE2")
+		s.log.Debug("map: storage not wired, ignoring warehouse open")
 		return
 	}
-	rows, err := s.storage.LoadWarehouse(context.Background(), auth.accountID)
+	rows, err := s.storage.LoadWarehouse(fctx, accountID)
 	if err != nil {
-		s.log.Error("map: load warehouse for init burst", "aid", auth.accountID, "err", err)
+		s.log.Error("map: load warehouse for init burst", "aid", accountID, "err", err)
 		return
 	}
-	s.writeStorageLists(c, rows)
+	normal, equip := s.storageListEntries(rows)
+	var out bytes.Buffer
+	// The row count is the warehouse's item count, bounded by MAX_STORAGE (600).
+	if err := ropacket.EncodeStorageOpen(&out, normal, equip, uint16(len(rows)), uint16(len(rows))); err != nil { //nolint:gosec // G115: warehouse row count bounded by MAX_STORAGE (600).
+		s.log.Error("map: encode warehouse open burst", "err", err)
+		return
+	}
+	_ = c.AsyncWrite(out.Bytes(), nil)
 }
 
-// handleCloseStore closes the warehouse (CZ_CLOSE_STORE 0x07e5). Today the
+// OpenStorage opens the player's warehouse — the content module's
+// contentdomain.ScriptStorage port, reached from the NPC script's
+// `openstorage` builtin (the source's BUILDIN_FUNC(openstorage),
+// src/map/script.cpp:10958, which calls storage_storageopen).
+//
+// accountID selects the warehouse rows (the warehouse is an account-scoped
+// store); charID resolves the player's live connection. A player with no live
+// connection, or a server with no storage wired, is a no-op.
+func (s *MapServer) OpenStorage(accountID, charID uint32) {
+	c, ok := s.connFor(charID)
+	if !ok {
+		s.log.Debug("map: warehouse open for player without a connection", "charID", charID)
+		return
+	}
+	s.openStorage(context.Background(), c, accountID)
+}
+
+// handleCloseStore closes the warehouse (CZ_CLOSE_STORE 0x00f7). Today the
 // warehouse state is server-side (no per-conn flag) — close is informational
-// and the handler is a no-op. Mirrors rAthena's clif_parse_CloseStore which
-// only clears the per-conn storage flag (clif.cpp:7990-7997).
-func (s *MapServer) handleCloseStore(_ gnet.Conn, auth *mapAuth, _ []byte) {
+// and the handler is a no-op. Mirrors rAthena's clif_parse_CloseKafra which
+// only clears the per-conn storage flag (src/map/clif.cpp:13747).
+func (s *MapServer) handleCloseStore(_ context.Context, _ gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		s.log.Warn("map: CZ_CLOSE_STORE from unauthed conn")
 		return
@@ -1975,60 +2063,71 @@ func (s *MapServer) handleCloseStore(_ gnet.Conn, auth *mapAuth, _ []byte) {
 	// No state to clear today; the warehouse is a per-account store.
 }
 
-// handleMoveItemToStore2 moves an item from the player's bag to the warehouse
-// (CZ_MOVE_ITEM_TO_STORE2 0x07e6). The wire index is the bag slot (server row
-// + 2). On success, emits ZC_STOREITEMLISTRESULT with result=0 (success);
-// on failure, result=1.
-func (s *MapServer) handleMoveItemToStore2(c gnet.Conn, auth *mapAuth, frame []byte) {
+// handleMoveItemToStore moves an item from the player's bag to the warehouse
+// (CZ_MOVE_ITEM_FROM_BODY_TO_STORE 0x00f3). The parser hands the server's
+// 0-based bag row, the value the source's handler works with.
+//
+// The source acknowledges a deposit by removing the row from the client's
+// warehouse grid, so a successful move emits ZC_DELETE_ITEM_FROM_STORE and
+// the refreshed item count.
+func (s *MapServer) handleMoveItemToStore(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
-		s.log.Warn("map: CZ_MOVE_ITEM_TO_STORE2 from unauthed conn")
+		s.log.Warn("map: CZ_MOVE_ITEM_FROM_BODY_TO_STORE from unauthed conn")
 		return
 	}
 	if s.storage == nil {
-		s.log.Debug("map: storage not wired, ignoring CZ_MOVE_ITEM_TO_STORE2")
+		s.log.Debug("map: storage not wired, ignoring CZ_MOVE_ITEM_FROM_BODY_TO_STORE")
 		return
 	}
-	req, err := ropacket.ParseCZMoveItemToStore2(frame)
+	req, err := ropacket.ParseCZMoveItemFromBodyToStore(frame)
 	if err != nil {
-		s.log.Warn("map: parse CZ_MOVE_ITEM_TO_STORE2", "err", err)
+		s.log.Warn("map: parse CZ_MOVE_ITEM_FROM_BODY_TO_STORE", "err", err)
 		return
 	}
-	_, mErr := s.storage.MoveToStorage(context.Background(), auth.accountID, auth.charID, uint32(req.Index), int(req.Amount)) //nolint:gosec // G115: amount fits int.
-	s.writeStorageItemListResult(c, mErr)
+	_, mErr := s.storage.MoveToStorage(fctx, auth.accountID, auth.charID, uint32(req.Index), int(req.Amount)) //nolint:gosec // G115: amount fits int.
+	if mErr != nil {
+		s.log.Warn("map: move item to storage", "err", mErr)
+		return
+	}
+	s.writeStorageItemRemoved(c, req.Index, req.Amount)
 }
 
-// handleMoveItemToBody2 moves an item from the warehouse to the player's bag
-// (CZ_MOVE_ITEM_TO_BODY2 0x07e7). The wire index is the warehouse slot
-// (server row + 2). On success, emits ZC_STOREITEMLISTRESULT with result=0
-// (success); on failure, result=1.
-func (s *MapServer) handleMoveItemToBody2(c gnet.Conn, auth *mapAuth, frame []byte) {
+// handleMoveItemToBody moves an item from the warehouse to the player's bag
+// (CZ_MOVE_ITEM_FROM_STORE_TO_BODY 0x00f5). The parser hands the server's
+// 0-based warehouse row, the value the source's handler works with.
+func (s *MapServer) handleMoveItemToBody(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
-		s.log.Warn("map: CZ_MOVE_ITEM_TO_BODY2 from unauthed conn")
+		s.log.Warn("map: CZ_MOVE_ITEM_FROM_STORE_TO_BODY from unauthed conn")
 		return
 	}
 	if s.storage == nil {
-		s.log.Debug("map: storage not wired, ignoring CZ_MOVE_ITEM_TO_BODY2")
+		s.log.Debug("map: storage not wired, ignoring CZ_MOVE_ITEM_FROM_STORE_TO_BODY")
 		return
 	}
-	req, err := ropacket.ParseCZMoveItemToBody2(frame)
+	req, err := ropacket.ParseCZMoveItemFromStoreToBody(frame)
 	if err != nil {
-		s.log.Warn("map: parse CZ_MOVE_ITEM_TO_BODY2", "err", err)
+		s.log.Warn("map: parse CZ_MOVE_ITEM_FROM_STORE_TO_BODY", "err", err)
 		return
 	}
-	_, mErr := s.storage.MoveFromStorage(context.Background(), auth.accountID, auth.charID, uint32(req.Index), int(req.Amount)) //nolint:gosec // G115: amount fits int.
-	s.writeStorageItemListResult(c, mErr)
+	_, mErr := s.storage.MoveFromStorage(fctx, auth.accountID, auth.charID, uint32(req.Index), int(req.Amount)) //nolint:gosec // G115: amount fits int.
+	if mErr != nil {
+		s.log.Warn("map: move item to body", "err", mErr)
+		return
+	}
+	s.writeStorageItemRemoved(c, req.Index, req.Amount)
 }
 
-// writeStorageLists emits ZC_STORE_NORMALITEMLIST + ZC_STORE_EQUIPMENTITEMLIST
-// to populate the warehouse grid on CZ_REQ_OPENSTORE2. The shape mirrors
-// the inventory init burst but without an invType byte (rAthena's
-// clif_storageList emits the bare NORMALITEM_INFO / EQUIPITEM_INFO lists).
-func (s *MapServer) writeStorageLists(c gnet.Conn, rows []storagedomain.StorageItem) {
+// storageListEntries builds the warehouse's two item lists from its rows.
+//
+// The source's warehouse grid shows stackable and equipment rows in separate
+// lists (src/map/clif.cpp:3159-3235), and the client's slot is the storage
+// row plus one (the source's client_storage_index).
+func (s *MapServer) storageListEntries(rows []storagedomain.StorageItem) ([]ropacket.InventoryNormalItem, []ropacket.InventoryEquipItem) {
 	normal := make([]ropacket.InventoryNormalItem, 0, len(rows))
 	equipped := make([]ropacket.InventoryEquipItem, 0, len(rows))
 	for i, it := range rows {
 		//nolint:gosec // G115: warehouse row count bounded by MAX_STORAGE (600).
-		clientIdx := uint16(i) + 2
+		clientIdx := uint16(i) + 1
 		entry := s.itemEntry(it.NameID)
 		wireType := uint8(0) // default IT_ETC when item_db is absent
 		if entry != nil {
@@ -2064,28 +2163,20 @@ func (s *MapServer) writeStorageLists(c gnet.Conn, rows []storagedomain.StorageI
 		}
 		equipped = append(equipped, eq)
 	}
-	var buf bytes.Buffer
-	if err := (ropacket.StorageListNormalResponse{Items: normal}).Encode(&buf); err != nil {
-		s.log.Error("map: encode ZC_STORE_NORMALITEMLIST", "err", err)
-		return
-	}
-	if err := (ropacket.StorageListEquipResponse{Items: equipped}).Encode(&buf); err != nil {
-		s.log.Error("map: encode ZC_STORE_EQUIPMENTITEMLIST", "err", err)
-		return
-	}
-	_ = c.AsyncWrite(buf.Bytes(), nil)
+	return normal, equipped
 }
 
-// writeStorageItemListResult emits ZC_STOREITEMLISTRESULT (0x07eb, 6 bytes).
-// result=0 on success (nil err); result=1 on any failure.
-func (s *MapServer) writeStorageItemListResult(c gnet.Conn, mErr error) {
-	resp := ropacket.StorageItemListResult{Result: 0}
-	if mErr != nil {
-		resp.Result = 1
-	}
+// writeStorageItemRemoved emits the source's ZC_DELETE_ITEM_FROM_STORE (0xf6),
+// the notice that a warehouse row is gone from the client's grid.
+//
+// The source sends it after a deposit or a withdraw
+// (src/map/clif.cpp:4940-4946, clif_storageitemremoved), with the client's
+// warehouse slot — the storage row plus one — and the amount that moved.
+func (s *MapServer) writeStorageItemRemoved(c gnet.Conn, serverRow uint16, amount uint32) {
+	resp := ropacket.StorageDeleteItemResponse{Index: serverRow + 1, Amount: amount}
 	out := make([]byte, resp.Size())
 	if err := resp.Encode(sliceWriter(out)); err != nil {
-		s.log.Error("map: encode ZC_STOREITEMLISTRESULT", "err", err)
+		s.log.Error("map: encode ZC_DELETE_ITEM_FROM_STORE", "err", err)
 		return
 	}
 	_ = c.AsyncWrite(out, nil)

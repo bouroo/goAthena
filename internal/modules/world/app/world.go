@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	"github.com/bouroo/goAthena/internal/modules/world/domain"
 	"github.com/bouroo/goAthena/internal/shared/safe"
 	"github.com/bouroo/goAthena/pkg/ro/aoi"
@@ -71,6 +72,17 @@ type WorldService struct {
 	// It provides the new level, recalculated MaxHP/MaxSP, and remaining status points.
 	// nil = leveling is silent. Invoked off the world mutex.
 	OnLevelUp func(charID uint32, newLevel int16, maxHP, maxSP int32, statusPoint uint32)
+	// OnAnnounce, when set, is invoked after Announce/AnnounceMap resolve the
+	// recipients of a script broadcast, so the gateway can encode one
+	// ZC_BROADCAST and write it to each recipient's connection. recipients holds
+	// the char ids (GIDs) the audience resolved to; flag carries the announce
+	// BC_* bits so the emitter can pick the colour. nil = announce is silent.
+	// Invoked off the world mutex.
+	OnAnnounce func(recipients []uint32, msg string, flag int)
+	// zones resolves a warp destination map to the zone serving it (M12).
+	// nil = every map is local (the v0 single-zone default). Set via
+	// SetZoneDirectory.
+	zones transitdomain.MapDirectory
 }
 
 // Pre-renewal standing natural-regen intervals (rAthena status_natural_heal).
@@ -112,6 +124,12 @@ func NewWorldService(repo domain.WorldRepository, log *slog.Logger, tickRateHz i
 		respawnCancel: respawnCancel,
 		respawnTimers: make(map[uint32]*respawnTimer),
 	}
+}
+
+// SetZoneDirectory attaches the transit MapDirectory (M12). nil keeps every
+// map local.
+func (w *WorldService) SetZoneDirectory(dir transitdomain.MapDirectory) {
+	w.zones = dir
 }
 
 // ensureGrid returns the AOI grid for a map, creating it on first access. Map
@@ -252,19 +270,7 @@ func (w *WorldService) QueryVisible(mapName string, x, y int) []domain.EntityID 
 func (w *WorldService) PlayersNear(mapName string, pos domain.Position) []domain.EntityID {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	gm := w.grids[mapName]
-	if gm == nil {
-		return nil
-	}
-	visible := gm.QueryVisible(int(pos.X), int(pos.Y))
-	out := make([]domain.EntityID, 0, len(visible))
-	for _, e := range visible {
-		ce, ok := w.entities[domain.EntityID(e.ID)]
-		if ok && ce.Type == domain.EntityTypePC {
-			out = append(out, ce.ID)
-		}
-	}
-	return out
+	return w.playersNearLocked(mapName, pos)
 }
 
 // PlayersOnMap returns the IDs of every player-character entity currently on
@@ -274,14 +280,7 @@ func (w *WorldService) PlayersNear(mapName string, pos domain.Position) []domain
 func (w *WorldService) PlayersOnMap(mapName string) []domain.EntityID {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	set := w.byMap[mapName]
-	out := make([]domain.EntityID, 0, len(set))
-	for id := range set {
-		if ce, ok := w.entities[id]; ok && ce.Type == domain.EntityTypePC {
-			out = append(out, id)
-		}
-	}
-	return out
+	return w.playersOnMapLocked(mapName)
 }
 
 // PlayerByName resolves an online player-character's entity by exact name.
@@ -533,10 +532,49 @@ func (w *WorldService) LeaveMap(ctx context.Context, charID uint32) error {
 		}
 		return err
 	}
+	return w.leaveMap(ctx, charID, e, e.Pos)
+}
+
+// LeaveRemoteZone is LeaveMap for a cross-zone redirect (M12): the char leaves
+// this zone's world and its vitals/EXP persist, but the offline row records
+// (x, y) — the DESTINATION zone's entry coordinates the redirect already
+// persisted — instead of the stale live position, so the destination zone's
+// EnterMap loads the player at its warp destination. Same idempotency
+// contract as LeaveMap.
+func (w *WorldService) LeaveRemoteZone(ctx context.Context, charID uint32, x, y int16) error {
+	e, err := w.Get(domain.EntityID(charID))
+	if err != nil {
+		if errors.Is(err, domain.ErrEntityNotFound) {
+			return nil
+		}
+		return err
+	}
+	return w.leaveMap(ctx, charID, e, domain.Position{X: x, Y: y})
+}
+
+// ResolveZone adapts the transit MapDirectory for the content ScriptWorld
+// port (M12): the script `warp` builtin resolves the destination before
+// choosing the local MAPMOVE or the remote SERVERMOVE redirect. The
+// directory is optional (SetZoneDirectory); nil answers local.
+func (w *WorldService) ResolveZone(mapName string) (transitdomain.Zone, error) {
+	if w.zones == nil {
+		return transitdomain.Zone{}, nil
+	}
+	zone, err := w.zones.Resolve(mapName)
+	if err != nil {
+		return transitdomain.Zone{}, fmt.Errorf("resolve zone: %w", err)
+	}
+	return zone, nil
+}
+
+// leaveMap is the shared persist primitive behind LeaveMap/LeaveRemoteZone:
+// remove the entity, write the offline flag at offlinePos, and save the
+// snapshot's vitals/EXP/skills.
+func (w *WorldService) leaveMap(ctx context.Context, charID uint32, e domain.Entity, offlinePos domain.Position) error {
 	if err := w.RemoveEntity(domain.EntityID(charID)); err != nil {
 		return err
 	}
-	if err := w.repo.SetOnline(ctx, charID, false, e.Pos); err != nil {
+	if err := w.repo.SetOnline(ctx, charID, false, offlinePos); err != nil {
 		return fmt.Errorf("set offline: %w", err)
 	}
 	if err := w.repo.SaveState(ctx, charID, e.Level, e.JobLevel, e.MaxHP, e.MaxSP, e.HP, e.SP, e.BaseExp, e.JobExp, e.StatusPoint, e.SkillPoint); err != nil {
@@ -922,6 +960,133 @@ func (w *WorldService) HealPlayer(charID uint32, hpPct, spPct int) (hp, sp int32
 	e.SP = applyPctHeal(e.SP, e.MaxSP, spPct)
 	return e.HP, e.SP, nil
 }
+
+// HealAbs restores a player's HP and SP by absolute amounts, clamped to
+// [0, Max] — rAthena's `heal` builtin (script.cpp:6007, status_heal). Unlike
+// HealPlayer's percentages this is a flat restore. It is AddVitals under the
+// ScriptWorld name: HP/SP is transient runtime state, and the vitals
+// notification the gateway relays as ZC_PAR_CHANGE fires off the world mutex.
+func (w *WorldService) HealAbs(charID uint32, hp, sp int) error {
+	_, _, err := w.AddVitals(charID, saturateInt32(hp), saturateInt32(sp))
+	return err
+}
+
+// saturateInt32 narrows an unbounded script integer to int32, clamping at the
+// range ends. rAthena does the same (status.cpp:1806 cap_value(hhp,INT_MIN,
+// INT_MAX)) so a script cannot wrap a heal into damage by overflowing.
+func saturateInt32(v int) int32 {
+	switch {
+	case v > math.MaxInt32:
+		return math.MaxInt32
+	case v < math.MinInt32:
+		return math.MinInt32
+	default:
+		return int32(v)
+	}
+}
+
+// Announce resolves the audience the announce flag's BC_* target bits select
+// (rAthena buildin_announce, script.cpp:11957) and hands the recipient char ids
+// to OnAnnounce, which owns packet emission. anchorID is the broadcast source —
+// the NPC (BC_NPC) or the attached player — so BC_MAP and BC_AREA anchor on it
+// exactly as rAthena's clif_send targets do. A zero flag is BC_ALL.
+//
+// An anchor that is not a live entity drops the broadcast (rAthena returns
+// early when the source block is null, script.cpp:11984); BC_ALL does not need
+// one and still delivers.
+func (w *WorldService) Announce(anchorID uint32, msg string, flag int) {
+	w.mu.RLock()
+	anchor, haveAnchor := w.entities[domain.EntityID(anchorID)]
+	var ids []domain.EntityID
+	switch flag & bcTargetMask {
+	case bcSelf:
+		if haveAnchor && anchor.Type == domain.EntityTypePC {
+			ids = []domain.EntityID{anchor.ID}
+		}
+	case bcMap:
+		if haveAnchor {
+			ids = w.playersOnMapLocked(anchor.Map)
+		}
+	case bcArea:
+		if haveAnchor {
+			ids = w.playersNearLocked(anchor.Map, anchor.Pos)
+		}
+	default: // BC_ALL — every player on this zone
+		for _, e := range w.entities {
+			if e.Type == domain.EntityTypePC {
+				ids = append(ids, e.ID)
+			}
+		}
+	}
+	w.mu.RUnlock()
+	if len(ids) == 0 || w.OnAnnounce == nil {
+		return
+	}
+	w.OnAnnounce(entityIDsToUint32(ids), msg, flag)
+}
+
+// entityIDsToUint32 narrows entity ids to the char ids the gateway's connection
+// map is keyed by (EntityID wraps a char_id).
+func entityIDsToUint32(ids []domain.EntityID) []uint32 {
+	out := make([]uint32, len(ids))
+	for i, id := range ids {
+		out[i] = uint32(id) //nolint:gosec // G115: EntityID wraps a char_id (uint32).
+	}
+	return out
+}
+
+// AnnounceMap resolves every player on mapName and hands them to OnAnnounce.
+// It is rAthena's mapannounce (script.cpp:12028), which ignores the flag's
+// target bits and broadcasts map-wide. An unknown map delivers to nobody.
+func (w *WorldService) AnnounceMap(mapName, msg string, flag int) {
+	w.mu.RLock()
+	recipients := w.playersOnMapLocked(mapName)
+	w.mu.RUnlock()
+	if len(recipients) == 0 || w.OnAnnounce == nil {
+		return
+	}
+	w.OnAnnounce(entityIDsToUint32(recipients), msg, flag)
+}
+
+// playersOnMapLocked returns the ids of the PCs on mapName. Callers hold w.mu
+// (read).
+func (w *WorldService) playersOnMapLocked(mapName string) []domain.EntityID {
+	set := w.byMap[mapName]
+	out := make([]domain.EntityID, 0, len(set))
+	for id := range set {
+		if e, ok := w.entities[id]; ok && e.Type == domain.EntityTypePC {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// playersNearLocked returns the ids of the PCs within AOI view range of pos on
+// mapName. Callers hold w.mu (read); the AOI grid's own per-tower locks are
+// acquired underneath (world→tower order, matching AddEntity/MoveEntity).
+func (w *WorldService) playersNearLocked(mapName string, pos domain.Position) []domain.EntityID {
+	gm := w.grids[mapName]
+	if gm == nil {
+		return nil
+	}
+	visible := gm.QueryVisible(int(pos.X), int(pos.Y))
+	out := make([]domain.EntityID, 0, len(visible))
+	for _, e := range visible {
+		if ce, ok := w.entities[domain.EntityID(e.ID)]; ok && ce.Type == domain.EntityTypePC {
+			out = append(out, ce.ID)
+		}
+	}
+	return out
+}
+
+// BC_* target bits and codes from clif.hpp:245 broadcast_flags — the flag
+// subset the announce audience logic reads.
+const (
+	bcTargetMask = 0x07 // BC_TARGET_MASK
+	bcSelf       = 3    // BC_SELF
+	bcMap        = 1    // BC_MAP
+	bcArea       = 2    // BC_AREA
+)
 
 // AddVitals applies an absolute HP/SP delta to a player, clamped to [0, Max], and
 // returns the resulting values. It is the usable-item (potion) use case's world

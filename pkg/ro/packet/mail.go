@@ -15,57 +15,98 @@ import (
 // builders src/map/clif.cpp:15869-16900, opcode table
 // src/map/clif_packetdb.hpp:1738-1762 (+ 0x0AC0/0x0AC1 at :1867, 0x0B97/CZ
 // CHECKNAME2 at :2002, 0x0A6E at :1855 block gate 20160330).
-const (
-	// C→S opcodes.
-	HeaderCZOPENMAILBOX     uint16 = 0x09e8 // CZ_OPEN_MAILBOX — clif_parse_Mail_refreshinbox
-	HeaderCZCLOSEMAILBOX    uint16 = 0x09e9 // CZ_CLOSE_MAILBOX — clif_parse_dull (no-op)
-	HeaderCZREQREADMAIL     uint16 = 0x09ea // CZ_REQ_READ_MAIL — clif_parse_Mail_read
-	HeaderCZREQNEXTMAILLIST uint16 = 0x09ee // CZ_REQ_NEXT_MAIL_LIST — refreshinbox
-	HeaderCZREQREFRESHMAILL uint16 = 0x09ef // CZ_REQ_REFRESH_MAIL_LIST — refreshinbox
-	HeaderCZREQZENYFROMMAIL uint16 = 0x09f1 // CZ_REQ_ZENY_FROM_MAIL — clif_parse_Mail_getattach
-	HeaderCZREQITEMFROMMAIL uint16 = 0x09f3 // CZ_REQ_ITEM_FROM_MAIL — clif_parse_Mail_getattach
-	HeaderCZREQDELETEMAIL   uint16 = 0x09f5 // CZ_REQ_DELETE_MAIL — clif_parse_Mail_delete
-	HeaderCZREQCANCELWRITE  uint16 = 0x0a03 // CZ_REQ_CANCEL_WRITE_MAIL
-	HeaderCZREQADDITEMMAIL  uint16 = 0x0a04 // CZ_REQ_ADD_ITEM_TO_MAIL — clif_parse_Mail_setattach
-	HeaderCZREQREMOVEITEMMA uint16 = 0x0a06 // CZ_REQ_REMOVE_ITEM_MAIL — clif_parse_Mail_winopen
-	HeaderCZREQOPENWRITEMAI uint16 = 0x0a08 // CZ_REQ_OPEN_WRITE_MAIL — clif_parse_Mail_beginwrite
-	HeaderCZCHECKRECEIVENAM uint16 = 0x0a13 // CZ_CHECK_RECEIVE_CHARACTER_NAME — clif_parse_Mail_Receiver_Check
-	HeaderCZREQWRITEMAIL    uint16 = 0x09ec // CZ_REQ_WRITE_MAIL — clif_parse_Mail_send
-	HeaderCZREQWRITEMAIL2   uint16 = 0x0a6e // CZ_REQ_WRITE_MAIL2 (≥20160330, carries receiver char id)
-	HeaderCZOPENMAILBOX2    uint16 = 0x0ac0 // CZ_OPEN_MAILBOX2 (≥20170419)
-	HeaderCZREFRESHMAILLIST uint16 = 0x0ac1 // CZ_REQ_REFRESH_MAIL_LIST2 (≥20170419)
-	HeaderCZCHECKNAME2      uint16 = 0x0b97 // CZ_CHECKNAME2 (≥20201104: + own_char byte)
 
-	// S→C opcodes.
-	HeaderZCNOTIFYUNREADMA uint16 = 0x09e7 // ZC_NOTIFY_UNREADMAIL — clif_Mail_new
-	HeaderZCACKMAILWRITE   uint16 = 0x09ed // ZC_ACK_WRITE_MAIL — clif_Mail_send
-	HeaderZCACKZENYFROMMAI uint16 = 0x09f2 // ZC_ACK_ZENY_FROM_MAIL — clif_mail_getattachment
-	HeaderZCACKITEMFROMMAI uint16 = 0x09f4 // ZC_ACK_ITEM_FROM_MAIL — clif_mail_getattachment
-	HeaderZCACKDELETEMAIL  uint16 = 0x09f6 // ZC_ACK_DELETE_MAIL — clif_mail_delete
-	HeaderZCACKREMOVEITEMM uint16 = 0x0a07 // ZC_ACK_REMOVE_ITEM_MAIL — clif_mail_removeitem
-	HeaderZCACKOPENWRITE   uint16 = 0x0a12 // ZC_ACK_OPEN_WRITE_MAIL — clif_send_Mail_beginwrite_ack
-	HeaderZCCHECKNAME      uint16 = 0x0a51 // ZC_CHECKNAME (≥20160302: + name) — clif_Mail_Receiver_Ack
-	HeaderZCACKADDITEMRODE uint16 = 0x0b3f // ZC_ACK_ADD_ITEM_RODEX (≥20200916 branch) — clif_Mail_setattachment
-	HeaderZCACKREADRODEX   uint16 = 0x0b63 // ZC_ACK_READ_RODEX (≥20200916 branch) — clif_Mail_read
-	HeaderZCACKMAILLIST    uint16 = 0x0ac2 // ZC_ACK_MAIL_LIST (≥20170419 layout) — clif_Mail_refreshinbox
-)
+// C→S opcodes.
+// HeaderCZOPENMAILBOX is the source pack's own opcode for this packet.
+func HeaderCZOPENMAILBOX() uint16 { return literalOpcode(0x09e8) }
+
+// HeaderCZCLOSEMAILBOX is the source pack's own opcode for this packet.
+func HeaderCZCLOSEMAILBOX() uint16 { return literalOpcode(0x09e9) }
+
+// HeaderCZREQREADMAIL is the source pack's own opcode for this packet.
+func HeaderCZREQREADMAIL() uint16 { return literalOpcode(0x09ea) }
+
+// HeaderCZREQNEXTMAILLIST is the source pack's own opcode for this packet.
+func HeaderCZREQNEXTMAILLIST() uint16 { return literalOpcode(0x09ee) }
+
+// HeaderCZREQREFRESHMAILL is the source pack's own opcode for this packet.
+func HeaderCZREQREFRESHMAILL() uint16 { return literalOpcode(0x09ef) }
+
+// HeaderCZREQZENYFROMMAIL is the source pack's own opcode for this packet.
+func HeaderCZREQZENYFROMMAIL() uint16 { return literalOpcode(0x09f1) }
+
+// HeaderCZREQITEMFROMMAIL is the source pack's own opcode for this packet.
+func HeaderCZREQITEMFROMMAIL() uint16 { return literalOpcode(0x09f3) }
+
+// HeaderCZREQDELETEMAIL is the source pack's own opcode for this packet.
+func HeaderCZREQDELETEMAIL() uint16 { return literalOpcode(0x09f5) }
+
+// HeaderCZREQCANCELWRITE is the source pack's own opcode for this packet.
+func HeaderCZREQCANCELWRITE() uint16 { return literalOpcode(0x0a03) }
+
+// HeaderCZREQADDITEMMAIL is the source pack's own opcode for this packet.
+func HeaderCZREQADDITEMMAIL() uint16 { return literalOpcode(0x0a04) }
+
+// HeaderCZREQREMOVEITEMMA is the source pack's own opcode for this packet.
+func HeaderCZREQREMOVEITEMMA() uint16 { return literalOpcode(0x0a06) }
+
+// HeaderCZREQOPENWRITEMAI is the source pack's own opcode for this packet.
+func HeaderCZREQOPENWRITEMAI() uint16 { return literalOpcode(0x0a08) }
+
+// HeaderCZCHECKRECEIVENAM is the source pack's own opcode for this packet.
+func HeaderCZCHECKRECEIVENAM() uint16 { return literalOpcode(0x0a13) }
+
+// HeaderCZREQWRITEMAIL is the source pack's own opcode for this packet.
+func HeaderCZREQWRITEMAIL() uint16 { return literalOpcode(0x09ec) }
+
+// HeaderCZREQWRITEMAIL2 is the source pack's own opcode for this packet.
+func HeaderCZREQWRITEMAIL2() uint16 { return literalOpcode(0x0a6e) }
+
+// HeaderCZOPENMAILBOX2 is the source pack's own opcode for this packet.
+func HeaderCZOPENMAILBOX2() uint16 { return literalOpcode(0x0ac0) }
+
+// HeaderCZREFRESHMAILLIST is the source pack's own opcode for this packet.
+func HeaderCZREFRESHMAILLIST() uint16 { return literalOpcode(0x0ac1) }
+
+// HeaderCZCHECKNAME2 is the source pack's own opcode for this packet.
+func HeaderCZCHECKNAME2() uint16 { return opcode("CZ_CHECKNAME2") }
+
+// S→C opcodes.
+// HeaderZCNOTIFYUNREADMA is the source pack's own opcode for this packet.
+func HeaderZCNOTIFYUNREADMA() uint16 { return opcode("rodexicon") }
+
+// HeaderZCACKMAILWRITE is the source pack's own opcode for this packet.
+func HeaderZCACKMAILWRITE() uint16 { return opcode("rodexwriteresult") }
+
+// HeaderZCACKZENYFROMMAI is the source pack's own opcode for this packet.
+func HeaderZCACKZENYFROMMAI() uint16 { return opcode("rodexgetzeny") }
+
+// HeaderZCACKITEMFROMMAI is the source pack's own opcode for this packet.
+func HeaderZCACKITEMFROMMAI() uint16 { return opcode("rodexgetitem") }
+
+// HeaderZCACKDELETEMAIL is the source pack's own opcode for this packet.
+func HeaderZCACKDELETEMAIL() uint16 { return opcode("rodexdelete") }
+
+// HeaderZCACKREMOVEITEMM is the source pack's own opcode for this packet.
+func HeaderZCACKREMOVEITEMM() uint16 { return opcode("rodexremoveitem") }
+
+// HeaderZCACKOPENWRITE is the source pack's own opcode for this packet.
+func HeaderZCACKOPENWRITE() uint16 { return opcode("rodexopenwrite") }
+
+// HeaderZCCHECKNAME is the source pack's own opcode for this packet.
+func HeaderZCCHECKNAME() uint16 { return opcode("ZC_CHECKNAME") }
+
+// HeaderZCACKADDITEMRODE is the source pack's own opcode for this packet.
+func HeaderZCACKADDITEMRODE() uint16 { return opcode("ZC_ACK_ADD_ITEM_RODEX") }
+
+// HeaderZCACKREADRODEX is the source pack's own opcode for this packet.
+func HeaderZCACKREADRODEX() uint16 { return opcode("ZC_ACK_READ_RODEX") }
+
+// HeaderZCACKMAILLIST is the source pack's own opcode for this packet.
+func HeaderZCACKMAILLIST() uint16 { return opcode("rodexmailList") }
 
 // On-wire sizes.
 const (
-	// 09e8/09ee/09ef: cmd + mail id.Q = 11 (clif_packetdb.hpp:1740,1745,1746).
-	sizeCZOpenMailbox = 11
-	// 0ac0/0ac1: cmd + mail id.Q + unknown.16B = 26 (clif_packetdb.hpp:1867).
-	sizeCZOpenMailbox2 = 26
-	// 09ea/09f5: cmd + mail tab.B + mail id.Q = 11 (clif_packetdb.hpp:1742,1752).
-	sizeCZReadDeleteMail = 11
-	// 09f1/09f3: cmd + mail id.Q + mail tab.B = 11 (clif_packetdb.hpp:1748,1750).
-	sizeCZGetAttach = 11
-	// 0a03: cmd only = 2; 0a04/0a06: cmd + index.W + count.W = 6 (:1754-1756).
-	sizeCZCancelWrite = 2
-	sizeCZMailItem    = 6
-	// 0a08/0a13/0b97: cmd + receive name.24B (+ own_char.B on 0b97) (:1758, 27B per :2002).
-	sizeCZOpenWriteMail = 26
-	sizeCZCheckName2    = 27
 	// 0a6e layout: cmd+len+recv24+sender24+zeny.Q+titleLen.W+textLen.W+charid.L
 	// = 68 header before the strings (clif.cpp:16817 <char id>.L at 64,
 	// strings at 68). 09ec lacks the char id slot (strings at 64).
@@ -73,26 +114,6 @@ const (
 	sizeCZWriteMailHeader  = 64
 	// Minimum frame the send handler accepts (clif.cpp: "length < 0x3e" reject).
 	minCZWriteMail = 0x3e
-
-	sizeZCNotifyUnreadMail = 3  // cmd + result.B
-	sizeZCAckWriteMail     = 3  // cmd + result.B
-	sizeZCAckZenyFromMail  = 12 // cmd + mail id.Q + tab.B + result.B
-	sizeZCAckItemFromMail  = 12
-	sizeZCAckDeleteMail    = 11 // cmd + tab.B + mail id.Q
-	sizeZCAckRemoveItem    = 9  // cmd + result.B + index.W + cnt.W + weight.W
-	sizeZCAckOpenWrite     = 27 // cmd + receive name.24B + result.B
-	sizeZCCheckName        = 34 // cmd + charid.L + class.W + level.W + name.24B
-	// 0b3f: cmd+result.B+index.W+count.W+itemId.L+type.B+ident.B+damaged.B
-	// +slot.16B+options.25B+weight.W+favorite.B+location.L+refine.B+grade.B
-	// (PACKET_ZC_ACK_ADD_ITEM_RODEX ≥20200916; at 20250604 EQUIPSLOTINFO is
-	// uint32 card[4] = 16B and MAX_ITEM_OPTIONS = MAX_ITEM_RDM_OPT = 5 × 5B).
-	sizeZCAckAddItemRodex = 64
-	// ZC_ACK_READ_RODEX fixed part: cmd+len+tab.B+id.Q+textLen.W+zeny.Q+cnt.B.
-	sizeZCAckReadRodexHeader = 24
-	// ZC_ACK_READ_RODEX_SUB ≥20200916: count.W+ITID.L+ident.B+damaged.B
-	// +slot.16B+location.L+type.B+view.W+bind.W+options.25B+refine.B+grade.B.
-	// options = MAX_ITEM_OPTIONS = MAX_ITEM_RDM_OPT = 5 × ItemOptions(5B).
-	sizeZCAckReadRodexSub = 60
 	// ZC_ACK_MAIL_LIST ≥20170419: cmd+len+unknown.B, then per-mail entries.
 	sizeZCAckMailListHeader = 5
 	// maillistinfo ≥20170419: openType.B+id.Q+read.B+type.B+sender.24B
@@ -100,31 +121,114 @@ const (
 	sizeZCMailListInfo = 41
 )
 
+// 09e8/09ee/09ef: cmd + mail id.Q = 11 (clif_packetdb.hpp:1740,1745,1746).
+// sizeCZOpenMailbox is the source pack's own length for this packet.
+func sizeCZOpenMailbox() int { return packetLengthOf(2536) }
+
+// 0ac0/0ac1: cmd + mail id.Q + unknown.16B = 26 (clif_packetdb.hpp:1867).
+// sizeCZOpenMailbox2 is the source pack's own length for this packet.
+func sizeCZOpenMailbox2() int { return packetLengthOf(2752) }
+
+// 09ea/09f5: cmd + mail tab.B + mail id.Q = 11 (clif_packetdb.hpp:1742,1752).
+// sizeCZReadDeleteMail is the source pack's own length for this packet.
+func sizeCZReadDeleteMail() int { return packetLengthOf(2538) }
+
+// 09f1/09f3: cmd + mail id.Q + mail tab.B = 11 (clif_packetdb.hpp:1748,1750).
+// sizeCZGetAttach is the source pack's own length for this packet.
+func sizeCZGetAttach() int { return packetLengthOf(2545) }
+
+// 0a03: cmd only = 2; 0a04/0a06: cmd + index.W + count.W = 6 (:1754-1756).
+// sizeCZCancelWrite is the source pack's own length for this packet.
+func sizeCZCancelWrite() int { return packetLengthOf(2563) }
+
+// sizeCZMailItem is the source pack's own length for this packet.
+func sizeCZMailItem() int { return packetLengthOf(2564) }
+
+// 0a08/0a13/0b97: cmd + receive name.24B (+ own_char.B on 0b97) (:1758, 27B per :2002).
+// sizeCZOpenWriteMail is the source pack's own length for this packet.
+func sizeCZOpenWriteMail() int { return packetLengthOf(2568) }
+
+// sizeCZCheckName2 is the source pack's own length for this packet.
+func sizeCZCheckName2() int { return packetLengthOf(2579) }
+
+// sizeZCNotifyUnreadMail is the source pack's own length for this packet.
+func sizeZCNotifyUnreadMail() int { return packetLengthOf(2535) }
+
+// sizeZCAckWriteMail is the source pack's own length for this packet.
+func sizeZCAckWriteMail() int { return packetLengthOf(2541) }
+
+// sizeZCAckZenyFromMail is the source pack's own length for this packet.
+func sizeZCAckZenyFromMail() int { return packetLengthOf(2546) }
+
+// sizeZCAckItemFromMail is the source pack's own length for this packet.
+func sizeZCAckItemFromMail() int { return packetLengthOf(2548) }
+
+// sizeZCAckDeleteMail is the source pack's own length for this packet.
+func sizeZCAckDeleteMail() int { return packetLengthOf(2550) }
+
+// sizeZCAckRemoveItem is the source pack's own length for this packet.
+func sizeZCAckRemoveItem() int { return packetLengthOf(2567) }
+
+// sizeZCAckOpenWrite is the source pack's own length for this packet.
+func sizeZCAckOpenWrite() int { return packetLengthOf(2578) }
+
+// sizeZCCheckName is the source pack's own length for this packet.
+func sizeZCCheckName() int { return packetLengthOf(2641) }
+
+// 0b3f: cmd+result.B+index.W+count.W+itemId.L+type.B+ident.B+damaged.B
+// +slot.16B+options.25B+weight.W+favorite.B+location.L+refine.B+grade.B
+// (PACKET_ZC_ACK_ADD_ITEM_RODEX ≥20200916; at 20250604 EQUIPSLOTINFO is
+// uint32 card[4] = 16B and MAX_ITEM_OPTIONS = MAX_ITEM_RDM_OPT = 5 × 5B).
+// sizeZCAckAddItemRodex is the source pack's own length for this packet.
+func sizeZCAckAddItemRodex() int { return layout("PACKET_ZC_ACK_ADD_ITEM_RODEX") }
+
+// ZC_ACK_READ_RODEX fixed part: cmd+len+tab.B+id.Q+textLen.W+zeny.Q+cnt.B.
+// sizeZCAckReadRodexHeader is the source pack's own length for this packet.
+func sizeZCAckReadRodexHeader() int { return layout("PACKET_ZC_ACK_READ_RODEX") }
+
+// ZC_ACK_READ_RODEX_SUB ≥20200916: count.W+ITID.L+ident.B+damaged.B
+// +slot.16B+location.L+type.B+view.W+bind.W+options.25B+refine.B+grade.B.
+// options = MAX_ITEM_OPTIONS = MAX_ITEM_RDM_OPT = 5 × ItemOptions(5B).
+// sizeZCAckReadRodexSub is the source pack's own length for this packet.
+func sizeZCAckReadRodexSub() int { return layout("PACKET_ZC_ACK_READ_RODEX_SUB") }
+
 // Public size constants for the dispatch table (mirrors the guild family's
 // pattern: the dispatch table references the public names so the two cannot
 // drift apart without a compile error).
-const (
-	// SizeCZOpenMailbox is CZ_OPEN_MAILBOX / CZ_REQ_NEXT_MAIL_LIST /
-	// CZ_REQ_REFRESH_MAIL_LIST's frame size (11B).
-	SizeCZOpenMailbox = sizeCZOpenMailbox
-	// SizeCZOpenMailbox2 is CZ_OPEN_MAILBOX2 / CZ_REQ_REFRESH_MAIL_LIST2's
-	// frame size (26B).
-	SizeCZOpenMailbox2 = sizeCZOpenMailbox2
-	// SizeCZReadDeleteMail is CZ_REQ_READ_MAIL / CZ_REQ_DELETE_MAIL's frame
-	// size (11B).
-	SizeCZReadDeleteMail = sizeCZReadDeleteMail
-	// SizeCZGetAttach is CZ_REQ_ZENY_FROM_MAIL / CZ_REQ_ITEM_FROM_MAIL's
-	// frame size (11B).
-	SizeCZGetAttach = sizeCZGetAttach
-	// SizeCZMailItem is CZ_REQ_ADD_ITEM_TO_MAIL / CZ_REQ_REMOVE_ITEM_MAIL's
-	// frame size (6B).
-	SizeCZMailItem = sizeCZMailItem
-	// SizeCZOpenWriteMail is CZ_REQ_OPEN_WRITE_MAIL /
-	// CZ_CHECK_RECEIVE_CHARACTER_NAME's frame size (26B).
-	SizeCZOpenWriteMail = sizeCZOpenWriteMail
-	// SizeCZCheckName2 is CZ_CHECKNAME2's frame size (27B).
-	SizeCZCheckName2 = sizeCZCheckName2
-)
+
+// SizeCZOpenMailbox() is CZ_OPEN_MAILBOX / CZ_REQ_NEXT_MAIL_LIST /
+// CZ_REQ_REFRESH_MAIL_LIST's frame size (11B).
+// SizeCZOpenMailbox is the source pack's own length for this packet.
+func SizeCZOpenMailbox() int { return packetLengthOf(2536) }
+
+// SizeCZOpenMailbox2() is CZ_OPEN_MAILBOX2 / CZ_REQ_REFRESH_MAIL_LIST2's
+// frame size (26B).
+// SizeCZOpenMailbox2 is the source pack's own length for this packet.
+func SizeCZOpenMailbox2() int { return packetLengthOf(2752) }
+
+// SizeCZReadDeleteMail() is CZ_REQ_READ_MAIL / CZ_REQ_DELETE_MAIL's frame
+// size (11B).
+// SizeCZReadDeleteMail is the source pack's own length for this packet.
+func SizeCZReadDeleteMail() int { return packetLengthOf(2538) }
+
+// SizeCZGetAttach() is CZ_REQ_ZENY_FROM_MAIL / CZ_REQ_ITEM_FROM_MAIL's
+// frame size (11B).
+// SizeCZGetAttach is the source pack's own length for this packet.
+func SizeCZGetAttach() int { return packetLengthOf(2545) }
+
+// SizeCZMailItem() is CZ_REQ_ADD_ITEM_TO_MAIL / CZ_REQ_REMOVE_ITEM_MAIL's
+// frame size (6B).
+// SizeCZMailItem is the source pack's own length for this packet.
+func SizeCZMailItem() int { return packetLengthOf(2564) }
+
+// SizeCZOpenWriteMail() is CZ_REQ_OPEN_WRITE_MAIL /
+// CZ_CHECK_RECEIVE_CHARACTER_NAME's frame size (26B).
+// SizeCZOpenWriteMail is the source pack's own length for this packet.
+func SizeCZOpenWriteMail() int { return packetLengthOf(2568) }
+
+// SizeCZCheckName2() is CZ_CHECKNAME2's frame size (27B).
+// SizeCZCheckName2 is the source pack's own length for this packet.
+func SizeCZCheckName2() int { return packetLengthOf(2579) }
 
 // Mail inbox types (mmo.hpp mail_inbox_type) and mail flags
 // (clif.cpp:91 mail_type enum — the MAIL_TYPE_* wire bits, distinct from the
@@ -203,23 +307,23 @@ type CZMailReq struct {
 // ParseCZOpenMailbox decodes CZ_OPEN_MAILBOX / CZ_REQ_NEXT_MAIL_LIST /
 // CZ_REQ_REFRESH_MAIL_LIST (11B).
 func ParseCZOpenMailbox(frame []byte) (CZMailReq, error) {
-	return parseCZMailID(frame, sizeCZOpenMailbox)
+	return parseCZMailID(frame, sizeCZOpenMailbox())
 }
 
 // ParseCZOpenMailbox2 decodes CZ_OPEN_MAILBOX2 / CZ_REQ_REFRESH_MAIL_LIST2
 // (26B; the trailing 16 bytes are unknown to rAthena and ignored).
 func ParseCZOpenMailbox2(frame []byte) (CZMailReq, error) {
-	return parseCZMailID(frame, sizeCZOpenMailbox2)
+	return parseCZMailID(frame, sizeCZOpenMailbox2())
 }
 
 // ParseCZReadMail decodes CZ_REQ_READ_MAIL (11B, tab.B then mail id).
 func ParseCZReadMail(frame []byte) (CZMailReq, error) {
-	return parseCZMailID(frame, sizeCZReadDeleteMail)
+	return parseCZMailID(frame, sizeCZReadDeleteMail())
 }
 
 // ParseCZDeleteMail decodes CZ_REQ_DELETE_MAIL (11B).
 func ParseCZDeleteMail(frame []byte) (CZMailReq, error) {
-	return parseCZMailID(frame, sizeCZReadDeleteMail)
+	return parseCZMailID(frame, sizeCZReadDeleteMail())
 }
 
 // parseCZMailID validates the header and extracts the 64-bit mail id at the
@@ -230,7 +334,7 @@ func ParseCZDeleteMail(frame []byte) (CZMailReq, error) {
 func parseCZMailID(frame []byte, size int) (CZMailReq, error) {
 	name := "mail request"
 	off := uint64(2)
-	if size == sizeCZReadDeleteMail || size == sizeCZOpenMailbox {
+	if size == sizeCZReadDeleteMail() || size == sizeCZOpenMailbox() {
 		off = 3
 	}
 	if len(frame) < size {
@@ -243,24 +347,24 @@ func parseCZMailID(frame []byte, size int) (CZMailReq, error) {
 // ParseCZGetAttach decodes CZ_REQ_ZENY_FROM_MAIL / CZ_REQ_ITEM_FROM_MAIL
 // (11B: mail id.Q then tab.B).
 func ParseCZGetAttach(frame []byte) (CZMailReq, error) {
-	if len(frame) < sizeCZGetAttach {
-		return CZMailReq{}, fmt.Errorf("packet: parse CZ_REQ_*_FROM_MAIL: want at least %d bytes, got %d", sizeCZGetAttach, len(frame))
+	if len(frame) < sizeCZGetAttach() {
+		return CZMailReq{}, fmt.Errorf("packet: parse CZ_REQ_*_FROM_MAIL: want at least %d bytes, got %d", sizeCZGetAttach(), len(frame))
 	}
 	return CZMailReq{Op: binary.LittleEndian.Uint16(frame[0:2]), MailID: binary.LittleEndian.Uint64(frame[2:10])}, nil
 }
 
 // Encode writes the CZ frame to w (e2e harness support).
 func (m CZMailReq) Encode(w io.Writer) error {
-	size := sizeCZOpenMailbox
+	size := sizeCZOpenMailbox()
 	off := 2
 	switch m.Op {
-	case HeaderCZOPENMAILBOX2, HeaderCZREFRESHMAILLIST:
-		size = sizeCZOpenMailbox2
-	case HeaderCZREQREADMAIL, HeaderCZREQDELETEMAIL:
-		size = sizeCZReadDeleteMail
+	case HeaderCZOPENMAILBOX2(), HeaderCZREFRESHMAILLIST():
+		size = sizeCZOpenMailbox2()
+	case HeaderCZREQREADMAIL(), HeaderCZREQDELETEMAIL():
+		size = sizeCZReadDeleteMail()
 		off = 3
-	case HeaderCZREQZENYFROMMAIL, HeaderCZREQITEMFROMMAIL:
-		size = sizeCZGetAttach
+	case HeaderCZREQZENYFROMMAIL(), HeaderCZREQITEMFROMMAIL():
+		size = sizeCZGetAttach()
 	}
 	buf := make([]byte, size)
 	binary.LittleEndian.PutUint16(buf[0:], m.Op)
@@ -281,7 +385,7 @@ type CZOpenWriteMail struct {
 
 // ParseCZOpenWriteMail decodes CZ_REQ_OPEN_WRITE_MAIL (26B).
 func ParseCZOpenWriteMail(frame []byte) (CZOpenWriteMail, error) {
-	return parseCZMailName(frame, HeaderCZREQOPENWRITEMAI, sizeCZOpenWriteMail)
+	return parseCZMailName(frame, HeaderCZREQOPENWRITEMAI(), sizeCZOpenWriteMail())
 }
 
 // ParseCZCheckReceiverName decodes CZ_CHECK_RECEIVE_CHARACTER_NAME (26B) and
@@ -291,9 +395,9 @@ func ParseCZCheckReceiverName(frame []byte) (CZOpenWriteMail, error) {
 	if len(frame) >= 2 {
 		op = binary.LittleEndian.Uint16(frame[0:2])
 	}
-	size := sizeCZOpenWriteMail
-	if op == HeaderCZCHECKNAME2 {
-		size = sizeCZCheckName2
+	size := sizeCZOpenWriteMail()
+	if op == HeaderCZCHECKNAME2() {
+		size = sizeCZCheckName2()
 	}
 	return parseCZMailName(frame, op, size)
 }
@@ -310,9 +414,9 @@ func parseCZMailName(frame []byte, want uint16, size int) (CZOpenWriteMail, erro
 
 // Encode writes the frame to w.
 func (m CZOpenWriteMail) Encode(w io.Writer) error {
-	size := sizeCZOpenWriteMail
-	if m.Op == HeaderCZCHECKNAME2 {
-		size = sizeCZCheckName2
+	size := sizeCZOpenWriteMail()
+	if m.Op == HeaderCZCHECKNAME2() {
+		size = sizeCZCheckName2()
 	}
 	buf := make([]byte, size)
 	binary.LittleEndian.PutUint16(buf[0:], m.Op)
@@ -333,17 +437,17 @@ type CZMailAttachItem struct {
 
 // ParseCZMailAddItem decodes CZ_REQ_ADD_ITEM_TO_MAIL.
 func ParseCZMailAddItem(frame []byte) (CZMailAttachItem, error) {
-	return parseCZMailAttachItem(frame, HeaderCZREQADDITEMMAIL)
+	return parseCZMailAttachItem(frame, HeaderCZREQADDITEMMAIL())
 }
 
 // ParseCZMailRemoveItem decodes CZ_REQ_REMOVE_ITEM_MAIL.
 func ParseCZMailRemoveItem(frame []byte) (CZMailAttachItem, error) {
-	return parseCZMailAttachItem(frame, HeaderCZREQREMOVEITEMMA)
+	return parseCZMailAttachItem(frame, HeaderCZREQREMOVEITEMMA())
 }
 
 func parseCZMailAttachItem(frame []byte, want uint16) (CZMailAttachItem, error) {
-	if len(frame) < sizeCZMailItem {
-		return CZMailAttachItem{}, fmt.Errorf("packet: parse mail item attach 0x%04x: want at least %d bytes, got %d", want, sizeCZMailItem, len(frame))
+	if len(frame) < sizeCZMailItem() {
+		return CZMailAttachItem{}, fmt.Errorf("packet: parse mail item attach 0x%04x: want at least %d bytes, got %d", want, sizeCZMailItem(), len(frame))
 	}
 	if op := binary.LittleEndian.Uint16(frame[0:2]); op != want {
 		return CZMailAttachItem{}, fmt.Errorf("packet: parse mail item attach: unexpected cmd 0x%04x", op)
@@ -357,11 +461,11 @@ func parseCZMailAttachItem(frame []byte, want uint16) (CZMailAttachItem, error) 
 
 // Encode writes the frame to w.
 func (m CZMailAttachItem) Encode(w io.Writer) error {
-	var buf [sizeCZMailItem]byte
+	buf := make([]byte, sizeCZMailItem())
 	binary.LittleEndian.PutUint16(buf[0:], m.Op)
 	binary.LittleEndian.PutUint16(buf[2:], m.Index)
 	binary.LittleEndian.PutUint16(buf[4:], m.Count)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write mail item attach: %w", err)
 	}
 	return nil
@@ -389,14 +493,14 @@ func ParseCZWriteMail(frame []byte) (CZWriteMail, error) {
 		return CZWriteMail{}, fmt.Errorf("packet: parse CZ_REQ_WRITE_MAIL: truncated header")
 	}
 	op := binary.LittleEndian.Uint16(frame[0:2])
-	if op != HeaderCZREQWRITEMAIL && op != HeaderCZREQWRITEMAIL2 {
+	if op != HeaderCZREQWRITEMAIL() && op != HeaderCZREQWRITEMAIL2() {
 		return CZWriteMail{}, fmt.Errorf("packet: parse CZ_REQ_WRITE_MAIL: unexpected cmd 0x%04x", op)
 	}
 	if len(frame) < minCZWriteMail {
 		return CZWriteMail{}, fmt.Errorf("packet: parse CZ_REQ_WRITE_MAIL: frame too short (%d < %d)", len(frame), minCZWriteMail)
 	}
 	strBase := sizeCZWriteMailHeader
-	if op == HeaderCZREQWRITEMAIL2 {
+	if op == HeaderCZREQWRITEMAIL2() {
 		strBase = sizeCZWriteMail2Header
 	}
 	m := CZWriteMail{
@@ -407,7 +511,7 @@ func ParseCZWriteMail(frame []byte) (CZWriteMail, error) {
 		TitleLength:  int(binary.LittleEndian.Uint16(frame[60:62])),
 		TextLength:   int(binary.LittleEndian.Uint16(frame[62:64])),
 	}
-	if op == HeaderCZREQWRITEMAIL2 {
+	if op == HeaderCZREQWRITEMAIL2() {
 		m.ReceiverCharID = binary.LittleEndian.Uint32(frame[64:68])
 	}
 	if strBase+m.TitleLength > len(frame) {
@@ -426,12 +530,12 @@ func ParseCZWriteMail(frame []byte) (CZWriteMail, error) {
 // EncodeZCNotifyUnreadMail writes ZC_NOTIFY_UNREADMAIL (0x09e7, 3B) — the
 // inbox icon; result 1 when unread (or unchecked) mail exists.
 func EncodeZCNotifyUnreadMail(w io.Writer, unread bool) error {
-	var buf [sizeZCNotifyUnreadMail]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYUNREADMA)
+	buf := make([]byte, sizeZCNotifyUnreadMail())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYUNREADMA())
 	if unread {
 		buf[2] = 1
 	}
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_NOTIFY_UNREADMAIL: %w", err)
 	}
 	return nil
@@ -457,7 +561,7 @@ func EncodeZCAckMailList(w io.Writer, entries []MailListEntry) error {
 		size += sizeZCMailListInfo + len(e.Title) + 1 // title includes the NUL
 	}
 	buf := make([]byte, size)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKMAILLIST)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKMAILLIST())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(size)) //nolint:gosec // G115: ≤ 30 inbox rows of bounded entries.
 	buf[4] = 1
 	off := sizeZCAckMailListHeader
@@ -509,9 +613,9 @@ func EncodeZCAckReadRodex(w io.Writer, openType uint8, mailID uint64, zeny uint6
 		body = "(no message)"
 		textLen = len(body) + 1
 	}
-	size := sizeZCAckReadRodexHeader + textLen + len(items)*sizeZCAckReadRodexSub
+	size := sizeZCAckReadRodexHeader() + textLen + len(items)*sizeZCAckReadRodexSub()
 	buf := make([]byte, size)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREADRODEX)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREADRODEX())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(size)) //nolint:gosec // G115: body ≤ 501, items ≤ 5.
 	buf[4] = openType
 	binary.LittleEndian.PutUint64(buf[5:], mailID)
@@ -520,7 +624,7 @@ func EncodeZCAckReadRodex(w io.Writer, openType uint8, mailID uint64, zeny uint6
 	buf[23] = uint8(len(items)) //nolint:gosec // G115: MAIL_MAX_ITEM = 5.
 	copy(buf[24:], body)
 	buf[24+len(body)] = 0
-	off := sizeZCAckReadRodexHeader + textLen
+	off := sizeZCAckReadRodexHeader() + textLen
 	for _, it := range items {
 		binary.LittleEndian.PutUint16(buf[off:], it.Count)
 		binary.LittleEndian.PutUint32(buf[off+2:], it.ITID)
@@ -539,7 +643,7 @@ func EncodeZCAckReadRodex(w io.Writer, openType uint8, mailID uint64, zeny uint6
 		binary.LittleEndian.PutUint16(buf[off+31:], it.Bind)
 		buf[off+58] = it.Refine
 		// grade (off+59) stays 0 — enchantgrade is not modeled yet.
-		off += sizeZCAckReadRodexSub
+		off += sizeZCAckReadRodexSub()
 	}
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_READ_RODEX: %w", err)
@@ -549,13 +653,13 @@ func EncodeZCAckReadRodex(w io.Writer, openType uint8, mailID uint64, zeny uint6
 
 // EncodeZCAckOpenWriteMail writes ZC_ACK_OPEN_WRITE_MAIL (0x0a12, 27B).
 func EncodeZCAckOpenWriteMail(w io.Writer, receiverName string, ok bool) error {
-	var buf [sizeZCAckOpenWrite]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKOPENWRITE)
-	writeNameField(buf[:], 2, receiverName)
+	buf := make([]byte, sizeZCAckOpenWrite())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKOPENWRITE())
+	writeNameField(buf, 2, receiverName)
 	if ok {
 		buf[26] = 1
 	}
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_OPEN_WRITE_MAIL: %w", err)
 	}
 	return nil
@@ -564,13 +668,13 @@ func EncodeZCAckOpenWriteMail(w io.Writer, receiverName string, ok bool) error {
 // EncodeZCCheckName writes ZC_CHECKNAME (0x0a51, 34B) — the recipient
 // preview row (char id, class, base level, name).
 func EncodeZCCheckName(w io.Writer, charID uint32, class uint16, baseLevel uint16, name string) error {
-	var buf [sizeZCCheckName]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCHECKNAME)
+	buf := make([]byte, sizeZCCheckName())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCHECKNAME())
 	binary.LittleEndian.PutUint32(buf[2:], charID)
 	binary.LittleEndian.PutUint16(buf[6:], class)
 	binary.LittleEndian.PutUint16(buf[8:], baseLevel)
-	writeNameField(buf[:], 10, name)
-	if _, err := w.Write(buf[:]); err != nil {
+	writeNameField(buf, 10, name)
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_CHECKNAME: %w", err)
 	}
 	return nil
@@ -578,10 +682,10 @@ func EncodeZCCheckName(w io.Writer, charID uint32, class uint16, baseLevel uint1
 
 // EncodeZCAckWriteMail writes ZC_ACK_WRITE_MAIL (0x09ed, 3B).
 func EncodeZCAckWriteMail(w io.Writer, result uint8) error {
-	var buf [sizeZCAckWriteMail]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKMAILWRITE)
+	buf := make([]byte, sizeZCAckWriteMail())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKMAILWRITE())
 	buf[2] = result
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_WRITE_MAIL: %w", err)
 	}
 	return nil
@@ -591,8 +695,8 @@ func EncodeZCAckWriteMail(w io.Writer, result uint8) error {
 // result != 0 sends the zero-item failure form (rAthena memsets the struct
 // and only fills result).
 func EncodeZCAckAddItemRodex(w io.Writer, result uint8, it MailItem) error {
-	var buf [sizeZCAckAddItemRodex]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKADDITEMRODE)
+	buf := make([]byte, sizeZCAckAddItemRodex())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKADDITEMRODE())
 	buf[2] = result
 	if result == MailAddOK {
 		binary.LittleEndian.PutUint16(buf[3:], it.Index)
@@ -617,7 +721,7 @@ func EncodeZCAckAddItemRodex(w io.Writer, result uint8, it MailItem) error {
 		buf[62] = it.Refine
 		// grade (buf[63]) stays 0 — enchantgrade is not modeled yet.
 	}
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_ADD_ITEM_RODEX: %w", err)
 	}
 	return nil
@@ -626,15 +730,15 @@ func EncodeZCAckAddItemRodex(w io.Writer, result uint8, it MailItem) error {
 // EncodeZCAckRemoveItemMail writes ZC_ACK_REMOVE_ITEM_MAIL (0x0a07, 9B);
 // weight is the staged total after the removal.
 func EncodeZCAckRemoveItemMail(w io.Writer, ok bool, index, count, weight uint16) error {
-	var buf [sizeZCAckRemoveItem]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREMOVEITEMM)
+	buf := make([]byte, sizeZCAckRemoveItem())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREMOVEITEMM())
 	if ok {
 		buf[2] = 1
 	}
 	binary.LittleEndian.PutUint16(buf[3:], index)
 	binary.LittleEndian.PutUint16(buf[5:], count)
 	binary.LittleEndian.PutUint16(buf[7:], weight)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_REMOVE_ITEM_MAIL: %w", err)
 	}
 	return nil
@@ -642,12 +746,12 @@ func EncodeZCAckRemoveItemMail(w io.Writer, ok bool, index, count, weight uint16
 
 // encodeZCAckCollect writes the shared 09f2/09f4 collect-attachment ack.
 func encodeZCAckCollect(w io.Writer, cmd uint16, mailID uint64, openType, result uint8) error {
-	var buf [sizeZCAckZenyFromMail]byte
+	buf := make([]byte, sizeZCAckZenyFromMail())
 	binary.LittleEndian.PutUint16(buf[0:], cmd)
 	binary.LittleEndian.PutUint64(buf[2:], mailID)
 	buf[10] = openType
 	buf[11] = result
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write mail collect ack 0x%04x: %w", cmd, err)
 	}
 	return nil
@@ -655,22 +759,22 @@ func encodeZCAckCollect(w io.Writer, cmd uint16, mailID uint64, openType, result
 
 // EncodeZCAckZenyFromMail writes ZC_ACK_ZENY_FROM_MAIL (0x09f2, 12B).
 func EncodeZCAckZenyFromMail(w io.Writer, mailID uint64, openType, result uint8) error {
-	return encodeZCAckCollect(w, HeaderZCACKZENYFROMMAI, mailID, openType, result)
+	return encodeZCAckCollect(w, HeaderZCACKZENYFROMMAI(), mailID, openType, result)
 }
 
 // EncodeZCAckItemFromMail writes ZC_ACK_ITEM_FROM_MAIL (0x09f4, 12B).
 func EncodeZCAckItemFromMail(w io.Writer, mailID uint64, openType, result uint8) error {
-	return encodeZCAckCollect(w, HeaderZCACKITEMFROMMAI, mailID, openType, result)
+	return encodeZCAckCollect(w, HeaderZCACKITEMFROMMAI(), mailID, openType, result)
 }
 
 // EncodeZCAckDeleteMail writes ZC_ACK_DELETE_MAIL (0x09f6, 11B) — success
 // only; rAthena stays silent on failure (clif_mail_delete).
 func EncodeZCAckDeleteMail(w io.Writer, openType uint8, mailID uint64) error {
-	var buf [sizeZCAckDeleteMail]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKDELETEMAIL)
+	buf := make([]byte, sizeZCAckDeleteMail())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKDELETEMAIL())
 	buf[2] = openType
 	binary.LittleEndian.PutUint64(buf[3:], mailID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_DELETE_MAIL: %w", err)
 	}
 	return nil

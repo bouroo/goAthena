@@ -14,8 +14,8 @@ import (
 func TestParseCZTradeRequest(t *testing.T) {
 	t.Parallel()
 	good := func() []byte {
-		f := make([]byte, sizeCZTradeRequest)
-		writeLE16(f[0:], HeaderCZTRADEREQUEST)
+		f := make([]byte, sizeCZTradeRequest())
+		writeLE16(f[0:], HeaderCZTRADEREQUEST())
 		writeLE32(f[2:], 0x0A0B0C0D) // target GID
 		return f
 	}()
@@ -31,16 +31,16 @@ func TestParseCZTradeRequest(t *testing.T) {
 	// Encode round-trips (for the e2e harness).
 	var buf bytes.Buffer
 	require.NoError(t, got.Encode(&buf))
-	assert.Len(t, buf.Bytes(), sizeCZTradeRequest)
+	assert.Len(t, buf.Bytes(), sizeCZTradeRequest())
 	rt, err := ParseCZTradeRequest(buf.Bytes())
 	require.NoError(t, err)
 	assert.Equal(t, got, rt)
 
-	_, err = ParseCZTradeRequest(make([]byte, sizeCZTradeRequest-1))
+	_, err = ParseCZTradeRequest(make([]byte, sizeCZTradeRequest()-1))
 	require.Error(t, err)
 
-	bad := make([]byte, sizeCZTradeRequest)
-	writeLE16(bad[0:], HeaderCZTRADEACK)
+	bad := make([]byte, sizeCZTradeRequest())
+	writeLE16(bad[0:], HeaderCZTRADEACK())
 	_, err = ParseCZTradeRequest(bad)
 	require.Error(t, err)
 }
@@ -56,18 +56,18 @@ func TestParseCZTradeAck(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := make([]byte, sizeCZTradeAck)
-			writeLE16(f[0:], HeaderCZTRADEACK)
+			f := make([]byte, sizeCZTradeAck())
+			writeLE16(f[0:], HeaderCZTRADEACK())
 			f[2] = tc.typ
 			got, err := ParseCZTradeAck(f)
 			require.NoError(t, err)
 			assert.Equal(t, tc.typ, got.Type)
 			var buf bytes.Buffer
 			require.NoError(t, got.Encode(&buf))
-			assert.Len(t, buf.Bytes(), sizeCZTradeAck)
+			assert.Len(t, buf.Bytes(), sizeCZTradeAck())
 		})
 	}
-	_, err := ParseCZTradeAck(make([]byte, sizeCZTradeAck-1))
+	_, err := ParseCZTradeAck(make([]byte, sizeCZTradeAck()-1))
 	require.Error(t, err)
 }
 
@@ -75,8 +75,8 @@ func TestEncodeCZTradeCancel(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 	require.NoError(t, EncodeCZTradeCancel(&buf))
-	require.Len(t, buf.Bytes(), sizeCZTradeCancel)
-	assert.Equal(t, HeaderCZTRADECANCEL, binary.LittleEndian.Uint16(buf.Bytes()[0:2]))
+	require.Len(t, buf.Bytes(), sizeCZTradeCancel())
+	assert.Equal(t, HeaderCZTRADECANCEL(), binary.LittleEndian.Uint16(buf.Bytes()[0:2]))
 }
 
 func TestTradeRequestResponse_Encode(t *testing.T) {
@@ -85,20 +85,20 @@ func TestTradeRequestResponse_Encode(t *testing.T) {
 	r := TradeRequestResponse{RequesterName: "Alice", TargetID: 0x12345678, TargetLv: 42}
 	require.NoError(t, r.Encode(&buf))
 	out := buf.Bytes()
-	require.Len(t, out, sizeZCReqExchange, "ZC_REQ_EXCHANGE_ITEM fixed 32 bytes")
-	assert.Equal(t, HeaderZCREQEXCHANGEITEM, binary.LittleEndian.Uint16(out[0:2]))
+	require.Len(t, out, sizeZCReqExchange(), "ZC_REQ_EXCHANGE_ITEM fixed 32 bytes")
+	assert.Equal(t, HeaderZCREQEXCHANGEITEM(), binary.LittleEndian.Uint16(out[0:2]))
 	// Name slot [2:26], NUL-padded after "Alice".
 	assert.Equal(t, []byte("Alice"), out[2:7])
 	assert.Equal(t, byte(0), out[7], "name slot NUL-padded")
 	assert.Equal(t, uint32(0x12345678), binary.LittleEndian.Uint32(out[26:30]))
 	assert.Equal(t, uint16(42), binary.LittleEndian.Uint16(out[30:32]))
-	assert.Equal(t, sizeZCReqExchange, r.Size())
+	assert.Equal(t, sizeZCReqExchange(), r.Size())
 
 	// Overlong name truncates to NAME_LENGTH-1 (23) bytes, no overrun.
 	overlong := TradeRequestResponse{RequesterName: string(bytes.Repeat([]byte("n"), 50))}
 	var big bytes.Buffer
 	require.NoError(t, overlong.Encode(&big))
-	assert.Len(t, big.Bytes(), sizeZCReqExchange)
+	assert.Len(t, big.Bytes(), sizeZCReqExchange())
 }
 
 func TestTradeAckResponse_Encode(t *testing.T) {
@@ -107,12 +107,12 @@ func TestTradeAckResponse_Encode(t *testing.T) {
 	r := TradeAckResponse{Result: TradeAckAccept, TargetID: 0xCAFEBABE, TargetLv: 99}
 	require.NoError(t, r.Encode(&buf))
 	out := buf.Bytes()
-	require.Len(t, out, sizeZCAckExchange, "ZC_ACK_EXCHANGE_ITEM fixed 9 bytes")
-	assert.Equal(t, HeaderZCACKEXCHANGEITEM, binary.LittleEndian.Uint16(out[0:2]))
+	require.Len(t, out, sizeZCAckExchange(), "ZC_ACK_EXCHANGE_ITEM fixed 9 bytes")
+	assert.Equal(t, HeaderZCACKEXCHANGEITEM(), binary.LittleEndian.Uint16(out[0:2]))
 	assert.Equal(t, uint8(TradeAckAccept), out[2])
 	assert.Equal(t, uint32(0xCAFEBABE), binary.LittleEndian.Uint32(out[3:7]))
 	assert.Equal(t, uint16(99), binary.LittleEndian.Uint16(out[7:9]))
-	assert.Equal(t, sizeZCAckExchange, r.Size())
+	assert.Equal(t, sizeZCAckExchange(), r.Size())
 }
 
 func TestCancelExchangeResponse_Encode(t *testing.T) {
@@ -121,16 +121,16 @@ func TestCancelExchangeResponse_Encode(t *testing.T) {
 	r := CancelExchangeResponse{}
 	require.NoError(t, r.Encode(&buf))
 	out := buf.Bytes()
-	require.Len(t, out, sizeZCCancelExchange, "ZC_CANCEL_EXCHANGE_ITEM fixed 2 bytes")
-	assert.Equal(t, HeaderZCCANCELEXCHANGEITEM, binary.LittleEndian.Uint16(out[0:2]))
-	assert.Equal(t, sizeZCCancelExchange, r.Size())
+	require.Len(t, out, sizeZCCancelExchange(), "ZC_CANCEL_EXCHANGE_ITEM fixed 2 bytes")
+	assert.Equal(t, HeaderZCCANCELEXCHANGEITEM(), binary.LittleEndian.Uint16(out[0:2]))
+	assert.Equal(t, sizeZCCancelExchange(), r.Size())
 }
 
 func TestParseCZAddExchangeItem(t *testing.T) {
 	t.Parallel()
 	good := func() []byte {
-		f := make([]byte, sizeCZAddExchangeItem)
-		writeLE16(f[0:], HeaderCZADDEXCHANGEITEM)
+		f := make([]byte, sizeCZAddExchangeItem())
+		writeLE16(f[0:], HeaderCZADDEXCHANGEITEM())
 		writeLE16(f[2:], 5)  // item at bag slot 5
 		writeLE32(f[4:], 10) // amount
 		return f
@@ -142,12 +142,12 @@ func TestParseCZAddExchangeItem(t *testing.T) {
 	// Encode round-trip.
 	var buf bytes.Buffer
 	require.NoError(t, got.Encode(&buf))
-	assert.Len(t, buf.Bytes(), sizeCZAddExchangeItem)
+	assert.Len(t, buf.Bytes(), sizeCZAddExchangeItem())
 	rt, err := ParseCZAddExchangeItem(buf.Bytes())
 	require.NoError(t, err)
 	assert.Equal(t, got, rt)
 	// Short frame errors.
-	_, err = ParseCZAddExchangeItem(make([]byte, sizeCZAddExchangeItem-1))
+	_, err = ParseCZAddExchangeItem(make([]byte, sizeCZAddExchangeItem()-1))
 	require.Error(t, err)
 }
 
@@ -162,8 +162,8 @@ func TestZCAddExchangeItem_EncodeLayout(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, r.Encode(&buf))
 	out := buf.Bytes()
-	require.Len(t, out, sizeZCAddExchangeItem, "ZC_ADD fixed 62 bytes at 20250604")
-	assert.Equal(t, HeaderZCADDEXCHANGEITEM, binary.LittleEndian.Uint16(out[0:2]))
+	require.Len(t, out, sizeZCAddExchangeItem(), "ZC_ADD fixed 62 bytes at 20250604")
+	assert.Equal(t, HeaderZCADDEXCHANGEITEM(), binary.LittleEndian.Uint16(out[0:2]))
 	assert.Equal(t, uint32(0x01020304), binary.LittleEndian.Uint32(out[2:6]), "itemId@2")
 	assert.Equal(t, uint8(5), out[6], "itemType@6")
 	assert.Equal(t, int32(7), int32(binary.LittleEndian.Uint32(out[7:11])), "amount@7")
@@ -181,7 +181,7 @@ func TestZCAddExchangeItem_EncodeLayout(t *testing.T) {
 	assert.Equal(t, uint16(42), binary.LittleEndian.Uint16(out[58:60]), "look@58")
 	assert.Equal(t, uint8(8), out[60], "refine@60")
 	assert.Equal(t, uint8(3), out[61], "grade@61")
-	assert.Equal(t, sizeZCAddExchangeItem, r.Size())
+	assert.Equal(t, sizeZCAddExchangeItem(), r.Size())
 }
 
 func TestAckAddExchangeItem_Encode(t *testing.T) {
@@ -190,11 +190,11 @@ func TestAckAddExchangeItem_Encode(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, r.Encode(&buf))
 	out := buf.Bytes()
-	require.Len(t, out, sizeZCAckAddExchange, "ZC_ACK_ADD fixed 5 bytes")
-	assert.Equal(t, HeaderZCACKADDEXCHANGEITEM, binary.LittleEndian.Uint16(out[0:2]))
+	require.Len(t, out, sizeZCAckAddExchange(), "ZC_ACK_ADD fixed 5 bytes")
+	assert.Equal(t, HeaderZCACKADDEXCHANGEITEM(), binary.LittleEndian.Uint16(out[0:2]))
 	assert.Equal(t, uint16(5), binary.LittleEndian.Uint16(out[2:4]))
 	assert.Equal(t, uint8(TradeItemAddSuccess), out[4])
-	assert.Equal(t, sizeZCAckAddExchange, r.Size())
+	assert.Equal(t, sizeZCAckAddExchange(), r.Size())
 }
 
 func TestConcludeExchangeItem_Encode(t *testing.T) {
@@ -203,9 +203,9 @@ func TestConcludeExchangeItem_Encode(t *testing.T) {
 		var buf bytes.Buffer
 		require.NoError(t, (ConcludeExchangeItem{Who: who}).Encode(&buf))
 		out := buf.Bytes()
-		require.Len(t, out, sizeZCConcludeExchange, "ZC_CONCLUDE fixed 3 bytes")
-		assert.Equal(t, HeaderZCCONCLUDEEXCHANGEITEM, binary.LittleEndian.Uint16(out[0:2]))
+		require.Len(t, out, sizeZCConcludeExchange(), "ZC_CONCLUDE fixed 3 bytes")
+		assert.Equal(t, HeaderZCCONCLUDEEXCHANGEITEM(), binary.LittleEndian.Uint16(out[0:2]))
 		assert.Equal(t, who, out[2])
 	}
-	assert.Equal(t, sizeZCConcludeExchange, (ConcludeExchangeItem{}).Size())
+	assert.Equal(t, sizeZCConcludeExchange(), (ConcludeExchangeItem{}).Size())
 }

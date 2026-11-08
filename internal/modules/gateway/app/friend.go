@@ -62,7 +62,7 @@ func (s *MapServer) clearFriendReqsFor(charID uint32) {
 // target's display name. The target must be online (rAthena resolves it with
 // map_nick2sd, clif.cpp:15434); the requester must have room; on success the
 // target gets the ZC_REQ_ADD_FRIENDS dialog (clif_friendlist_req, clif.cpp:15417).
-func (s *MapServer) handleFriendsAdd(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleFriendsAdd(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -90,8 +90,7 @@ func (s *MapServer) handleFriendsAdd(c gnet.Conn, auth *mapAuth, frame []byte) {
 	if !ok {
 		return
 	}
-	ctx := context.Background()
-	friends, err := s.friend.List(ctx, auth.charID)
+	friends, err := s.friend.List(fctx, auth.charID)
 	if err != nil {
 		s.log.Debug("map: friend list read failed", "gid", auth.charID, "err", err)
 		return
@@ -121,7 +120,7 @@ func (s *MapServer) handleFriendsAdd(c gnet.Conn, auth *mapAuth, frame []byte) {
 // accept/reject. On reject only the requester is told (result 1). On accept
 // both lists gain the pair and EACH side gets its own ZC_ADD_FRIENDS(result 0)
 // naming the other — rAthena's friend_auto_add default (clif.cpp:15519-15555).
-func (s *MapServer) handleFriendsReply(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleFriendsReply(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -154,7 +153,7 @@ func (s *MapServer) handleFriendsReply(c gnet.Conn, auth *mapAuth, frame []byte)
 		return
 	}
 	acceptorName := playerName(s.world, auth.charID)
-	err = s.friend.Add(context.Background(), inv.requesterCharID, auth.charID)
+	err = s.friend.Add(fctx, inv.requesterCharID, auth.charID)
 	switch err { //nolint:exhaustive // default covers the wrapped-error tail.
 	case nil:
 		s.writeFriendAddAck(requesterConn, ropacket.FriendAddOK, auth.accountID, auth.charID, acceptorName)
@@ -176,7 +175,7 @@ func (s *MapServer) handleFriendsReply(c gnet.Conn, auth *mapAuth, frame []byte)
 // removed friend's client hears the REMOVER's ids, the requester's own client
 // hears the removed friend's ids (clif_parse_FriendsListRemove,
 // clif.cpp:15586-15613).
-func (s *MapServer) handleFriendsRemove(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleFriendsRemove(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -189,7 +188,7 @@ func (s *MapServer) handleFriendsRemove(c gnet.Conn, auth *mapAuth, frame []byte
 		s.log.Warn("map: parse CZ_DELETE_FRIENDS", "err", err)
 		return
 	}
-	friends, err := s.friend.List(context.Background(), auth.charID)
+	friends, err := s.friend.List(fctx, auth.charID)
 	if err != nil {
 		s.log.Debug("map: friend list read failed", "gid", auth.charID, "err", err)
 		return
@@ -206,7 +205,7 @@ func (s *MapServer) handleFriendsRemove(c gnet.Conn, auth *mapAuth, frame []byte
 		s.log.Debug("map: CZ_DELETE_FRIENDS target not in list", "gid", auth.charID, "target", req.CID)
 		return
 	}
-	if err := s.friend.Remove(context.Background(), auth.charID, target.FriendCharID); err != nil {
+	if err := s.friend.Remove(fctx, auth.charID, target.FriendCharID); err != nil {
 		s.log.Debug("map: friend remove rejected", "gid", auth.charID, "err", err)
 		return
 	}

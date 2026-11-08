@@ -44,12 +44,12 @@ type CALoginRequest struct {
 
 // ParseCALogin parses a full 55-byte CA_LOGIN frame (including the 2-byte cmd
 // header) into a CALoginRequest. Returns a wrapped error if the frame is not
-// exactly 55 bytes or its cmd header is not HeaderCALOGIN (0x0064).
+// exactly 55 bytes or its cmd header is not HeaderCALOGIN() (0x0064).
 func ParseCALogin(frame []byte) (CALoginRequest, error) {
-	if len(frame) != sizeCALogin {
-		return CALoginRequest{}, fmt.Errorf("packet: parse CA_LOGIN: want %d bytes, got %d", sizeCALogin, len(frame))
+	if len(frame) != sizeCALogin() {
+		return CALoginRequest{}, fmt.Errorf("packet: parse CA_LOGIN: want %d bytes, got %d", sizeCALogin(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCALOGIN {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCALOGIN() {
 		return CALoginRequest{}, fmt.Errorf("packet: parse CA_LOGIN: unexpected cmd 0x%04x", cmd)
 	}
 
@@ -84,9 +84,9 @@ func (r CALoginRequest) Encode(w io.Writer) error {
 		return err
 	}
 
-	buf := make([]byte, sizeCALogin)
-	// int16 packetType = 0x0064 (HeaderCALOGIN).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCALOGIN)
+	buf := make([]byte, sizeCALogin())
+	// int16 packetType = 0x0064 (HeaderCALOGIN()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCALOGIN())
 	// uint32 version at offset 2.
 	binary.LittleEndian.PutUint32(buf[2:], r.Version)
 	// char username[24] at offset 6 — zero-padded.

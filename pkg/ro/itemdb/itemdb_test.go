@@ -350,3 +350,179 @@ type errorReader struct{}
 func (errorReader) Read(_ []byte) (int, error) {
 	return 0, errors.New("read failure")
 }
+
+// TestInfo_Columns proves the getiteminfo columns answer the values rAthena's
+// buildin_getiteminfo would push for the fixture item: the YAML scalars
+// verbatim, the ITEMINFO_* derived values (wire type, equip bitmask, subtype),
+// and the load-time defaults rAthena fills in for absent fields.
+func TestInfo_Columns(t *testing.T) {
+	reg := loadFixture(t)
+	sword := reg.Get(1101)
+	require.NotNil(t, sword)
+
+	cases := []struct {
+		name string
+		info int
+		want int64
+	}{
+		{"buy", InfoBuy, 100},
+		{"sell (explicit)", InfoSell, 50},
+		{"type", InfoType, 5}, // IT_WEAPON
+		{"weight", InfoWeight, 500},
+		{"attack", InfoAttack, 25},
+		{"defense", InfoDefense, 2},
+		{"range", InfoRange, 1},
+		{"slot", InfoSlot, 3},
+		{"equiplevelmin", InfoEquipLevelMin, 10},
+		{"weaponlevel", InfoWeaponLevel, 1},
+		{"armorlevel", InfoArmorLevel, 2},
+		{"equiplevelmax", InfoEquipLevelMax, 99},
+		{"id", InfoID, 1101},
+		{"locations (EQP_HAND_R)", InfoLocations, 2},
+		{"subtype (W_1HSWORD)", InfoSubType, 2},
+		{"view (weapon -> subtype)", InfoView, 2},
+		{"gender (absent -> SEX_BOTH)", InfoGender, 2},
+		{"maxchance (unset)", InfoMaxChance, 0},
+		{"magicattack (pre-re)", InfoMagicAttack, 0},
+		{"aliasname (no AliasName)", InfoAliasName, 0},
+	}
+	for _, tc := range cases {
+		if got := sword.Info(tc.info); got != tc.want {
+			t.Errorf("Info(%s) = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestInfo_SellDerivedFromBuy proves the itemdb.cpp:1188 rule: an item with a
+// Buy and no Sell sells for half.
+func TestInfo_SellDerivedFromBuy(t *testing.T) {
+	reg := loadFixture(t)
+	jellopy := reg.Get(909)
+	require.NotNil(t, jellopy)
+	if got := jellopy.Info(InfoSell); got != 0 { // no Buy either -> 0
+		t.Errorf("Info(sell) = %d, want 0 for an item with no price", got)
+	}
+}
+
+// TestInfo_EquipLevelMaxDefault proves an item whose YAML omits EquipLevelMax
+// answers MAX_LEVEL, the default rAthena applies at load.
+func TestInfo_EquipLevelMaxDefault(t *testing.T) {
+	reg := loadFixture(t)
+	jellopy := reg.Get(909)
+	require.NotNil(t, jellopy)
+	if got := jellopy.Info(InfoEquipLevelMax); got != maxLevel {
+		t.Errorf("Info(equiplevelmax) = %d, want %d", got, maxLevel)
+	}
+}
+
+// TestInfo_UnknownCode proves an unsupported column answers -1 (rAthena's
+// default branch) and a nil entry answers -1 rather than panicking.
+func TestInfo_UnknownCode(t *testing.T) {
+	reg := loadFixture(t)
+	if got := reg.Get(1101).Info(999); got != -1 {
+		t.Errorf("Info(999) = %d, want -1", got)
+	}
+	var nilEntry *ItemEntry
+	if got := nilEntry.Info(InfoBuy); got != -1 {
+		t.Errorf("nil entry Info(buy) = %d, want -1", got)
+	}
+}
+
+// TestInfo_Gender proves the Gender string maps to the SEX_* code.
+func TestInfo_Gender(t *testing.T) {
+	reg, err := Load(strings.NewReader(`Header:
+  Type: ITEM_DB
+  Version: 3
+
+Body:
+  - Id: 2201
+    AegisName: Hat_F
+    Name: Hat
+    Type: Armor
+    Gender: Female
+  - Id: 2202
+    AegisName: Hat_M
+    Name: Hat
+    Type: Armor
+    Gender: Male
+`))
+	require.NoError(t, err)
+	if got := reg.Get(2201).Info(InfoGender); got != 0 {
+		t.Errorf("female = %d, want 0 (SEX_FEMALE)", got)
+	}
+	if got := reg.Get(2202).Info(InfoGender); got != 1 {
+		t.Errorf("male = %d, want 1 (SEX_MALE)", got)
+	}
+}
+
+// TestInfo_CardSubtype proves a card's SubType resolves to the CARD_* enum, the
+// value scripts compare against (npc corpus: `getiteminfo(...) == CARD_ENCHANT`).
+func TestInfo_CardSubtype(t *testing.T) {
+	reg, err := Load(strings.NewReader(`Header:
+  Type: ITEM_DB
+  Version: 3
+
+Body:
+  - Id: 4001
+    AegisName: Poring_Card
+    Name: Poring Card
+    Type: Card
+    SubType: Enchant
+  - Id: 4002
+    AegisName: Plain_Card
+    Name: Plain Card
+    Type: Card
+`))
+	require.NoError(t, err)
+	if got := reg.Get(4001).Info(InfoSubType); got != 1 {
+		t.Errorf("enchant card = %d, want 1 (CARD_ENCHANT)", got)
+	}
+	if got := reg.Get(4002).Info(InfoSubType); got != 0 {
+		t.Errorf("subtype-less card = %d, want 0 (CARD_NORMAL)", got)
+	}
+}
+
+// TestInfo_AmmoSubtype proves an ammo item's SubType resolves to the AMMO_* enum
+// and that ITEMINFO_VIEW answers that subtype for ammo (script.cpp:14790).
+func TestInfo_AmmoSubtype(t *testing.T) {
+	reg, err := Load(strings.NewReader(`Header:
+  Type: ITEM_DB
+  Version: 3
+
+Body:
+  - Id: 1750
+    AegisName: Arrow
+    Name: Arrow
+    Type: Ammo
+    SubType: Arrow
+`))
+	require.NoError(t, err)
+	e := reg.Get(1750)
+	require.NotNil(t, e)
+	if got := e.Info(InfoSubType); got != 1 {
+		t.Errorf("arrow subtype = %d, want 1 (AMMO_ARROW)", got)
+	}
+	if got := e.Info(InfoView); got != 1 {
+		t.Errorf("arrow view = %d, want 1 (ammo view is its subtype)", got)
+	}
+}
+
+// TestInfo_ViewNonWeaponAnswersLook proves ITEMINFO_VIEW answers the item's look
+// id for anything that is not a weapon or ammo (script.cpp:14790).
+func TestInfo_ViewNonWeaponAnswersLook(t *testing.T) {
+	reg, err := Load(strings.NewReader(`Header:
+  Type: ITEM_DB
+  Version: 3
+
+Body:
+  - Id: 501
+    AegisName: Red_Potion
+    Name: Red Potion
+    Type: Healing
+    View: 42
+`))
+	require.NoError(t, err)
+	if got := reg.Get(501).Info(InfoView); got != 42 {
+		t.Errorf("view = %d, want 42 (the look id)", got)
+	}
+}

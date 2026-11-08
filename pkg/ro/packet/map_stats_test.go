@@ -13,8 +13,8 @@ import (
 func TestParseCZStatusChange(t *testing.T) {
 	t.Parallel()
 
-	good := make([]byte, sizeCZStatusChange)
-	binary.LittleEndian.PutUint16(good[0:], HeaderCZSTATUSCHANGE)
+	good := make([]byte, sizeCZStatusChange())
+	binary.LittleEndian.PutUint16(good[0:], HeaderCZSTATUSCHANGE())
 	binary.LittleEndian.PutUint16(good[2:], 13) // SP_STR
 	good[4] = 1                                 // amount
 
@@ -32,7 +32,7 @@ func TestParseCZStatusChange(t *testing.T) {
 	}
 
 	// Wrong header must error.
-	bad := make([]byte, sizeCZStatusChange)
+	bad := make([]byte, sizeCZStatusChange())
 	binary.LittleEndian.PutUint16(bad[0:], 0xdead)
 	if _, err := ParseCZStatusChange(bad); err == nil {
 		t.Error("ParseCZStatusChange wrong cmd: want error, got nil")
@@ -47,8 +47,8 @@ func TestCZStatusChangeRequest_EncodeRoundTrip(t *testing.T) {
 	if err := req.Encode(&buf); err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	if buf.Len() != sizeCZStatusChange {
-		t.Fatalf("encoded len = %d, want %d", buf.Len(), sizeCZStatusChange)
+	if buf.Len() != sizeCZStatusChange() {
+		t.Fatalf("encoded len = %d, want %d", buf.Len(), sizeCZStatusChange())
 	}
 	// Header byte 0 = 0xbb (little-endian low byte of 0x00bb).
 	if buf.Bytes()[0] != 0xbb {
@@ -71,8 +71,8 @@ func TestZCStatusChangeAck_Encode(t *testing.T) {
 	if err := ack.Encode(&buf); err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	if buf.Len() != sizeZCStatusChangeAck {
-		t.Fatalf("encoded len = %d, want %d", buf.Len(), sizeZCStatusChangeAck)
+	if buf.Len() != sizeZCStatusChangeAck() {
+		t.Fatalf("encoded len = %d, want %d", buf.Len(), sizeZCStatusChangeAck())
 	}
 	want := []byte{0xbc, 0x00, 13, 0x00, 0x00, 0x05}
 	if !bytes.Equal(buf.Bytes(), want) {
@@ -88,8 +88,8 @@ func TestZCNotifyEffect_Encode(t *testing.T) {
 	if err := eff.Encode(&buf); err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	if buf.Len() != sizeZCNotifyEffect {
-		t.Fatalf("encoded len = %d, want %d", buf.Len(), sizeZCNotifyEffect)
+	if buf.Len() != sizeZCNotifyEffect() {
+		t.Fatalf("encoded len = %d, want %d", buf.Len(), sizeZCNotifyEffect())
 	}
 	// [0xbb9b? no]: header 0x019b LE = 0x9b,0x01; then AID(4)=0; effectID(4)=0.
 	want := []byte{0x9b, 0x01, 0, 0, 0, 0, 0, 0, 0, 0}

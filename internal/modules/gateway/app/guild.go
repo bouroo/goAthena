@@ -73,7 +73,7 @@ func (s *MapServer) clearGuildInvitesFor(charID uint32) {
 // requester (rAthena guild_create). The reply is ZC_RESULT_MAKE_GUILD to the
 // requester alone; a success additionally delivers the belong-info, guild-info
 // and roster burst so the client's guild window opens populated.
-func (s *MapServer) handleCreateGuild(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleCreateGuild(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -91,7 +91,7 @@ func (s *MapServer) handleCreateGuild(c gnet.Conn, auth *mapAuth, frame []byte) 
 	if strings.TrimSpace(req.Name) == "" {
 		return
 	}
-	g, err := s.guild.Create(context.Background(), auth.accountID, auth.charID, req.Name)
+	g, err := s.guild.Create(fctx, auth.accountID, auth.charID, req.Name)
 	if err != nil {
 		s.writeCreateGuildAck(c, createGuildResult(err))
 		return
@@ -106,7 +106,7 @@ func (s *MapServer) handleCreateGuild(c gnet.Conn, auth *mapAuth, frame []byte) 
 // target's account id. The inviter must be the guild master (positions with
 // invite permission are a later commit), and every refusal is reported to the
 // INVITER via ZC_ACK_REQ_JOIN_GUILD (rAthena guild_invite, guild.cpp:925-970).
-func (s *MapServer) handleGuildInvite(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleGuildInvite(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -119,8 +119,7 @@ func (s *MapServer) handleGuildInvite(c gnet.Conn, auth *mapAuth, frame []byte) 
 		s.log.Warn("map: parse CZ_REQ_JOIN_GUILD", "err", err)
 		return
 	}
-	ctx := context.Background()
-	g, err := s.guild.GetByMember(ctx, auth.charID)
+	g, err := s.guild.GetByMember(fctx, auth.charID)
 	if err != nil {
 		s.writeInviteAck(c, ropacket.GuildInviteRejected)
 		return
@@ -141,12 +140,12 @@ func (s *MapServer) handleGuildInvite(c gnet.Conn, auth *mapAuth, frame []byte) 
 		return
 	}
 	// The target must not already belong to a guild (guild.cpp:943 — flag 0).
-	if _, err := s.guild.GetByMember(ctx, targetCharID); err == nil {
+	if _, err := s.guild.GetByMember(fctx, targetCharID); err == nil {
 		s.writeInviteAck(c, ropacket.GuildInviteAlreadyIn)
 		return
 	}
 	// Open-slot check before delivering the invitation (guild.cpp:948 — flag 3).
-	members, err := s.guild.Members(ctx, g.ID)
+	members, err := s.guild.Members(fctx, g.ID)
 	if err != nil {
 		s.log.Debug("map: guild members read failed", "guild", g.ID, "err", err)
 		return
@@ -162,7 +161,7 @@ func (s *MapServer) handleGuildInvite(c gnet.Conn, auth *mapAuth, frame []byte) 
 // handleGuildReplyInvite processes CZ_JOIN_GUILD — the invitee's accept/reject.
 // On accept the roster is refreshed for everyone; on reject only the inviter is
 // told (guild.cpp:972-1008).
-func (s *MapServer) handleGuildReplyInvite(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleGuildReplyInvite(fctx context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -187,14 +186,13 @@ func (s *MapServer) handleGuildReplyInvite(_ gnet.Conn, auth *mapAuth, frame []b
 		return
 	}
 	s.clearGuildInvite(auth.charID)
-	ctx := context.Background()
 	if req.Answer != ropacket.GuildJoinAccept {
 		if pc, ok := s.connFor(inv.inviterCharID); ok {
 			s.writeInviteAck(pc, ropacket.GuildInviteRejected)
 		}
 		return
 	}
-	if err := s.guild.Accept(ctx, guilddomain.GuildID(req.GuildID), auth.charID); err != nil {
+	if err := s.guild.Accept(fctx, guilddomain.GuildID(req.GuildID), auth.charID); err != nil {
 		if pc, ok := s.connFor(inv.inviterCharID); ok {
 			s.writeInviteAck(pc, guildInviteResult(err))
 		}
@@ -209,7 +207,7 @@ func (s *MapServer) handleGuildReplyInvite(_ gnet.Conn, auth *mapAuth, frame []b
 // handleGuildLeave processes CZ_REQ_LEAVE_GUILD — the requester leaves. The
 // notice goes to the whole guild INCLUDING the leaver (rAthena clif_guild_leave
 // GUILD_NOBG), which is also what clears the leaver's own guild window.
-func (s *MapServer) handleGuildLeave(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleGuildLeave(fctx context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -222,18 +220,17 @@ func (s *MapServer) handleGuildLeave(_ gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: parse CZ_REQ_LEAVE_GUILD", "err", err)
 		return
 	}
-	ctx := context.Background()
-	g, err := s.guild.GetByMember(ctx, auth.charID)
+	g, err := s.guild.GetByMember(fctx, auth.charID)
 	if err != nil || uint32(g.ID) != req.GuildID {
 		s.log.Debug("map: CZ_REQ_LEAVE_GUILD not in guild", "gid", auth.charID)
 		return
 	}
-	members, err := s.guild.Members(ctx, g.ID)
+	members, err := s.guild.Members(fctx, g.ID)
 	if err != nil {
 		s.log.Debug("map: guild members read failed", "guild", g.ID, "err", err)
 		return
 	}
-	if err := s.guild.Leave(ctx, g.ID, auth.charID); err != nil {
+	if err := s.guild.Leave(fctx, g.ID, auth.charID); err != nil {
 		s.log.Debug("map: guild leave rejected", "gid", auth.charID, "err", err)
 		return
 	}
@@ -247,7 +244,7 @@ func (s *MapServer) handleGuildLeave(_ gnet.Conn, auth *mapAuth, frame []byte) {
 // handleGuildBan processes CZ_REQ_BAN_GUILD — the master expels a member
 // (guild.cpp:1189-1237). The notice goes to the whole guild including the
 // expelled char (clif_guild_expulsion GUILD_NOBG).
-func (s *MapServer) handleGuildBan(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleGuildBan(fctx context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -260,18 +257,17 @@ func (s *MapServer) handleGuildBan(_ gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: parse CZ_REQ_BAN_GUILD", "err", err)
 		return
 	}
-	ctx := context.Background()
-	g, err := s.guild.GetByMember(ctx, auth.charID)
+	g, err := s.guild.GetByMember(fctx, auth.charID)
 	if err != nil || uint32(g.ID) != req.GuildID {
 		s.log.Debug("map: CZ_REQ_BAN_GUILD not in guild", "gid", auth.charID)
 		return
 	}
-	members, err := s.guild.Members(ctx, g.ID)
+	members, err := s.guild.Members(fctx, g.ID)
 	if err != nil {
 		s.log.Debug("map: guild members read failed", "guild", g.ID, "err", err)
 		return
 	}
-	if err := s.guild.Kick(ctx, g.ID, auth.charID, req.CID); err != nil {
+	if err := s.guild.Kick(fctx, g.ID, auth.charID, req.CID); err != nil {
 		s.log.Debug("map: guild ban rejected", "gid", auth.charID, "target", req.CID, "err", err)
 		return
 	}
@@ -286,7 +282,7 @@ func (s *MapServer) handleGuildBan(_ gnet.Conn, auth *mapAuth, frame []byte) {
 // guild. rAthena requires the key to echo the guild name, the actor to be the
 // master, and every OTHER member to be offline (guild.cpp:2289-2310); the
 // service enforces those rules and the result is ZC_ACK_DISORGANIZE_GUILD_RESULT.
-func (s *MapServer) handleGuildBreak(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleGuildBreak(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -299,12 +295,11 @@ func (s *MapServer) handleGuildBreak(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: parse CZ_REQ_DISORGANIZE_GUILD", "err", err)
 		return
 	}
-	ctx := context.Background()
-	g, err := s.guild.GetByMember(ctx, auth.charID)
+	g, err := s.guild.GetByMember(fctx, auth.charID)
 	if err != nil {
 		return
 	}
-	if err := s.guild.Break(ctx, g.ID, auth.charID, req.Key); err != nil {
+	if err := s.guild.Break(fctx, g.ID, auth.charID, req.Key); err != nil {
 		if !errors.Is(err, guilddomain.ErrMembersOnline) {
 			s.log.Debug("map: guild break rejected", "gid", auth.charID, "err", err)
 			return
@@ -318,7 +313,7 @@ func (s *MapServer) handleGuildBreak(c gnet.Conn, auth *mapAuth, frame []byte) {
 // handleGuildChat processes CZ_GUILD_CHAT — a line broadcast to the whole
 // guild, sender included (rAthena clif_guild_message prefixes the speaker name
 // and sends ZC_GUILD_CHAT to GUILD_NOBG).
-func (s *MapServer) handleGuildChat(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleGuildChat(fctx context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -339,11 +334,11 @@ func (s *MapServer) handleGuildChat(_ gnet.Conn, auth *mapAuth, frame []byte) {
 	if senderName != "" {
 		line = senderName + " : " + msg
 	}
-	g, err := s.guild.GetByMember(context.Background(), auth.charID)
+	g, err := s.guild.GetByMember(fctx, auth.charID)
 	if err != nil {
 		return
 	}
-	members, err := s.guild.Members(context.Background(), g.ID)
+	members, err := s.guild.Members(fctx, g.ID)
 	if err != nil {
 		return
 	}
@@ -358,7 +353,7 @@ func (s *MapServer) handleGuildChat(_ gnet.Conn, auth *mapAuth, frame []byte) {
 // handleGuildCheckMaster processes CZ_REQ_GUILD_MENUINTERFACE (0x014d) — the
 // client's guild-window permission poll. The reply names whether this char is
 // the master (clif_guild_masterormember, clif.cpp:8762).
-func (s *MapServer) handleGuildCheckMaster(c gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleGuildCheckMaster(fctx context.Context, c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		return
 	}
@@ -366,7 +361,7 @@ func (s *MapServer) handleGuildCheckMaster(c gnet.Conn, auth *mapAuth, _ []byte)
 		return
 	}
 	isMaster := false
-	if g, err := s.guild.GetByMember(context.Background(), auth.charID); err == nil {
+	if g, err := s.guild.GetByMember(fctx, auth.charID); err == nil {
 		isMaster = g.Master == auth.charID
 	}
 	s.writeFrame(c, ropacket.AckMenuInterfaceResponse{IsMaster: isMaster}, "ZC_ACK_GUILD_MENUINTERFACE")

@@ -7,7 +7,6 @@ import (
 
 	storagedomain "github.com/bouroo/goAthena/internal/modules/commerce/storage/domain"
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
-	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 )
 
 // StorageService is the world-side orchestrator for the bag↔warehouse verb.
@@ -66,8 +65,9 @@ var (
 	ErrStorageNotOpen         = errors.New("storage: warehouse not open")
 )
 
-// MoveToStorage moves amount units of the bag row at wireIndex (client index
-// = server row + 2) from the player's bag into the account's warehouse.
+// MoveToStorage moves amount units of the bag row at serverRow (the 0-based
+// row the packet layer's parser hands over) from the player's bag into the
+// account's warehouse.
 // Stackable items merge into an existing same-NameID warehouse row; equipment
 // always inserts a new row.
 //
@@ -79,7 +79,7 @@ var (
 //   - remove / add fails (e.g. warehouse full) → the failed step leaves the
 //     other side unchanged; the error is wrapped and returned. The contract
 //     is "all or nothing"; a future DB transaction will harden this.
-func (s *StorageService) MoveToStorage(ctx context.Context, accountID, charID, wireIndex uint32, amount int) (StorageMoveResult, error) {
+func (s *StorageService) MoveToStorage(ctx context.Context, accountID, charID, serverRow uint32, amount int) (StorageMoveResult, error) {
 	if amount <= 0 {
 		return StorageMoveResult{}, fmt.Errorf("%w: amount must be > 0", ErrStorageInsufficient)
 	}
@@ -87,13 +87,8 @@ func (s *StorageService) MoveToStorage(ctx context.Context, accountID, charID, w
 	if err != nil {
 		return StorageMoveResult{}, fmt.Errorf("storage: load bag: %w", err)
 	}
-	// wireIndex == 0 is an INVALID bag slot — rows start at server row 1.
-	if wireIndex < 2 {
-		return StorageMoveResult{}, fmt.Errorf("%w: wire index %d < 2", ErrStorageIndexOutOfRange, wireIndex)
-	}
-	serverRow := ropacket.ServerIndex(uint16(wireIndex)) //nolint:gosec // G115: range-checked above.
 	if int(serverRow) >= len(items) {
-		return StorageMoveResult{}, fmt.Errorf("%w: wire index %d out of %d items", ErrStorageIndexOutOfRange, wireIndex, len(items))
+		return StorageMoveResult{}, fmt.Errorf("%w: row %d out of %d items", ErrStorageIndexOutOfRange, serverRow, len(items))
 	}
 	bagRow := items[serverRow]
 	if bagRow.IsEquipped() {
@@ -140,7 +135,8 @@ func (s *StorageService) MoveToStorage(ctx context.Context, accountID, charID, w
 	}, nil
 }
 
-// MoveFromStorage moves amount units of the warehouse row at wireIndex
+// MoveFromStorage moves amount units of the warehouse row at serverRow (the
+// 0-based row the packet layer's parser hands over)
 // (warehouse index = server row + 2) from the account's warehouse into the
 // player's bag. Stackable items merge into an existing same-NameID bag row;
 // equipment always inserts a new bag row.
@@ -149,7 +145,7 @@ func (s *StorageService) MoveToStorage(ctx context.Context, accountID, charID, w
 // warehouse row removed-but-not-delivered (the future DB transaction closes
 // that seam). Out-of-range / insufficient / not-found errors are mapped to
 // distinct sentinels so the gateway can echo a useful ack.
-func (s *StorageService) MoveFromStorage(ctx context.Context, accountID, charID, wireIndex uint32, amount int) (StorageMoveResult, error) {
+func (s *StorageService) MoveFromStorage(ctx context.Context, accountID, charID, serverRow uint32, amount int) (StorageMoveResult, error) {
 	if amount <= 0 {
 		return StorageMoveResult{}, fmt.Errorf("%w: amount must be > 0", ErrStorageInsufficient)
 	}
@@ -157,12 +153,8 @@ func (s *StorageService) MoveFromStorage(ctx context.Context, accountID, charID,
 	if err != nil {
 		return StorageMoveResult{}, fmt.Errorf("storage: load warehouse: %w", err)
 	}
-	if wireIndex < 2 {
-		return StorageMoveResult{}, fmt.Errorf("%w: wire index %d < 2", ErrStorageIndexOutOfRange, wireIndex)
-	}
-	serverRow := ropacket.ServerIndex(uint16(wireIndex)) //nolint:gosec // G115: range-checked above.
 	if int(serverRow) >= len(items) {
-		return StorageMoveResult{}, fmt.Errorf("%w: wire index %d out of %d rows", ErrStorageIndexOutOfRange, wireIndex, len(items))
+		return StorageMoveResult{}, fmt.Errorf("%w: row %d out of %d rows", ErrStorageIndexOutOfRange, serverRow, len(items))
 	}
 	warehouseRow := items[serverRow]
 	if warehouseRow.IsEquipped() {

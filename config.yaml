@@ -50,8 +50,35 @@ identity:
 zone:
   tick_rate_hz: 50                  # 20ms game loop (matches rAthena)
   view_range_cells: 20              # AOI visibility radius
-  db_path: third_party/rathenaThailand/db   # load real pre-re mobs/items/skills from the submodule
+  # The reference data (mobs, items, skills) and the NPC corpus belong to the
+  # source pack: the Thai fork's db/pre-re tree and its 1209 script files are
+  # not upstream's 1138. Leaving these unset points them at the source pack
+  # named by client_source below; set them to override.
+  # db_path: third_party/rathenaThailand/db
+  # script_path: third_party/rathenaThailand/npc
+  # The wire protocol comes from a source pack and a client family. The
+  # Thai fork is the primary target; upstream master is the compatibility
+  # set. The client family is "re" (ragexeRE) or "main" (the modern
+  # client); each source pack declares its packet headers per family.
+  client_source: thailand              # thailand|upstream
+  client_variant: re                   # re|main
 
+  directory:                        # cross-zone handoff routing (M12/M13)
+    mode: local                     # local|agones|static
+    # agones: resolve maps against Agones GameServers (K8s API; in-cluster
+    # credentials, or KUBECONFIG for Swarm/workstation runs). Manifests:
+    # deploy/agones/{fleet,gameserver}.yaml. In a fleet pod set namespace,
+    # selector, and self_name — self_name is the pod's own GameServer name
+    # (metadata.labels['agones.dev/gameserver'] via the downward API), so the
+    # pod answers its own maps locally instead of redirecting to itself.
+    # A non-local directory that cannot reach its source is a fatal boot error.
+    # namespace: default            # GameServer namespace
+    # selector: ""                  # label selector narrowing candidates
+    # self_name: ""                 # THIS pod's GameServer resource name (own maps stay local)
+    # static: fixed route table (Swarm / fixed sharding) — map → host:port
+    # routes:
+    #   geffen: 10.0.4.7:5121
+    #   payon: 10.0.4.8:5121
 log:
   level: info                       # debug|info|warn|error
   format: json                      # json|text

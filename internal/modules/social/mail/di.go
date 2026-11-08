@@ -13,6 +13,7 @@ import (
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
 
+	"github.com/bouroo/goAthena/internal/modules/economy"
 	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
 	economydomain "github.com/bouroo/goAthena/internal/modules/economy/domain"
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
@@ -56,7 +57,7 @@ func Register(inj do.Injector) {
 	do.Provide(inj, func(i do.Injector) (*app.MailService, error) {
 		repo := do.MustInvoke[*infra.GORMMailRepository](i)
 		itemRepo := do.MustInvoke[invdomain.ItemRepository](i)
-		econSvc := do.MustInvoke[*economyapp.EconomyService](i)
+		econSvc := do.MustInvoke[economy.Service](i)
 		inv := invPort{repo: itemRepo}
 		deduct := func(ctx context.Context, charID uint32, amount int32) error {
 			return econSvc.DeductZenyFor(ctx, charID, amount, economyapp.LedgerEntry{Reason: economydomain.ReasonMailSend})

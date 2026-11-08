@@ -80,7 +80,7 @@ func enterMap(t *testing.T, conn net.Conn, r *bufio.Reader) (spawnUnits int) {
 		pre = append(pre, chunk...)
 		_, _ = r.Discard(len(chunk))
 		for i := 0; i+107 <= len(pre); i++ {
-			if binary.LittleEndian.Uint16(pre[i:]) == ropacket.HeaderZCSPAWNUNIT && pre[i+4] == 6 {
+			if binary.LittleEndian.Uint16(pre[i:]) == ropacket.HeaderZCSPAWNUNIT() && pre[i+4] == 6 {
 				spawnUnits++
 			}
 		}
@@ -104,8 +104,14 @@ func drainLoadEndAckBurst(t *testing.T, conn net.Conn, r *bufio.Reader) {
 
 // fixedSize maps the fixed-size reply commands these tests read to their
 // total wire length (cmd 2B + body).
-var fixedSize = map[uint16]int{
-	ropacket.HeaderZCSELECTDEALTYPE: 6, // cmd + NpcID
+//
+// The opcodes come from the installed protocol set, which TestMain
+// installs, so the map is built when it is read rather than when the
+// package initializes.
+func fixedSize() map[uint16]int {
+	return map[uint16]int{
+		ropacket.HeaderZCSELECTDEALTYPE(): 6, // cmd + NpcID
+	}
 }
 
 // readVarFrame reads one frame and returns its command and body past the
@@ -118,7 +124,7 @@ func readVarFrame(t *testing.T, r *bufio.Reader) (cmd uint16, body []byte) {
 		t.Fatalf("read frame cmd: %v", err)
 	}
 	cmd = binary.LittleEndian.Uint16(head)
-	if sz, ok := fixedSize[cmd]; ok {
+	if sz, ok := fixedSize()[cmd]; ok {
 		body := make([]byte, sz-2)
 		if _, err := io.ReadFull(r, body); err != nil {
 			t.Fatalf("read frame body (cmd 0x%04x): %v", cmd, err)
@@ -132,7 +138,7 @@ func readVarFrame(t *testing.T, r *bufio.Reader) (cmd uint16, body []byte) {
 	}
 	cmd = binary.LittleEndian.Uint16(hdr[0:2])
 	var n int
-	if sz, ok := fixedSize[cmd]; ok {
+	if sz, ok := fixedSize()[cmd]; ok {
 		n = sz - 4
 	} else {
 		n = int(binary.LittleEndian.Uint16(hdr[2:4])) - 4
@@ -180,7 +186,7 @@ func TestMap_SeededShopClickOpensDealType(t *testing.T) {
 	}
 
 	cmd, body := readVarFrame(t, r)
-	if cmd != ropacket.HeaderZCSELECTDEALTYPE {
+	if cmd != ropacket.HeaderZCSELECTDEALTYPE() {
 		t.Fatalf("reply = 0x%04x, want 0x00c4 ZC_SELECT_DEALTYPE", cmd)
 	}
 	if got := binary.LittleEndian.Uint32(body[0:4]); got != shopGID {
@@ -215,15 +221,15 @@ func TestMap_WarpPortalTeleports(t *testing.T) {
 
 	// Walk one cell east onto the trigger tile.
 	moveReq := make([]byte, 5)
-	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE)
+	binary.LittleEndian.PutUint16(moveReq[0:], ropacket.HeaderCZREQUESTMOVE())
 	dest := packMoveDest(54, 111)
 	copy(moveReq[2:], dest[:])
 	sendRaw(t, conn, moveReq)
 
 	// Self move-ack (12B ZC_NOTIFY_PLAYERMOVE) then the portal's
 	// ZC_NPCACK_MAPMOVE (22B) carrying the destination map+cell.
-	readTradeFrame(t, conn, ropacket.HeaderZCNOTIFYPLAYERMOVE, 12)
-	move := readTradeFrame(t, conn, ropacket.HeaderZCNPCACKMAPMOVE, 22)
+	readTradeFrame(t, conn, ropacket.HeaderZCNOTIFYPLAYERMOVE(), 12)
+	move := readTradeFrame(t, conn, ropacket.HeaderZCNPCACKMAPMOVE(), 22)
 	gotMap := string(bytes.TrimRight(move[2:18], "\x00"))
 	if gotMap != "prontera" {
 		t.Fatalf("portal dest map = %q, want prontera", gotMap)

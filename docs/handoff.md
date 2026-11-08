@@ -29,11 +29,16 @@
 
 | Gate | Tool | Pass criterion |
 |---|---|---|
-| L1 static | `task fmt` (gofumpt + goimports) + `task lint` (golangci-lint v2) | 0 issues |
-| L1 vet | `task vet` (`go vet ./...`) | clean |
+| L1 static | `task fmt-check` (gofumpt + goimports) + `task lint` (golangci-lint v2, pinned to the Go toolchain — see ci.yml) | 0 issues |
+| L1 vet | `task vet` (`go vet ./...`) across tagless + `-tags=unit` + `-tags=integration` | clean |
+| L1 scan-vuln | `task scan-vuln` (govulncheck — reachable call paths only) | 0 reachable |
+| L1 scan-sec | `task scan-sec` (gosec minus the golangci-adjudicated rule classes — see the Taskfile target) | 0 findings |
 | L2 runtime | `task test-unit` (`go test -race -tags=unit ./internal/... ./pkg/...`) | all green; ≥60% coverage |
-| L3 e2e | compose harness (MariaDB + Valkey + goathena + client) | login → char → map → at least one gameplay verb |
+| L3 integration | `task test-integration` (`go test -race -tags=integration ./...`) — testcontainers MariaDB/Postgres + live gnet gateway TCP suites | all green |
 | L3 architecture | `arch_test.go` walks | intra-module direction enforced |
+
+All of L1 + L2 + L3 run in the pre-push hook (`.githook`, `GATE_SKIP=<names>` to
+override) and in CI; the same `task` targets back both so they cannot drift.
 
 ---
 
@@ -277,16 +282,22 @@ real ledger needs:~~ **done** in commit `8c87e57`:
 | Shops from NPC scripts | commit `1403e6a` | ✅ |
 | Warp portals from corpus | commit `8923241` | ✅ |
 | Script-VM panic-recovery | 00af9aa | ✅ |
+| Rung B quest engine | commit `b7f8ab7` (persistent NPC vars) | ✅ |
+| Rung C misc verbs | `heal`/`announce`/`mapannounce`/`getiteminfo` + `script/constants.go` (this commit) | ✅ |
 
 **Remaining (the bulk):** full rAthena `script.cpp` coverage. The 29k LOC C++
 script VM carries roughly 600 builtins in the production engine. Currently
-implemented (17): `mes`, `next`, `close`, `close2`, `end`, `set`, `warp`,
+implemented (21): `mes`, `next`, `close`, `close2`, `end`, `set`, `warp`,
 `percentheal`, `select`, `prompt`, `menu`, `input`, `getitem`, `getitem2`,
-`delitem`, `countitem`, `equip`, `unequip`. Item-script Rung A landed in
-commit `556a8ee`.
+`delitem`, `countitem`, `equip`, `unequip`, `getvariableofnpc`, `setquestvar`,
+plus Rung C's `heal`, `announce`, `mapannounce`, `getiteminfo`. Item-script
+Rung A landed in commit `556a8ee`.
 
-Rungs B–E (quest engine, monster/event scripts, buffs/sc_start, operator
-primitives) are deferred — each is its own commit-sized effort.
+Rung D (monster/event scripts) and Rung E (operator primitives) are deferred —
+each is its own commit-sized effort. `bonus`/`sc_start`/`sc_end` were dropped
+from Rung C's scope: both need subsystems that do not exist yet (a persistent
+stat-bonus aggregate over equipped items, and a status-effect registry with
+tick/expiry), so they are their own rungs rather than one builtin each.
 
 **Scope ladder** (each rung is a commit; we ship as far as time + L2 permits):
 
@@ -332,8 +343,45 @@ primitives) are deferred — each is its own commit-sized effort.
   / short-arg safety.
 - L1+L2 green (fmt + lint + vet + race tests).
 
-Rungs C–E (misc verbs, monster/event scripts, operator primitives) are
-deferred — each is its own commit-sized effort.
+**Rung C (this commit)** — the verbs content authors use outside dialogs:
+`heal`, `announce`, `mapannounce`, `getiteminfo`, plus the script-constant table
+those and every future builtin need.
+
+- `pkg/ro/script/constants.go` — a compile-time constant table resolved by the
+  compiler (rAthena resolves constants while parsing, script.cpp:2315
+  `script_get_constant`; names match case-insensitively like rAthena's
+  `add_str`/`strcasecmp` string table). Without it `bc_map`/`ITEMINFO_TYPE`
+  compiled to a variable read and silently answered 0. The table is scoped to
+  the constants implemented builtins take (`BC_*`, `ITEMINFO_*`, `IT_*`,
+  `FW_*`) and is generated-from-upstream-shaped when breadth matters.
+- `heal(hp, sp)`: absolute restore via `world.AddVitals`, clamped to [0, max]
+  (rAthena `status_heal`, script.cpp:6007). The script-side int64 saturates to
+  int32 (rAthena `cap_value(hhp, INT_MIN, INT_MAX)`), so an overflowing heal
+  cannot wrap into damage.
+- `announce(text, flag)` / `mapannounce(map, text, flag)`: the audience is
+  resolved in `world` (it owns the entity registry and AOI grids) over the
+  `BC_*` target bits — `BC_SELF`/`BC_MAP`/`BC_AREA`/`BC_ALL`, with `BC_NPC`
+  choosing the NPC as the source instead of the dialog's player (rAthena
+  script.cpp:11957 / :12028). `world.OnAnnounce` hands the recipient char ids to
+  the gateway, which encodes one `ZC_BROADCAST` and writes it to each live
+  connection — the content module never touches connections.
+- `ZC_BROADCAST` (0x009a) codec: `[2:cmd][2:packetLength][prefix+text+NUL]`.
+  The colour has no wire field — `clif_broadcast` (clif.cpp:6725) prefixes the
+  text with `blue` (BC_BLUE) or `ssss` (BC_WOE), which the encoder reproduces;
+  an empty message writes no frame (clif.cpp:6728). Packet DB 149 → **150**.
+- `getiteminfo(item, code)`: `item` is a numeric name id or an AegisName
+  (rAthena dispatches on the argument type, script.cpp:14766). The columns come
+  from new `itemdb.ItemEntry.Info` (+ `Info*` codes), which answers the YAML
+  scalars and the load-time defaults rAthena fills in — Sell = Buy/2
+  (itemdb.cpp:1188), EquipLevelMax = MAX_LEVEL, Gender = SEX_BOTH, and the
+  W_*/AMMO_*/CARD_* subtype resolution (itemdb.cpp:165-190). An unknown item or
+  column answers -1; `ITEMINFO_AEGISNAME` is the one string column.
+- Evidence: kernel builtin tests in `pkg/ro/script/vm_test.go` (flag constants
+  resolve, sign survives, both item argument shapes), `itemdb` column tests,
+  content-adapter tests, world audience tests (`announce_test.go`: self/map/
+  area/all + non-PC anchor + unknown map + flat heal clamp), and L3 over real
+  TCP (`TestMap_AnnounceReachesClient`, `..._BluePrefixReachesClient`,
+  `..._AnnounceMapReachesMapOnly`). L1 (fmt/lint/vet/scans) + L2 (race) green.
 
 ---
 
@@ -372,20 +420,29 @@ attachment rows (upgrades with the inventory row-preserving insert).
 | Warp portals from corpus | commit `8923241` | ✅ |
 | ZC_NPCACK_MAPMOVE wire | gateway dispatch | ✅ |
 
-**Remaining:** **cross-zone handshake** — the multi-process case where the
-target map runs on a different node (Agones fleet). Without the fleet the
-monolith can also run multiple map shards, so a cross-zone handoff needs:
+**Remaining:** **remote cross-zone handshake** — the target map runs on a
+different node (Agones fleet). The v0 slice landed (`67b4979`): a
+`transit/domain.MapDirectory` port (`Resolve` map → `Zone{IPv4, Port}`) with
+the single-zone `LocalDirectory` in production wiring (`transit.
+RegisterMapDirectory`), a `ZC_NPCACK_SERVERMOVE` (0x0ac7, 156B,
+`PACKET_ZC_NPCACK_SERVERMOVE` at PACKETVER ≥ 20170315 — the ledger's earlier
+"ZC_NOTIFY_TRANSFER" guess has no rAthena counterpart) codec + packet-DB
+entry, and the gateway/content warp paths branch local-vs-remote on the
+resolved zone: remote persists the destination, `WorldService.
+LeaveRemoteZone` tears the player out of this zone (offline row stamped at
+the destination cell so the remote zone's `EnterMap` loads it), and the
+client is redirected to the zone ip:port. World/cross-process validation of
+the reconnecting client already rides the shared Valkey session (CZ_ENTER's
+`GetSession`+`LoginID1` check), so a separate Handoff token port adds no
+security the shared session does not already provide — M13 drops in a fleet
+directory (remote = real address) and keeps the client-side seam unchanged.
 
-1. A `MapDirectory` port (name → instance addr).
-2. A `Handoff` port (sign a session token the target zone can validate).
-3. Wire the CZ_ENTER path to first resolve the map name → (zone, addr) and
-   either (a) re-enter locally if the zone is this process, or (b) emit a
-   `ZC_NOTIFY_TRANSFER`/`ZC_TRANSFER` redirect the client uses to reconnect.
-4. `Agones` adapter is M13.
-
-**Plan in this session:** ship the local cross-zone handoff (a) and the
-transfer-redirect packet framing, with the directory port stub. M13 wires
-the remote (b) path.
+1. ~~A `MapDirectory` port (name → instance addr).~~ ✅ v0 this commit
+2. ~~A `Handoff` port~~ — skipped: the shared Valkey session is the
+   cross-zone client credential (same check as same-zone CZ_ENTER).
+3. ~~Wire the CZ_ENTER/warp path to resolve map → (zone, addr).~~ ✅
+   gateway `relocateThroughPortal` + content `ScriptHost.Warp`.
+4. `Agones` fleet directory providing remote addresses — M13.
 
 ---
 
@@ -393,17 +450,33 @@ the remote (b) path.
 
 | Item | Evidence | Status |
 |---|---|---|
-| NATS in compose | `compose.yml` sidecar | ✅ partial — sidecar present, no `nats.Connect` in binary |
-| Subject naming convention | not yet | 📋 |
-| Versioned schema for events | not yet | 📋 |
-| One module extracted as NATS service | not yet | 📋 |
-| Agones Fleet | not yet | 📋 |
+| NATS in compose | `compose.yml` sidecar | ✅ partial — sidecar present; binary dials on demand (`natsinfra.New`) |
+| Subject naming convention | `economy/remote` (`goathena.<module>.v<wire>.<verb>`) | ✅ v0 taxonomy |
+| Versioned schema for events | subject `v0` suffix = wire-version contract (add field = compatible; remove/retype = bump verb) | ✅ |
+| One module extracted as NATS service | economy: `economy.Service` interface + `remote.Proxy`/`remote.Server` + `goathena serve-economy` host | ✅ first extraction |
+| Agones Fleet manifests | `deploy/agones/{fleet,gameserver}.yaml` + `transit/agones/fleet_manifest_test.go` | ✅ — two-Fleet manifest (prontera/geffen map sets) + a single-shard GameServer; `Static` port policy (the process binds `GATEWAY_MAP_PORT` at boot and is never told a dynamic host port, so `Dynamic` would redirect clients to a port nobody listens on); `self_name` read from the pod label `agones.dev/gameserver` via the downward API; probes on `/healthz`+`/readyz`; the test decodes each document with the Agones API's own YAML decoder and runs `Validate` + `ApplyDefaults`, asserting the `game` port name and `goathena.dev/maps` annotation the directory reads (it caught the missing `spec.strategy.type`) |
+| Fleet `MapDirectory` | `transit/agones` + `transit/static` | ✅ — `zone.directory.mode` `local\|agones\|static`; agones resolves Ready GameServers (maps CSV annotation `goathena.dev/maps` or `goathena.dev/map-<name>` labels, `game` port) via in-cluster creds or KUBECONFIG (Swarm path); static parses `routes` map→host:port; fatal boot error on non-local dial failure |
+| Fleet cross-node admission | ✗ open | The char→map handoff advertises `gateway.map_host`, and a Static-port fleet puts many shards on one node while a Dynamic one is never told its host port — so a fleet pod must publish its Agones-assigned `Status.Address` instead of the configured host. No env var can express "my node's address" (it is runtime state), so this needs the SDK `GetGameServer` call at boot; tracked below. |
 
 **Plan in this session:** wire `nats.Connect` in `composition.go`; define
 subject taxonomy (`economy.zeny.*`, `social.party.*`, `transit.handoff.*`,
 `world.entity.*`); extract **economy** as the first NATS-backed remote (small
 port surface, hot path already validates the architecture); add an env-driven
 local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
+
+**Open (fleet manifests landed; these remain):**
+
+1. **Advertised map address from the Agones allocation.** The char→map handoff
+   carries `gateway.map_host`/`map_port` from config, so a fleet pod cannot
+   advertise the address Agones assigned it. Closing this means calling the SDK
+   `GetGameServer` at boot (the `Port` interface in
+   `internal/infrastructure/agones` already owns the sidecar connection) and
+   feeding `Status.Address`/`Status.Ports["game"]` into the handoff instead of
+   the static config. Until then the manifests pin `Static` port policy, which
+   makes the node address + `5121` correct but allows one shard per node.
+2. **Sharding keys** — the NATS subjects are not partitioned by zone yet.
+3. **Further module extractions** over NATS (social/mail are the next-largest
+   port surfaces after economy).
 
 ---
 
@@ -414,18 +487,33 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | Prometheus `/metrics` | commit `7d64573` | ✅ |
 | Docker compose e2e | compose + Containerfile | ✅ |
 | 36MB distroless image | Containerfile | ✅ |
-| OTel tracing SDK | commit `4fcb6c4` (OTel SDK landed) | ✅ partial — SDK is in; full coverage audit needed |
-| OTel span coverage across modules | partial | 📋 |
-| Security review | not yet | 📋 |
-| Load test harness | not yet | 📋 |
+| OTel tracing SDK | commit `4fcb6c4` | ✅ — SDK + OTLP exporter wired; the global W3C propagator is now set too (without it the injected traceparent is silently dropped) |
+| OTel span coverage | `internal/shared/traces`, gateway dispatch, `economy/remote` | ✅ — instrumented at process boundaries only: one span per decoded client frame (map + char, labelled with the rAthena packet name from the packet DB), one per login attempt, and a producer/consumer span pair around each NATS request in `economy/remote` (traceparent rides the message headers, so a zone's frame trace continues into the economy host's DB work). The 50 Hz world tick and the AOI broadcast fan-out are deliberately not instrumented — a span per loop step would cost more than it measures. |
+| OTel abuse signal (F-08 item 3) | `internal/shared/metrics` | ✅ — `goathena_gateway_unknown_opcodes_total{listener,known}`; `known="false"` is the probe/fuzz signal (a playing client never sends an opcode the DB does not define), `known="true"` is the unwired-verb coverage signal (drop/trade/skill today). |
+| Login-load baseline | `cmd/loadgen` + `task loadtest`, `docs/loadtest-baseline.md` (`28af5c3`) | ✅ — ≈1000 logins/s zero-error; limiter shape verified |
+| Security review | F-01..F-07 closed | ✅ — see `docs/security-audit.md` |
 
-**Plan in this session:**
+**Landed this session:** span instrumentation (`internal/shared/traces`), the
+W3C propagator registration, and the unknown-opcode counter. Remaining M14
+items are all closed or tracked elsewhere; the module coverage matrix is the
+table above.
 
-1. OTel span audit + per-module coverage matrix; add spans where missing.
-2. Threat-model + security review pass (auth on every write, packet DB
-   exhaustive coverage, header skip on unknown opcodes, replay protection).
-3. Load harness: a `cmd/loadgen` binary that opens N TCP conns and runs a
-   script (login → char → enter → sit → stand loop). Compose sidecar.
+**Deliberately out of scope:** tracing the 50 Hz world tick, the AOI broadcast
+fan-out, or individual entity mutations. Per-frame spans on those would swamp
+the exporter and cost more than the loop they measure; the frame span already
+brackets them, so a slow tick shows up as a slow frame.
+
+### M15 — The Thai fork as the primary target
+
+| Item | Evidence | Status |
+|---|---|---|
+| Source pack as the protocol authority | `pkg/ro/protocol`, `pkg/ro/packet/resolve.go`, [ADR 0004](adr/0004-source-pack-is-the-protocol-authority.md) | ✅ — every opcode and wire length resolves from the installed source pack at boot; nothing is a fork-dependent constant. The port of the Thai fork onto `develop` found ≈15 wire values the branch had hand-derived wrongly (frame lengths, field offsets, and opcodes), all corrected against the source's own tables. |
+| Source-aware generator | `cmd/protocolgen` (`-source thailand|upstream`), `pkg/ro/protocol/generated/{thailand,upstream}/` | ✅ — the generator compiles the source's registration headers and emits the resolved table and the registration order, per source pack. |
+| Operator-selected source pack | `client_source` / `client_variant` in `config.yaml` + `ZONE_CLIENT_SOURCE` / `ZONE_CLIENT_VARIANT` | ✅ — the boot installs the set the configuration names (`cmd/goathena`'s `installProtocol`). |
+| Reference data follows the source pack | `internal/config`'s `resolveSourcePackPaths` | ✅ — an unset `db_path` / `script_path` points at the selected source pack's `db/` and `npc/`; an explicit path wins. |
+| Thai-only schema | `internal/infrastructure/db/migrations/*/000012_vip_storage.*.sql` | ✅ — the fork's `vip_storage` table, for both drivers. |
+| Both script corpora compile | `internal/modules/content/corpus_integration_test.go` | ✅ — the fork's 1209 scripts and upstream's 1138 both compile (77/72 dialog scripts, 9308/9304 spawns). |
+| The warehouse speaks the source's protocol | `pkg/ro/packet/storage.go`, `internal/modules/gateway/app/dispatch.go` | ✅ — the source's kafra moves (0x0364 / 0x0365) and close (0x0193), the source's item-list packets (0xb09 / 0xb39 with the invType byte), and the source's delete/count notices. The branch had invented a 0x07e3-0x07eb range the source does not have. |
 
 ---
 
@@ -446,14 +534,20 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | M8: full transaction log + audit | M | Small. Ship next session. |
 | M9: vending | L | Substantial. |
 | M9: storage/warehouse | ✅ done | Service+schema `1a2b848` + gateway wiring `c33c242`. Guild storage deferred to M11. |
-| M10: Rung B–E | L | Rung A done (`556a8ee`); Rung B done (`b7f8ab7`); Rungs C–E queued. |
+| M10: Rung D–E | L | Rung A `556a8ee`; Rung B `b7f8ab7`; Rung C (this commit: `heal`/`announce`/`mapannounce`/`getiteminfo` + constant table). Rungs D–E queued. |
+| M10: `bonus`/`sc_start`/`sc_end` | L | Not a builtin-sized task: needs a persistent stat-bonus aggregate over equips and a status-effect registry (tick/expiry). Own rungs. |
 | M11: friend list | ✅ done | Wire codecs + dispatch + `friends` table + online toggles (`gateway/app/friend.go`, migration `000009_friend`). |
 | M11: guild | ✅ done | First slice end-to-end: codecs + service + gateway + `000010_guild`; alliances/positions/skills/exp/emblem deferred. |
 | M11: mail | ✅ done | RODEX end-to-end: codecs + service + gateway + `000011_mail` (`375aa87`); account/returned tabs + expiry cron deferred. |
-| M12: Agones fleet adapter | L | M13 prereq. |
-| M13: Agones SDK | L | Architecture-defining. |
+| M12: Agones fleet directory | ✅ done | `transit/agones` + `transit/static` + `zone.directory.mode` switch (this session); fleet YAML manifests remain M13. |
+| M12: cross-zone redirect v0 | ✅ done | Directory port + SERVERMOVE framing + warp-path branch (`67b4979`); Agones fleet directory = M13 prereq. |
+| M13: Agones SDK | 🟡 partial | Sidecar lifecycle (`internal/infrastructure/agones`) + fleet directory (`transit/agones`) + fleet/GameServer manifests (`deploy/agones/`) landed; the advertised-address work below is what gates a real fleet. |
 | M14: threat model | M | One-shot. |
-| M14: load test harness | M | One-shot. |
+| M14: load test harness | ✅ done | `cmd/loadgen` (wire-correct at 20250604) + `task loadtest` + recorded baseline (`28af5c3`). |
+| M14 F-07 frame cap | ✅ done | Packet DB `MaxLength` + gateway close-on-oversize (this commit). |
+| M13 Agones adapter | 🟡 partial | Sidecar lifecycle + fleet directory + manifests wired; the advertised map address from the allocation (SDK `GetGameServer`) + sharding keys remain — see § M13 Open. |
+| M13 economy over NATS | ✅ done | `economy.Service` seam + `remote.Proxy`/`Server` + `serve-economy` host; sharding keys remain. |
+| Release pipeline hardening | ✅ done | Deps cleared the trivy HIGH gate (`v0.1.0-beta.6`+); gosec/govulncheck in hook+CI (`5503b26`); tags gated to main (`6a93c9c`); auto GitHub Release (`8af706e`); all live-verified through `v0.1.0-beta.8`. |
 
 ---
 
@@ -474,3 +568,16 @@ local-vs-remote switch so CI stays green. Agones adapter is a follow-up.
 | 2026-09-20 | goAthena agent | `06fb692` | M11 friend list end-to-end — `CZ_ADD_FRIENDS`/`CZ_DELETE_FRIENDS`/`CZ_ACK_REQ_ADD_FRIENDS` wire codecs + dispatch, `friends` table (rAthena shape, one row per direction) + GORM repo, bidirectional accept/remove in one tx, online/offline `ZC_FRIENDS_STATE` toggles both directions, `ZC_FRIENDS_LIST` in LoadEndAck burst; unit+GORM integration+gateway e2e (two conns, add→accept→remove, restore) |
 | 2026-09-20 | goAthena agent | `767c283` | M11 guild first slice end-to-end — CZ create/invite/reply/leave/ban/break/chat/menuinterface codecs + 9 dispatch entries, `guild` table + `char.guild_id` (`000010_guild`), memory+GORM repos (guild dies with last member out), invite acks 0/1/2/3 to inviter, LoadEndAck belong/info/roster tail, master-only invite/expel, break=master+key+empty; wire-verified: ZC_UPDATE_GDID 0x02f7/47B (>=20220216, masterGID), ZC_GUILD_INFO 0x0b7b/118B |
 | 2026-09-21 | goAthena agent | `375aa87` | M11 mail (RODEX) end-to-end — 18 C→S + 9 S→C codecs (DB 121→148), `social/mail` module (domain/app/infra/di), gateway `mail.go` + 19 dispatch entries + per-char staging & op mutex, `mail`+`mail_attachments` tables (`000011_mail`), fee math (2% + 2500/item) with ledger reasons, saga compensation on failed send, claim-first collect; rAthena-anchored wire fixes: attachment sub 60B / add-item ack 64B (uint32 cards + 25B options), MAIL_TYPE bits 0x2/0x4/0x8, newest-first inbox; L3 caught GORM `mails` pluralization + reserved-word `Order("index")`; gateway e2e ×5 + GORM round-trip/cap on MariaDB+postgres |
+| 2026-09-21 | goAthena agent | `300fe5e` | deps refresh (parallel session): otel 1.46, valkey-go 1.0.78, gorm postgres 1.6.3, x/crypto 0.57.0, grpc 1.84.0 + stdlib-modernized call sites (maps/slices) — supersedes the two open dependabot PRs |
+| 2026-09-21 | goAthena agent | `37ccb62` `75648e7` | release-scan fixes — v0.1.0-beta.4's trivy gate correctly failed on 3 HIGH CVEs; x/crypto/grpc bumps cleared two, grpc needed the CVE-2026-84445 fix pseudo-version (v1.85.0-dev.0.20260825072537 — trivy's DB tracks branch lineage: 1.84.0 predates the backport); testdb literal restored to the nested ContainerRequest form (flat form is a Go 1.27 promoted-field literal that older typecheckers reject) |
+| 2026-09-21 | goAthena agent | `5503b26` | gosec + govulncheck gates: `task scan-vuln`/`scan-sec` run in the pre-push hook and a parallel CI security job (pinned gosec v2.29.0 / govulncheck v1.7.0, shared Taskfile targets); gosec excludes only golangci-adjudicated classes, no severity floor (probe-verified a floor drops real LOW classes; G402/G306 probe fails the gate); timeout-minutes on every CI/CD job |
+| 2026-09-21 | goAthena agent | `6a93c9c` `ff21f34` | CD hardening — publish only for tags reachable from main (ancestry guard job; live-verified negative: a develop tag fails in 8s with publish+scan skipped); release cadence documented in §0 |
+| 2026-09-21 | goAthena agent | `8af706e` | CD release job — a green scan now cuts the GitHub Release from the annotated tag's message (prerelease for beta/rc/alpha/dev, full for stable, re-run safe); Releases page retro-filled beta.4–7; live-verified end-to-end with v0.1.0-beta.8 (guard ✓ publish ✓ scan ✓ release ✓ prerelease flag ✓) after merging develop→main (`16791bd`, `577c968`) |
+| 2026-09-21 | goAthena agent | this commit | M14 F-07 closed + M13 first slice — variable-length frames capped per the packet DB (`MaxLength`/`InboundCap()`, default 8KB): a declared length above the cap closes the connection instead of reserving buffer (`TestMap_OversizeVariableFrameCloses`, live gnet: oversize chat header closes, in-cap whisper answers); Agones SDK sidecar lifecycle wired (`internal/infrastructure/agones`: Ready/health-stream/Shutdown on `AGONES_SDK_GRPC_PORT` auto-detect, Noop otherwise) and driven from `App.Run` (ready after listeners, shutdown before drain); agones unit tests (env detect, ping loop cadence+teardown, Noop) — M13 🟡 partial, M14 F-07 ✅ |
+| 2026-09-21 | goAthena agent | `0155ada` | M13 economy extraction over NATS — `economy.Service` interface seam (7 zeny verbs; shop/mail/trade resolve the interface), `nats.economy: local\|remote` switch + `nats://\|tls://` scheme validation + optional NATS_USER/PASSWORD, request/reply Proxy+Server (`goathena.economy.v0.zeny.{get,credit,deduct}`, error codes↔sentinels incl. zeny overflow, sanitized replies, queue group, flush-before-return, bounded-drain `natsinfra.Close`), `goathena serve-economy` headless DB+NATS host; adversarial review 11 findings → 6 fixed (overflow sentinel, doubled error text, async-drain shutdown, malformed-URL fatal config, driver-error leak, bus creds) + security-audit F-09 partial; unit round-trips over in-process nats-server + L3 MariaDB/postgres (real char/zeny_ledger rows move through proxy→broker→host→DB, overdraw refuses without moving) — M13 🟡 (sharding keys open) |
+| 2026-09-21 | goAthena agent | `28af5c3` | M14 login-load baseline — `cmd/loadgen` was never wire-correct at 20250604 and the first live run caught it: double cmd header (57B on a 55B frame → empty username + 0x0000 garbage), stale refuse opcode (0x006a vs the server's 0x083e — refused logins counted as throttle), partial-frame reads misaligning reply N+1, read-timeout (silent limiter drop) now classified throttle via errors.As; `task loadtest` target (compose up limiter-off → readyz wait → idempotent DELETE+INSERT seed → loadgen → down); compose goathena service repaired (DB_NAME/DB_USER/DB_PASSWORD unset → config fatal at boot); `.gitignore` loadgen pattern root-anchored (shadowed cmd/loadgen); baseline: ≈1000 logins/s zero-error (100 conns × 10/s × 30s → 29900/29900), limiter 5-burst/1s shape verified (18 accept / 10 throttle / 0 error) — docs/loadtest-baseline.md |
+| 2026-09-27 | goAthena agent | `67b4979` | M12 cross-zone redirect v0 — `transit/domain.MapDirectory` port (`Resolve` map → `Zone{IPv4, Port}`, wire-order address) + single-zone `LocalDirectory` provider in composition; `ZC_NPCACK_SERVERMOVE` codec (0x0ac7, 156B: mapName[24] BE-ip swapped-port empty domain[128], `PACKET_ZC_NPCACK_SERVERMOVE` ≥20170315 — clif_changemapserver) + packet-DB entry (count 148→149); gateway `relocateThroughPortal` + content `ScriptHost.Warp` branch on the resolved zone: remote persists destination, `WorldService.LeaveRemoteZone` (LeaveMap refactor over shared `leaveMap`, offline row stamped at the destination cell so the remote zone's `EnterMap` loads it), client redirected to zone ip:port; Handoff token port skipped — the shared Valkey session check in CZ_ENTER is the cross-zone client credential; L3 `TestMap_CrossZonePortalRedirects` (live gnet 156B frame) + local-warp regression green; Agones fleet directory = M13 || 2026-09-27 | goAthena agent | this commit | M13 fleet `MapDirectory` — `zone.directory.mode` `local\|agones\|static` (ZoneDirectoryConfig + fatal `Validate` on static-without-routes + fatal boot error in `app.New` when a non-local directory fails to build): `transit/agones` resolves Ready Agones GameServers via the K8s API (in-cluster creds, kubeconfig fallback = Docker Swarm path; per-List resolve — cold path), map declaration by CSV annotation `goathena.dev/maps` or `goathena.dev/map-<name>` labels, `game` status port → `Zone` (BE IPv4, plain port — Encode does the BE write; the "ntows(htons) swap" cancels on the value, pinned by e2e bytes), `self_name` marks this pod's own GameServer local, selector narrows candidates; `transit/static` parses the `routes` map→host:port table (IPv4 literal only, malformed = config error); provider switch in `transit.RegisterMapDirectory`; L2 race units green (agones/static/config fake-clientset tests), L1 + scans green, crosszone e2e regression green; fleet YAML manifests = remaining M13 |
+| 2026-09-28 | goAthena agent | this commit | M10 Rung C — misc script verbs. `pkg/ro/script/constants.go` compile-time constant table (`BC_*`/`ITEMINFO_*`/`IT_*`/`FW_*`, case-insensitive like rAthena's `strcasecmp` string table) folded in `compileExpr`, without which `bc_map`/`ITEMINFO_TYPE` compiled to a variable read answering 0; `heal(hp,sp)` (absolute, int64→int32 saturating like `cap_value`, over `world.AddVitals`), `announce(text,flag)`/`mapannounce(map,text,flag)` (audience resolved in `world` over the `BC_*` target bits with `BC_NPC` source selection → `world.OnAnnounce` → gateway encodes one `ZC_BROADCAST` per recipient connection; content never touches connections), `getiteminfo(item,code)` (numeric id or AegisName; new `itemdb.ItemEntry.Info` + `Info*` codes answer the YAML scalars and rAthena's load-time defaults — Sell=Buy/2, EquipLevelMax=MAX_LEVEL, Gender=SEX_BOTH, W_/AMMO_/CARD_ subtype resolution; -1 for unknown item/column, AegisName the one string column); `ZC_BROADCAST` (0x009a) codec reproduces clif_broadcast's prefix-marker colour (`blue`/`ssss`) and empty-message drop, packet DB 149→150; `ScriptWorld` port gains `Announce`/`AnnounceMap`/`HealAbs`; evidence — kernel builtin tests, itemdb column tests, content adapter tests, world audience tests (`announce_test.go`), L3 over real TCP (`TestMap_AnnounceReachesClient`/`_BluePrefixReachesClient`/`_AnnounceMapReachesMapOnly`); `bonus`/`sc_start` deferred (need stat-bonus aggregate + status-effect registry) |
+| 2026-09-28 | goAthena agent | this commit | M13 Agones fleet manifests — `deploy/agones/fleet.yaml` (two Fleets: prontera + geffen map sets) and `deploy/agones/gameserver.yaml` (single-shard case), plus `config.yaml` directory-mode notes. `Static` port policy is deliberate: the process binds `GATEWAY_MAP_PORT` at boot and nothing tells it a dynamic host port, so `Dynamic` would redirect clients to a port nobody listens on; the cost (one shard per node) and the fix (SDK `GetGameServer` at boot → advertise `Status.Address`) are recorded as M13 Open. `self_name` is read from the pod label `agones.dev/gameserver` via the downward API. `transit/agones/fleet_manifest_test.go` decodes each document with the Agones API's own YAML decoder and runs `ApplyDefaults`+`Validate` against a local no-op `APIHooks` (avoids pulling `agones/pkg/testing`'s `apiextensions-apiserver` dep), asserting the `game` port name and `goathena.dev/maps` annotation the directory reads — it caught both fleets missing `spec.strategy.type`, which the apiserver requires. `k8s.io/api` promoted indirect→direct (the test uses `corev1.Pod`). L1 (fmt/lint/vet) + L2 green. |
+| 2026-09-28 | goAthena agent | this commit | M14 OTel span audit — the SDK was wired but emitted nothing (zero `StartSpan` calls repo-wide). Added `internal/shared/traces`: `Frame` (per decoded client frame), `InjectPublish`/`ExtractSubscribe` (producer/consumer around a NATS request, traceparent in message headers), a `Span` type whose `Set`/`End` tolerate nil, and a case-insensitive `carrier`. Instrumented: one span per decoded frame on both the map and char listeners (named from the packet DB: `frame CZ_ENTER`, attrs `packet.opcode`/`packet.name`), one per login attempt, and the `economy/remote` request pair — **the handler signature gained a leading `fctx context.Context` and the 69 in-handler `context.Background()` calls now use it**, so frame → service → bus is one trace (dispatch-table `size`/`fn` shape unchanged otherwise; `revive` unused-parameter forced 25 handlers to `_`). Registered `propagation.TraceContext`+`Baggage` in `initOTel` — without it injection is a silent no-op. Added `internal/shared/metrics.UnknownOpcodes{listener,known}` at both skip sites (F-08 item 3). **The propagation test caught a real bug**: NATS lowercases header keys on the wire while OTel's shipped `propagation.HeaderCarrier` is `http.Header`-backed and canonicalizes on Get, so every cross-process trace silently split into two unrelated roots — the case-insensitive carrier fixes it, and reverting to the stdlib carrier reproduces the failure. Deliberately NOT instrumented: the 50 Hz tick, the AOI broadcast fan-out, entity mutations (the frame span already brackets them). Tests: `internal/shared/traces` (5, incl. a lowercased-header round-trip), `economy/remote` `TestProxyCallEmitsLinkedTrace` (asserts producer/consumer share a trace ID and the consumer's parent is the producer). Evidence: L1 green (0 lint issues), L2 `-race` green, coverage 87.7%, L3 green (gateway 64.7s + economy 6.2s integration over real TCP/NATS). |
+| 2026-11-08 | goAthena agent | `6e7a981` | M15 the source pack is the protocol authority — the Thai fork becomes the primary protocol target and upstream the compatibility set, and the wire protocol stops being hand-copied constants: every opcode and length resolves from the installed source pack at boot, out of the source's own runtime packet table. The source registers a packet with `packetdb_addpacket`, which OVERWRITES the opcode's whole entry (clif.cpp:25899-25906), and the registration headers list the same opcodes under different handlers across client versions — so the runtime table is not the first block of `clif_packetdb.hpp`, one handler owns several opcodes, and "the opcode for this handler" is not a single fact. The resolution walks the source's own registration order, keeps the last registration whose shape the server parses, and the server then accepts every opcode the source binds to that handler. Verified against a C++ probe that reproduces the source's runtime table exactly (it includes the registration headers the way clif.cpp:25929-25935 does): every opcode agrees. The port found ≈15 wire values the branch had hand-derived wrongly — CZ_REQ_LEAVE_GUILD 52→54, ZC_FRIENDS_LIST_sub 8→32, ZC_ITEM_FALL_ENTRY 24→22, ZC_SKILLINFO_LIST 37→15, ZC_USE_SKILL_TOPOS 11→10, ZC_GUILD_INFO name 17→46, CZ_ACTION_REQUEST 0x0089→0x0437, the kafra moves 0x00f3→0x0364 and 0x00f5→0x0365, CZ_CLOSE_STORE 0x07e5→0x0193 — and two of those were not merely off: 0x00f3 is CZ_GLOBAL_MESSAGE in the source's runtime table, and 0x008b (which the branch registered as ZC_ACTION_RESPONSE) the source registers as a two-byte packet with no handler, so a client built for the source could read neither frame. The warehouse now speaks the source's kafra protocol instead of the invented 0x07e3-0x07eb range, and the open is the source's own `openstorage` script command (there is no client request that opens a warehouse) wired through a content-module port. Source pack and client family are operator configuration (`client_source`/`client_variant`); the reference data and NPC corpus follow the selected pack; the fork's `vip_storage` table is a migration for both drivers. Deps bumped for advisories published since the last release: echo v5.4.4, compress v1.20.2, x/net v0.60.0. Gates: fmt-check, lint 0 issues, vet, scan-sec, scan-vuln 0 reachable, unit + integration suites green, kernel coverage 78.2%; live: login succeeds with zero refusals and zero errors on all four (pack × family) combinations. ADR 0004 records why the source's runtime table is the authority |

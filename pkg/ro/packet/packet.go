@@ -51,8 +51,28 @@ type Definition struct {
 	// Length is the fixed on-wire byte length, or VariableLength (-1)
 	// when the packet length is read from the uint16 at offset 2.
 	Length int
+	// MaxLength bounds a variable-length inbound frame's declared on-wire
+	// length (0 → MaxVariableLength). A frame declaring more is a protocol
+	// violation: the peer is reserving buffer it should never need, and at
+	// wire rate that is a cheap memory-pressure attack. The largest
+	// legitimate C→S variable frame is well under 1KB (mail send: 24B names
+	// ×2 + 500B body + fixed header); 8KB leaves headroom.
+	MaxLength int
 	// Direction is C→S (client → server) or S→C (server → client).
 	Direction Direction
+}
+
+// MaxVariableLength is the default cap on a variable-length inbound frame's
+// declared length when the definition carries no tighter MaxLength.
+const MaxVariableLength = 8192
+
+// InboundCap returns the maximum declared length this definition accepts on
+// an inbound variable-length frame.
+func (d Definition) InboundCap() int {
+	if d.MaxLength > 0 {
+		return d.MaxLength
+	}
+	return MaxVariableLength
 }
 
 // DB is a registry of packet definitions keyed by command ID.

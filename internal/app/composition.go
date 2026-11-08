@@ -137,7 +137,12 @@ func compose(ctx context.Context, cfg *config.Config, log *slog.Logger) (do.Inje
 	account.Register(inj, cfg.Identity.UseMD5Passwords)
 	character.Register(inj, cfg.Identity.MaxChars)
 	inventory.Register(inj)
-	economy.Register(inj)
+	// Economy may be the in-process service (default) or a NATS proxy against
+	// a serve-economy host (M13). The bus connection closes after the
+	// listeners: a listener conn can still be mid-request during shutdown.
+	if closeEconomy := economy.Register(inj, cfg.NATS, log); closeEconomy != nil {
+		closers = append(closers, closeEconomy)
+	}
 	shopmod.Register(inj)
 	storagemod.Register(inj)
 	social.Register(inj)

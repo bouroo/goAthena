@@ -143,6 +143,39 @@ tasks:
     cmds:
       - go mod tidy
 
+  loadtest:
+    desc: Boot the compose stack, seed the loadgen account, run the login-load baseline (LOADGEN_CONNS/LOADGEN_RATE/LOADGEN_DURATION tune it; LOADTEST_KEEP=1 leaves the stack up)
+    cmds:
+      - |
+        set -e
+        echo "▶ compose up (login limiter disabled for the baseline)"
+        GATEWAY_LOGIN_RATE_BURST=0 GATEWAY_LOGIN_RATE_PER_SEC=0 docker compose up -d --build goathena
+        echo "▶ waiting for /readyz"
+        ready=0
+        for i in $(seq 1 60); do
+          if curl -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then ready=1; break; fi
+          sleep 2
+        done
+        if [ "$ready" != 1 ]; then
+          echo "readyz never passed; last logs:"
+          docker compose logs goathena | tail -20
+          exit 1
+        fi
+        echo "▶ seeding loadgen account"
+        # DELETE+INSERT (not INSERT IGNORE): rAthena's login.userid carries a
+        # plain KEY, not UNIQUE, so IGNORE would happily accumulate dupes.
+        docker compose exec -T mariadb mariadb -uroot -pragnarok ragnarok \
+          -e "DELETE FROM login WHERE userid='loadgen'; INSERT INTO login (userid, user_pass, sex) VALUES ('loadgen', MD5('loadgen'), 'M');"
+        echo "▶ loadgen: ${LOADGEN_CONNS:-10} conns × ${LOADGEN_RATE:-2}/s for ${LOADGEN_DURATION:-30s}"
+        go run ./cmd/loadgen \
+          -conns "${LOADGEN_CONNS:-10}" -rate "${LOADGEN_RATE:-2}" -duration "${LOADGEN_DURATION:-30s}"
+        if [ "${LOADTEST_KEEP:-0}" != 1 ]; then
+          echo "▶ compose down"
+          docker compose down
+        else
+          echo "▶ stack left up (LOADTEST_KEEP=1)"
+        fi
+
   verify:
     desc: Leave the tree passing every gate (tidy + fmt-check + lint + vet + scans + unit + coverage)
     deps: [tidy]

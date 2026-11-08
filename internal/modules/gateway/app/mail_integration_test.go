@@ -107,18 +107,18 @@ func TestMailSendDeliversEndToEnd(t *testing.T) {
 
 	// Open the compose window: 27B ack.
 	sendCZOpenWriteMail(t, conn, "Partner")
-	expectFrame(t, conn, ropacket.HeaderZCACKOPENWRITE, 27)
+	expectFrame(t, conn, ropacket.HeaderZCACKOPENWRITE(), 27)
 
 	// Stage zeny (index 0) + an item (index 2, server row 0): 64B acks.
 	sendCZMailAddItem(t, conn, 0, 1000)
-	expectFrame(t, conn, ropacket.HeaderZCACKADDITEMRODE, 64)
+	expectFrame(t, conn, ropacket.HeaderZCACKADDITEMRODE(), 64)
 	sendCZMailAddItem(t, conn, 2, 1)
-	expectFrame(t, conn, ropacket.HeaderZCACKADDITEMRODE, 64)
+	expectFrame(t, conn, ropacket.HeaderZCACKADDITEMRODE(), 64)
 
 	// Send to "Partner": 1000 zeny + 20 fee + 2500 attachment = 3520.
 	// The 3B ack's result byte must be 0.
 	sendCZWriteMail(t, conn, "Partner", "hi", "body", 1000)
-	body := expectFrame(t, conn, ropacket.HeaderZCACKMAILWRITE, 3)
+	body := expectFrame(t, conn, ropacket.HeaderZCACKMAILWRITE(), 3)
 	if body[0] != 0 {
 		t.Fatalf("send ack result = %d, want 0", body[0])
 	}
@@ -149,7 +149,7 @@ func TestMailReadDelivers(t *testing.T) {
 	// Read it.
 	sendCZReadMail(t, conn, uint64(mail.ID))
 	cmd, _ := readMailFrame(t, conn)
-	if cmd != ropacket.HeaderZCACKREADRODEX {
+	if cmd != ropacket.HeaderZCACKREADRODEX() {
 		t.Fatalf("read cmd = 0x%04x, want ZC_ACK_READ_RODEX", cmd)
 	}
 	// The row is now READ.
@@ -179,7 +179,7 @@ func TestMailCollectZenyMoves(t *testing.T) {
 	// Collect the zeny.
 	sendCZCollectZeny(t, conn, uint64(mail.ID))
 	cmd, _ := readMailFrame(t, conn)
-	if cmd != ropacket.HeaderZCACKZENYFROMMAI {
+	if cmd != ropacket.HeaderZCACKZENYFROMMAI() {
 		t.Fatalf("collect cmd = 0x%04x, want ZC_ACK_ZENY_FROM_MAIL", cmd)
 	}
 	// The mail's zeny is zeroed.
@@ -207,7 +207,7 @@ func TestMailCollectItemsMoves(t *testing.T) {
 
 	sendCZCollectItems(t, conn, uint64(mail.ID))
 	cmd, _ := readMailFrame(t, conn)
-	if cmd != ropacket.HeaderZCACKITEMFROMMAI {
+	if cmd != ropacket.HeaderZCACKITEMFROMMAI() {
 		t.Fatalf("collect cmd = 0x%04x, want ZC_ACK_ITEM_FROM_MAIL", cmd)
 	}
 	// The attachment rows are gone and the item landed in the bag.
@@ -248,7 +248,7 @@ func TestMailListAndDelete(t *testing.T) {
 	// Open the inbox: the list carries the seeded row.
 	sendCZOpenMailbox(t, conn)
 	cmd, body := readMailFrame(t, conn)
-	if cmd != ropacket.HeaderZCACKMAILLIST {
+	if cmd != ropacket.HeaderZCACKMAILLIST() {
 		t.Fatalf("list cmd = 0x%04x, want ZC_ACK_MAIL_LIST", cmd)
 	}
 	if len(body) < 41+4 || !bytes.Contains(body, []byte("delete me")) {
@@ -258,7 +258,7 @@ func TestMailListAndDelete(t *testing.T) {
 	// Delete it (empty mail — no attachments).
 	sendCZDeleteMail(t, conn, uint64(mail.ID))
 	cmd, _ = readMailFrame(t, conn)
-	if cmd != ropacket.HeaderZCACKDELETEMAIL {
+	if cmd != ropacket.HeaderZCACKDELETEMAIL() {
 		t.Fatalf("delete cmd = 0x%04x, want ZC_ACK_DELETE_MAIL", cmd)
 	}
 	if _, err := env.mailRepo.Get(context.Background(), 150001, mail.ID); err == nil {
@@ -286,7 +286,7 @@ func expectFrame(t *testing.T, c net.Conn, cmd uint16, size int) []byte {
 func sendCZOpenWriteMail(t *testing.T, c net.Conn, name string) {
 	t.Helper()
 	var buf [26]byte
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQOPENWRITEMAI)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQOPENWRITEMAI())
 	copy(buf[2:], name)
 	if _, err := c.Write(buf[:]); err != nil {
 		t.Fatalf("write CZ_REQ_OPEN_WRITE_MAIL: %v", err)
@@ -297,7 +297,7 @@ func sendCZOpenWriteMail(t *testing.T, c net.Conn, name string) {
 func sendCZMailAddItem(t *testing.T, c net.Conn, index, count uint16) {
 	t.Helper()
 	var buf [6]byte
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQADDITEMMAIL)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQADDITEMMAIL())
 	binary.LittleEndian.PutUint16(buf[2:], index)
 	binary.LittleEndian.PutUint16(buf[4:], count)
 	if _, err := c.Write(buf[:]); err != nil {
@@ -333,7 +333,7 @@ func sendCZWriteMail(t *testing.T, c net.Conn, receiver, title, body string, zen
 func sendCZReadMail(t *testing.T, c net.Conn, mailID uint64) {
 	t.Helper()
 	var buf [11]byte
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQREADMAIL)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQREADMAIL())
 	buf[2] = 0
 	binary.LittleEndian.PutUint64(buf[3:], mailID)
 	if _, err := c.Write(buf[:]); err != nil {
@@ -346,7 +346,7 @@ func sendCZReadMail(t *testing.T, c net.Conn, mailID uint64) {
 func sendCZCollectZeny(t *testing.T, c net.Conn, mailID uint64) {
 	t.Helper()
 	var buf [11]byte
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQZENYFROMMAIL)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQZENYFROMMAIL())
 	binary.LittleEndian.PutUint64(buf[2:], mailID)
 	buf[10] = 0
 	if _, err := c.Write(buf[:]); err != nil {
@@ -358,7 +358,7 @@ func sendCZCollectZeny(t *testing.T, c net.Conn, mailID uint64) {
 func sendCZCollectItems(t *testing.T, c net.Conn, mailID uint64) {
 	t.Helper()
 	var buf [11]byte
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQITEMFROMMAIL)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQITEMFROMMAIL())
 	binary.LittleEndian.PutUint64(buf[2:], mailID)
 	buf[10] = 0
 	if _, err := c.Write(buf[:]); err != nil {
@@ -370,7 +370,7 @@ func sendCZCollectItems(t *testing.T, c net.Conn, mailID uint64) {
 func sendCZOpenMailbox(t *testing.T, c net.Conn) {
 	t.Helper()
 	var buf [11]byte
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZOPENMAILBOX)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZOPENMAILBOX())
 	if _, err := c.Write(buf[:]); err != nil {
 		t.Fatalf("write CZ_OPEN_MAILBOX: %v", err)
 	}
@@ -380,7 +380,7 @@ func sendCZOpenMailbox(t *testing.T, c net.Conn) {
 func sendCZDeleteMail(t *testing.T, c net.Conn, mailID uint64) {
 	t.Helper()
 	var buf [11]byte
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQDELETEMAIL)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQDELETEMAIL())
 	buf[2] = 0
 	binary.LittleEndian.PutUint64(buf[3:], mailID)
 	if _, err := c.Write(buf[:]); err != nil {
@@ -400,7 +400,7 @@ func readMailFrame(t *testing.T, r io.Reader) (uint16, []byte) {
 	}
 	c := binary.LittleEndian.Uint16(cmd[:])
 	switch c {
-	case ropacket.HeaderZCACKMAILLIST:
+	case ropacket.HeaderZCACKMAILLIST():
 		var lenBuf [2]byte
 		if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
 			t.Fatalf("read ZC_ACK_MAIL_LIST len: %v", err)
@@ -410,7 +410,7 @@ func readMailFrame(t *testing.T, r io.Reader) (uint16, []byte) {
 			t.Fatalf("read ZC_ACK_MAIL_LIST body: %v", err)
 		}
 		return c, body
-	case ropacket.HeaderZCACKREADRODEX:
+	case ropacket.HeaderZCACKREADRODEX():
 		// Fixed 24B header (the body length is at offset 13, the item count
 		// at offset 23) — read the header, then the body, then the items.
 		header := make([]byte, 22)
@@ -428,13 +428,13 @@ func readMailFrame(t *testing.T, r io.Reader) (uint16, []byte) {
 			t.Fatalf("read ZC_ACK_READ_RODEX items: %v", err)
 		}
 		return c, append(header, append(body, items...)...)
-	case ropacket.HeaderZCACKZENYFROMMAI, ropacket.HeaderZCACKITEMFROMMAI:
+	case ropacket.HeaderZCACKZENYFROMMAI(), ropacket.HeaderZCACKITEMFROMMAI():
 		body := make([]byte, 10)
 		if _, err := io.ReadFull(r, body); err != nil {
 			t.Fatalf("read mail collect ack body: %v", err)
 		}
 		return c, body
-	case ropacket.HeaderZCACKDELETEMAIL:
+	case ropacket.HeaderZCACKDELETEMAIL():
 		body := make([]byte, 9)
 		if _, err := io.ReadFull(r, body); err != nil {
 			t.Fatalf("read ZC_ACK_DELETE_MAIL body: %v", err)

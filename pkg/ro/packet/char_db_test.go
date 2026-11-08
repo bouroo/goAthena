@@ -17,15 +17,15 @@ func TestNewCharServerDB_HasAllEntries(t *testing.T) {
 	}
 	// 3 C→S fixed + 5 S→C (4 fixed, 1 variable) = 8 total entries.
 	checks := []expect{
-		{HeaderCHENTER, "CH_ENTER", sizeCHEnter, DirectionClientToServer},
-		{HeaderCHSELECTCHAR, "CH_SELECT_CHAR", sizeCHSelectChar, DirectionClientToServer},
-		{HeaderCHMAKECHAR, "CH_MAKE_CHAR", sizeCHMakeChar, DirectionClientToServer},
+		{HeaderCHENTER(), "CH_ENTER", sizeCHEnter(), DirectionClientToServer},
+		{HeaderCHSELECTCHAR(), "CH_SELECT_CHAR", sizeCHSelectChar(), DirectionClientToServer},
+		{HeaderCHMAKECHAR(), "CH_MAKE_CHAR", sizeCHMakeChar(), DirectionClientToServer},
 
-		{HeaderHCREFUSEENTER, "HC_REFUSE_ENTER", sizeHCRefuseEnter, DirectionServerToClient},
-		{HeaderHCACCEPTENTER, "HC_ACCEPT_ENTER", VariableLength, DirectionServerToClient},
-		{HeaderHCNOTIFYZONESVR, "HC_NOTIFY_ZONESVR", sizeHCNotifyZone, DirectionServerToClient},
-		{HeaderHCACCEPTMAKECHAR, "HC_ACCEPT_MAKECHAR", sizeHCAcceptMakeChar, DirectionServerToClient},
-		{HeaderHCREFUSEMAKECHAR, "HC_REFUSE_MAKECHAR", sizeHCRefuseMakeChar, DirectionServerToClient},
+		{HeaderHCREFUSEENTER(), "HC_REFUSE_ENTER", sizeHCRefuseEnter(), DirectionServerToClient},
+		{HeaderHCACCEPTENTER(), "HC_ACCEPT_ENTER", VariableLength, DirectionServerToClient},
+		{HeaderHCNOTIFYZONESVR(), "HC_NOTIFY_ZONESVR", sizeHCNotifyZone(), DirectionServerToClient},
+		{HeaderHCACCEPTMAKECHAR(), "HC_ACCEPT_MAKECHAR", sizeHCAcceptMakeChar(), DirectionServerToClient},
+		{HeaderHCREFUSEMAKECHAR(), "HC_REFUSE_MAKECHAR", sizeHCRefuseMakeChar(), DirectionServerToClient},
 	}
 
 	for _, c := range checks {
@@ -77,12 +77,12 @@ func TestNewCharServerDB_VariableLengthConvention(t *testing.T) {
 	t.Parallel()
 
 	db := NewCharServerDB()
-	got, ok := db.Length(HeaderHCACCEPTENTER)
+	got, ok := db.Length(HeaderHCACCEPTENTER())
 	if !ok {
-		t.Fatalf("Length(HeaderHCACCEPTENTER) ok = false, want true")
+		t.Fatalf("Length(HeaderHCACCEPTENTER()) ok = false, want true")
 	}
 	if got != VariableLength {
-		t.Errorf("Length(HeaderHCACCEPTENTER) = %d, want VariableLength (%d)", got, VariableLength)
+		t.Errorf("Length(HeaderHCACCEPTENTER()) = %d, want VariableLength (%d)", got, VariableLength)
 	}
 }
 
@@ -110,21 +110,21 @@ func TestDB_Merge(t *testing.T) {
 	combined.Merge(charDB)
 
 	// Login-side entries still findable.
-	if def, ok := combined.Lookup(HeaderCALOGIN); !ok || def.Name != "CA_LOGIN" {
+	if def, ok := combined.Lookup(HeaderCALOGIN()); !ok || def.Name != "CA_LOGIN" {
 		t.Errorf("merged DB missing CA_LOGIN (ok=%v, def=%+v)", ok, def)
 	}
-	if def, ok := combined.Lookup(HeaderACREFUSELOGIN); !ok || def.Name != "AC_REFUSE_LOGIN" {
+	if def, ok := combined.Lookup(HeaderACREFUSELOGIN()); !ok || def.Name != "AC_REFUSE_LOGIN" {
 		t.Errorf("merged DB missing AC_REFUSE_LOGIN (ok=%v, def=%+v)", ok, def)
 	}
 
 	// Char-side entries findable.
-	if def, ok := combined.Lookup(HeaderCHENTER); !ok || def.Name != "CH_ENTER" {
+	if def, ok := combined.Lookup(HeaderCHENTER()); !ok || def.Name != "CH_ENTER" {
 		t.Errorf("merged DB missing CH_ENTER (ok=%v, def=%+v)", ok, def)
 	}
-	if def, ok := combined.Lookup(HeaderHCNOTIFYZONESVR); !ok || def.Name != "HC_NOTIFY_ZONESVR" {
+	if def, ok := combined.Lookup(HeaderHCNOTIFYZONESVR()); !ok || def.Name != "HC_NOTIFY_ZONESVR" {
 		t.Errorf("merged DB missing HC_NOTIFY_ZONESVR (ok=%v, def=%+v)", ok, def)
 	}
-	if def, ok := combined.Lookup(HeaderHCACCEPTENTER); !ok || def.Length != VariableLength {
+	if def, ok := combined.Lookup(HeaderHCACCEPTENTER()); !ok || def.Length != VariableLength {
 		t.Errorf("merged DB HC_ACCEPT_ENTER lookup wrong (ok=%v, def=%+v)", ok, def)
 	}
 
@@ -138,22 +138,22 @@ func TestDB_Merge_OverwritesExistingEntry(t *testing.T) {
 	t.Parallel()
 
 	dst := NewDB()
-	dst.Register(Definition{ID: HeaderCHENTER, Name: "STALE", Length: 999})
+	dst.Register(Definition{ID: HeaderCHENTER(), Name: "STALE", Length: 999})
 
 	src := NewDB()
-	src.Register(Definition{ID: HeaderCHENTER, Name: "CH_ENTER", Length: sizeCHEnter})
+	src.Register(Definition{ID: HeaderCHENTER(), Name: "CH_ENTER", Length: sizeCHEnter()})
 
 	dst.Merge(src)
 
-	got, ok := dst.Lookup(HeaderCHENTER)
+	got, ok := dst.Lookup(HeaderCHENTER())
 	if !ok {
 		t.Fatalf("Lookup after Merge ok = false, want true")
 	}
 	if got.Name != "CH_ENTER" {
 		t.Errorf("Name = %q, want %q (Merge should overwrite like Register)", got.Name, "CH_ENTER")
 	}
-	if got.Length != sizeCHEnter {
-		t.Errorf("Length = %d, want %d", got.Length, sizeCHEnter)
+	if got.Length != sizeCHEnter() {
+		t.Errorf("Length = %d, want %d", got.Length, sizeCHEnter())
 	}
 }
 
@@ -183,7 +183,7 @@ func TestDB_Merge_ZeroValueReceiver(t *testing.T) {
 	// A zero-value &DB{} has a nil entries map; Merge must lazily
 	// initialize it instead of panicking on maps.Copy.
 	src := NewDB()
-	src.Register(Definition{ID: HeaderCHENTER, Name: "CH_ENTER", Length: sizeCHEnter})
+	src.Register(Definition{ID: HeaderCHENTER(), Name: "CH_ENTER", Length: sizeCHEnter()})
 
 	dst := &DB{}
 	dst.Merge(src)
@@ -191,12 +191,12 @@ func TestDB_Merge_ZeroValueReceiver(t *testing.T) {
 	if got := dst.Size(); got != 1 {
 		t.Errorf("dst.Size() = %d, want 1", got)
 	}
-	def, ok := dst.Lookup(HeaderCHENTER)
+	def, ok := dst.Lookup(HeaderCHENTER())
 	if !ok {
 		t.Fatalf("Lookup CH_ENTER after Merge ok = false, want true")
 	}
-	if def.Name != "CH_ENTER" || def.Length != sizeCHEnter {
-		t.Errorf("merged def = %+v, want CH_ENTER/%d", def, sizeCHEnter)
+	if def.Name != "CH_ENTER" || def.Length != sizeCHEnter() {
+		t.Errorf("merged def = %+v, want CH_ENTER/%d", def, sizeCHEnter())
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
 	"github.com/bouroo/goAthena/internal/modules/content/infra"
 	worldapp "github.com/bouroo/goAthena/internal/modules/world/app"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	"github.com/bouroo/goAthena/pkg/ro/mobdb"
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
@@ -60,7 +61,14 @@ func Register(inj do.Injector, cfg *config.Config) {
 		if q, err := do.Invoke[domain.ScriptQuest](i); err == nil {
 			quest = q
 		}
-		return app.NewEngine(scripts, npcs, world, inventory, quest, log), nil
+		// The item_db registry backs the getiteminfo builtin. Optional: a
+		// resolve failure (no item_db loaded) leaves it nil and every lookup
+		// answers "unknown item" rather than failing the boot.
+		var items *itemdb.Registry
+		if reg, err := do.Invoke[*itemdb.Registry](i); err == nil {
+			items = reg
+		}
+		return app.NewEngine(scripts, npcs, world, inventory, quest, items, log), nil
 	})
 	do.Provide(inj, func(i do.Injector) (domain.NPCStore, error) {
 		return do.MustInvoke[*infra.MemoryNPCStore](i), nil

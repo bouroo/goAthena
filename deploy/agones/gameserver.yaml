@@ -1,0 +1,116 @@
+# goAthena single-zone GameServer (Agones) — the one-shard case.
+#
+# Use this instead of a Fleet when a map set runs under a single allocation
+# (a hand-allocated boss zone, a staging shard, a smoke test). It is the same
+# pod contract as deploy/agones/fleet.yaml; see that file's header for the
+# invariants the transit MapDirectory relies on (the `game` port name and the
+# `goathena.dev/maps` annotation).
+#
+# A GameServer left in Ready is allocatable; Agones sends players here only
+# after an allocation call, so the surrounding controller allocates it when the
+# shard should accept crossings.
+apiVersion: agones.dev/v1
+kind: GameServer
+metadata:
+  name: goathena-boss-zone
+  labels:
+    app.kubernetes.io/name: goathena
+    app.kubernetes.io/component: zone
+spec:
+  ports:
+    - name: game
+      portPolicy: Static
+      containerPort: 5121
+      protocol: TCP
+  health:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 3
+  sdkServer:
+    logLevel: Info
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: goathena
+        app.kubernetes.io/component: zone
+      annotations:
+        # A single-map shard: one boss map, no fild neighbors.
+        goathena.dev/maps: "abbey01"
+    spec:
+      containers:
+        - name: goathena
+          image: ghcr.io/bouroo/goathena:latest
+          args: ["serve", "-config", "/config.yaml"]
+          env:
+            - name: APP_ENVIRONMENT
+              value: production
+            - name: DB_DRIVER
+              value: postgres
+            - name: DB_HOST
+              value: goathena-postgres
+            - name: DB_NAME
+              value: ragnarok
+            - name: DB_USER
+              value: ragnarok
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: goathena-db
+                  key: password
+            - name: VALKEY_HOST
+              value: goathena-valkey
+            - name: NATS_URL
+              value: nats://goathena-nats:4222
+            - name: ZONE_DIRECTORY_MODE
+              value: agones
+            - name: ZONE_DIRECTORY_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: ZONE_DIRECTORY_SELECTOR
+              value: app.kubernetes.io/component=zone
+            - name: ZONE_DIRECTORY_SELF_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['agones.dev/gameserver']
+            - name: OTEL_EXPORTER
+              value: otlp
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://goathena-otel-collector:4317
+            - name: LOG_FORMAT
+              value: json
+          ports:
+            - name: game
+              containerPort: 5121
+              protocol: TCP
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: ["ALL"]

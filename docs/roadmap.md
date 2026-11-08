@@ -190,9 +190,10 @@ started.**
 | **M9** Commerce | Shop buy/sell (economy+inventory ports) | 🟡 partial — shop slice (157 LOC); trade/vending/storage open |
 | **M10** Content | script VM ↔ dialog bridge (mes/next/select/input/close) | 🟡 partial — dialog bridge landed (602 LOC); full script-VM coverage open |
 | **M11** Social | Chat/whisper routing scaffold (PlayerDirectory port) | 🟡 chat ✅; friend/party ✅; guild/mail remain |
-| **M12** Transit | cross-map warp (SetPosition + LeaveMap) | 🟡 partial — in-zone warp landed (61 LOC); cross-zone handshake + Agones allocation open |
-| **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 📋 planned (no `nats.Connect`, no Agones adapter yet) |
-| **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | 🟡 partial — /metrics + compose e2e login live; OTel tracing, security review, load test open |
+| **M12** Transit | cross-map warp (SetPosition + LeaveMap) | 🟡 partial — in-zone warp + cross-zone redirect v0 (`MapDirectory` port + `ZC_NPCACK_SERVERMOVE` framing, Agones fleet directory open) |
+| **M13** Scale-out prep | Module extraction over NATS; Agones fleet wiring; sharding keys | 🟡 partial — Agones sidecar lifecycle wired; economy extracted over NATS (`economy.Service` seam, request/reply proxy+server, `goathena serve-economy` host, env-driven local/remote switch); sharding keys + further module extractions open |
+| **M14** Hardening | Prometheus /metrics + Docker compose verified (36MB distroless, e2e login) | 🟡 partial — /metrics + compose e2e + security review (F-01..F-07 closed incl. variable-frame length cap) + gosec/govulncheck gates live + login-load baseline recorded (`task loadtest`, ≈1000 logins/s zero-error) + OTel span coverage at every process boundary (client frame, login attempt, NATS hop with traceparent propagation) + `goathena_gateway_unknown_opcodes_total` probe signal |
+| **M15** Source-pack protocol | The Thai fork as the primary protocol target; upstream as the compatibility set | ✅ — the source pack is the authority: every opcode and wire length resolves from the installed source pack at boot, from the source's own runtime packet table ([ADR 0004](adr/0004-source-pack-is-the-protocol-authority.md)). The port found ≈15 wire values the branch had hand-derived wrongly (frame lengths, field offsets, opcodes) and corrected them against the source; the warehouse now speaks the source's kafra protocol instead of an invented 0x07e3-0x07eb range. The source pack and client family are operator configuration (`client_source` / `client_variant`), the reference data and NPC corpus follow the selected pack, and the fork's `vip_storage` table is a migration. Both corpora compile (1209 fork scripts + 1138 upstream). Live-verified: login succeeds on all four (pack × family) combinations. |
 
 **Effort weighting** (from `rathena-subsystem-size-risk-profile`): the protocol/
 crypto/path work is a few hundred lines and **done**; the real effort is the
@@ -231,9 +232,9 @@ it — never when the code merely looks right.
 | **M9** Commerce | `shop`/`trade`/`vending`/`storage` over economy+inventory | L3 (trade e2e) | 🟡 partial (shop slice) |
 | **M10** Content | `content` script VM — dialog/quest/item-script execution | L3 (NPC dialog e2e) | 🟡 partial (dialog bridge) |
 | **M11** Social | friend/party/guild/mail | L3 | 🟡 friend ✅ party ✅ (L3 e2e); guild/mail remain |
-| **M12** Transit | cross-map handshake + Agones allocation path | L3 (map-change e2e) | 🟡 partial (in-zone warp; cross-zone+Agones open) |
+| **M12** Transit | cross-map handshake + Agones allocation path | L3 (map-change e2e) | 🟡 partial (cross-zone redirect v0 landed; Agones allocation open) |
 | **P-scale** Scale-out | extract one module to a NATS binary; Agones fleet | L3 (multi-process) | 📋 |
-| **P-hard** Harden | OTel coverage, security review, perf profiling, load test | perf budget met | 📋 |
+| **P-hard** Harden | OTel coverage, security review, perf profiling, load test | perf budget met | 🟡 partial — OTel span coverage landed (M14); security review F-01..F-09; perf profiling + sustained load test remain |
 
 ### Phase 0 — recovery decision (recorded)
 

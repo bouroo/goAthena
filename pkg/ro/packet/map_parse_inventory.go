@@ -47,10 +47,10 @@ type CZUseItemRequest struct {
 // frame is shorter than 8 bytes, or naming the unexpected cmd id if
 // the header is not 0x0439.
 func ParseCZUseItem(frame []byte) (CZUseItemRequest, error) {
-	if len(frame) < sizeCZUseItem2 {
-		return CZUseItemRequest{}, fmt.Errorf("packet: parse CZ_USE_ITEM2: want at least %d bytes, got %d", sizeCZUseItem2, len(frame))
+	if len(frame) < sizeCZUseItem2() {
+		return CZUseItemRequest{}, fmt.Errorf("packet: parse CZ_USE_ITEM2: want at least %d bytes, got %d", sizeCZUseItem2(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZUSEITEM2 {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZUSEITEM2() {
 		return CZUseItemRequest{}, fmt.Errorf("packet: parse CZ_USE_ITEM2: unexpected cmd 0x%04x", cmd)
 	}
 	return CZUseItemRequest{
@@ -63,8 +63,8 @@ func ParseCZUseItem(frame []byte) (CZUseItemRequest, error) {
 // layout documented on CZUseItemRequest: [2:cmd=0x0439][2:index]
 // [4:AID] = 8 bytes.
 func (r CZUseItemRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCZUseItem2)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZUSEITEM2)
+	buf := make([]byte, sizeCZUseItem2())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZUSEITEM2())
 	binary.LittleEndian.PutUint16(buf[2:], r.Index)
 	binary.LittleEndian.PutUint32(buf[4:], r.AID)
 	if _, err := w.Write(buf); err != nil {
@@ -107,10 +107,10 @@ type CZReqWearEquipRequest struct {
 // frame is shorter than 8 bytes, or naming the unexpected cmd id if
 // the header is not 0x0998.
 func ParseCZReqWearEquip(frame []byte) (CZReqWearEquipRequest, error) {
-	if len(frame) < sizeCZReqWearEquipV5 {
-		return CZReqWearEquipRequest{}, fmt.Errorf("packet: parse CZ_REQ_WEAR_EQUIP_V5: want at least %d bytes, got %d", sizeCZReqWearEquipV5, len(frame))
+	if len(frame) < sizeCZReqWearEquipV5() {
+		return CZReqWearEquipRequest{}, fmt.Errorf("packet: parse CZ_REQ_WEAR_EQUIP_V5: want at least %d bytes, got %d", sizeCZReqWearEquipV5(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQWEAREQUIPV5 {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQWEAREQUIPV5() {
 		return CZReqWearEquipRequest{}, fmt.Errorf("packet: parse CZ_REQ_WEAR_EQUIP_V5: unexpected cmd 0x%04x", cmd)
 	}
 	return CZReqWearEquipRequest{
@@ -123,8 +123,8 @@ func ParseCZReqWearEquip(frame []byte) (CZReqWearEquipRequest, error) {
 // on-wire layout documented on CZReqWearEquipRequest:
 // [2:cmd=0x0998][2:index][4:position] = 8 bytes.
 func (r CZReqWearEquipRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCZReqWearEquipV5)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQWEAREQUIPV5)
+	buf := make([]byte, sizeCZReqWearEquipV5())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQWEAREQUIPV5())
 	binary.LittleEndian.PutUint16(buf[2:], r.Index)
 	binary.LittleEndian.PutUint32(buf[4:], r.Position)
 	if _, err := w.Write(buf); err != nil {
@@ -160,10 +160,10 @@ type CZReqTakeoffEquipRequest struct {
 // frame is shorter than 4 bytes, or naming the unexpected cmd id if
 // the header is not 0x00ab.
 func ParseCZReqTakeoffEquip(frame []byte) (CZReqTakeoffEquipRequest, error) {
-	if len(frame) < sizeCZReqTakeoffEquip {
-		return CZReqTakeoffEquipRequest{}, fmt.Errorf("packet: parse CZ_REQ_TAKEOFF_EQUIP: want at least %d bytes, got %d", sizeCZReqTakeoffEquip, len(frame))
+	if len(frame) < sizeCZReqTakeoffEquip() {
+		return CZReqTakeoffEquipRequest{}, fmt.Errorf("packet: parse CZ_REQ_TAKEOFF_EQUIP: want at least %d bytes, got %d", sizeCZReqTakeoffEquip(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQTAKEOFFEQUIP {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQTAKEOFFEQUIP() {
 		return CZReqTakeoffEquipRequest{}, fmt.Errorf("packet: parse CZ_REQ_TAKEOFF_EQUIP: unexpected cmd 0x%04x", cmd)
 	}
 	return CZReqTakeoffEquipRequest{
@@ -175,8 +175,8 @@ func ParseCZReqTakeoffEquip(frame []byte) (CZReqTakeoffEquipRequest, error) {
 // on-wire layout documented on CZReqTakeoffEquipRequest:
 // [2:cmd=0x00ab][2:index] = 4 bytes.
 func (r CZReqTakeoffEquipRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCZReqTakeoffEquip)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQTAKEOFFEQUIP)
+	buf := make([]byte, sizeCZReqTakeoffEquip())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQTAKEOFFEQUIP())
 	binary.LittleEndian.PutUint16(buf[2:], r.Index)
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_REQ_TAKEOFF_EQUIP: %w", err)
@@ -208,11 +208,11 @@ type CZItemPickupRequest struct {
 // shorter than 6 bytes, or naming the unexpected cmd id if the header is not
 // 0x009f/0x0362.
 func ParseCZItemPickup(frame []byte) (CZItemPickupRequest, error) {
-	if len(frame) < sizeCZItemPickup {
-		return CZItemPickupRequest{}, fmt.Errorf("packet: parse CZ_ITEM_PICKUP: want at least %d bytes, got %d", sizeCZItemPickup, len(frame))
+	if len(frame) < sizeCZItemPickup() {
+		return CZItemPickupRequest{}, fmt.Errorf("packet: parse CZ_ITEM_PICKUP: want at least %d bytes, got %d", sizeCZItemPickup(), len(frame))
 	}
 	cmd := binary.LittleEndian.Uint16(frame[0:2])
-	if cmd != HeaderCZITEMPICKUP && cmd != HeaderCZITEMTAKE0362 {
+	if cmd != HeaderCZITEMPICKUP() && cmd != HeaderCZITEMTAKE0362() {
 		return CZItemPickupRequest{}, fmt.Errorf("packet: parse CZ_ITEM_PICKUP: unexpected cmd 0x%04x", cmd)
 	}
 	return CZItemPickupRequest{
@@ -223,8 +223,8 @@ func ParseCZItemPickup(frame []byte) (CZItemPickupRequest, error) {
 // Encode writes the CZ_ITEM_PICKUP packet to w, mirroring the on-wire layout
 // documented on CZItemPickupRequest: [2:cmd=0x009f][4:groundID] = 6 bytes.
 func (r CZItemPickupRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCZItemPickup)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZITEMPICKUP)
+	buf := make([]byte, sizeCZItemPickup())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZITEMPICKUP())
 	binary.LittleEndian.PutUint32(buf[2:], r.GroundID)
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_ITEM_PICKUP: %w", err)

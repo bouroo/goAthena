@@ -153,10 +153,17 @@ func (s *EconomyService) CreditZenyWithPeer(ctx context.Context, charID uint32, 
 	return s.CreditZenyFor(ctx, charID, amount, s.tradeEntry(peer))
 }
 
-// tradeEntry builds the LedgerEntry used by both trade legs. A zero peer
-// degrades to ReasonUnknown — the legacy posture — so a partially-wired caller
-// still produces an audit row (just without the "who paid whom" linkage).
+// tradeEntry builds the LedgerEntry used by both trade legs.
 func (s *EconomyService) tradeEntry(peer uint32) LedgerEntry {
+	return TradeEntry(peer)
+}
+
+// TradeEntry is the ledger entry shape for a trade leg: ReasonTrade with the
+// partner's charID. A zero peer degrades to ReasonUnknown — the legacy
+// posture — so a partially-wired caller still produces an audit row (just
+// without the "who paid whom" linkage). Exported because the remote proxy
+// must reproduce the exact entry a local WithPeer call would write.
+func TradeEntry(peer uint32) LedgerEntry {
 	if peer == 0 {
 		return LedgerEntry{Reason: domain.ReasonUnknown}
 	}

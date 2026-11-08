@@ -8,6 +8,7 @@ import (
 	"github.com/samber/do/v2"
 
 	contentdomain "github.com/bouroo/goAthena/internal/modules/content/domain"
+	"github.com/bouroo/goAthena/internal/modules/economy"
 	economyapp "github.com/bouroo/goAthena/internal/modules/economy/app"
 	economydomain "github.com/bouroo/goAthena/internal/modules/economy/domain"
 	invdomain "github.com/bouroo/goAthena/internal/modules/inventory/domain"
@@ -75,7 +76,7 @@ func Register(inj do.Injector) {
 	do.Provide(inj, func(i do.Injector) (*app.ShopService, error) {
 		catalog := do.MustInvoke[*domain.CatalogRegistry](i)
 		itemRepo := do.MustInvoke[invdomain.ItemRepository](i)
-		econSvc := do.MustInvoke[*economyapp.EconomyService](i)
+		econSvc := do.MustInvoke[economy.Service](i)
 		// Wire the reason-tagged methods so the ledger carries ReasonShopBuy on
 		// the player's debit and ReasonShopSell on the player's credit. The
 		// shop doesn't carry a peer char (NPC leg is anonymous) so the LedgerEntry

@@ -123,8 +123,8 @@ func TestStorage_MoveToStorage_Stackable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	// wireIndex = server row 0 + 2 = 2.
-	res, err := svc.MoveToStorage(ctx, 2000001, 150001, 2, 4)
+	// The server's 0-based bag row.
+	res, err := svc.MoveToStorage(ctx, 2000001, 150001, 0, 4)
 	if err != nil {
 		t.Fatalf("move to storage: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestStorage_MoveToStorage_MergesIntoExisting(t *testing.T) {
 
 	// Seed bag with 5x Red Potion, then deposit 3 → warehouse has 3.
 	_, _ = inv.Add(ctx, 150001, 501, 5)
-	if _, err := svc.MoveToStorage(ctx, 2000001, 150001, 2, 3); err != nil {
+	if _, err := svc.MoveToStorage(ctx, 2000001, 150001, 0, 3); err != nil {
 		t.Fatalf("first move: %v", err)
 	}
 	// Bag now has 2x Red Potion.
@@ -167,7 +167,7 @@ func TestStorage_MoveToStorage_MergesIntoExisting(t *testing.T) {
 		t.Fatalf("re-fill bag: %v", err)
 	}
 	// Deposit 4 more from bag → warehouse row merges into 7.
-	res, err := svc.MoveToStorage(ctx, 2000001, 150001, 2, 4)
+	res, err := svc.MoveToStorage(ctx, 2000001, 150001, 0, 4)
 	if err != nil {
 		t.Fatalf("second move: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestStorage_MoveFromStorage_Stackable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed warehouse: %v", err)
 	}
-	res, err := svc.MoveFromStorage(ctx, 2000001, 150001, 2, 2)
+	res, err := svc.MoveFromStorage(ctx, 2000001, 150001, 0, 2)
 	if err != nil {
 		t.Fatalf("move from storage: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestStorage_MoveToStorage_IndexOutOfRange(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty bag — wire index 2 is out of range (rows start at 1).
-	_, err := svc.MoveToStorage(ctx, 2000001, 150001, 2, 1)
+	_, err := svc.MoveToStorage(ctx, 2000001, 150001, 0, 1)
 	if !errors.Is(err, ErrStorageIndexOutOfRange) {
 		t.Errorf("expected ErrStorageIndexOutOfRange, got %v", err)
 	}
@@ -234,7 +234,7 @@ func TestStorage_MoveToStorage_EquippedRejected(t *testing.T) {
 	if err := inv.SetEquip(ctx, row.ID, 0x0001); err != nil {
 		t.Fatalf("set equip: %v", err)
 	}
-	_, err = svc.MoveToStorage(ctx, 2000001, 150001, 2, 1)
+	_, err = svc.MoveToStorage(ctx, 2000001, 150001, 0, 1)
 	if !errors.Is(err, ErrStorageEquipped) {
 		t.Errorf("expected ErrStorageEquipped, got %v", err)
 	}
@@ -247,7 +247,7 @@ func TestStorage_MoveToStorage_Insufficient(t *testing.T) {
 	if _, err := inv.Add(ctx, 150001, 501, 3); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	_, err := svc.MoveToStorage(ctx, 2000001, 150001, 2, 5)
+	_, err := svc.MoveToStorage(ctx, 2000001, 150001, 0, 5)
 	if !errors.Is(err, ErrStorageInsufficient) {
 		t.Errorf("expected ErrStorageInsufficient, got %v", err)
 	}
@@ -273,7 +273,7 @@ func TestStorage_MoveToStorage_WarehouseFull(t *testing.T) {
 		t.Fatalf("seed bag: %v", err)
 	}
 	// Move should fail with ErrStorageFull.
-	_, err := svc.MoveToStorage(ctx, 2000001, 150001, 2, 1)
+	_, err := svc.MoveToStorage(ctx, 2000001, 150001, 0, 1)
 	if !errors.Is(err, storagedomain.ErrStorageFull) && !errors.Is(err, ErrStorageFull) {
 		t.Errorf("expected ErrStorageFull, got %v", err)
 	}

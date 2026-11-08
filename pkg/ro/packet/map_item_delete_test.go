@@ -32,8 +32,8 @@ func TestDeleteItemFromBodyResponse_EncodeFieldLayout(t *testing.T) {
 	if len(out) != 8 {
 		t.Fatalf("encoded length = %d, want 8; bytes=% x", len(out), out)
 	}
-	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCDeleteItemFromBody {
-		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCDeleteItemFromBody)
+	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCDeleteItemFromBody() {
+		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCDeleteItemFromBody())
 	}
 	if got := int16(binary.LittleEndian.Uint16(out[2:4])); got != DeleteTypeItemSold { //nolint:gosec // G115: bit-cast back to the signed wire field
 		t.Errorf("deleteType = %d, want %d", got, DeleteTypeItemSold)

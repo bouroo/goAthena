@@ -26,12 +26,12 @@ type CHEnterRequest struct {
 
 // ParseCHEnter parses a full 17-byte CH_ENTER frame (including the 2-byte
 // cmd header) into a CHEnterRequest. Returns a wrapped error if the frame
-// is not exactly 17 bytes or its cmd header is not HeaderCHENTER (0x0065).
+// is not exactly 17 bytes or its cmd header is not HeaderCHENTER() (0x0065).
 func ParseCHEnter(frame []byte) (CHEnterRequest, error) {
-	if len(frame) != sizeCHEnter {
-		return CHEnterRequest{}, fmt.Errorf("packet: parse CH_ENTER: want %d bytes, got %d", sizeCHEnter, len(frame))
+	if len(frame) != sizeCHEnter() {
+		return CHEnterRequest{}, fmt.Errorf("packet: parse CH_ENTER: want %d bytes, got %d", sizeCHEnter(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHENTER {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHENTER() {
 		return CHEnterRequest{}, fmt.Errorf("packet: parse CH_ENTER: unexpected cmd 0x%04x", cmd)
 	}
 
@@ -52,9 +52,9 @@ func ParseCHEnter(frame []byte) (CHEnterRequest, error) {
 // The reserved uint16 slot between loginID2 and sex is always written as
 // zero — the field is part of the packed struct but carries no payload.
 func (r CHEnterRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCHEnter)
-	// int16 packetType = 0x0065 (HeaderCHENTER).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCHENTER)
+	buf := make([]byte, sizeCHEnter())
+	// int16 packetType = 0x0065 (HeaderCHENTER()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCHENTER())
 	// uint32 accountID at offset 2.
 	binary.LittleEndian.PutUint32(buf[2:], r.AccountID)
 	// uint32 loginID1 at offset 6.
@@ -82,12 +82,12 @@ type CHSelectCharRequest struct {
 // ParseCHSelectChar parses a full 3-byte CH_SELECT_CHAR frame (including the
 // 2-byte cmd header) into a CHSelectCharRequest. Returns a wrapped error if
 // the frame is not exactly 3 bytes or its cmd header is not
-// HeaderCHSELECTCHAR (0x0066).
+// HeaderCHSELECTCHAR() (0x0066).
 func ParseCHSelectChar(frame []byte) (CHSelectCharRequest, error) {
-	if len(frame) != sizeCHSelectChar {
-		return CHSelectCharRequest{}, fmt.Errorf("packet: parse CH_SELECT_CHAR: want %d bytes, got %d", sizeCHSelectChar, len(frame))
+	if len(frame) != sizeCHSelectChar() {
+		return CHSelectCharRequest{}, fmt.Errorf("packet: parse CH_SELECT_CHAR: want %d bytes, got %d", sizeCHSelectChar(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHSELECTCHAR {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHSELECTCHAR() {
 		return CHSelectCharRequest{}, fmt.Errorf("packet: parse CH_SELECT_CHAR: unexpected cmd 0x%04x", cmd)
 	}
 
@@ -100,9 +100,9 @@ func ParseCHSelectChar(frame []byte) (CHSelectCharRequest, error) {
 // documented on CHSelectCharRequest: [2:cmd=0x0066][1:slot] = 3 bytes.
 // Source: rathena/src/common/packets.hpp:116-120.
 func (r CHSelectCharRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCHSelectChar)
-	// int16 packetType = 0x0066 (HeaderCHSELECTCHAR).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCHSELECTCHAR)
+	buf := make([]byte, sizeCHSelectChar())
+	// int16 packetType = 0x0066 (HeaderCHSELECTCHAR()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCHSELECTCHAR())
 	// uint8 slot at offset 2.
 	buf[2] = r.Slot
 
@@ -137,13 +137,13 @@ type CHMakeCharRequest struct {
 
 // ParseCHMakeChar parses a full 36-byte CH_MAKE_CHAR frame (including the
 // 2-byte cmd header) into a CHMakeCharRequest. Returns a wrapped error if the
-// frame is not exactly 36 bytes or its cmd header is not HeaderCHMAKECHAR
+// frame is not exactly 36 bytes or its cmd header is not HeaderCHMAKECHAR()
 // (0x0a39).
 func ParseCHMakeChar(frame []byte) (CHMakeCharRequest, error) {
-	if len(frame) != sizeCHMakeChar {
-		return CHMakeCharRequest{}, fmt.Errorf("packet: parse CH_MAKE_CHAR: want %d bytes, got %d", sizeCHMakeChar, len(frame))
+	if len(frame) != sizeCHMakeChar() {
+		return CHMakeCharRequest{}, fmt.Errorf("packet: parse CH_MAKE_CHAR: want %d bytes, got %d", sizeCHMakeChar(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHMAKECHAR {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHMAKECHAR() {
 		return CHMakeCharRequest{}, fmt.Errorf("packet: parse CH_MAKE_CHAR: unexpected cmd 0x%04x", cmd)
 	}
 
@@ -166,9 +166,9 @@ func (r CHMakeCharRequest) Encode(w io.Writer) error {
 	if err := r.validate(); err != nil {
 		return err
 	}
-	buf := make([]byte, sizeCHMakeChar)
-	// int16 packetType = 0x0a39 (HeaderCHMAKECHAR).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCHMAKECHAR)
+	buf := make([]byte, sizeCHMakeChar())
+	// int16 packetType = 0x0a39 (HeaderCHMAKECHAR()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCHMAKECHAR())
 	// char name[24] at offset 2 — zero-padded by writeFixedString.
 	writeFixedString(buf[2:26], r.Name)
 	// uint8 slot at offset 26.
@@ -209,12 +209,12 @@ type CHDeleteChar3ReservedRequest struct {
 
 // ParseCHDeleteChar3Reserved parses a full 6-byte CH_DELETE_CHAR3_RESERVED
 // frame (including the 2-byte cmd header). Returns wrapped error if frame
-// is not exactly 6 bytes or cmd header is not HeaderCHDELETECHAR3RESERVED.
+// is not exactly 6 bytes or cmd header is not HeaderCHDELETECHAR3RESERVED().
 func ParseCHDeleteChar3Reserved(frame []byte) (CHDeleteChar3ReservedRequest, error) {
 	if len(frame) != 6 { //nolint:gosec // G115: constant 6 fits in int.
 		return CHDeleteChar3ReservedRequest{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3_RESERVED: want 6 bytes, got %d", len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHDELETECHAR3RESERVED {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHDELETECHAR3RESERVED() {
 		return CHDeleteChar3ReservedRequest{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3_RESERVED: unexpected cmd 0x%04x", cmd)
 	}
 	return CHDeleteChar3ReservedRequest{
@@ -237,12 +237,12 @@ type CHDeleteChar3Request struct {
 
 // ParseCHDeleteChar3 parses a full 12-byte CH_DELETE_CHAR3 frame
 // (including the 2-byte cmd header). Returns wrapped error if frame
-// is not exactly 12 bytes or cmd header is not HeaderCHDELETECHAR3.
+// is not exactly 12 bytes or cmd header is not HeaderCHDELETECHAR3().
 func ParseCHDeleteChar3(frame []byte) (CHDeleteChar3Request, error) {
 	if len(frame) != 12 { //nolint:gosec // G115: constant 12 fits in int.
 		return CHDeleteChar3Request{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3: want 12 bytes, got %d", len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHDELETECHAR3 {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHDELETECHAR3() {
 		return CHDeleteChar3Request{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3: unexpected cmd 0x%04x", cmd)
 	}
 	return CHDeleteChar3Request{
@@ -261,12 +261,12 @@ type CHDeleteChar3CancelRequest struct {
 
 // ParseCHDeleteChar3Cancel parses a full 6-byte CH_DELETE_CHAR3_CANCEL
 // frame (including the 2-byte cmd header). Returns wrapped error if frame
-// is not exactly 6 bytes or cmd header is not HeaderCHDELETECHAR3CANCEL.
+// is not exactly 6 bytes or cmd header is not HeaderCHDELETECHAR3CANCEL().
 func ParseCHDeleteChar3Cancel(frame []byte) (CHDeleteChar3CancelRequest, error) {
 	if len(frame) != 6 { //nolint:gosec // G115: constant 6 fits in int.
 		return CHDeleteChar3CancelRequest{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3_CANCEL: want 6 bytes, got %d", len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHDELETECHAR3CANCEL {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCHDELETECHAR3CANCEL() {
 		return CHDeleteChar3CancelRequest{}, fmt.Errorf("packet: parse CH_DELETE_CHAR3_CANCEL: unexpected cmd 0x%04x", cmd)
 	}
 	return CHDeleteChar3CancelRequest{

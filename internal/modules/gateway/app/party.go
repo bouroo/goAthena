@@ -70,7 +70,7 @@ func (s *MapServer) clearPartyInvitesFor(charID uint32) {
 // handleMakeGroup processes CZ_MAKE_GROUP / CZ_MAKE_GROUP2 — create a party led
 // by the requester. The reply is ZC_ACK_MAKE_GROUP to the requester alone; the
 // client's own roster refresh follows from the ZC_GROUP_LIST below.
-func (s *MapServer) handleMakeGroup(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleMakeGroup(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -85,7 +85,7 @@ func (s *MapServer) handleMakeGroup(c gnet.Conn, auth *mapAuth, frame []byte) {
 			return
 		}
 	}
-	p, err := s.party.Create(context.Background(), auth.accountID, auth.charID, req.Name)
+	p, err := s.party.Create(fctx, auth.accountID, auth.charID, req.Name)
 	if err != nil {
 		s.writeMakeGroupAck(c, makeGroupResult(err))
 		return
@@ -98,7 +98,7 @@ func (s *MapServer) handleMakeGroup(c gnet.Conn, auth *mapAuth, frame []byte) {
 // target's account id. The inviter must be a party leader, and every refusal is
 // reported to the INVITER via ZC_PARTY_JOIN_REQ_ACK (rAthena clif_party_invite_reply,
 // src/map/party.cpp:390-450).
-func (s *MapServer) handleReqJoinGroup(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleReqJoinGroup(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -111,8 +111,7 @@ func (s *MapServer) handleReqJoinGroup(c gnet.Conn, auth *mapAuth, frame []byte)
 		s.log.Warn("map: parse CZ_REQ_JOIN_GROUP", "err", err)
 		return
 	}
-	ctx := context.Background()
-	party, err := s.party.GetByMember(ctx, auth.charID)
+	party, err := s.party.GetByMember(fctx, auth.charID)
 	if err != nil {
 		// Not in a party: nothing to invite into. rAthena just shows a message;
 		// the ack's empty name + REJECTED is the closest wire equivalent.
@@ -135,12 +134,12 @@ func (s *MapServer) handleReqJoinGroup(c gnet.Conn, auth *mapAuth, frame []byte)
 		return
 	}
 	// The target must not already belong to a party (src/map/party.cpp:443-448).
-	if _, err := s.party.GetByMember(ctx, targetCharID); err == nil {
+	if _, err := s.party.GetByMember(fctx, targetCharID); err == nil {
 		s.writeJoinReqAck(c, target.Name, ropacket.PartyReplyJoinOtherParty)
 		return
 	}
 	// Open-slot check before delivering the invitation (src/map/party.cpp:418-424).
-	members, err := s.party.Members(ctx, party.ID)
+	members, err := s.party.Members(fctx, party.ID)
 	if err != nil {
 		s.log.Debug("map: party members read failed", "party", party.ID, "err", err)
 		return
@@ -156,7 +155,7 @@ func (s *MapServer) handleReqJoinGroup(c gnet.Conn, auth *mapAuth, frame []byte)
 // handleJoinGroup processes CZ_JOIN_GROUP — the invitee's accept/reject. On
 // accept the roster is refreshed for everyone; on reject only the inviter is
 // told (src/map/party.cpp:570-604).
-func (s *MapServer) handleJoinGroup(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleJoinGroup(fctx context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -181,14 +180,13 @@ func (s *MapServer) handleJoinGroup(_ gnet.Conn, auth *mapAuth, frame []byte) {
 		return
 	}
 	s.clearPartyInvite(auth.charID)
-	ctx := context.Background()
 	if req.Flag != ropacket.PartyJoinAccept {
 		if pc, ok := s.connFor(inv.inviterCharID); ok {
 			s.writeJoinReqAck(pc, playerName(s.world, auth.charID), ropacket.PartyReplyRejected)
 		}
 		return
 	}
-	if err := s.party.Accept(ctx, partydomain.PartyID(req.PartyID), auth.charID); err != nil {
+	if err := s.party.Accept(fctx, partydomain.PartyID(req.PartyID), auth.charID); err != nil {
 		if pc, ok := s.connFor(inv.inviterCharID); ok {
 			s.writeJoinReqAck(pc, playerName(s.world, auth.charID), joinReplyResult(err))
 		}
@@ -206,7 +204,7 @@ func (s *MapServer) handleJoinGroup(_ gnet.Conn, auth *mapAuth, frame []byte) {
 // (src/char/int_party.cpp:651-676). Each member therefore gets its own
 // ZC_DELETE_MEMBER_FROM_GROUP, so the roster must be read BEFORE the leave is
 // applied.
-func (s *MapServer) handleLeaveGroup(c gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleLeaveGroup(fctx context.Context, c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		return
 	}
@@ -214,18 +212,17 @@ func (s *MapServer) handleLeaveGroup(c gnet.Conn, auth *mapAuth, _ []byte) {
 		s.log.Debug("map: party not wired, ignoring CZ_REQ_LEAVE_GROUP")
 		return
 	}
-	ctx := context.Background()
-	party, err := s.party.GetByMember(ctx, auth.charID)
+	party, err := s.party.GetByMember(fctx, auth.charID)
 	if err != nil {
 		s.log.Debug("map: CZ_REQ_LEAVE_GROUP not in party", "gid", auth.charID)
 		return
 	}
-	members, err := s.party.Members(ctx, party.ID)
+	members, err := s.party.Members(fctx, party.ID)
 	if err != nil {
 		s.log.Debug("map: party members read failed", "party", party.ID, "err", err)
 		return
 	}
-	if err := s.party.Leave(ctx, party.ID, auth.charID); err != nil {
+	if err := s.party.Leave(fctx, party.ID, auth.charID); err != nil {
 		s.log.Debug("map: party leave rejected", "gid", auth.charID, "err", err)
 		return
 	}
@@ -246,7 +243,7 @@ func (s *MapServer) handleLeaveGroup(c gnet.Conn, auth *mapAuth, _ []byte) {
 
 // handleExpelGroupMember processes CZ_REQ_EXPEL_GROUP_MEMBER — the leader kicks a
 // member (src/map/party.cpp:699-731).
-func (s *MapServer) handleExpelGroupMember(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleExpelGroupMember(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -259,13 +256,12 @@ func (s *MapServer) handleExpelGroupMember(c gnet.Conn, auth *mapAuth, frame []b
 		s.log.Warn("map: parse CZ_REQ_EXPEL_GROUP_MEMBER", "err", err)
 		return
 	}
-	ctx := context.Background()
-	party, err := s.party.GetByMember(ctx, auth.charID)
+	party, err := s.party.GetByMember(fctx, auth.charID)
 	if err != nil {
 		s.log.Debug("map: CZ_REQ_EXPEL_GROUP_MEMBER not in party", "gid", auth.charID)
 		return
 	}
-	members, err := s.party.Members(ctx, party.ID)
+	members, err := s.party.Members(fctx, party.ID)
 	if err != nil {
 		s.log.Debug("map: party members read failed", "party", party.ID, "err", err)
 		return
@@ -283,7 +279,7 @@ func (s *MapServer) handleExpelGroupMember(c gnet.Conn, auth *mapAuth, frame []b
 		s.writeDeleteMember(c, ropacket.PartyWithdrawCantExpel, req.AID, req.Name)
 		return
 	}
-	if err := s.party.Kick(ctx, party.ID, auth.charID, target.CharID); err != nil {
+	if err := s.party.Kick(fctx, party.ID, auth.charID, target.CharID); err != nil {
 		s.writeDeleteMember(c, ropacket.PartyWithdrawCantExpel, req.AID, req.Name)
 		return
 	}
@@ -297,7 +293,7 @@ func (s *MapServer) handleExpelGroupMember(c gnet.Conn, auth *mapAuth, frame []b
 // handleChangeGroupExpOption processes CZ_CHANGE_GROUPEXPOPTION — the leader
 // flips the exp-share rule. Only the exp flag is settable on this opcode; the
 // item rules keep their current value (src/map/clif.cpp:13956).
-func (s *MapServer) handleChangeGroupExpOption(_ gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleChangeGroupExpOption(fctx context.Context, _ gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -310,8 +306,7 @@ func (s *MapServer) handleChangeGroupExpOption(_ gnet.Conn, auth *mapAuth, frame
 		s.log.Warn("map: parse CZ_CHANGE_GROUPEXPOPTION", "err", err)
 		return
 	}
-	ctx := context.Background()
-	party, err := s.party.GetByMember(ctx, auth.charID)
+	party, err := s.party.GetByMember(fctx, auth.charID)
 	if err != nil {
 		return
 	}
@@ -320,7 +315,7 @@ func (s *MapServer) handleChangeGroupExpOption(_ gnet.Conn, auth *mapAuth, frame
 	if req.ExpFlag != 0 {
 		exp = 1
 	}
-	if err := s.party.SetOptions(ctx, party.ID, auth.charID, exp, party.Item); err != nil {
+	if err := s.party.SetOptions(fctx, party.ID, auth.charID, exp, party.Item); err != nil {
 		s.log.Debug("map: party option change rejected", "gid", auth.charID, "err", err)
 		return
 	}

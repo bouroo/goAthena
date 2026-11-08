@@ -49,10 +49,10 @@ type CZUseSkill struct {
 // is shorter than 10 bytes, or naming the unexpected cmd id if the
 // header is not 0x0438.
 func ParseCZUseSkill(frame []byte) (CZUseSkill, error) {
-	if len(frame) < sizeCZUseSkill2 {
-		return CZUseSkill{}, fmt.Errorf("packet: parse CZ_USE_SKILL2: want at least %d bytes, got %d", sizeCZUseSkill2, len(frame))
+	if len(frame) < sizeCZUseSkill2() {
+		return CZUseSkill{}, fmt.Errorf("packet: parse CZ_USE_SKILL2: want at least %d bytes, got %d", sizeCZUseSkill2(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZUSESKILL {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZUSESKILL() {
 		return CZUseSkill{}, fmt.Errorf("packet: parse CZ_USE_SKILL2: unexpected cmd 0x%04x", cmd)
 	}
 	return CZUseSkill{
@@ -67,8 +67,8 @@ func ParseCZUseSkill(frame []byte) (CZUseSkill, error) {
 // [2:skillID][4:targetID] = 10 bytes. Used by tests and by the e2e
 // harness to drive the skill-usage handler.
 func (r CZUseSkill) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCZUseSkill2)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZUSESKILL)
+	buf := make([]byte, sizeCZUseSkill2())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZUSESKILL())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(r.SkillLv)) //nolint:gosec // wire slot is signed int16
 	binary.LittleEndian.PutUint16(buf[4:], r.SkillID)
 	binary.LittleEndian.PutUint32(buf[6:], r.TargetID)
@@ -102,7 +102,7 @@ func (r CZUseSkill) Encode(w io.Writer) error {
 //	int8   Action      — rAthena damage_type selector (clif.cpp:691-707);
 //	                     0 = DMG_NORMAL for a regular offensive hit
 //
-// Total: 2+2+4+4+4+4+4+4+2+2+1 = 33 bytes (sizeZCNotifySkill).
+// Total: 2+2+4+4+4+4+4+4+2+2+1 = 33 bytes (sizeZCNotifySkill()).
 type NotifySkillResponse struct {
 	SKID       uint16
 	AID        uint32
@@ -118,16 +118,16 @@ type NotifySkillResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 33).
 func (r NotifySkillResponse) Size() int {
-	return sizeZCNotifySkill
+	return sizeZCNotifySkill()
 }
 
 // Encode writes the ZC_NOTIFY_SKILL packet to w. The buffer is fixed at
-// sizeZCNotifySkill (33) bytes — the client parses a fixed-layout
+// sizeZCNotifySkill() (33) bytes — the client parses a fixed-layout
 // block, so a wrong-length frame would corrupt the next packet on the
 // TCP stream.
 func (r NotifySkillResponse) Encode(w io.Writer) error {
-	var buf [sizeZCNotifySkill]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYSKILL)
+	buf := make([]byte, sizeZCNotifySkill())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYSKILL())
 	binary.LittleEndian.PutUint16(buf[2:], r.SKID)
 	binary.LittleEndian.PutUint32(buf[4:], r.AID)
 	binary.LittleEndian.PutUint32(buf[8:], r.TargetID)
@@ -138,7 +138,7 @@ func (r NotifySkillResponse) Encode(w io.Writer) error {
 	binary.LittleEndian.PutUint16(buf[28:], uint16(r.Level))      //nolint:gosec // wire slot is signed int16
 	binary.LittleEndian.PutUint16(buf[30:], uint16(r.Count))      //nolint:gosec // wire slot is signed int16
 	buf[32] = byte(r.Action)                                      //nolint:gosec // int8 fits in a byte
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_NOTIFY_SKILL: %w", err)
 	}
 	return nil
@@ -167,7 +167,7 @@ func (r NotifySkillResponse) Encode(w io.Writer) error {
 //	uint8  cause     — USESKILL_FAIL_* reason code (see the const block
 //	                   below). 12 = UseSkillFailSPInsufficient.
 //
-// Total: 2+2+4+4+1+1 = 14 bytes (sizeZCAckToUseSkill).
+// Total: 2+2+4+4+1+1 = 14 bytes (sizeZCAckToUseSkill()).
 type AckUseSkillResponse struct {
 	SkillID uint16
 	BType   int32
@@ -178,7 +178,7 @@ type AckUseSkillResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 14).
 func (r AckUseSkillResponse) Size() int {
-	return sizeZCAckToUseSkill
+	return sizeZCAckToUseSkill()
 }
 
 // Encode writes the ZC_ACK_TOUSESKILL packet to w. Used to acknowledge
@@ -186,14 +186,14 @@ func (r AckUseSkillResponse) Size() int {
 // Bash slice only emits the negative path (SP insufficient →
 // Cause = UseSkillFailSPInsufficient).
 func (r AckUseSkillResponse) Encode(w io.Writer) error {
-	var buf [sizeZCAckToUseSkill]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKTOUSESKILL)
+	buf := make([]byte, sizeZCAckToUseSkill())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKTOUSESKILL())
 	binary.LittleEndian.PutUint16(buf[2:], r.SkillID)
 	binary.LittleEndian.PutUint32(buf[4:], uint32(r.BType)) //nolint:gosec // wire slot is unsigned
 	binary.LittleEndian.PutUint32(buf[8:], r.ItemID)
 	buf[12] = r.Flag
 	buf[13] = r.Cause
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_TOUSESKILL: %w", err)
 	}
 	return nil

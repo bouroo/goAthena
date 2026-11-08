@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/bouroo/goAthena/internal/modules/content/domain"
+	transitdomain "github.com/bouroo/goAthena/internal/modules/transit/domain"
 	"github.com/bouroo/goAthena/internal/shared/safe"
+	"github.com/bouroo/goAthena/pkg/ro/itemdb"
 	ropacket "github.com/bouroo/goAthena/pkg/ro/packet"
 	"github.com/bouroo/goAthena/pkg/ro/script"
 )
@@ -32,20 +34,44 @@ type Engine struct {
 	world     domain.ScriptWorld
 	inventory domain.ScriptInventory
 	quest     domain.ScriptQuest
-	log       *slog.Logger
+	// storage is the warehouse port behind the `openstorage` builtin. nil
+	// makes the builtin a no-op.
+	storage domain.ScriptStorage
+	// items is the kernel item_db registry the getiteminfo builtin reads. nil
+	// (no item_db loaded) makes every lookup an unknown item.
+	items *itemdb.Registry
+	log   *slog.Logger
 
 	mu       sync.Mutex
 	sessions map[uint32]*domain.DialogSession // key = accountID
 }
 
 // NewEngine builds an Engine from compiled scripts, an NPC store, the world
-// port used by effect builtins (warp/heal), and the inventory port used by
-// item-script builtins (getitem/delitem/countitem/equip/unequip). scripts,
+// port used by effect builtins (warp/heal/announce), and the inventory port used
+// by item-script builtins (getitem/delitem/countitem/equip/unequip). scripts,
 // world, and inventory may each be nil: clicks are then a no-op and effect
 // builtins drop their frames / return 0 respectively. quest may be nil: the
-// getvariableofnpc / setquestvar builtins then read 0 / silently no-op.
-func NewEngine(scripts *script.CompiledScriptSet, npcs domain.NPCStore, world domain.ScriptWorld, inventory domain.ScriptInventory, quest domain.ScriptQuest, log *slog.Logger) *Engine {
-	return &Engine{scripts: scripts, npcs: npcs, world: world, inventory: inventory, quest: quest, log: log, sessions: make(map[uint32]*domain.DialogSession)}
+// getvariableofnpc / setquestvar builtins then read 0 / silently no-op. items
+// may be nil: getiteminfo then reports every item as unknown.
+func NewEngine(scripts *script.CompiledScriptSet, npcs domain.NPCStore, world domain.ScriptWorld, inventory domain.ScriptInventory, quest domain.ScriptQuest, items *itemdb.Registry, log *slog.Logger) *Engine {
+	return &Engine{scripts: scripts, npcs: npcs, world: world, inventory: inventory, quest: quest, items: items, log: log, sessions: make(map[uint32]*domain.DialogSession)}
+}
+
+// SetStorage attaches the warehouse port behind the `openstorage` builtin.
+// The gateway calls it right after it builds the MapServer (the gateway owns
+// the player's connection and the storage frames), so the content module never
+// imports the gateway. A nil port leaves the builtin a no-op.
+func (e *Engine) SetStorage(port domain.ScriptStorage) {
+	e.mu.Lock()
+	e.storage = port
+	e.mu.Unlock()
+}
+
+// storagePort returns the warehouse port, nil when none is wired.
+func (e *Engine) storagePort() domain.ScriptStorage {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.storage
 }
 
 // StartDialog resolves the NPC's script, creates a dialog session, and runs the
@@ -69,9 +95,9 @@ func (e *Engine) StartDialog(accountID, charID, npcGID uint32, writer domain.Pac
 		e.log.Debug("content: dialog already active", "accountID", accountID)
 		return
 	}
-	sess := &domain.DialogSession{NpcID: npcGID, CharID: charID, Writer: writer, Signal: make(chan domain.DialogSignal, 1)}
+	sess := &domain.DialogSession{NpcID: npcGID, AccountID: accountID, CharID: charID, Writer: writer, Signal: make(chan domain.DialogSignal, 1)}
 	e.put(accountID, sess)
-	host := &ScriptHost{session: sess, world: e.world, inventory: e.inventory, quest: e.quest, log: e.log}
+	host := &ScriptHost{session: sess, world: e.world, inventory: e.inventory, quest: e.quest, storage: e.storagePort(), items: e.items, log: e.log}
 	// The VM runs scripts reached from the client (NPC clicks, dialog input), so
 	// a panic inside it must cost this one player's dialog — runScript's own
 	// defer still unregisters the session — rather than the process.
@@ -135,13 +161,18 @@ func (e *Engine) end(accountID uint32) {
 // via the session's Signal channel. Inventory effects (getitem/delitem/countitem/
 // equip/unequip) flow through the injected ScriptInventory port — the engine
 // passes a world-owned adapter; nil disables the item-script builtins (the
-// builtin returns 0 and the script continues).
+// builtin returns 0 and the script continues). items is the kernel item_db
+// registry; nil reports every item as unknown to getiteminfo.
 type ScriptHost struct {
 	session   *domain.DialogSession
 	world     domain.ScriptWorld
 	inventory domain.ScriptInventory
 	quest     domain.ScriptQuest
-	log       *slog.Logger
+	items     *itemdb.Registry
+	// storage is the warehouse port behind the `openstorage` builtin. nil
+	// (no gateway storage wired) makes the builtin a no-op.
+	storage domain.ScriptStorage
+	log     *slog.Logger
 }
 
 // Mes sends a ZC_SAY_DIALOG2 dialog line. Non-blocking.
@@ -201,11 +232,31 @@ func (h *ScriptHost) Close() {
 	h.session.Writer.WritePacket(buf.Bytes())
 }
 
-// Warp moves the player to the named map tile: it persists the destination via
-// the world port and emits ZC_NPCACK_MAPMOVE so the client reconnects there.
-// No-ops when no world is wired or the player is not on a map.
+// Warp moves the player to the named map tile. The zone resolution (M12)
+// picks the frame: a remote zone persists the destination, tears the player
+// out of this zone's world (LeaveRemoteZone), and emits ZC_NPCACK_SERVERMOVE
+// so the client reconnects to that zone's ip:port (rAthena
+// clif_changemapserver); the local case is the pre-M12 behavior (persist via
+// the world port + ZC_NPCACK_MAPMOVE). No-ops when no world is wired or the
+// player is not on a map.
 func (h *ScriptHost) Warp(mapName string, x, y int) {
 	if h.world == nil {
+		return
+	}
+	if zone, err := h.world.ResolveZone(mapName); err == nil && zone != (transitdomain.Zone{}) {
+		// Persist the destination map+cell first (the remote zone's EnterMap
+		// loads it), so the ScriptWorld port needs no second persist verb.
+		if werr := h.world.WarpPlayer(h.session.CharID, mapName, int16(x), int16(y)); werr != nil { //nolint:gosec // G115: x/y are map-tile coords bounded by map dimensions.
+			h.log.Debug("content: warp dropped (player not on map)", "charID", h.session.CharID, "map", mapName, "err", werr)
+			return
+		}
+		if lerr := h.world.LeaveRemoteZone(context.Background(), h.session.CharID, int16(x), int16(y)); lerr != nil { //nolint:gosec // G115: x/y are map-tile coords bounded by map dimensions.
+			h.log.Debug("content: cross-zone warp dropped (player not on map)", "charID", h.session.CharID, "map", mapName, "err", lerr)
+			return
+		}
+		var sbuf bytes.Buffer
+		_ = ropacket.ServerMoveResponse{MapName: mapName, X: uint16(x), Y: uint16(y), IP: zone.IPv4, Port: zone.Port}.Encode(&sbuf) //nolint:errcheck,gosec // G115: x/y are map-tile coords; map names are bounded by data.
+		h.session.Writer.WritePacket(sbuf.Bytes())
 		return
 	}
 	if err := h.world.WarpPlayer(h.session.CharID, mapName, int16(x), int16(y)); err != nil { //nolint:gosec // G115: x/y are map-tile coords bounded by map dimensions.
@@ -304,6 +355,110 @@ func (h *ScriptHost) SetQuestVar(npcName, varName string, value int64) error {
 	}
 	return nil
 }
+
+// Announce broadcasts text to the audience the flag's BC_* target bits select
+// (rAthena's buildin_announce, script.cpp:11957). The audience is resolved by
+// the world module — it owns the entity registry and AOI grids — and the frames
+// leave through the gateway's connection map. The anchor is the NPC when the
+// flag carries BC_NPC and the dialog's player otherwise, matching rAthena's
+// source selection. No-op when no world is wired.
+func (h *ScriptHost) Announce(msg string, flag int) {
+	if h.world == nil {
+		return
+	}
+	h.world.Announce(h.announceAnchor(flag), msg, flag)
+}
+
+// AnnounceMap broadcasts text to every player on mapName — rAthena's
+// mapannounce (script.cpp:12028), which ignores the flag's target bits.
+func (h *ScriptHost) AnnounceMap(mapName, msg string, flag int) {
+	if h.world == nil {
+		return
+	}
+	h.world.AnnounceMap(mapName, msg, flag)
+}
+
+// announceAnchor picks the broadcast source: the NPC running the script when the
+// flag sets BC_NPC, the dialog's player otherwise (script.cpp:11973).
+func (h *ScriptHost) announceAnchor(flag int) uint32 {
+	const bcNPC = 0x08
+	if flag&bcNPC != 0 {
+		return h.session.NpcID
+	}
+	return h.session.CharID
+}
+
+// HealAbs restores HP/SP by absolute amounts — the `heal` builtin
+// (script.cpp:6007 status_heal). The world port clamps to the player's maxima
+// and fires the vitals notification the gateway relays, so no frame is written
+// here. No-op when no world is wired or the player is not on a map.
+func (h *ScriptHost) HealAbs(hp, sp int) {
+	if h.world == nil {
+		return
+	}
+	if err := h.world.HealAbs(h.session.CharID, hp, sp); err != nil {
+		h.log.Debug("content: heal dropped (player not on map)", "charID", h.session.CharID, "err", err)
+	}
+}
+
+// ItemInfo answers getiteminfo (rAthena buildin_getiteminfo, script.cpp:14761)
+// from the kernel item_db registry. The item argument is a numeric name id or an
+// AegisName string — rAthena dispatches on the argument's type
+// (script_isstring), so the distinction is carried into the lookup. An unknown
+// item, an unsupported code, or an unloaded registry all yield -1;
+// ITEMINFO_AEGISNAME answers with the item's AegisName string, the one string
+// column in the set.
+func (h *ScriptHost) ItemInfo(item script.Value, info int) script.Value {
+	entry := h.lookupItem(item)
+	if entry == nil {
+		if info == itemdb.InfoAegisName {
+			return script.StrVal("") // rAthena: an unknown item's AegisName is "" (script.cpp:14775)
+		}
+		return script.IntVal(-1)
+	}
+	if info == itemdb.InfoAegisName {
+		return script.StrVal(entry.AegisName)
+	}
+	return script.IntVal(entry.Info(info))
+}
+
+// OpenStorage opens the dialog's player's warehouse (kafra storage) — the
+// source's BUILDIN_FUNC(openstorage) (src/map/script.cpp:10958), which calls
+// storage_storageopen on the player running the script. The source opens the
+// warehouse from the NPC script; there is no client request that opens it.
+//
+// The gateway owns the connection and the storage frames, so the burst is
+// emitted through the ScriptStorage port. A nil port (no storage wired) makes
+// the builtin a no-op — the script continues, exactly like the source's
+// "no player -> return" guard.
+func (h *ScriptHost) OpenStorage() {
+	if h.storage == nil {
+		return
+	}
+	h.storage.OpenStorage(h.session.AccountID, h.session.CharID)
+}
+
+// lookupItem resolves a getiteminfo item argument to its item_db entry, or nil
+// when it names no known item.
+func (h *ScriptHost) lookupItem(item script.Value) *itemdb.ItemEntry {
+	if h.items == nil {
+		return nil
+	}
+	// A string argument is an AegisName (rAthena's item_db.searchname path,
+	// script.cpp:14767); a numeric one is a name id.
+	if item.Kind == script.KindStr {
+		return h.items.ByAegisName(item.Str)
+	}
+	n := item.Int
+	if n < 0 || n > maxItemID {
+		return nil
+	}
+	return h.items.Get(int32(n)) //nolint:gosec // G115: bounded by maxItemID above.
+}
+
+// maxItemID bounds the getiteminfo uint32→int32 cast for item_db lookup; item_db
+// ids are < 2^31 (same bound the gateway's itemEntry uses).
+const maxItemID = int64(1<<31 - 1)
 
 // waitAdvance blocks for a Next/OK signal. Cancel/close/timeout → false.
 func (h *ScriptHost) waitAdvance() bool {

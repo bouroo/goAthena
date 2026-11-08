@@ -20,8 +20,8 @@ func TestRefuseEnterResponse_Encode_ByteExact(t *testing.T) {
 	}
 	got := buf.Bytes()
 
-	if len(got) != sizeHCRefuseEnter {
-		t.Fatalf("len = %d, want %d", len(got), sizeHCRefuseEnter)
+	if len(got) != sizeHCRefuseEnter() {
+		t.Fatalf("len = %d, want %d", len(got), sizeHCRefuseEnter())
 	}
 
 	// Header bytes: little-endian 0x006c → 0x6c 0x00.
@@ -42,8 +42,8 @@ func TestRefuseEnterResponse_Encode_ZeroError(t *testing.T) {
 		t.Fatalf("Encode err = %v, want nil", err)
 	}
 	got := buf.Bytes()
-	if len(got) != sizeHCRefuseEnter {
-		t.Fatalf("len = %d, want %d", len(got), sizeHCRefuseEnter)
+	if len(got) != sizeHCRefuseEnter() {
+		t.Fatalf("len = %d, want %d", len(got), sizeHCRefuseEnter())
 	}
 	if got[0] != 0x6c || got[1] != 0x00 {
 		t.Errorf("header bytes = %02x %02x, want 6c 00", got[0], got[1])
@@ -56,8 +56,8 @@ func TestRefuseEnterResponse_Encode_ZeroError(t *testing.T) {
 func TestRefuseEnterResponse_Size(t *testing.T) {
 	t.Parallel()
 
-	if got := (RefuseEnterResponse{}).Size(); got != sizeHCRefuseEnter {
-		t.Errorf("Size() = %d, want %d", got, sizeHCRefuseEnter)
+	if got := (RefuseEnterResponse{}).Size(); got != sizeHCRefuseEnter() {
+		t.Errorf("Size() = %d, want %d", got, sizeHCRefuseEnter())
 	}
 }
 
@@ -78,8 +78,8 @@ func TestNotifyZoneServerResponse_Encode_ByteExact(t *testing.T) {
 	}
 	got := buf.Bytes()
 
-	if len(got) != sizeHCNotifyZone {
-		t.Fatalf("len = %d, want %d", len(got), sizeHCNotifyZone)
+	if len(got) != sizeHCNotifyZone() {
+		t.Fatalf("len = %d, want %d", len(got), sizeHCNotifyZone())
 	}
 	// Header bytes: little-endian 0x0ac5 → 0xc5 0x0a.
 	if got[0] != 0xc5 || got[1] != 0x0a {
@@ -116,7 +116,7 @@ func TestNotifyZoneServerResponse_Encode_ByteExact(t *testing.T) {
 	}
 
 	// Spot-check the trailing tail is zero (string shorter than slot).
-	for i := 28 + len("ro.example.com"); i < sizeHCNotifyZone; i++ {
+	for i := 28 + len("ro.example.com"); i < sizeHCNotifyZone(); i++ {
 		if got[i] != 0 {
 			t.Errorf("tail byte at offset %d = 0x%02x, want 0x00", i, got[i])
 		}
@@ -139,13 +139,13 @@ func TestNotifyZoneServerResponse_Encode_EmptyStrings(t *testing.T) {
 		t.Fatalf("Encode err = %v, want nil", err)
 	}
 	got := buf.Bytes()
-	if len(got) != sizeHCNotifyZone {
-		t.Fatalf("len = %d, want %d", len(got), sizeHCNotifyZone)
+	if len(got) != sizeHCNotifyZone() {
+		t.Fatalf("len = %d, want %d", len(got), sizeHCNotifyZone())
 	}
 
 	// After the fixed fields (CID[2:6], mapname[6:22], ip[22:26],
 	// port[26:28]) the rest must be zero.
-	for i := 28; i < sizeHCNotifyZone; i++ {
+	for i := 28; i < sizeHCNotifyZone(); i++ {
 		if got[i] != 0 {
 			t.Errorf("byte at offset %d = 0x%02x, want 0x00", i, got[i])
 		}
@@ -227,8 +227,8 @@ func TestNotifyZoneServerResponse_Encode_OverflowErrors(t *testing.T) {
 func TestNotifyZoneServerResponse_Size(t *testing.T) {
 	t.Parallel()
 
-	if got := (NotifyZoneServerResponse{}).Size(); got != sizeHCNotifyZone {
-		t.Errorf("Size() = %d, want %d", got, sizeHCNotifyZone)
+	if got := (NotifyZoneServerResponse{}).Size(); got != sizeHCNotifyZone() {
+		t.Errorf("Size() = %d, want %d", got, sizeHCNotifyZone())
 	}
 }
 
@@ -490,8 +490,8 @@ func TestCHEnterRequest_Encode_RoundTrip(t *testing.T) {
 	if err := req.Encode(&buf); err != nil {
 		t.Fatalf("Encode err = %v, want nil", err)
 	}
-	if got := buf.Len(); got != sizeCHEnter {
-		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCHEnter)
+	if got := buf.Len(); got != sizeCHEnter() {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCHEnter())
 	}
 
 	got, err := ParseCHEnter(buf.Bytes())
@@ -554,8 +554,8 @@ func TestCHSelectCharRequest_Encode_RoundTrip(t *testing.T) {
 	if err := req.Encode(&buf); err != nil {
 		t.Fatalf("Encode err = %v, want nil", err)
 	}
-	if got := buf.Len(); got != sizeCHSelectChar {
-		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCHSelectChar)
+	if got := buf.Len(); got != sizeCHSelectChar() {
+		t.Fatalf("Encode wrote %d bytes, want %d", got, sizeCHSelectChar())
 	}
 
 	got, err := ParseCHSelectChar(buf.Bytes())

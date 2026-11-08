@@ -128,8 +128,8 @@ func (r AcceptLoginResponse) Encode(w io.Writer) error {
 	buf := make([]byte, r.Size())
 	pos := 0
 
-	// int16 packetType = 0x0ac4 (HeaderACACCEPTLOGIN).
-	binary.LittleEndian.PutUint16(buf[pos:], HeaderACACCEPTLOGIN)
+	// int16 packetType = 0x0ac4 (HeaderACACCEPTLOGIN()).
+	binary.LittleEndian.PutUint16(buf[pos:], HeaderACACCEPTLOGIN())
 	pos += 2
 	// int16 packetLength = total wire length (guaranteed in-range by validate).
 	binary.LittleEndian.PutUint16(buf[pos:], uint16(r.Size())) //nolint:gosec // validated by r.validate()
@@ -226,8 +226,8 @@ func (r RefuseLoginResponse) Encode(w io.Writer) error {
 	}
 
 	buf := make([]byte, refuseLoginSize)
-	// int16 packetType = 0x083e (HeaderACREFUSELOGIN).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderACREFUSELOGIN)
+	// int16 packetType = 0x083e (HeaderACREFUSELOGIN()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderACREFUSELOGIN())
 	// uint32 error.
 	binary.LittleEndian.PutUint32(buf[2:], r.Error)
 	// char unblock_time[20] — zero-padded.

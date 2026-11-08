@@ -117,7 +117,7 @@ func (s *MapServer) lockMailOps(charID uint32) func() {
 // CZ_REQ_REFRESH_MAIL_LIST / CZ_OPEN_MAILBOX2 / CZ_REQ_REFRESH_MAIL_LIST2 —
 // all five are the same verb in rAthena (clif_parse_Mail_refreshinbox):
 // load the inbox and list it.
-func (s *MapServer) handleOpenMailbox(c gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleOpenMailbox(fctx context.Context, c gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		return
 	}
@@ -127,7 +127,7 @@ func (s *MapServer) handleOpenMailbox(c gnet.Conn, auth *mapAuth, _ []byte) {
 		s.log.Debug("map: mail not wired, ignoring inbox request")
 		return
 	}
-	res, err := s.mail.Inbox(context.Background(), auth.charID)
+	res, err := s.mail.Inbox(fctx, auth.charID)
 	if err != nil {
 		s.log.Warn("map: mail inbox", "gid", auth.charID, "err", err)
 		return
@@ -139,12 +139,13 @@ func (s *MapServer) handleOpenMailbox(c gnet.Conn, auth *mapAuth, _ []byte) {
 
 // handleCloseMailbox processes CZ_CLOSE_MAILBOX — rAthena routes it to
 // clif_parse_dull (no-op); the client closes its window itself.
-func (s *MapServer) handleCloseMailbox(_ gnet.Conn, _ *mapAuth, _ []byte) {}
+func (s *MapServer) handleCloseMailbox(_ context.Context, _ gnet.Conn, _ *mapAuth, _ []byte) {
+}
 
 // handleReadMail processes CZ_REQ_READ_MAIL (rAthena clif_parse_Mail_read):
 // the full message + attachments, and the row flips NEW/UNREAD → READ on
 // first open.
-func (s *MapServer) handleReadMail(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleReadMail(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -159,7 +160,7 @@ func (s *MapServer) handleReadMail(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: parse CZ_REQ_READ_MAIL", "err", err)
 		return
 	}
-	m, err := s.mail.Read(context.Background(), auth.charID, toMailID(req.MailID))
+	m, err := s.mail.Read(fctx, auth.charID, toMailID(req.MailID))
 	if err != nil {
 		s.log.Debug("map: mail read", "gid", auth.charID, "id", req.MailID, "err", err)
 		return
@@ -172,7 +173,7 @@ func (s *MapServer) handleReadMail(c gnet.Conn, auth *mapAuth, frame []byte) {
 // handleDeleteMail processes CZ_REQ_DELETE_MAIL. rAthena refuses while any
 // attachment remains (clif_parse_Mail_delete) and stays silent on failure —
 // only a success sends ZC_ACK_DELETE_MAIL.
-func (s *MapServer) handleDeleteMail(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleDeleteMail(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -187,7 +188,7 @@ func (s *MapServer) handleDeleteMail(c gnet.Conn, auth *mapAuth, frame []byte) {
 		s.log.Warn("map: parse CZ_REQ_DELETE_MAIL", "err", err)
 		return
 	}
-	if err := s.mail.Delete(context.Background(), auth.charID, toMailID(req.MailID)); err != nil {
+	if err := s.mail.Delete(fctx, auth.charID, toMailID(req.MailID)); err != nil {
 		return // rAthena is silent on failure
 	}
 	s.writeMailEncoder(c, func(w io.Writer) error {
@@ -198,7 +199,7 @@ func (s *MapServer) handleDeleteMail(c gnet.Conn, auth *mapAuth, frame []byte) {
 // handleCollectZeny processes CZ_REQ_ZENY_FROM_MAIL (rAthena
 // clif_parse_Mail_getattach MAIL_ATT_ZENY). The 09f2 ack carries the
 // result: 0 ok, 1 zeny overflow/failure, 2 inventory overflow.
-func (s *MapServer) handleCollectZeny(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleCollectZeny(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -213,7 +214,7 @@ func (s *MapServer) handleCollectZeny(c gnet.Conn, auth *mapAuth, frame []byte) 
 		s.log.Warn("map: parse CZ_REQ_ZENY_FROM_MAIL", "err", err)
 		return
 	}
-	if err := s.mail.CollectZeny(context.Background(), auth.charID, toMailID(req.MailID)); err != nil {
+	if err := s.mail.CollectZeny(fctx, auth.charID, toMailID(req.MailID)); err != nil {
 		if errors.Is(err, maildomain.ErrMailNotFound) {
 			return // rAthena: nothing to collect, stay silent
 		}
@@ -230,7 +231,7 @@ func (s *MapServer) handleCollectZeny(c gnet.Conn, auth *mapAuth, frame []byte) 
 
 // handleCollectItems processes CZ_REQ_ITEM_FROM_MAIL (rAthena
 // clif_parse_Mail_getattach MAIL_ATT_ITEM).
-func (s *MapServer) handleCollectItems(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleCollectItems(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -245,7 +246,7 @@ func (s *MapServer) handleCollectItems(c gnet.Conn, auth *mapAuth, frame []byte)
 		s.log.Warn("map: parse CZ_REQ_ITEM_FROM_MAIL", "err", err)
 		return
 	}
-	if err := s.mail.CollectItems(context.Background(), auth.charID, toMailID(req.MailID)); err != nil {
+	if err := s.mail.CollectItems(fctx, auth.charID, toMailID(req.MailID)); err != nil {
 		if errors.Is(err, maildomain.ErrMailNotFound) {
 			return // rAthena: no items, stay silent
 		}
@@ -263,7 +264,7 @@ func (s *MapServer) handleCollectItems(c gnet.Conn, auth *mapAuth, frame []byte)
 // handleOpenWriteMail processes CZ_REQ_OPEN_WRITE_MAIL (rAthena
 // clif_parse_Mail_beginwrite): open the compose window. A compose window
 // already open → refuse (rAthena's mail_writing guard).
-func (s *MapServer) handleOpenWriteMail(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleOpenWriteMail(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -293,7 +294,7 @@ func (s *MapServer) handleOpenWriteMail(c gnet.Conn, auth *mapAuth, frame []byte
 // handleCancelWriteMail processes CZ_REQ_CANCEL_WRITE_MAIL (rAthena
 // clif_parse_Mail_cancelwrite): drop the staging. The zeny was never
 // deducted (it only moves at send), so nothing to refund.
-func (s *MapServer) handleCancelWriteMail(_ gnet.Conn, auth *mapAuth, _ []byte) {
+func (s *MapServer) handleCancelWriteMail(_ context.Context, _ gnet.Conn, auth *mapAuth, _ []byte) {
 	if auth == nil {
 		return
 	}
@@ -305,7 +306,7 @@ func (s *MapServer) handleCancelWriteMail(_ gnet.Conn, auth *mapAuth, _ []byte) 
 // handleCheckReceiverName processes CZ_CHECK_RECEIVE_CHARACTER_NAME /
 // CZ_CHECKNAME2 (rAthena clif_parse_Mail_Receiver_Check): the compose
 // window's recipient preview row.
-func (s *MapServer) handleCheckReceiverName(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleCheckReceiverName(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -318,7 +319,7 @@ func (s *MapServer) handleCheckReceiverName(c gnet.Conn, auth *mapAuth, frame []
 		s.log.Warn("map: parse CZ_CHECK_RECEIVE_CHARACTER_NAME", "err", err)
 		return
 	}
-	rec, err := s.mail.CheckReceiver(context.Background(), req.Name)
+	rec, err := s.mail.CheckReceiver(fctx, req.Name)
 	if err != nil {
 		return // rAthena stays silent on an unknown name
 	}
@@ -330,7 +331,7 @@ func (s *MapServer) handleCheckReceiverName(c gnet.Conn, auth *mapAuth, frame []
 // handleAddItemToMail processes CZ_REQ_ADD_ITEM_TO_MAIL (rAthena
 // clif_parse_Mail_setattach): stage zeny (index 0) or an item (index ≥ 2,
 // server row = index-2) into the compose window.
-func (s *MapServer) handleAddItemToMail(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleAddItemToMail(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -443,7 +444,7 @@ func (s *MapServer) stageMailItem(auth *mapAuth, st mailStaging, req ropacket.CZ
 // handleRemoveItemFromMail processes CZ_REQ_REMOVE_ITEM_MAIL (rAthena
 // clif_parse_Mail_winopen, RODEX branch: index.W + count.W): unstage one
 // attachment. The ack carries the staged total weight after the removal.
-func (s *MapServer) handleRemoveItemFromMail(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleRemoveItemFromMail(_ context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -492,7 +493,7 @@ func (s *MapServer) handleRemoveItemFromMail(c gnet.Conn, auth *mapAuth, frame [
 // clif_parse_Mail_send): lift the staged attachments, charge zeny + fees,
 // deliver. On success the sender gets ZC_ACK_WRITE_MAIL 0 and the online
 // receiver gets the unread-mail icon.
-func (s *MapServer) handleWriteMail(c gnet.Conn, auth *mapAuth, frame []byte) {
+func (s *MapServer) handleWriteMail(fctx context.Context, c gnet.Conn, auth *mapAuth, frame []byte) {
 	if auth == nil {
 		return
 	}
@@ -538,7 +539,7 @@ func (s *MapServer) handleWriteMail(c gnet.Conn, auth *mapAuth, frame []byte) {
 		})
 	}
 	senderName := playerName(s.world, auth.charID)
-	dest, err := s.mail.Send(context.Background(), auth.charID, senderName, req.ReceiverName, req.Title, req.Body, zeny, items)
+	dest, err := s.mail.Send(fctx, auth.charID, senderName, req.ReceiverName, req.Title, req.Body, zeny, items)
 	if err != nil {
 		// rAthena mail_deliveryfail: the staging is dropped (the charge and
 		// lifted items are compensated by the service).

@@ -17,20 +17,20 @@ func u64(b []byte, off int) uint64 { return binary.LittleEndian.Uint64(b[off : o
 func TestParseCZMailIDFrames(t *testing.T) {
 	// CZ_REQ_READ_MAIL 0x09ea: tab.B then mail id.Q.
 	var buf bytes.Buffer
-	if err := (CZMailReq{Op: HeaderCZREQREADMAIL, MailID: 77}).Encode(&buf); err != nil {
+	if err := (CZMailReq{Op: HeaderCZREQREADMAIL(), MailID: 77}).Encode(&buf); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 	if got := buf.Len(); got != 11 {
 		t.Fatalf("CZ_REQ_READ_MAIL size = %d, want 11", got)
 	}
 	got, err := ParseCZReadMail(buf.Bytes())
-	if err != nil || got.MailID != 77 || got.Op != HeaderCZREQREADMAIL {
+	if err != nil || got.MailID != 77 || got.Op != HeaderCZREQREADMAIL() {
 		t.Fatalf("parsed = %+v, err %v", got, err)
 	}
 	// CZ_OPEN_MAILBOX2 0x0ac0: id.Q at 2, 16 unknown bytes tail (the
 	// ≥20170419 handler reads RFIFOQ(fd, 2) directly).
 	var b2 bytes.Buffer
-	if err := (CZMailReq{Op: HeaderCZOPENMAILBOX2, MailID: 88}).Encode(&b2); err != nil {
+	if err := (CZMailReq{Op: HeaderCZOPENMAILBOX2(), MailID: 88}).Encode(&b2); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 	if got := b2.Len(); got != 26 {
@@ -42,7 +42,7 @@ func TestParseCZMailIDFrames(t *testing.T) {
 	}
 	// CZ_REQ_ZENY_FROM_MAIL 0x09f1: id.Q at 2, tab.B at 10.
 	f1 := make([]byte, 11)
-	binary.LittleEndian.PutUint16(f1[0:], HeaderCZREQZENYFROMMAIL)
+	binary.LittleEndian.PutUint16(f1[0:], HeaderCZREQZENYFROMMAIL())
 	binary.LittleEndian.PutUint64(f1[2:], 99)
 	f1[10] = MailInboxNormal
 	got3, err := ParseCZGetAttach(f1)
@@ -56,7 +56,7 @@ func TestParseCZMailIDFrames(t *testing.T) {
 
 func TestParseCZMailNameFrames(t *testing.T) {
 	var buf bytes.Buffer
-	if err := (CZOpenWriteMail{Op: HeaderCZREQOPENWRITEMAI, Name: "Partner"}).Encode(&buf); err != nil {
+	if err := (CZOpenWriteMail{Op: HeaderCZREQOPENWRITEMAI(), Name: "Partner"}).Encode(&buf); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 	if got := buf.Len(); got != 26 {
@@ -68,18 +68,18 @@ func TestParseCZMailNameFrames(t *testing.T) {
 	}
 	// 0x0b97 adds one flag byte.
 	f := make([]byte, 27)
-	binary.LittleEndian.PutUint16(f[0:], HeaderCZCHECKNAME2)
+	binary.LittleEndian.PutUint16(f[0:], HeaderCZCHECKNAME2())
 	copy(f[2:], "Hero")
 	f[26] = 1
 	got2, err := ParseCZCheckReceiverName(f)
-	if err != nil || got2.Name != "Hero" || got2.Op != HeaderCZCHECKNAME2 {
+	if err != nil || got2.Name != "Hero" || got2.Op != HeaderCZCHECKNAME2() {
 		t.Fatalf("parsed = %+v, err %v", got2, err)
 	}
 }
 
 func TestParseCZMailAttachItem(t *testing.T) {
 	var buf bytes.Buffer
-	if err := (CZMailAttachItem{Op: HeaderCZREQADDITEMMAIL, Index: 5, Count: 3}).Encode(&buf); err != nil {
+	if err := (CZMailAttachItem{Op: HeaderCZREQADDITEMMAIL(), Index: 5, Count: 3}).Encode(&buf); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 	got, err := ParseCZMailAddItem(buf.Bytes())
@@ -95,7 +95,7 @@ func TestParseCZWriteMail2(t *testing.T) {
 	// 0x0a6e: strings start after the 4-byte receiver char id.
 	title, body := "Hello there", "Body text\nline two"
 	frame := make([]byte, sizeCZWriteMail2Header+len(title)+1+len(body))
-	binary.LittleEndian.PutUint16(frame[0:], HeaderCZREQWRITEMAIL2)
+	binary.LittleEndian.PutUint16(frame[0:], HeaderCZREQWRITEMAIL2())
 	binary.LittleEndian.PutUint16(frame[2:], uint16(len(frame))) //nolint:gosec // test frame bounded.
 	copy(frame[4:], "Partner\x00")
 	copy(frame[28:], "Hero\x00")
@@ -121,7 +121,7 @@ func TestParseCZWriteMail2(t *testing.T) {
 	}
 	// 0x09ec has no char-id slot.
 	f9 := make([]byte, sizeCZWriteMailHeader+len(title)+1)
-	binary.LittleEndian.PutUint16(f9[0:], HeaderCZREQWRITEMAIL)
+	binary.LittleEndian.PutUint16(f9[0:], HeaderCZREQWRITEMAIL())
 	binary.LittleEndian.PutUint16(f9[60:], uint16(len(title)+1)) //nolint:gosec
 	copy(f9[64:], title)
 	got9, err := ParseCZWriteMail(f9)
@@ -136,7 +136,7 @@ func TestZCNotifyUnreadMail(t *testing.T) {
 		t.Fatalf("encode: %v", err)
 	}
 	b := buf.Bytes()
-	if len(b) != 3 || u16(b, 0) != HeaderZCNOTIFYUNREADMA || b[2] != 1 {
+	if len(b) != 3 || u16(b, 0) != HeaderZCNOTIFYUNREADMA() || b[2] != 1 {
 		t.Fatalf("bytes = %x", b)
 	}
 }
@@ -155,7 +155,7 @@ func TestZCAckMailList(t *testing.T) {
 	if len(b) != want {
 		t.Fatalf("size = %d, want %d", len(b), want)
 	}
-	if u16(b, 0) != HeaderZCACKMAILLIST || u16(b, 2) != uint16(want) || b[4] != 1 {
+	if u16(b, 0) != HeaderZCACKMAILLIST() || u16(b, 2) != uint16(want) || b[4] != 1 {
 		t.Fatalf("header = %x", b[:5])
 	}
 	e := b[5:]
@@ -185,7 +185,7 @@ func TestZCAckReadRodex(t *testing.T) {
 	if len(b) != want {
 		t.Fatalf("size = %d, want %d", len(b), want)
 	}
-	if u16(b, 0) != HeaderZCACKREADRODEX || u16(b, 2) != uint16(want) || b[4] != MailInboxNormal ||
+	if u16(b, 0) != HeaderZCACKREADRODEX() || u16(b, 2) != uint16(want) || b[4] != MailInboxNormal ||
 		u64(b, 5) != 42 || u16(b, 13) != 3 || u64(b, 15) != 500 || b[23] != 1 {
 		t.Fatalf("header = %x", b[:24])
 	}
@@ -236,7 +236,7 @@ func TestZCSmallAcks(t *testing.T) {
 	if err := EncodeZCAckWriteMail(&buf, MailSendSuccess); err != nil {
 		t.Fatalf("encode write ack: %v", err)
 	}
-	if b := buf.Bytes(); len(b) != 3 || u16(b, 0) != HeaderZCACKMAILWRITE || b[2] != 0 {
+	if b := buf.Bytes(); len(b) != 3 || u16(b, 0) != HeaderZCACKMAILWRITE() || b[2] != 0 {
 		t.Fatalf("write ack = %x", b)
 	}
 
@@ -276,7 +276,7 @@ func TestZCSmallAcks(t *testing.T) {
 	if err := EncodeZCAckItemFromMail(&buf, 43, MailInboxNormal, MailAttachOK); err != nil {
 		t.Fatalf("encode item ack: %v", err)
 	}
-	if b := buf.Bytes(); len(b) != 12 || u16(b, 0) != HeaderZCACKITEMFROMMAI || u64(b, 2) != 43 {
+	if b := buf.Bytes(); len(b) != 12 || u16(b, 0) != HeaderZCACKITEMFROMMAI() || u64(b, 2) != 43 {
 		t.Fatalf("item ack = %x", b)
 	}
 
@@ -284,7 +284,7 @@ func TestZCSmallAcks(t *testing.T) {
 	if err := EncodeZCAckDeleteMail(&buf, MailInboxNormal, 44); err != nil {
 		t.Fatalf("encode delete: %v", err)
 	}
-	if b := buf.Bytes(); len(b) != 11 || u16(b, 0) != HeaderZCACKDELETEMAIL || b[2] != 0 || u64(b, 3) != 44 {
+	if b := buf.Bytes(); len(b) != 11 || u16(b, 0) != HeaderZCACKDELETEMAIL() || b[2] != 0 || u64(b, 3) != 44 {
 		t.Fatalf("delete = %x", b)
 	}
 }

@@ -12,16 +12,15 @@ func TestItemFallEntryResponse_Size(t *testing.T) {
 	t.Parallel()
 
 	r := &ItemFallEntryResponse{}
-	if got, want := r.Size(), 24; got != want {
+	if got, want := r.Size(), sizeZCItemFallEntry(); got != want {
 		t.Errorf("Size() = %d, want %d", got, want)
 	}
 }
 
 // TestItemFallEntryResponse_EncodeFieldLayout verifies the on-wire byte
 // layout of ZC_ITEM_FALL_ENTRY (0x0ADD) at PACKETVER 20250604. The legacy
-// clif.cpp:864 comment "<name id>.W" is stale — nameID is uint32 at
-// >=20181121, so the frame is 24 bytes (not 22) and every field after
-// nameID sits 2 bytes further than the old v4 layout.
+// The source registers the packet at 22 bytes (clif_packetdb.hpp:1925)
+// and documents the name id as a uint16 (clif.cpp:864).
 func TestItemFallEntryResponse_EncodeFieldLayout(t *testing.T) {
 	t.Parallel()
 
@@ -44,56 +43,56 @@ func TestItemFallEntryResponse_EncodeFieldLayout(t *testing.T) {
 		t.Fatalf("Encode: %v", err)
 	}
 	out := buf.Bytes()
-	if len(out) != 24 {
-		t.Fatalf("encoded length = %d, want 24; bytes=% x", len(out), out)
+	if len(out) != sizeZCItemFallEntry() {
+		t.Fatalf("encoded length = %d, want %d; bytes=% x", len(out), sizeZCItemFallEntry(), out)
 	}
 
 	// [0:2] packetType
-	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCItemFallEntry {
-		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCItemFallEntry)
+	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCItemFallEntry() {
+		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCItemFallEntry())
 	}
 	// [2:6] ID
 	if got := binary.LittleEndian.Uint32(out[2:6]); got != 0x11223344 {
 		t.Errorf("ID = 0x%x, want 0x11223344", got)
 	}
-	// [6:10] NameID (uint32)
-	if got := binary.LittleEndian.Uint32(out[6:10]); got != 0x12345678 {
-		t.Errorf("NameID = 0x%x, want 0x12345678", got)
+	// [6:8] NameID (uint16)
+	if got := binary.LittleEndian.Uint16(out[6:8]); got != 0x5678 {
+		t.Errorf("NameID = 0x%x, want 0x5678", got)
 	}
-	// [10:12] Type
-	if got := binary.LittleEndian.Uint16(out[10:12]); got != 3 {
+	// [8:10] Type
+	if got := binary.LittleEndian.Uint16(out[8:10]); got != 3 {
 		t.Errorf("Type = %d, want 3", got)
 	}
-	// [12] Identified
-	if out[12] != 1 {
-		t.Errorf("Identified = %d, want 1", out[12])
+	// [10] Identified
+	if out[10] != 1 {
+		t.Errorf("Identified = %d, want 1", out[10])
 	}
-	// [13:15] X
-	if got := binary.LittleEndian.Uint16(out[13:15]); got != 155 {
+	// [11:13] X
+	if got := binary.LittleEndian.Uint16(out[11:13]); got != 155 {
 		t.Errorf("X = %d, want 155", got)
 	}
-	// [15:17] Y
-	if got := binary.LittleEndian.Uint16(out[15:17]); got != 165 {
+	// [13:15] Y
+	if got := binary.LittleEndian.Uint16(out[13:15]); got != 165 {
 		t.Errorf("Y = %d, want 165", got)
 	}
-	// [17] SubX
-	if out[17] != 4 {
-		t.Errorf("SubX = %d, want 4", out[17])
+	// [15] SubX
+	if out[15] != 4 {
+		t.Errorf("SubX = %d, want 4", out[15])
 	}
-	// [18] SubY
-	if out[18] != 7 {
-		t.Errorf("SubY = %d, want 7", out[18])
+	// [16] SubY
+	if out[16] != 7 {
+		t.Errorf("SubY = %d, want 7", out[16])
 	}
-	// [19:21] Amount
-	if got := binary.LittleEndian.Uint16(out[19:21]); got != 9 {
+	// [17:19] Amount
+	if got := binary.LittleEndian.Uint16(out[17:19]); got != 9 {
 		t.Errorf("Amount = %d, want 9", got)
 	}
-	// [21] ShowDropEffect
-	if out[21] != 1 {
-		t.Errorf("ShowDropEffect = %d, want 1", out[21])
+	// [19] ShowDropEffect
+	if out[19] != 1 {
+		t.Errorf("ShowDropEffect = %d, want 1", out[19])
 	}
-	// [22:24] DropEffectMode
-	if got := binary.LittleEndian.Uint16(out[22:24]); got != 0 {
+	// [20:22] DropEffectMode
+	if got := binary.LittleEndian.Uint16(out[20:22]); got != 0 {
 		t.Errorf("DropEffectMode = %d, want 0", got)
 	}
 }
@@ -138,8 +137,8 @@ func TestItemEntryResponse_EncodeFieldLayout(t *testing.T) {
 	if len(out) != 19 {
 		t.Fatalf("encoded length = %d, want 19; bytes=% x", len(out), out)
 	}
-	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCItemEntry {
-		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCItemEntry)
+	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCItemEntry() {
+		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCItemEntry())
 	}
 	if got := binary.LittleEndian.Uint32(out[2:6]); got != 0xAAAABBBB {
 		t.Errorf("AID = 0x%x, want 0xAAAABBBB", got)
@@ -179,8 +178,8 @@ func TestItemDisappearResponse_EncodeFieldLayout(t *testing.T) {
 	if len(out) != 6 {
 		t.Fatalf("encoded length = %d, want 6; bytes=% x", len(out), out)
 	}
-	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCItemDisappear {
-		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCItemDisappear)
+	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCItemDisappear() {
+		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCItemDisappear())
 	}
 	if got := binary.LittleEndian.Uint32(out[2:6]); got != 0xCAFEBABE {
 		t.Errorf("AID = 0x%x, want 0xCAFEBABE", got)
@@ -199,8 +198,8 @@ func TestItemThrowAckResponse_EncodeFieldLayout(t *testing.T) {
 	if len(out) != 6 {
 		t.Fatalf("encoded length = %d, want 6; bytes=% x", len(out), out)
 	}
-	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCItemThrowAck {
-		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCItemThrowAck)
+	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCItemThrowAck() {
+		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCItemThrowAck())
 	}
 	if got := binary.LittleEndian.Uint16(out[2:4]); got != 7 {
 		t.Errorf("Index = %d, want 7", got)
@@ -243,8 +242,8 @@ func TestItemPickupAckResponse_EncodeFieldLayout(t *testing.T) {
 	if len(out) != 70 {
 		t.Fatalf("encoded length = %d, want 70; bytes=% x", len(out), out)
 	}
-	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCItemPickupAck {
-		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCItemPickupAck)
+	if got := binary.LittleEndian.Uint16(out[0:2]); got != HeaderZCItemPickupAck() {
+		t.Errorf("packetType = 0x%04x, want 0x%04x", got, HeaderZCItemPickupAck())
 	}
 	if got := binary.LittleEndian.Uint16(out[2:4]); got != 11 {
 		t.Errorf("Index = %d, want 11", got)

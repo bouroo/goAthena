@@ -39,14 +39,14 @@ type MapAcceptEnterResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 13).
 func (r MapAcceptEnterResponse) Size() int {
-	return sizeZCAcceptEnter
+	return sizeZCAcceptEnter()
 }
 
 // Encode writes the ZC_ACCEPT_ENTER packet to w.
 func (r MapAcceptEnterResponse) Encode(w io.Writer) error {
-	buf := make([]byte, sizeZCAcceptEnter)
-	// int16 packetType = 0x02eb (HeaderZCACCEPTENTER).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACCEPTENTER)
+	buf := make([]byte, sizeZCAcceptEnter())
+	// int16 packetType = 0x02eb (HeaderZCACCEPTENTER()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACCEPTENTER())
 	// uint32 startTime at offset 2.
 	binary.LittleEndian.PutUint32(buf[2:], r.StartTime)
 	// uint8 posDir[3] at offset 6 — kRO 3-byte packed position.
@@ -75,13 +75,13 @@ type MapRefuseEnterResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 3).
 func (r MapRefuseEnterResponse) Size() int {
-	return sizeZCRefuseEnter
+	return sizeZCRefuseEnter()
 }
 
 // Encode writes the ZC_REFUSE_ENTER packet to w.
 func (r MapRefuseEnterResponse) Encode(w io.Writer) error {
-	buf := make([]byte, sizeZCRefuseEnter)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREFUSEENTER)
+	buf := make([]byte, sizeZCRefuseEnter())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCREFUSEENTER())
 	buf[2] = r.Error
 
 	if _, err := w.Write(buf); err != nil {
@@ -109,7 +109,7 @@ type MapMoveResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 22).
 func (r MapMoveResponse) Size() int {
-	return sizeZCNPCAckMapMove
+	return sizeZCNPCAckMapMove()
 }
 
 // Encode writes the ZC_NPCACK_MAPMOVE packet to w. Returns a wrapped error
@@ -120,8 +120,8 @@ func (r MapMoveResponse) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: encode ZC_NPCACK_MAPMOVE: %w", ErrMapNameTooLong)
 	}
 
-	buf := make([]byte, sizeZCNPCAckMapMove)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNPCACKMAPMOVE)
+	buf := make([]byte, sizeZCNPCAckMapMove())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNPCACKMAPMOVE())
 	// char mapName[16] at offset 2 — zero-padded.
 	writeFixedString(buf[2:2+mapNameExtSlot], r.MapName)
 	// uint16 xPos at offset 18 (2+16).
@@ -131,6 +131,68 @@ func (r MapMoveResponse) Encode(w io.Writer) error {
 
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_NPCACK_MAPMOVE: %w", err)
+	}
+	return nil
+}
+
+// ServerMoveResponse encodes a ZC_NPCACK_SERVERMOVE packet (command 0x0ac7) —
+// the cross-map-server variant of ZC_NPCACK_MAPMOVE: the client loads the
+// named map and reconnects to ip:port (a different zone process) instead of
+// this map server. Layout source: rathena/src/map/packets.hpp
+// PACKET_ZC_NPCACK_SERVERMOVE at PACKETVER >= 20170315 (opcode 0x0ac7,
+// SERVERMOVE_DOMAIN variant; the trailing domain slot is sent empty).
+//
+// Fixed wire length: 156 bytes (int16 packetType + char mapName[24] +
+// uint16 xPos + uint16 yPos + uint32 ip + uint16 port + char domain[128]).
+// The struct is packed (no padding). ip and port are the two fields the
+// client reads big-endian — rAthena writes htonl(ip) and the byte-swapped
+// port ("ntows(htons(port))", clif.cpp:2173-2174) — so Encode stores them
+// verbatim as pre-swapped wire values.
+type ServerMoveResponse struct {
+	// MapName is the destination map name (no extension, e.g. "izlude"),
+	// zero-padded to fill the 24-byte slot (MAP_NAME_LENGTH_EXT).
+	MapName string
+	// X is the destination cell X.
+	X uint16
+	// Y is the destination cell Y.
+	Y uint16
+	// IP is the zone address in the wire (big-endian) byte order the client
+	// expects — the value of binary.BigEndian.PutUint32 over the IPv4 octets.
+	IP uint32
+	// Port is the zone port in the wire (byte-swapped) order rAthena's
+	// ntows(htons(port)) produces.
+	Port uint16
+}
+
+// Size returns the on-wire byte length that Encode will write (always 156).
+func (r ServerMoveResponse) Size() int {
+	return sizeZCNPCAckServerMove()
+}
+
+// Encode writes the ZC_NPCACK_SERVERMOVE packet to w. Returns a wrapped error
+// (sentinel + %w) if MapName exceeds 24 bytes; in that case no bytes are
+// written to w.
+func (r ServerMoveResponse) Encode(w io.Writer) error {
+	const nameSlot = 24
+	if len(r.MapName) > nameSlot {
+		return fmt.Errorf("packet: encode ZC_NPCACK_SERVERMOVE: %w", ErrMapNameTooLong)
+	}
+	buf := make([]byte, sizeZCNPCAckServerMove())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNPCACKSERVERMOVE())
+	writeFixedString(buf[2:2+nameSlot], r.MapName)
+	// uint16 xPos at offset 26 (2+24).
+	binary.LittleEndian.PutUint16(buf[26:], r.X)
+	// uint16 yPos at offset 28.
+	binary.LittleEndian.PutUint16(buf[28:], r.Y)
+	// uint32 ip at offset 30 — big-endian on the wire (clif.cpp htonl).
+	binary.BigEndian.PutUint32(buf[30:], r.IP)
+	// uint16 port at offset 34 — byte-swapped on the wire (clif.cpp
+	// ntows(htons(port))).
+	binary.BigEndian.PutUint16(buf[34:], r.Port)
+	// char domain[128] at offset 36 — sent empty (rAthena safestrncpy "").
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_NPCACK_SERVERMOVE: %w", err)
 	}
 	return nil
 }
@@ -167,14 +229,14 @@ type MapNotifyPlayerMoveResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 12).
 func (r MapNotifyPlayerMoveResponse) Size() int {
-	return sizeZCNotifyPlayerMove
+	return sizeZCNotifyPlayerMove()
 }
 
 // Encode writes the ZC_NOTIFY_PLAYERMOVE packet to w.
 func (r MapNotifyPlayerMoveResponse) Encode(w io.Writer) error {
-	buf := make([]byte, sizeZCNotifyPlayerMove)
-	// int16 packetType = 0x0087 (HeaderZCNOTIFYPLAYERMOVE).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYPLAYERMOVE)
+	buf := make([]byte, sizeZCNotifyPlayerMove())
+	// int16 packetType = 0x0087 (HeaderZCNOTIFYPLAYERMOVE()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYPLAYERMOVE())
 	// uint32 moveStartTime at offset 2.
 	binary.LittleEndian.PutUint32(buf[2:], r.MoveStartTime)
 	// uint8 srcPos[3] at offset 6 — kRO 3-byte packed source position.
@@ -309,7 +371,7 @@ func (r SpawnUnitResponse) Size() int {
 
 // Encode writes the ZC_SPAWN_UNIT packet to w.
 func (r SpawnUnitResponse) Encode(w io.Writer) error {
-	return encodeSpawnUnitLike(w, HeaderZCSPAWNUNIT, r)
+	return encodeSpawnUnitLike(w, HeaderZCSPAWNUNIT(), r)
 }
 
 // encodeSpawnUnitLike writes a ZC_SPAWN_UNIT / ZC_SET_UNIT_IDLE packet
@@ -378,7 +440,7 @@ func (r SetUnitIdleResponse) Size() int {
 
 // Encode writes the ZC_SET_UNIT_IDLE packet to w.
 func (r SetUnitIdleResponse) Encode(w io.Writer) error {
-	return encodeSpawnUnitLike(w, HeaderZCSETUNITIDLE, SpawnUnitResponse(r))
+	return encodeSpawnUnitLike(w, HeaderZCSETUNITIDLE(), SpawnUnitResponse(r))
 }
 
 // UnitWalkingResponse encodes a ZC_UNIT_WALKING packet (command 0x09fd,
@@ -547,7 +609,7 @@ func (r UnitWalkingResponse) Size() int {
 // Encode writes the ZC_UNIT_WALKING packet to w.
 func (r UnitWalkingResponse) Encode(w io.Writer) error {
 	buf := make([]byte, sizeZCUnitWalking)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCUNITWALKING)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCUNITWALKING())
 	binary.LittleEndian.PutUint16(buf[2:], sizeZCUnitWalking)
 	buf[4] = r.ObjectType
 	binary.LittleEndian.PutUint32(buf[5:], r.AID)
@@ -620,14 +682,14 @@ type MapPropertyResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 8).
 func (r MapPropertyResponse) Size() int {
-	return sizeZCMapPropertyR2
+	return sizeZCMapPropertyR2()
 }
 
 // Encode writes the ZC_MAPPROPERTY_R2 packet to w.
 func (r MapPropertyResponse) Encode(w io.Writer) error {
-	buf := make([]byte, sizeZCMapPropertyR2)
-	// int16 packetType = 0x099b (HeaderZCMAPPROPERTYR2).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCMAPPROPERTYR2)
+	buf := make([]byte, sizeZCMapPropertyR2())
+	// int16 packetType = 0x099b (HeaderZCMAPPROPERTYR2()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCMAPPROPERTYR2())
 	// int16 propertyType at offset 2.
 	binary.LittleEndian.PutUint16(buf[2:], r.PropertyType)
 	// uint32 flags at offset 4.
@@ -657,14 +719,14 @@ type NotifyTimeResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 6).
 func (r NotifyTimeResponse) Size() int {
-	return sizeZCNotifyTime
+	return sizeZCNotifyTime()
 }
 
 // Encode writes the ZC_NOTIFY_TIME packet to w.
 func (r NotifyTimeResponse) Encode(w io.Writer) error {
-	buf := make([]byte, sizeZCNotifyTime)
-	// int16 packetType = 0x007f (HeaderZCNOTIFYTIME).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYTIME)
+	buf := make([]byte, sizeZCNotifyTime())
+	// int16 packetType = 0x007f (HeaderZCNOTIFYTIME()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYTIME())
 	// uint32 time at offset 2.
 	binary.LittleEndian.PutUint32(buf[2:], r.Time)
 
@@ -683,7 +745,7 @@ func (r NotifyTimeResponse) Encode(w io.Writer) error {
 //
 // Wire layout (rathena/src/map/packets.hpp:598-602):
 //
-//	int16 packetType = 0x00b3 (HeaderZCRESTARTACK)
+//	int16 packetType = 0x00b3 (HeaderZCRESTARTACK())
 //	uint8 type        (0 = refused, 1 = leave-for-char-select)
 type RestartAckResponse struct {
 	Type uint8
@@ -691,18 +753,18 @@ type RestartAckResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 3).
 func (r RestartAckResponse) Size() int {
-	return sizeZCRestartAck
+	return sizeZCRestartAck()
 }
 
 // Encode writes the ZC_RESTART_ACK packet to w.
 func (r RestartAckResponse) Encode(w io.Writer) error {
-	var buf [sizeZCRestartAck]byte
-	// int16 packetType = 0x00b3 (HeaderZCRESTARTACK).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCRESTARTACK)
+	buf := make([]byte, sizeZCRestartAck())
+	// int16 packetType = 0x00b3 (HeaderZCRESTARTACK()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCRESTARTACK())
 	// uint8 type at offset 2.
 	buf[2] = r.Type
 
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_RESTART_ACK: %w", err)
 	}
 	return nil
@@ -762,13 +824,13 @@ type StatusResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 44).
 func (r StatusResponse) Size() int {
-	return sizeZCStatus
+	return sizeZCStatus()
 }
 
 // Encode writes the ZC_STATUS packet to w.
 func (r StatusResponse) Encode(w io.Writer) error {
-	var buf [sizeZCStatus]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTATUS)
+	buf := make([]byte, sizeZCStatus())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTATUS())
 	binary.LittleEndian.PutUint16(buf[2:], r.StatusPoint)
 	buf[4] = r.Str
 	buf[5] = r.NeedStr
@@ -796,7 +858,7 @@ func (r StatusResponse) Encode(w io.Writer) error {
 	binary.LittleEndian.PutUint16(buf[38:], uint16(r.Critical)) //nolint:gosec // ditto
 	binary.LittleEndian.PutUint16(buf[40:], uint16(r.ASPD))     //nolint:gosec // ditto
 	binary.LittleEndian.PutUint16(buf[42:], uint16(r.PlusASPD)) //nolint:gosec // ditto
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_STATUS: %w", err)
 	}
 	return nil
@@ -817,16 +879,16 @@ type ParChangeResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 8).
 func (r ParChangeResponse) Size() int {
-	return sizeZCParChange
+	return sizeZCParChange()
 }
 
 // Encode writes the ZC_PAR_CHANGE packet to w.
 func (r ParChangeResponse) Encode(w io.Writer) error {
-	var buf [sizeZCParChange]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPARCHANGE)
+	buf := make([]byte, sizeZCParChange())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPARCHANGE())
 	binary.LittleEndian.PutUint16(buf[2:], r.VarID)
 	binary.LittleEndian.PutUint32(buf[4:], uint32(r.Count)) //nolint:gosec // wire slot is unsigned
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_PAR_CHANGE: %w", err)
 	}
 	return nil
@@ -847,16 +909,16 @@ type LongParChangeResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 8).
 func (r LongParChangeResponse) Size() int {
-	return sizeZCLongParChange
+	return sizeZCLongParChange()
 }
 
 // Encode writes the ZC_LONGPAR_CHANGE packet to w.
 func (r LongParChangeResponse) Encode(w io.Writer) error {
-	var buf [sizeZCLongParChange]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCLONGPARCHANGE)
+	buf := make([]byte, sizeZCLongParChange())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCLONGPARCHANGE())
 	binary.LittleEndian.PutUint16(buf[2:], r.VarID)
 	binary.LittleEndian.PutUint32(buf[4:], uint32(r.Amount)) //nolint:gosec // wire slot is unsigned
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_LONGPAR_CHANGE: %w", err)
 	}
 	return nil
@@ -880,16 +942,16 @@ type LongLongParChangeResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 12).
 func (r LongLongParChangeResponse) Size() int {
-	return sizeZCLongLongParChange
+	return sizeZCLongLongParChange()
 }
 
 // Encode writes the ZC_LONGLONGPAR_CHANGE packet to w.
 func (r LongLongParChangeResponse) Encode(w io.Writer) error {
-	var buf [sizeZCLongLongParChange]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCLONGLONGPARCHANGE)
+	buf := make([]byte, sizeZCLongLongParChange())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCLONGLONGPARCHANGE())
 	binary.LittleEndian.PutUint16(buf[2:], r.VarID)
 	binary.LittleEndian.PutUint64(buf[4:], uint64(r.Amount)) //nolint:gosec // wire slot is unsigned
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_LONGLONGPAR_CHANGE: %w", err)
 	}
 	return nil
@@ -910,17 +972,10 @@ func StatusPointCost(currentVal uint8) uint8 {
 // The empty list packets are completely static — their bytes never
 // change — so they are built once at package init and shared by every
 // caller. Callers must treat the returned slices as read-only.
-var (
-	emptyInventoryListNormal []byte
-	emptyInventoryListEquip  []byte
-	emptySkillList           []byte
-	// emptyHotkeyListTab holds the two ZC_SHORTCUT_KEY_LIST frames
-	// rAthena emits for a fresh character (tab 0 and tab 1). See
-	// EncodeEmptyHotkeyList.
-	emptyHotkeyListTab [2][]byte
-)
-
-func init() {
+// The empty frames are built on demand: their opcodes and their sizes come
+// from the installed protocol set, and a package-level variable would
+// resolve before the boot installs it.
+func emptyInventoryListNormal() []byte {
 	// Inventory empty lists carry the MAIN@20250604 5-byte header
 	// (cmd + packetLength + invType=0). NOTE: rAthena suppresses these
 	// frames entirely when the inventory is empty (clif_inventorylist
@@ -930,36 +985,46 @@ func init() {
 	// future caller that wants an explicit zero-item frame.
 	// TODO(B1): invType header + opcode resolve per-PACKETVER via the
 	// PacketRegistry (packetdb N1.1).
-	emptyInventoryListNormal = make([]byte, sizeEmptyInventoryListNormal)
-	binary.LittleEndian.PutUint16(emptyInventoryListNormal[0:], HeaderZCINVENTORYITEMLISTNORMAL)
-	binary.LittleEndian.PutUint16(emptyInventoryListNormal[2:], sizeEmptyInventoryListNormal)
-	emptyInventoryListNormal[4] = 0 // invType = INVTYPE_INVENTORY
+	buf := make([]byte, sizeEmptyInventoryListNormal)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTNORMAL())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(sizeEmptyInventoryListNormal)) //nolint:gosec // the length is a two-byte field.
+	buf[4] = 0                                                                   // invType = INVTYPE_INVENTORY
+	return buf
+}
 
-	emptyInventoryListEquip = make([]byte, sizeEmptyInventoryListNormal)
-	binary.LittleEndian.PutUint16(emptyInventoryListEquip[0:], HeaderZCINVENTORYITEMLISTEQUIP)
-	binary.LittleEndian.PutUint16(emptyInventoryListEquip[2:], sizeEmptyInventoryListNormal)
-	emptyInventoryListEquip[4] = 0 // invType = INVTYPE_INVENTORY
+// emptyInventoryListEquip returns the empty ZC_INVENTORY_ITEMLIST_EQUIP
+// frame.
+func emptyInventoryListEquip() []byte {
+	buf := make([]byte, sizeEmptyInventoryListNormal)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYITEMLISTEQUIP())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(sizeEmptyInventoryListNormal)) //nolint:gosec // the length is a two-byte field.
+	buf[4] = 0                                                                   // invType = INVTYPE_INVENTORY
+	return buf
+}
 
+// emptySkillList returns the empty ZC_SKILLINFO_LIST frame.
+func emptySkillList() []byte {
 	// The skill list header did not gain an invType byte for
 	// MAIN@20250604 (its opcode stayed 0x010f), so it keeps the
 	// 4-byte header.
-	emptySkillList = make([]byte, sizeEmptyInventoryList)
-	binary.LittleEndian.PutUint16(emptySkillList[0:], HeaderZCSKILLINFOLIST)
-	binary.LittleEndian.PutUint16(emptySkillList[2:], sizeEmptyInventoryList)
+	buf := make([]byte, sizeEmptyInventoryList)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSKILLINFOLIST())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(sizeEmptyInventoryList)) //nolint:gosec // the length is a two-byte field.
+	return buf
+}
 
+// emptyHotkeyListTab returns the ZC_SHORTCUT_KEY_LIST frame rAthena emits
+// for a fresh character (tab 0 and tab 1).
+func emptyHotkeyListTab(tab int) []byte {
 	// Hotkey frames: 271 bytes each (cmd + rotate + tab + 38 slots).
 	// rAthena sends two of them (tab 0, tab 1) on every LoadEndAck;
 	// a fresh character has rotate=0 and all slots zero.
-	// TODO(B1): 38-slot shape + opcode resolve per-PACKETVER via the
-	// PacketRegistry (packetdb N1.1).
-	for tab := range 2 {
-		b := make([]byte, sizeZCShortcutKeyList)
-		binary.LittleEndian.PutUint16(b[0:], HeaderZCSHORTCUTKEYLIST)
-		binary.LittleEndian.PutUint16(b[3:], uint16(tab)) // tab (int16)
-		// Remaining bytes (rotate flag + 38 × 7 slot bytes) are zero
-		// (make already initializes to 0).
-		emptyHotkeyListTab[tab] = b
-	}
+	b := make([]byte, sizeZCShortcutKeyList())
+	binary.LittleEndian.PutUint16(b[0:], HeaderZCSHORTCUTKEYLIST())
+	binary.LittleEndian.PutUint16(b[3:], uint16(tab)) //nolint:gosec // bounded by the length check above // tab (int16)
+	// Remaining bytes (rotate flag + 38 × 7 slot bytes) are zero
+	// (make already initializes to 0).
+	return b
 }
 
 // EncodeEmptyInventoryListNormal returns the on-wire bytes for an
@@ -975,7 +1040,7 @@ func init() {
 // (see EncodeInventoryStart/End); this helper is the correct empty
 // encoder regardless.
 func EncodeEmptyInventoryListNormal() []byte {
-	return emptyInventoryListNormal
+	return emptyInventoryListNormal()
 }
 
 // EncodeEmptyInventoryListEquip returns the on-wire bytes for an
@@ -989,7 +1054,7 @@ func EncodeEmptyInventoryListNormal() []byte {
 // PacketRegistry (packetdb N1.1). The 5-byte / 0x0b39 form is
 // MAIN@20250604.
 func EncodeEmptyInventoryListEquip() []byte {
-	return emptyInventoryListEquip
+	return emptyInventoryListEquip()
 }
 
 // EncodeEmptySkillList returns the pre-allocated on-wire bytes for an
@@ -1004,7 +1069,7 @@ func EncodeEmptyInventoryListEquip() []byte {
 // expects to see so it initializes the skill list pane without
 // leaving it in an indeterminate state.
 func EncodeEmptySkillList() []byte {
-	return emptySkillList
+	return emptySkillList()
 }
 
 // EncodeEmptyHotkeyList returns the pre-allocated on-wire bytes for an
@@ -1033,9 +1098,9 @@ func EncodeEmptyHotkeyList(tab int) []byte {
 		// Defensive: the only valid tabs are 0 and 1. A bogus tab is a
 		// caller programming error; fall back to tab 0 rather than
 		// indexing out of bounds.
-		return emptyHotkeyListTab[0]
+		return emptyHotkeyListTab(0)
 	}
-	return emptyHotkeyListTab[tab]
+	return emptyHotkeyListTab(tab)
 }
 
 // inventoryStartFrame and inventoryEndFrame are the pre-built
@@ -1047,35 +1112,38 @@ func EncodeEmptyHotkeyList(tab int) []byte {
 //
 // TODO(B1): opcode + struct resolve per-PACKETVER via the PacketRegistry
 // (packetdb N1.1). The 0x0b08/0x0b0b forms are MAIN@20250604.
-var (
-	inventoryStartFrame []byte
-	inventoryEndFrame   []byte
-)
+// The frames are built on demand: their opcodes and their sizes come from
+// the installed protocol set, and a package-level variable would resolve
+// before the boot installs it.
+func inventoryStartFrame() []byte {
+	buf := make([]byte, sizeZCInventoryStart())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYSTART())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(sizeZCInventoryStart())) //nolint:gosec // the length is a two-byte field.
+	buf[4] = 0                                                             // invType = INVTYPE_INVENTORY
+	buf[5] = 0                                                             // name[0] = the NUL byte
+	return buf
+}
 
-func init() {
-	inventoryStartFrame = make([]byte, sizeZCInventoryStart)
-	binary.LittleEndian.PutUint16(inventoryStartFrame[0:], HeaderZCINVENTORYSTART)
-	binary.LittleEndian.PutUint16(inventoryStartFrame[2:], sizeZCInventoryStart)
-	inventoryStartFrame[4] = 0 // invType = INVTYPE_INVENTORY
-	inventoryStartFrame[5] = 0 // name[0] = '\0'
-
-	inventoryEndFrame = make([]byte, sizeZCInventoryEnd)
-	binary.LittleEndian.PutUint16(inventoryEndFrame[0:], HeaderZCINVENTORYEND)
-	inventoryEndFrame[2] = 0 // invType = INVTYPE_INVENTORY
-	inventoryEndFrame[3] = 0 // flag
+// inventoryEndFrame returns the ZC_INVENTORY_END bracket frame.
+func inventoryEndFrame() []byte {
+	buf := make([]byte, sizeZCInventoryEnd())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCINVENTORYEND())
+	buf[2] = 0 // invType = INVTYPE_INVENTORY
+	buf[3] = 0 // flag
+	return buf
 }
 
 // EncodeInventoryStart returns the pre-allocated ZC_INVENTORY_START
 // (0x0b08) bracket frame (6 bytes). Callers must not modify the
 // returned slice. See inventoryStartFrame for layout and rAthena
 // reference.
-func EncodeInventoryStart() []byte { return inventoryStartFrame }
+func EncodeInventoryStart() []byte { return inventoryStartFrame() }
 
 // EncodeInventoryEnd returns the pre-allocated ZC_INVENTORY_END
 // (0x0b0b) bracket frame (4 bytes). Callers must not modify the
 // returned slice. See inventoryEndFrame for layout and rAthena
 // reference.
-func EncodeInventoryEnd() []byte { return inventoryEndFrame }
+func EncodeInventoryEnd() []byte { return inventoryEndFrame() }
 
 // NotifyChatResponse encodes a ZC_NOTIFY_CHAT packet (command 0x008d,
 // variable length). The server sends this to broadcast a public chat
@@ -1119,10 +1187,10 @@ func (r NotifyChatResponse) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: write ZC_NOTIFY_CHAT: message too long (%d bytes)", len(msgBytes))
 	}
 	buf := make([]byte, total)
-	// int16 packetType = 0x008d (HeaderZCNOTIFYCHAT).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYCHAT)
+	// int16 packetType = 0x008d (HeaderZCNOTIFYCHAT()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYCHAT())
 	// int16 packetLength at offset 2 — full frame length including header.
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // bounded by the length check above
 	// uint32 GID at offset 4.
 	binary.LittleEndian.PutUint32(buf[4:], r.GID)
 	// char Message[] at offset 8 + trailing NUL.
@@ -1131,6 +1199,81 @@ func (r NotifyChatResponse) Encode(w io.Writer) error {
 
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_NOTIFY_CHAT: %w", err)
+	}
+	return nil
+}
+
+// BroadcastColor* are the BC_COLOR_MASK bits of an announce flag (clif.hpp:256).
+// The colour is not a packet field: clif_broadcast (clif.cpp:6725) prefixes the
+// text with a marker the client strips to pick the render colour.
+const (
+	// BroadcastColorYellow is BC_YELLOW (0x00), the default colour.
+	BroadcastColorYellow uint8 = 0x00
+	// BroadcastColorBlue is BC_BLUE (0x10); the frame carries a "blue" prefix.
+	BroadcastColorBlue uint8 = 0x10
+	// BroadcastColorWoe is BC_WOE (0x20); the frame carries an "ssss" prefix.
+	BroadcastColorWoe uint8 = 0x20
+	// BroadcastColorMask is BC_COLOR_MASK, the bits of flag the colour reads.
+	BroadcastColorMask uint8 = 0x30
+)
+
+// BroadcastResponse encodes ZC_BROADCAST (command 0x009a, variable length) — the
+// server announcement the client shows in its own banner. The announce and
+// mapannounce script builtins emit it.
+//
+// Source: rathena/src/map/packets.hpp:199 (`PACKET_ZC_BROADCAST { int16
+// packetType; int16 PacketLength; char message[] }`) + clif_broadcast
+// (clif.cpp:6725). Two upstream details are reproduced here: PacketLength
+// counts the trailing NUL (rAthena writes strlen+1 bytes), and the colour rides
+// the text as a marker prefix rather than a field — "blue" for BC_BLUE, "ssss"
+// for BC_WOE. rAthena drops a message shorter than two bytes including the NUL
+// (clif.cpp:6728), so an empty Message writes no frame at all.
+type BroadcastResponse struct {
+	// Message is the announcement text.
+	Message string
+	// Color is the BC_COLOR_MASK bits of the announce flag.
+	Color uint8
+}
+
+// colorPrefix returns the marker clif_broadcast prepends for the colour.
+func (r BroadcastResponse) colorPrefix() string {
+	switch r.Color & BroadcastColorMask {
+	case BroadcastColorBlue:
+		return "blue"
+	case BroadcastColorWoe:
+		return "ssss"
+	default:
+		return ""
+	}
+}
+
+// Size returns the on-wire byte length Encode writes.
+func (r BroadcastResponse) Size() int {
+	return 4 + len(r.colorPrefix()) + len(r.Message) + 1
+}
+
+// Encode writes the ZC_BROADCAST packet to w. The wire shape is
+// [2:cmd][2:packetLength][n:prefix+message+NUL]; the length slot is computed
+// from the payload so it can never disagree with the bytes written.
+func (r BroadcastResponse) Encode(w io.Writer) error {
+	if r.Message == "" {
+		return nil
+	}
+	prefix := r.colorPrefix()
+	msgBytes := []byte(r.Message)
+	total := 4 + len(prefix) + len(msgBytes) + 1
+	if total > 0xffff {
+		return fmt.Errorf("packet: write ZC_BROADCAST: message too long (%d bytes)", len(msgBytes))
+	}
+	buf := make([]byte, total)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCBROADCAST())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // bounded by the length check above
+	copy(buf[4:], prefix)
+	copy(buf[4+len(prefix):], msgBytes)
+	// The trailing byte is already 0x00 from make().
+
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("packet: write ZC_BROADCAST: %w", err)
 	}
 	return nil
 }
@@ -1157,18 +1300,18 @@ type ZCWhisperResponse struct {
 func (r ZCWhisperResponse) Encode(w io.Writer) error {
 	msg := []byte(r.Message)
 	// 4 (header) + 4 (GID) + 24 (sender) + 1 (isAdmin) + len(msg) + 1 (NUL).
-	total := 4 + 4 + sizeZCWhisperName + 1 + len(msg) + 1
+	total := 4 + 4 + sizeZCWhisperName() + 1 + len(msg) + 1
 	if total > 0xffff {
 		return fmt.Errorf("packet: write ZC_WHISPER: message too long (%d bytes)", len(msg))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCWHISPER)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCWHISPER())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // bounded by the length check above
 	binary.LittleEndian.PutUint32(buf[4:], r.SenderGID)
 	off := 8
-	copy(buf[off:off+sizeZCWhisperName], r.SenderName)
+	copy(buf[off:off+sizeZCWhisperName()], r.SenderName)
 	// trailing bytes of the 24-byte sender slot stay 0x00 from make() (NUL-pad).
-	off += sizeZCWhisperName
+	off += sizeZCWhisperName()
 	buf[off] = r.IsAdmin
 	off++
 	copy(buf[off:], msg)
@@ -1193,15 +1336,15 @@ type ZCAckWhisperResponse struct {
 }
 
 // Size returns the fixed wire size of ZC_ACK_WHISPER.
-func (ZCAckWhisperResponse) Size() int { return sizeZCAckWhisper }
+func (ZCAckWhisperResponse) Size() int { return sizeZCAckWhisper() }
 
 // Encode writes the 7-byte ZC_ACK_WHISPER frame.
 func (r ZCAckWhisperResponse) Encode(w io.Writer) error {
-	var buf [sizeZCAckWhisper]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKWHISPER)
+	buf := make([]byte, sizeZCAckWhisper())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKWHISPER())
 	buf[2] = r.Result
 	binary.LittleEndian.PutUint32(buf[3:], r.CID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_WHISPER: %w", err)
 	}
 	return nil
@@ -1231,12 +1374,12 @@ type ZCStatusChangeAck struct {
 //
 // The wire layout is: [2:cmd=0x00bc][2:statusID][1:result][1:value] = 6 bytes.
 func (a ZCStatusChangeAck) Encode(w io.Writer) error {
-	var buf [sizeZCStatusChangeAck]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTATUSCHANGEACK)
+	buf := make([]byte, sizeZCStatusChangeAck())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSTATUSCHANGEACK())
 	binary.LittleEndian.PutUint16(buf[2:], a.StatusID)
 	buf[4] = a.Result
 	buf[5] = a.Value
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_STATUS_CHANGE_ACK: %w", err)
 	}
 	return nil
@@ -1267,11 +1410,11 @@ type ZCNotifyEffect struct {
 //
 // The wire layout is: [2:cmd=0x019b][4:AID][4:effectID] = 10 bytes.
 func (n ZCNotifyEffect) Encode(w io.Writer) error {
-	var buf [sizeZCNotifyEffect]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYEFFECT)
+	buf := make([]byte, sizeZCNotifyEffect())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYEFFECT())
 	binary.LittleEndian.PutUint32(buf[2:], n.AID)
 	binary.LittleEndian.PutUint32(buf[6:], n.EffectID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_NOTIFY_EFFECT: %w", err)
 	}
 	return nil
@@ -1282,62 +1425,6 @@ func (n ZCNotifyEffect) Encode(w io.Writer) error {
 // gateway emits ZC_NOTIFY_EFFECT with this id when a monster kill pushes
 // a character's base EXP past the next-level threshold.
 const EffectBaseLevelUp uint32 = 0
-
-// ActionResponse encodes a ZC_ACTION_RESPONSE packet (command 0x008b,
-// 11 bytes fixed). The server broadcasts this to echo a player's
-// sit/stand/attack action back to nearby clients; the gateway uses it
-// as the single-player echo path for CZ_ACTION_REQUEST (no AOI yet).
-//
-// Wire shape: [2:cmd=0x008b][4:GID][1:action][4:targetGID] = 11 bytes.
-//
-// rAthena's modern sit/stand broadcast actually goes through
-// ZC_NOTIFY_ACT (0x008a) — see clif_sitting/clif_standing in
-// rathena/src/map/clif.cpp:5327-5358. We use the compact 0x008b shape
-// for the single-player echo path because (a) it is what the rAthena
-// packetdb registers at clif_packetdb.hpp:39 and (b) the only client
-// behavior that depends on the opcode is the on-screen sprite update,
-// which 0x008b also drives correctly for the local player.
-//
-// Source: rathena/src/map/clif_packetdb.hpp:39 +
-// clif_parse_ActionRequest at rathena/src/map/clif.cpp:11816-11829
-// (the request side) for the field naming.
-type ActionResponse struct {
-	// GID is the entity ID of the actor — the player whose action is
-	// being echoed. For sit/stand this is the player's own GID.
-	GID uint32
-	// Action is the action selector byte, copied verbatim from the
-	// incoming CZ_ACTION_REQUEST.
-	Action uint8
-	// TargetGID is the entity the action targets — for sit/stand this
-	// is the player's own GID (self-targeted); for attack it is the
-	// victim's GID. The single-player echo always sends 0 since there
-	// is no separate "self" field on the wire that the client can
-	// disambiguate from "no target".
-	TargetGID uint32
-}
-
-// Size returns the on-wire byte length that Encode will write (always 11).
-func (r ActionResponse) Size() int {
-	return sizeZCActionResponse
-}
-
-// Encode writes the ZC_ACTION_RESPONSE packet to w.
-func (r ActionResponse) Encode(w io.Writer) error {
-	buf := make([]byte, sizeZCActionResponse)
-	// int16 packetType = 0x008b (HeaderZCACTIONRESPONSE).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACTIONRESPONSE)
-	// uint32 GID at offset 2.
-	binary.LittleEndian.PutUint32(buf[2:], r.GID)
-	// uint8 action at offset 6.
-	buf[6] = r.Action
-	// uint32 targetGID at offset 7.
-	binary.LittleEndian.PutUint32(buf[7:], r.TargetGID)
-
-	if _, err := w.Write(buf); err != nil {
-		return fmt.Errorf("packet: write ZC_ACTION_RESPONSE: %w", err)
-	}
-	return nil
-}
 
 // ChangeDirResponse encodes a ZC_CHANGE_DIRECTION packet (command
 // 0x009c, 9 bytes fixed). The server broadcasts this to echo a
@@ -1371,14 +1458,14 @@ type ChangeDirResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 9).
 func (r ChangeDirResponse) Size() int {
-	return sizeZCChangeDir
+	return sizeZCChangeDir()
 }
 
 // Encode writes the ZC_CHANGE_DIRECTION packet to w.
 func (r ChangeDirResponse) Encode(w io.Writer) error {
-	var buf [sizeZCChangeDir]byte
-	// int16 packetType = 0x009c (HeaderZCCHANGEDIR).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCHANGEDIR)
+	buf := make([]byte, sizeZCChangeDir())
+	// int16 packetType = 0x009c (HeaderZCCHANGEDIR()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCHANGEDIR())
 	// uint32 srcId at offset 2.
 	binary.LittleEndian.PutUint32(buf[2:], r.SrcID)
 	// uint16 headDir at offset 6.
@@ -1386,7 +1473,7 @@ func (r ChangeDirResponse) Encode(w io.Writer) error {
 	// uint8 dir at offset 8.
 	buf[8] = r.Dir
 
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_CHANGE_DIRECTION: %w", err)
 	}
 	return nil
@@ -1420,20 +1507,20 @@ type EmotionResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 7).
 func (r EmotionResponse) Size() int {
-	return sizeZCEmotion
+	return sizeZCEmotion()
 }
 
 // Encode writes the ZC_EMOTION packet to w.
 func (r EmotionResponse) Encode(w io.Writer) error {
-	var buf [sizeZCEmotion]byte
-	// int16 packetType = 0x00c0 (HeaderZCEMOTION).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCEMOTION)
+	buf := make([]byte, sizeZCEmotion())
+	// int16 packetType = 0x00c0 (HeaderZCEMOTION()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCEMOTION())
 	// int32 GID at offset 2 — written as the wire's int32 slot.
 	binary.LittleEndian.PutUint32(buf[2:], r.GID)
 	// uint8 type at offset 6.
 	buf[6] = r.Type
 
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_EMOTION: %w", err)
 	}
 	return nil
@@ -1485,14 +1572,14 @@ type SpriteChangeResponse struct {
 // Size returns the on-wire byte length Encode writes (always 15 for the
 // PACKETVER 20250604 layout).
 func (r SpriteChangeResponse) Size() int {
-	return sizeZCSpriteChange
+	return sizeZCSpriteChange()
 }
 
 // Encode writes the ZC_SPRITE_CHANGE packet to w.
 func (r SpriteChangeResponse) Encode(w io.Writer) error {
-	var buf [sizeZCSpriteChange]byte
-	// int16 packetType = 0x01d7 (HeaderZCSPRITECHANGE).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSPRITECHANGE)
+	buf := make([]byte, sizeZCSpriteChange())
+	// int16 packetType = 0x01d7 (HeaderZCSPRITECHANGE()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSPRITECHANGE())
 	// uint32 GID at offset 2.
 	binary.LittleEndian.PutUint32(buf[2:], r.GID)
 	// uint8 type at offset 6.
@@ -1501,7 +1588,7 @@ func (r SpriteChangeResponse) Encode(w io.Writer) error {
 	binary.LittleEndian.PutUint32(buf[7:], r.Val)
 	binary.LittleEndian.PutUint32(buf[11:], r.Val2)
 
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_SPRITE_CHANGE: %w", err)
 	}
 	return nil
@@ -1537,8 +1624,8 @@ func (r AckReqNameResponse) Size() int {
 // Encode writes the ZC_ACK_REQNAME packet to w.
 func (r AckReqNameResponse) Encode(w io.Writer) error {
 	var buf [sizeZCAckReqName]byte
-	// int16 packetType = 0x0095 (HeaderZCACKREQNAME).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREQNAME)
+	// int16 packetType = 0x0095 (HeaderZCACKREQNAME()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREQNAME())
 	// int32 GID at offset 2.
 	binary.LittleEndian.PutUint32(buf[2:], r.GID)
 	// char name[24] at offset 6 — copy up to 24 bytes, null-pad the
@@ -1596,20 +1683,20 @@ type ReqNameAll2Response struct {
 }
 
 // Size returns the on-wire byte length that Encode will write (always 106).
-func (r ReqNameAll2Response) Size() int { return sizeZCAckReqNameAll2 }
+func (r ReqNameAll2Response) Size() int { return sizeZCAckReqNameAll2() }
 
 // Encode writes the ZC_ACK_REQNAMEALL2 packet to w.
 func (r ReqNameAll2Response) Encode(w io.Writer) error {
-	var buf [sizeZCAckReqNameAll2]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREQNAMEALL2)
+	buf := make([]byte, sizeZCAckReqNameAll2())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREQNAMEALL2())
 	binary.LittleEndian.PutUint32(buf[2:], r.GID)
-	writeNameField(buf[:], 6, r.Name)
-	writeNameField(buf[:], 30, r.PartyName)
-	writeNameField(buf[:], 54, r.GuildName)
-	writeNameField(buf[:], 78, r.PositionName)
+	writeNameField(buf, 6, r.Name)
+	writeNameField(buf, 30, r.PartyName)
+	writeNameField(buf, 54, r.GuildName)
+	writeNameField(buf, 78, r.PositionName)
 	binary.LittleEndian.PutUint32(buf[102:], r.TitleID)
 
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_REQNAMEALL2: %w", err)
 	}
 	return nil
@@ -1631,18 +1718,18 @@ type ReqNameAllNPCResponse struct {
 }
 
 // Size returns the on-wire byte length that Encode will write (always 58).
-func (r ReqNameAllNPCResponse) Size() int { return sizeZCAckReqNameAllNPC }
+func (r ReqNameAllNPCResponse) Size() int { return sizeZCAckReqNameAllNPC() }
 
 // Encode writes the ZC_ACK_REQNAMEALL_NPC packet to w.
 func (r ReqNameAllNPCResponse) Encode(w io.Writer) error {
-	var buf [sizeZCAckReqNameAllNPC]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREQNAMEALLNPC)
+	buf := make([]byte, sizeZCAckReqNameAllNPC())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCACKREQNAMEALLNPC())
 	binary.LittleEndian.PutUint32(buf[2:], r.GID)
 	binary.LittleEndian.PutUint32(buf[6:], r.GroupID)
-	writeNameField(buf[:], 10, r.Name)
-	writeNameField(buf[:], 34, r.Title)
+	writeNameField(buf, 10, r.Name)
+	writeNameField(buf, 34, r.Title)
 
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_ACK_REQNAMEALL_NPC: %w", err)
 	}
 	return nil
@@ -1680,8 +1767,8 @@ func (r SayDialog2Response) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: write ZC_SAY_DIALOG2: message too long (%d bytes)", len(msgBytes))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSAYDIALOG2)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSAYDIALOG2())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // bounded by the length check above
 	binary.LittleEndian.PutUint32(buf[4:], r.NpcID)
 	buf[8] = r.Type
 	copy(buf[9:], msgBytes)
@@ -1710,16 +1797,22 @@ type WaitDialog2Response struct {
 
 // Size returns the on-wire byte length that Encode will write (always 7).
 func (r WaitDialog2Response) Size() int {
-	return sizeZCWaitDialog2
+	return sizeZCWaitDialog2()
 }
 
 // Encode writes the ZC_WAIT_DIALOG2 packet to w.
 func (r WaitDialog2Response) Encode(w io.Writer) error {
-	var buf [sizeZCWaitDialog2]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCWAITDIALOG2)
+	buf := make([]byte, sizeZCWaitDialog2())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCWAITDIALOG2())
 	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
-	buf[6] = r.Type
-	if _, err := w.Write(buf[:]); err != nil {
+	// The source's struct carries the dialog type only for
+	// PACKETVER_MAIN_NUM >= 20220504 (src/map/packets_struct.hpp: the
+	// older branch ends at the npc id), so the byte is written only when
+	// the resolved layout has room for it.
+	if len(buf) >= 7 {
+		buf[6] = r.Type
+	}
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_WAIT_DIALOG2: %w", err)
 	}
 	return nil
@@ -1771,7 +1864,7 @@ func (r MenuListResponse) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: write ZC_MENU_LIST: items too long (%d bytes)", len(itemBytes))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCMENULIST)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCMENULIST())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // total guarded by the 0xffff check above
 	binary.LittleEndian.PutUint32(buf[4:], r.NpcID)
 	copy(buf[8:], itemBytes)
@@ -1783,15 +1876,15 @@ func (r MenuListResponse) Encode(w io.Writer) error {
 
 // Size returns the on-wire byte length that Encode will write (always 6).
 func (r CloseDialogResponse) Size() int {
-	return sizeZCCloseDialog
+	return sizeZCCloseDialog()
 }
 
 // Encode writes the ZC_CLOSE_DIALOG packet to w.
 func (r CloseDialogResponse) Encode(w io.Writer) error {
-	var buf [sizeZCCloseDialog]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCLOSEDIALOG)
+	buf := make([]byte, sizeZCCloseDialog())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCCLOSEDIALOG())
 	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_CLOSE_DIALOG: %w", err)
 	}
 	return nil
@@ -1811,14 +1904,14 @@ type OpenEditDlgResponse struct {
 }
 
 // Size returns the on-wire byte length that Encode will write (always 6).
-func (r OpenEditDlgResponse) Size() int { return sizeZCOpenEditDlg }
+func (r OpenEditDlgResponse) Size() int { return sizeZCOpenEditDlg() }
 
 // Encode writes the ZC_OPEN_EDITDLG packet to w.
 func (r OpenEditDlgResponse) Encode(w io.Writer) error {
-	var buf [sizeZCOpenEditDlg]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCOPENEDITDLG)
+	buf := make([]byte, sizeZCOpenEditDlg())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCOPENEDITDLG())
 	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_OPEN_EDITDLG: %w", err)
 	}
 	return nil
@@ -1838,14 +1931,14 @@ type OpenEditDlgStrResponse struct {
 }
 
 // Size returns the on-wire byte length that Encode will write (always 6).
-func (r OpenEditDlgStrResponse) Size() int { return sizeZCOpenEditDlg }
+func (r OpenEditDlgStrResponse) Size() int { return sizeZCOpenEditDlg() }
 
 // Encode writes the ZC_OPEN_EDITDLGSTR packet to w.
 func (r OpenEditDlgStrResponse) Encode(w io.Writer) error {
-	var buf [sizeZCOpenEditDlg]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCOPENEDITDLGSTR)
+	buf := make([]byte, sizeZCOpenEditDlg())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCOPENEDITDLGSTR())
 	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_OPEN_EDITDLGSTR: %w", err)
 	}
 	return nil
@@ -1868,15 +1961,15 @@ type SelectDealtypeResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 6).
 func (r SelectDealtypeResponse) Size() int {
-	return sizeZCSelectDealtype
+	return sizeZCSelectDealtype()
 }
 
 // Encode writes the ZC_SELECT_DEALTYPE packet to w.
 func (r SelectDealtypeResponse) Encode(w io.Writer) error {
-	var buf [sizeZCSelectDealtype]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSELECTDEALTYPE)
+	buf := make([]byte, sizeZCSelectDealtype())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSELECTDEALTYPE())
 	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_SELECT_DEALTYPE: %w", err)
 	}
 	return nil
@@ -1943,8 +2036,8 @@ func (r PurchaseItemListResponse) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: write ZC_PC_PURCHASE_ITEMLIST: too many items (%d)", len(r.Items))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCPURCHASEITEMLIST)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCPURCHASEITEMLIST())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // bounded by the length check above
 	for i, it := range r.Items {
 		off := 4 + i*sizeShopBuyItem
 		binary.LittleEndian.PutUint32(buf[off:off+4], it.ItemID)
@@ -1975,15 +2068,15 @@ type PurchaseResultResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 3).
 func (r PurchaseResultResponse) Size() int {
-	return sizeZCPCPurchaseResult
+	return sizeZCPCPurchaseResult()
 }
 
 // Encode writes the ZC_PC_PURCHASE_RESULT packet to w.
 func (r PurchaseResultResponse) Encode(w io.Writer) error {
-	var buf [sizeZCPCPurchaseResult]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCPURCHASERESULT)
+	buf := make([]byte, sizeZCPCPurchaseResult())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCPURCHASERESULT())
 	buf[2] = r.Result
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_PC_PURCHASE_RESULT: %w", err)
 	}
 	return nil
@@ -2021,12 +2114,12 @@ type NotifyActResponse struct {
 }
 
 // Size returns the on-wire byte length that Encode will write (always 34).
-func (r NotifyActResponse) Size() int { return sizeZCNotifyAct }
+func (r NotifyActResponse) Size() int { return sizeZCNotifyAct() }
 
 // Encode writes the ZC_NOTIFY_ACT packet to w.
 func (r NotifyActResponse) Encode(w io.Writer) error {
-	var buf [sizeZCNotifyAct]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYACT)
+	buf := make([]byte, sizeZCNotifyAct())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYACT())
 	binary.LittleEndian.PutUint32(buf[2:], r.SrcID)
 	binary.LittleEndian.PutUint32(buf[6:], r.TargetID)
 	binary.LittleEndian.PutUint32(buf[10:], r.ServerTick)
@@ -2037,7 +2130,7 @@ func (r NotifyActResponse) Encode(w io.Writer) error {
 	binary.LittleEndian.PutUint16(buf[27:], r.Div)
 	buf[29] = r.Type
 	binary.LittleEndian.PutUint32(buf[30:], uint32(r.Damage2)) //nolint:gosec // ditto
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_NOTIFY_ACT: %w", err)
 	}
 	return nil
@@ -2058,12 +2151,12 @@ type NotifyVanishResponse struct {
 }
 
 // Size returns the on-wire byte length that Encode will write (always 7).
-func (r NotifyVanishResponse) Size() int { return sizeZCNotifyVanish }
+func (r NotifyVanishResponse) Size() int { return sizeZCNotifyVanish() }
 
 // Encode writes the ZC_NOTIFY_VANISH packet to w.
 func (r NotifyVanishResponse) Encode(w io.Writer) error {
-	buf := make([]byte, sizeZCNotifyVanish)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYVANISH)
+	buf := make([]byte, sizeZCNotifyVanish())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCNOTIFYVANISH())
 	binary.LittleEndian.PutUint32(buf[2:], r.GID)
 	buf[6] = r.Type
 	if _, err := w.Write(buf); err != nil {
@@ -2113,15 +2206,15 @@ type SellItemListResponse struct {
 // entry count so the caller cannot accidentally emit a frame whose
 // length slot disagrees with the trailing bytes.
 func (r SellItemListResponse) Encode(w io.Writer) error {
-	total := 4 + len(r.Items)*sizeZCPCSellItemListItem
+	total := 4 + len(r.Items)*sizeZCPCSellItemListItem()
 	if total > 0xffff {
 		return fmt.Errorf("packet: write ZC_PC_SELL_ITEMLIST: too many items (%d)", len(r.Items))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCSELLITEMLIST)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCSELLITEMLIST())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // bounded by the length check above
 	for i, it := range r.Items {
-		off := 4 + i*sizeZCPCSellItemListItem
+		off := 4 + i*sizeZCPCSellItemListItem()
 		binary.LittleEndian.PutUint16(buf[off:off+2], it.Index)
 		binary.LittleEndian.PutUint32(buf[off+2:off+6], it.Price)
 		binary.LittleEndian.PutUint32(buf[off+6:off+10], it.Overcharge)
@@ -2135,7 +2228,7 @@ func (r SellItemListResponse) Encode(w io.Writer) error {
 // Size returns the on-wire byte length that Encode will write
 // (4 + 10 * len(Items)).
 func (r SellItemListResponse) Size() int {
-	return 4 + len(r.Items)*sizeZCPCSellItemListItem
+	return 4 + len(r.Items)*sizeZCPCSellItemListItem()
 }
 
 // SellResultResponse encodes ZC_PC_SELL_RESULT (command 0x00cb, 3 bytes
@@ -2153,15 +2246,15 @@ type SellResultResponse struct {
 
 // Size returns the on-wire byte length that Encode will write (always 3).
 func (r SellResultResponse) Size() int {
-	return sizeZCPCSellResult
+	return sizeZCPCSellResult()
 }
 
 // Encode writes the ZC_PC_SELL_RESULT packet to w.
 func (r SellResultResponse) Encode(w io.Writer) error {
-	var buf [sizeZCPCSellResult]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCSELLRESULT)
+	buf := make([]byte, sizeZCPCSellResult())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCPCSELLRESULT())
 	buf[2] = r.Result
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_PC_SELL_RESULT: %w", err)
 	}
 	return nil
@@ -2176,15 +2269,15 @@ type ZCSettingWhisperPCResponse struct {
 }
 
 // Size returns the fixed wire size of ZC_SETTING_WHISPER_PC.
-func (ZCSettingWhisperPCResponse) Size() int { return sizeZCSettingWhisperPC }
+func (ZCSettingWhisperPCResponse) Size() int { return sizeZCSettingWhisperPC() }
 
 // Encode writes the 4-byte ZC_SETTING_WHISPER_PC frame.
 func (r ZCSettingWhisperPCResponse) Encode(w io.Writer) error {
-	var buf [sizeZCSettingWhisperPC]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSETTINGWHISPERPC)
+	buf := make([]byte, sizeZCSettingWhisperPC())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSETTINGWHISPERPC())
 	buf[2] = r.Type
 	buf[3] = r.Result
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_SETTING_WHISPER_PC: %w", err)
 	}
 	return nil
@@ -2199,15 +2292,15 @@ type ZCSettingWhisperStateResponse struct {
 }
 
 // Size returns the fixed wire size of ZC_SETTING_WHISPER_STATE.
-func (ZCSettingWhisperStateResponse) Size() int { return sizeZCSettingWhisperState }
+func (ZCSettingWhisperStateResponse) Size() int { return sizeZCSettingWhisperState() }
 
 // Encode writes the 4-byte ZC_SETTING_WHISPER_STATE frame.
 func (r ZCSettingWhisperStateResponse) Encode(w io.Writer) error {
-	var buf [sizeZCSettingWhisperState]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSETTINGWHISPERSTATE)
+	buf := make([]byte, sizeZCSettingWhisperState())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderZCSETTINGWHISPERSTATE())
 	buf[2] = r.Type
 	buf[3] = r.Result
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write ZC_SETTING_WHISPER_STATE: %w", err)
 	}
 	return nil
@@ -2222,19 +2315,19 @@ type ZCWhisperListResponse struct {
 }
 
 // Size returns the full wire byte count this Encode will write.
-func (r ZCWhisperListResponse) Size() int { return 4 + len(r.Names)*sizeZCWhisperListName }
+func (r ZCWhisperListResponse) Size() int { return 4 + len(r.Names)*sizeZCWhisperListName() }
 
 // Encode writes the variable-length ZC_WHISPER_LIST frame.
 func (r ZCWhisperListResponse) Encode(w io.Writer) error {
 	var buf bytes.Buffer
 	var head [4]byte
-	binary.LittleEndian.PutUint16(head[0:], HeaderZCWHISPERLIST)
+	binary.LittleEndian.PutUint16(head[0:], HeaderZCWHISPERLIST())
 	binary.LittleEndian.PutUint16(head[2:], uint16(r.Size())) //nolint:gosec // G115: 4+24*20 fits u16.
 	buf.Write(head[:])
 	for _, n := range r.Names {
-		var name [sizeZCWhisperListName]byte
-		copy(name[:], n)
-		buf.Write(name[:])
+		name := make([]byte, sizeZCWhisperListName())
+		copy(name, n)
+		buf.Write(name)
 	}
 	if _, err := w.Write(buf.Bytes()); err != nil {
 		return fmt.Errorf("packet: write ZC_WHISPER_LIST: %w", err)

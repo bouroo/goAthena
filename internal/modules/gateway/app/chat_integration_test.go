@@ -30,7 +30,7 @@ import (
 func whisperFrame(target, message string) []byte {
 	total := 4 + 24 + len(message) + 1
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZWHISPER)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZWHISPER())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
 	copy(buf[4:], target)
 	copy(buf[28:], message)
@@ -47,7 +47,7 @@ func whisperFrame(target, message string) []byte {
 // framed by its real size, so the scan cannot desync.
 func drainToWhisper(t *testing.T, c net.Conn) (string, string) {
 	t.Helper()
-	frame := scanServerFrame(t, c, ropacket.HeaderZCWHISPER, 3*time.Second)
+	frame := scanServerFrame(t, c, ropacket.HeaderZCWHISPER(), 3*time.Second)
 	body := frame[4:] // skip the 4-byte header
 	// body: [4:senderGID][24:senderName][1:isAdmin][n:message+null]
 	name := body[4:28]
@@ -116,7 +116,7 @@ func TestMap_WhisperBetweenPlayers(t *testing.T) {
 	}
 
 	// Sender's ack: fixed 7B ZC_ACK_WHISPER, result 0, CID = sender charID.
-	ack := readTradeFrame(t, conn1, ropacket.HeaderZCACKWHISPER, 7)
+	ack := readTradeFrame(t, conn1, ropacket.HeaderZCACKWHISPER(), 7)
 	if ack[2] != 0 {
 		t.Fatalf("whisper ack result = %d, want 0 (success)", ack[2])
 	}
@@ -143,7 +143,7 @@ func TestMap_WhisperTargetOffline(t *testing.T) {
 	if _, err := conn1.Write(whisperFrame("Nobody", "hello?")); err != nil {
 		t.Fatalf("send CZ_WHISPER: %v", err)
 	}
-	ack := readTradeFrame(t, conn1, ropacket.HeaderZCACKWHISPER, 7)
+	ack := readTradeFrame(t, conn1, ropacket.HeaderZCACKWHISPER(), 7)
 	if ack[2] != 1 {
 		t.Fatalf("offline ack result = %d, want 1 (target offline)", ack[2])
 	}
@@ -211,7 +211,7 @@ func drainToNotifyChat(t *testing.T, c net.Conn) (uint32, string) {
 		if _, err := io.ReadFull(c, body); err != nil {
 			t.Fatalf("read frame body (0x%04x): %v", cmd, err)
 		}
-		if cmd != ropacket.HeaderZCNOTIFYCHAT {
+		if cmd != ropacket.HeaderZCNOTIFYCHAT() {
 			continue
 		}
 		msg := body[4:]
@@ -225,7 +225,7 @@ func drainToNotifyChat(t *testing.T, c net.Conn) (uint32, string) {
 // nameFrame builds a raw CZ_GETCHARNAMEREQUEST: [2:cmd=0x0094][4:GID].
 func nameFrame(gid uint32) []byte {
 	buf := make([]byte, 6)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZGETCHARNAMEREQUEST)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZGETCHARNAMEREQUEST())
 	binary.LittleEndian.PutUint32(buf[2:], gid)
 	return buf
 }
@@ -264,7 +264,7 @@ func TestMap_GetCharNameResolvesPCAndNPC(t *testing.T) {
 	if _, err := conn1.Write(nameFrame(150001)); err != nil {
 		t.Fatalf("send name request (self PC): %v", err)
 	}
-	pc := drainFixed(t, conn1, ropacket.HeaderZCACKREQNAMEALL2, 106)
+	pc := drainFixed(t, conn1, ropacket.HeaderZCACKREQNAMEALL2(), 106)
 	if got := trimNul(pc[6:30]); got != "Hero" {
 		t.Fatalf("PC name = %q, want Hero", got)
 	}
@@ -276,7 +276,7 @@ func TestMap_GetCharNameResolvesPCAndNPC(t *testing.T) {
 	if _, err := conn1.Write(nameFrame(0x70000001)); err != nil {
 		t.Fatalf("send name request (NPC): %v", err)
 	}
-	npc := drainFixed(t, conn1, ropacket.HeaderZCACKREQNAMEALLNPC, 58)
+	npc := drainFixed(t, conn1, ropacket.HeaderZCACKREQNAMEALLNPC(), 58)
 	if got := trimNul(npc[10:34]); got != "Portal Keeper" {
 		t.Fatalf("NPC name = %q, want Portal Keeper", got)
 	}
@@ -338,14 +338,14 @@ func TestMap_RequestTimePing(t *testing.T) {
 	drainQuiescent(t, conn1)
 
 	ping := make([]byte, 6)
-	binary.LittleEndian.PutUint16(ping[0:], ropacket.HeaderCZREQUESTTIME)
+	binary.LittleEndian.PutUint16(ping[0:], ropacket.HeaderCZREQUESTTIME())
 	binary.LittleEndian.PutUint32(ping[2:], 123456) // client tick (echoed only)
 	conn1.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := conn1.Write(ping); err != nil {
 		t.Fatalf("send CZ_REQUEST_TIME: %v", err)
 	}
 
-	reply := drainFixed(t, conn1, ropacket.HeaderZCNOTIFYTIME, 6)
+	reply := drainFixed(t, conn1, ropacket.HeaderZCNOTIFYTIME(), 6)
 	if got := binary.LittleEndian.Uint32(reply[2:6]); got == 0 {
 		t.Fatalf("server tick = 0, want nonzero")
 	}
@@ -354,7 +354,7 @@ func TestMap_RequestTimePing(t *testing.T) {
 // emotionFrame builds a raw CZ_REQ_EMOTION: [2:cmd=0x00bf][1:type].
 func emotionFrame(t uint8) []byte {
 	buf := make([]byte, 3)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQEMOTION)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQEMOTION())
 	buf[2] = t
 	return buf
 }
@@ -384,7 +384,7 @@ func TestMap_ReqEmotionBroadcastsToNeighbor(t *testing.T) {
 	if _, err := conn1.Write(emotionFrame(6)); err != nil { // 6 = /heh icon
 		t.Fatalf("send CZ_REQ_EMOTION: %v", err)
 	}
-	em := drainFixed(t, conn2, ropacket.HeaderZCEMOTION, 7)
+	em := drainFixed(t, conn2, ropacket.HeaderZCEMOTION(), 7)
 	if got := binary.LittleEndian.Uint32(em[2:6]); got != 150001 {
 		t.Fatalf("emotion GID = %d, want emoter charID 150001", got)
 	}
@@ -426,7 +426,7 @@ func TestMap_ChangeDirBroadcastsAndPersists(t *testing.T) {
 	if _, err := conn1.Write(dbuf.Bytes()); err != nil {
 		t.Fatalf("send CZ_CHANGE_DIR: %v", err)
 	}
-	cd := drainFixed(t, conn2, ropacket.HeaderZCCHANGEDIR, 9)
+	cd := drainFixed(t, conn2, ropacket.HeaderZCCHANGEDIR(), 9)
 	if got := binary.LittleEndian.Uint32(cd[2:6]); got != 150001 {
 		t.Fatalf("changedir GID = %d, want actor charID 150001", got)
 	}
@@ -454,7 +454,7 @@ func TestMap_ChangeDirBroadcastsAndPersists(t *testing.T) {
 // pmIgnoreFrame builds a raw CZ_PMIgnore: [2:cmd=0x00cf][24:name][1:type].
 func pmIgnoreFrame(name string, t uint8) []byte {
 	buf := make([]byte, 27)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZPMIGNORE)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZPMIGNORE())
 	copy(buf[2:], name)
 	buf[26] = t
 	return buf
@@ -463,7 +463,7 @@ func pmIgnoreFrame(name string, t uint8) []byte {
 // whisperStateFrame builds a raw CZ_SETTING_WHISPER_STATE: [2:cmd=0x00d0][1:type].
 func whisperStateFrame(t uint8) []byte {
 	buf := make([]byte, 3)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZSETTINGWHISPERSTATE)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZSETTINGWHISPERSTATE())
 	buf[2] = t
 	return buf
 }
@@ -471,7 +471,7 @@ func whisperStateFrame(t uint8) []byte {
 // reqWhisperListFrame is the bare 2-byte CZ_REQ_WHISPER_LIST.
 func reqWhisperListFrame() []byte {
 	buf := make([]byte, 2)
-	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQWHISPERLIST)
+	binary.LittleEndian.PutUint16(buf[0:], ropacket.HeaderCZREQWHISPERLIST())
 	return buf
 }
 
@@ -521,14 +521,14 @@ func TestMap_PMIgnoreVerbsMatrix(t *testing.T) {
 	}
 
 	// /ex Hero-add on Partner's behalf: block "Somebody".
-	send(pmIgnoreFrame("Somebody", 0), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 0)
+	send(pmIgnoreFrame("Somebody", 0), ropacket.HeaderZCSETTINGWHISPERPC(), 4, 3, 0)
 	// duplicate block → success, still one entry.
-	send(pmIgnoreFrame("Somebody", 0), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 0)
+	send(pmIgnoreFrame("Somebody", 0), ropacket.HeaderZCSETTINGWHISPERPC(), 4, 3, 0)
 	// /wl: one 24-byte entry.
 	if _, err := conn1.Write(reqWhisperListFrame()); err != nil {
 		t.Fatalf("send /wl: %v", err)
 	}
-	list := readWantVarFrame(t, conn1, ropacket.HeaderZCWHISPERLIST)
+	list := readWantVarFrame(t, conn1, ropacket.HeaderZCWHISPERLIST())
 	if len(list) != 4+24 {
 		t.Fatalf("/wl length = %d, want %d", len(list), 4+24)
 	}
@@ -536,17 +536,17 @@ func TestMap_PMIgnoreVerbsMatrix(t *testing.T) {
 		t.Fatalf("/wl first name = %q, want Somebody", got)
 	}
 	// /in Somebody → 0.
-	send(pmIgnoreFrame("Somebody", 1), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 0)
+	send(pmIgnoreFrame("Somebody", 1), ropacket.HeaderZCSETTINGWHISPERPC(), 4, 3, 0)
 	// /in Ghost (not on list) → 1.
-	send(pmIgnoreFrame("Ghost", 1), ropacket.HeaderZCSETTINGWHISPERPC, 4, 3, 1)
+	send(pmIgnoreFrame("Ghost", 1), ropacket.HeaderZCSETTINGWHISPERPC(), 4, 3, 1)
 
 	// /exall → 0; repeat → 1 (already denying).
-	send(whisperStateFrame(0), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 0)
-	send(whisperStateFrame(0), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 1)
+	send(whisperStateFrame(0), ropacket.HeaderZCSETTINGWHISPERSTATE(), 4, 3, 0)
+	send(whisperStateFrame(0), ropacket.HeaderZCSETTINGWHISPERSTATE(), 4, 3, 1)
 	// /inall while denying → 0 (clears flag+list).
-	send(whisperStateFrame(1), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 0)
+	send(whisperStateFrame(1), ropacket.HeaderZCSETTINGWHISPERSTATE(), 4, 3, 0)
 	// /inall on clean state (no flag, empty list) → 1.
-	send(whisperStateFrame(1), ropacket.HeaderZCSETTINGWHISPERSTATE, 4, 3, 1)
+	send(whisperStateFrame(1), ropacket.HeaderZCSETTINGWHISPERSTATE(), 4, 3, 1)
 }
 
 // readWantVarFrame scans queued frames for a wanted opcode and returns it whole.
@@ -566,7 +566,7 @@ func TestMap_WhisperIgnoredByList(t *testing.T) {
 	if _, err := conn2.Write(pmIgnoreFrame("Hero", 0)); err != nil {
 		t.Fatalf("send /ex Hero: %v", err)
 	}
-	ack := drainFixed(t, conn2, ropacket.HeaderZCSETTINGWHISPERPC, 4)
+	ack := drainFixed(t, conn2, ropacket.HeaderZCSETTINGWHISPERPC(), 4)
 	if ack[3] != 0 {
 		t.Fatalf("/ex result = %d, want 0", ack[3])
 	}
@@ -575,7 +575,7 @@ func TestMap_WhisperIgnoredByList(t *testing.T) {
 	if _, err := conn1.Write(whisperFrame("Partner", "can you hear me?")); err != nil {
 		t.Fatalf("send whisper: %v", err)
 	}
-	wack := drainFixed(t, conn1, ropacket.HeaderZCACKWHISPER, 7)
+	wack := drainFixed(t, conn1, ropacket.HeaderZCACKWHISPER(), 7)
 	if wack[2] != 2 {
 		t.Fatalf("whisper ack = %d, want 2 (ignored by list)", wack[2])
 	}
@@ -595,7 +595,7 @@ func TestMap_WhisperDeniedByExall(t *testing.T) {
 	if _, err := conn2.Write(whisperStateFrame(0)); err != nil {
 		t.Fatalf("send /exall: %v", err)
 	}
-	ack := drainFixed(t, conn2, ropacket.HeaderZCSETTINGWHISPERSTATE, 4)
+	ack := drainFixed(t, conn2, ropacket.HeaderZCSETTINGWHISPERSTATE(), 4)
 	if ack[3] != 0 {
 		t.Fatalf("/exall result = %d, want 0", ack[3])
 	}
@@ -604,7 +604,7 @@ func TestMap_WhisperDeniedByExall(t *testing.T) {
 	if _, err := conn1.Write(whisperFrame("Partner", "hello?")); err != nil {
 		t.Fatalf("send whisper: %v", err)
 	}
-	wack := drainFixed(t, conn1, ropacket.HeaderZCACKWHISPER, 7)
+	wack := drainFixed(t, conn1, ropacket.HeaderZCACKWHISPER(), 7)
 	if wack[2] != 3 {
 		t.Fatalf("whisper ack = %d, want 3 (all ignored)", wack[2])
 	}
@@ -612,5 +612,53 @@ func TestMap_WhisperDeniedByExall(t *testing.T) {
 	conn2.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	if n, err := conn2.Read(make([]byte, 64)); err == nil && n > 0 {
 		t.Fatalf("deny-all target received %d bytes, want silence", n)
+	}
+}
+
+// TestMap_OversizeVariableFrameCloses proves F-07's cap: a length-prefixed
+// frame declaring 60000 bytes (far above the packet DB's 8192 cap) is a
+// buffer-reservation attack — the server closes the connection instead of
+// waiting for bytes that would over-commit it. The control conversation
+// proves a fresh connection with in-cap frames stays live.
+func TestMap_OversizeVariableFrameCloses(t *testing.T) {
+	port := freePort(t)
+	sessions := charinfra.NewMemorySessionStore()
+	_ = sessions.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	ms, _ := buildTradeMapDeps(t, sessions)
+	conn := startAndDial(t, ms, port)
+	defer conn.Close()
+
+	sendCZEnter(t, conn, 2000001, 150001, 0x11111111)
+	awaitAcceptEnter(t, conn)
+	drainQuiescent(t, conn)
+
+	// The attack: a CZ_GLOBAL_MESSAGE header claiming a 60000-byte frame.
+	// Only the 4-byte header is sent — the old behavior would park the
+	// connection waiting for 59996 more bytes.
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write([]byte{0x8c, 0x00, 0x30, 0xea}); err != nil {
+		t.Fatalf("send oversize header: %v", err)
+	}
+	if _, err := conn.Read(make([]byte, 16)); err == nil {
+		t.Fatal("connection survived an oversize variable frame, want close")
+	}
+
+	// Control: a fresh connection with in-cap frames still works — the
+	// whisper ack proves the dispatcher is alive and unpolluted.
+	conn2, _ := buildTradeMapDeps(t, sessions)
+	c2 := startAndDial(t, conn2, freePort(t))
+	defer c2.Close()
+	sessions2 := charinfra.NewMemorySessionStore()
+	_ = sessions2.PutSession(t.Context(), chardomain.Session{AccountID: 2000001, LoginID1: 0x11111111, LoginID2: 0x22222222, Sex: 1})
+	sendCZEnter(t, c2, 2000001, 150001, 0x11111111)
+	awaitAcceptEnter(t, c2)
+	drainQuiescent(t, c2)
+	c2.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c2.Write(whisperFrame("Nobody", "still here")); err != nil {
+		t.Fatalf("send CZ_WHISPER: %v", err)
+	}
+	ack := readTradeFrame(t, c2, ropacket.HeaderZCACKWHISPER(), 7)
+	if ack[2] != 1 {
+		t.Fatalf("whisper ack result = %d, want 1 (target offline)", ack[2])
 	}
 }

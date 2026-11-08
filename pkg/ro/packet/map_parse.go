@@ -38,10 +38,10 @@ type CZEnterRequest struct {
 // shorter than 19 bytes, or naming the unexpected cmd id if the header is
 // not 0x0072.
 func ParseCZEnter(frame []byte) (CZEnterRequest, error) {
-	if len(frame) < sizeCZEnter {
-		return CZEnterRequest{}, fmt.Errorf("packet: parse CZ_ENTER: want at least %d bytes, got %d", sizeCZEnter, len(frame))
+	if len(frame) < sizeCZEnter() {
+		return CZEnterRequest{}, fmt.Errorf("packet: parse CZ_ENTER: want at least %d bytes, got %d", sizeCZEnter(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZENTER {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZENTER() {
 		return CZEnterRequest{}, fmt.Errorf("packet: parse CZ_ENTER: unexpected cmd 0x%04x", cmd)
 	}
 
@@ -60,9 +60,9 @@ func ParseCZEnter(frame []byte) (CZEnterRequest, error) {
 // rathena/src/map/clif.cpp:10642 and the WantToConnection handler reading
 // RFIFOL/AID/CID/login_id1/client_tick/sex at the documented offsets.
 func (r CZEnterRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCZEnter)
-	// int16 packetType = 0x0072 (HeaderCZENTER).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZENTER)
+	buf := make([]byte, sizeCZEnter())
+	// int16 packetType = 0x0072 (HeaderCZENTER()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZENTER())
 	// uint32 accountID at offset 2.
 	binary.LittleEndian.PutUint32(buf[2:], r.AccountID)
 	// uint32 charID at offset 6.
@@ -105,10 +105,10 @@ type CZRequestMoveRequest struct {
 // shorter than 5 bytes, or naming the unexpected cmd id if the header is
 // not 0x0085.
 func ParseCZRequestMove(frame []byte) (CZRequestMoveRequest, error) {
-	if len(frame) < sizeCZRequestMove {
-		return CZRequestMoveRequest{}, fmt.Errorf("packet: parse CZ_REQUEST_MOVE: want at least %d bytes, got %d", sizeCZRequestMove, len(frame))
+	if len(frame) < sizeCZRequestMove() {
+		return CZRequestMoveRequest{}, fmt.Errorf("packet: parse CZ_REQUEST_MOVE: want at least %d bytes, got %d", sizeCZRequestMove(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQUESTMOVE {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQUESTMOVE() {
 		return CZRequestMoveRequest{}, fmt.Errorf("packet: parse CZ_REQUEST_MOVE: unexpected cmd 0x%04x", cmd)
 	}
 
@@ -126,9 +126,9 @@ func ParseCZRequestMove(frame []byte) (CZRequestMoveRequest, error) {
 // rathena/src/map/clif.cpp:11374 (WalkToXY handler calling RFIFOPOS at
 // packet_db[..].pos[0]).
 func (r CZRequestMoveRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCZRequestMove)
-	// int16 packetType = 0x0085 (HeaderCZREQUESTMOVE).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQUESTMOVE)
+	buf := make([]byte, sizeCZRequestMove())
+	// int16 packetType = 0x0085 (HeaderCZREQUESTMOVE()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQUESTMOVE())
 	// uint8 dest[3] at offset 2 — kRO 3-byte packed position.
 	encodePos(buf[2:5], r.DestX, r.DestY, 0)
 
@@ -153,10 +153,10 @@ type CZRequestTimeRequest struct {
 
 // ParseCZRequestTime decodes a CZ_REQUEST_TIME frame.
 func ParseCZRequestTime(frame []byte) (CZRequestTimeRequest, error) {
-	if len(frame) < sizeCZRequestTime {
-		return CZRequestTimeRequest{}, fmt.Errorf("packet: parse CZ_REQUEST_TIME: frame too short: got %d bytes, want %d", len(frame), sizeCZRequestTime)
+	if len(frame) < sizeCZRequestTime() {
+		return CZRequestTimeRequest{}, fmt.Errorf("packet: parse CZ_REQUEST_TIME: frame too short: got %d bytes, want %d", len(frame), sizeCZRequestTime())
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQUESTTIME {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQUESTTIME() {
 		return CZRequestTimeRequest{}, fmt.Errorf("packet: parse CZ_REQUEST_TIME: unexpected cmd 0x%04x", cmd)
 	}
 	return CZRequestTimeRequest{
@@ -166,9 +166,9 @@ func ParseCZRequestTime(frame []byte) (CZRequestTimeRequest, error) {
 
 // Encode writes the CZ_REQUEST_TIME packet to w.
 func (r CZRequestTimeRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCZRequestTime)
-	// int16 packetType = 0x007e (HeaderCZREQUESTTIME).
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQUESTTIME)
+	buf := make([]byte, sizeCZRequestTime())
+	// int16 packetType = 0x007e (HeaderCZREQUESTTIME()).
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQUESTTIME())
 	// uint32 clientTick at offset 2.
 	binary.LittleEndian.PutUint32(buf[2:], r.ClientTick)
 
@@ -214,7 +214,7 @@ func ParseCZGlobalMessage(frame []byte) (CZGlobalMessageRequest, error) {
 	if len(frame) < minFrame {
 		return CZGlobalMessageRequest{}, fmt.Errorf("packet: parse CZ_GLOBAL_MESSAGE: want at least %d bytes, got %d", minFrame, len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZGLOBALMESSAGE {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZGLOBALMESSAGE() {
 		return CZGlobalMessageRequest{}, fmt.Errorf("packet: parse CZ_GLOBAL_MESSAGE: unexpected cmd 0x%04x", cmd)
 	}
 
@@ -268,10 +268,10 @@ type CZActionRequestRequest struct {
 // Returns a wrapped error naming the byte count if the frame is short,
 // or naming the unexpected cmd id if the header is not 0x0089.
 func ParseCZActionRequest(frame []byte) (CZActionRequestRequest, error) {
-	if len(frame) < sizeCZActionRequest {
-		return CZActionRequestRequest{}, fmt.Errorf("packet: parse CZ_ACTION_REQUEST: want at least %d bytes, got %d", sizeCZActionRequest, len(frame))
+	if len(frame) < sizeCZActionRequest() {
+		return CZActionRequestRequest{}, fmt.Errorf("packet: parse CZ_ACTION_REQUEST: want at least %d bytes, got %d", sizeCZActionRequest(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZACTIONREQUEST {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZACTIONREQUEST() {
 		return CZActionRequestRequest{}, fmt.Errorf("packet: parse CZ_ACTION_REQUEST: unexpected cmd 0x%04x", cmd)
 	}
 	return CZActionRequestRequest{
@@ -284,8 +284,8 @@ func ParseCZActionRequest(frame []byte) (CZActionRequestRequest, error) {
 // layout: [2:cmd=0x0089][4:targetGID][1:action] = 7 bytes. Used by the
 // e2e test harness to drive sit/stand.
 func (r CZActionRequestRequest) Encode(w io.Writer) error {
-	buf := make([]byte, sizeCZActionRequest)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZACTIONREQUEST)
+	buf := make([]byte, sizeCZActionRequest())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZACTIONREQUEST())
 	binary.LittleEndian.PutUint32(buf[2:], r.TargetGID)
 	buf[6] = r.Action
 	if _, err := w.Write(buf); err != nil {
@@ -307,8 +307,8 @@ func (r CZGlobalMessageRequest) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: write CZ_GLOBAL_MESSAGE: message too long (%d bytes)", len(msg))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZGLOBALMESSAGE)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZGLOBALMESSAGE())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // bounded by the length check above
 	copy(buf[4:], msg)
 	// buf[4+len(msg)] is already 0x00 from make() — the trailing NUL.
 
@@ -350,7 +350,7 @@ func ParseCZWhisper(frame []byte) (CZWhisperRequest, error) {
 	if len(frame) < minFrame {
 		return CZWhisperRequest{}, fmt.Errorf("packet: parse CZ_WHISPER: want at least %d bytes, got %d", minFrame, len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZWHISPER {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZWHISPER() {
 		return CZWhisperRequest{}, fmt.Errorf("packet: parse CZ_WHISPER: unexpected cmd 0x%04x", cmd)
 	}
 
@@ -381,16 +381,16 @@ func ParseCZWhisper(frame []byte) (CZWhisperRequest, error) {
 // [n:message+NUL]; packetLength = 4 + 24 + len(msg) + 1.
 func (r CZWhisperRequest) Encode(w io.Writer) error {
 	msg := []byte(r.Message)
-	total := 4 + sizeZCWhisperName + len(msg) + 1
+	total := 4 + sizeZCWhisperName() + len(msg) + 1
 	if total > 0xffff {
 		return fmt.Errorf("packet: write CZ_WHISPER: message too long (%d bytes)", len(msg))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZWHISPER)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
-	copy(buf[4:4+sizeZCWhisperName], r.TargetNick)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZWHISPER())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // bounded by the length check above
+	copy(buf[4:4+sizeZCWhisperName()], r.TargetNick)
 	// trailing bytes of the 24-byte nick slot stay 0x00 from make() (NUL-pad).
-	copy(buf[4+sizeZCWhisperName:], msg)
+	copy(buf[4+sizeZCWhisperName():], msg)
 	// buf[total-1] is already 0x00 from make() — the trailing NUL.
 	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_WHISPER: %w", err)
@@ -430,10 +430,10 @@ type CZChangeDirRequest struct {
 // Returns a wrapped error naming the byte count if the frame is short,
 // or naming the unexpected cmd id if the header is not 0x009b.
 func ParseCZChangeDir(frame []byte) (CZChangeDirRequest, error) {
-	if len(frame) < sizeCZChangeDir {
-		return CZChangeDirRequest{}, fmt.Errorf("packet: parse CZ_CHANGE_DIRECTION: want at least %d bytes, got %d", sizeCZChangeDir, len(frame))
+	if len(frame) < sizeCZChangeDir() {
+		return CZChangeDirRequest{}, fmt.Errorf("packet: parse CZ_CHANGE_DIRECTION: want at least %d bytes, got %d", sizeCZChangeDir(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCHANGEDIR {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCHANGEDIR() {
 		return CZChangeDirRequest{}, fmt.Errorf("packet: parse CZ_CHANGE_DIRECTION: unexpected cmd 0x%04x", cmd)
 	}
 	return CZChangeDirRequest{
@@ -449,11 +449,11 @@ func ParseCZChangeDir(frame []byte) (CZChangeDirRequest, error) {
 // PACKETVER but allowed by the wire format) see their value preserved
 // on the round-trip.
 func (r CZChangeDirRequest) Encode(w io.Writer) error {
-	var buf [sizeCZChangeDir]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCHANGEDIR)
+	buf := make([]byte, sizeCZChangeDir())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCHANGEDIR())
 	binary.LittleEndian.PutUint16(buf[2:], r.HeadDir)
 	buf[4] = r.Dir
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_CHANGE_DIRECTION: %w", err)
 	}
 	return nil
@@ -484,10 +484,10 @@ type CZReqEmotionRequest struct {
 // Returns a wrapped error naming the byte count if the frame is short,
 // or naming the unexpected cmd id if the header is not 0x00bf.
 func ParseCZReqEmotion(frame []byte) (CZReqEmotionRequest, error) {
-	if len(frame) < sizeCZReqEmotion {
-		return CZReqEmotionRequest{}, fmt.Errorf("packet: parse CZ_REQ_EMOTION: want at least %d bytes, got %d", sizeCZReqEmotion, len(frame))
+	if len(frame) < sizeCZReqEmotion() {
+		return CZReqEmotionRequest{}, fmt.Errorf("packet: parse CZ_REQ_EMOTION: want at least %d bytes, got %d", sizeCZReqEmotion(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQEMOTION {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQEMOTION() {
 		return CZReqEmotionRequest{}, fmt.Errorf("packet: parse CZ_REQ_EMOTION: unexpected cmd 0x%04x", cmd)
 	}
 	return CZReqEmotionRequest{
@@ -498,10 +498,10 @@ func ParseCZReqEmotion(frame []byte) (CZReqEmotionRequest, error) {
 // Encode writes the CZ_REQ_EMOTION packet to w. Mirrors the on-wire
 // layout: [2:cmd=0x00bf][1:emotion_type] = 3 bytes.
 func (r CZReqEmotionRequest) Encode(w io.Writer) error {
-	var buf [sizeCZReqEmotion]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQEMOTION)
+	buf := make([]byte, sizeCZReqEmotion())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQEMOTION())
 	buf[2] = r.EmotionType
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_REQ_EMOTION: %w", err)
 	}
 	return nil
@@ -528,10 +528,10 @@ type CZGetCharNameRequestRequest struct {
 // Returns a wrapped error naming the byte count if the frame is short,
 // or naming the unexpected cmd id if the header is not 0x0094.
 func ParseCZGetCharNameRequest(frame []byte) (CZGetCharNameRequestRequest, error) {
-	if len(frame) < sizeCZGetCharNameRequest {
-		return CZGetCharNameRequestRequest{}, fmt.Errorf("packet: parse CZ_GETCHARNAMEREQUEST: want at least %d bytes, got %d", sizeCZGetCharNameRequest, len(frame))
+	if len(frame) < sizeCZGetCharNameRequest() {
+		return CZGetCharNameRequestRequest{}, fmt.Errorf("packet: parse CZ_GETCHARNAMEREQUEST: want at least %d bytes, got %d", sizeCZGetCharNameRequest(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZGETCHARNAMEREQUEST {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZGETCHARNAMEREQUEST() {
 		return CZGetCharNameRequestRequest{}, fmt.Errorf("packet: parse CZ_GETCHARNAMEREQUEST: unexpected cmd 0x%04x", cmd)
 	}
 	return CZGetCharNameRequestRequest{
@@ -542,10 +542,10 @@ func ParseCZGetCharNameRequest(frame []byte) (CZGetCharNameRequestRequest, error
 // Encode writes the CZ_GETCHARNAMEREQUEST packet to w. Mirrors the
 // on-wire layout: [2:cmd=0x0094][4:GID int32] = 6 bytes.
 func (r CZGetCharNameRequestRequest) Encode(w io.Writer) error {
-	var buf [sizeCZGetCharNameRequest]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZGETCHARNAMEREQUEST)
+	buf := make([]byte, sizeCZGetCharNameRequest())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZGETCHARNAMEREQUEST())
 	binary.LittleEndian.PutUint32(buf[2:], r.GID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_GETCHARNAMEREQUEST: %w", err)
 	}
 	return nil
@@ -574,10 +574,10 @@ type CZRestartRequest struct {
 // Returns a wrapped error naming the byte count if the frame is short,
 // or naming the unexpected cmd id if the header is not 0x00b2.
 func ParseCZRestart(frame []byte) (CZRestartRequest, error) {
-	if len(frame) < sizeCZRestart {
-		return CZRestartRequest{}, fmt.Errorf("packet: parse CZ_RESTART: want at least %d bytes, got %d", sizeCZRestart, len(frame))
+	if len(frame) < sizeCZRestart() {
+		return CZRestartRequest{}, fmt.Errorf("packet: parse CZ_RESTART: want at least %d bytes, got %d", sizeCZRestart(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZRESTART {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZRESTART() {
 		return CZRestartRequest{}, fmt.Errorf("packet: parse CZ_RESTART: unexpected cmd 0x%04x", cmd)
 	}
 	return CZRestartRequest{
@@ -588,10 +588,10 @@ func ParseCZRestart(frame []byte) (CZRestartRequest, error) {
 // Encode writes the CZ_RESTART packet to w. Mirrors the on-wire
 // layout: [2:cmd=0x00b2][1:type uint8] = 3 bytes.
 func (r CZRestartRequest) Encode(w io.Writer) error {
-	var buf [sizeCZRestart]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZRESTART)
+	buf := make([]byte, sizeCZRestart())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZRESTART())
 	buf[2] = r.Type
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_RESTART: %w", err)
 	}
 	return nil
@@ -610,13 +610,13 @@ type CZSkillUpRequest struct {
 }
 
 // ParseCZSkillUp decodes a CZ_SKILLUP frame. The frame must be exactly
-// SizeCZSkillUp (4) bytes. The opcode is NOT validated here because
+// SizeCZSkillUp() (4) bytes. The opcode is NOT validated here because
 // dispatch has already selected this parser by opcode.
 func ParseCZSkillUp(frame []byte) (CZSkillUpRequest, error) {
-	if len(frame) != SizeCZSkillUp {
+	if len(frame) != SizeCZSkillUp() {
 		return CZSkillUpRequest{}, fmt.Errorf(
 			"packet: parse CZ_SKILLUP: want %d bytes, got %d",
-			SizeCZSkillUp, len(frame),
+			SizeCZSkillUp(), len(frame),
 		)
 	}
 	return CZSkillUpRequest{
@@ -628,10 +628,10 @@ func ParseCZSkillUp(frame []byte) (CZSkillUpRequest, error) {
 // layout: [2:cmd=0x0112][4:skillID uint16 LE].
 func (r CZSkillUpRequest) Encode(w io.Writer) error {
 	skillID := uint16(r.SkillID) //nolint:gosec // skill ids fit uint16 (bounded by skill_db)
-	var buf [SizeCZSkillUp]byte
-	binary.LittleEndian.PutUint16(buf[0:2], HeaderCZSKILLUP)
+	buf := make([]byte, SizeCZSkillUp())
+	binary.LittleEndian.PutUint16(buf[0:2], HeaderCZSKILLUP())
 	binary.LittleEndian.PutUint16(buf[2:4], skillID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_SKILLUP: %w", err)
 	}
 	return nil
@@ -658,10 +658,10 @@ type CZContactNPCRequest struct {
 // Returns a wrapped error naming the byte count if the frame is short,
 // or naming the unexpected cmd id if the header is not 0x0090.
 func ParseCZContactNPC(frame []byte) (CZContactNPCRequest, error) {
-	if len(frame) < sizeCZContactNPC {
-		return CZContactNPCRequest{}, fmt.Errorf("packet: parse CZ_CONTACTNPC: want at least %d bytes, got %d", sizeCZContactNPC, len(frame))
+	if len(frame) < sizeCZContactNPC() {
+		return CZContactNPCRequest{}, fmt.Errorf("packet: parse CZ_CONTACTNPC: want at least %d bytes, got %d", sizeCZContactNPC(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCONTACTNPC {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCONTACTNPC() {
 		return CZContactNPCRequest{}, fmt.Errorf("packet: parse CZ_CONTACTNPC: unexpected cmd 0x%04x", cmd)
 	}
 	return CZContactNPCRequest{
@@ -673,11 +673,11 @@ func ParseCZContactNPC(frame []byte) (CZContactNPCRequest, error) {
 // Encode writes the CZ_CONTACTNPC packet to w. Mirrors the on-wire
 // layout: [2:cmd=0x0090][4:AID uint32][1:type uint8] = 7 bytes.
 func (r CZContactNPCRequest) Encode(w io.Writer) error {
-	var buf [sizeCZContactNPC]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCONTACTNPC)
+	buf := make([]byte, sizeCZContactNPC())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCONTACTNPC())
 	binary.LittleEndian.PutUint32(buf[2:], r.AID)
 	buf[6] = r.Type
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_CONTACTNPC: %w", err)
 	}
 	return nil
@@ -702,10 +702,10 @@ type CZReqNextScriptRequest struct {
 // Returns a wrapped error naming the byte count if the frame is short,
 // or naming the unexpected cmd id if the header is not 0x00b9.
 func ParseCZReqNextScript(frame []byte) (CZReqNextScriptRequest, error) {
-	if len(frame) < sizeCZReqNextScript {
-		return CZReqNextScriptRequest{}, fmt.Errorf("packet: parse CZ_REQNEXTSCRIPT: want at least %d bytes, got %d", sizeCZReqNextScript, len(frame))
+	if len(frame) < sizeCZReqNextScript() {
+		return CZReqNextScriptRequest{}, fmt.Errorf("packet: parse CZ_REQNEXTSCRIPT: want at least %d bytes, got %d", sizeCZReqNextScript(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQNEXTSCRIPT {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZREQNEXTSCRIPT() {
 		return CZReqNextScriptRequest{}, fmt.Errorf("packet: parse CZ_REQNEXTSCRIPT: unexpected cmd 0x%04x", cmd)
 	}
 	return CZReqNextScriptRequest{
@@ -716,10 +716,10 @@ func ParseCZReqNextScript(frame []byte) (CZReqNextScriptRequest, error) {
 // Encode writes the CZ_REQNEXTSCRIPT packet to w. Mirrors the on-wire
 // layout: [2:cmd=0x00b9][4:NpcID uint32] = 6 bytes.
 func (r CZReqNextScriptRequest) Encode(w io.Writer) error {
-	var buf [sizeCZReqNextScript]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQNEXTSCRIPT)
+	buf := make([]byte, sizeCZReqNextScript())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZREQNEXTSCRIPT())
 	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_REQNEXTSCRIPT: %w", err)
 	}
 	return nil
@@ -744,10 +744,10 @@ type CZCloseDialogRequest struct {
 // Returns a wrapped error naming the byte count if the frame is short,
 // or naming the unexpected cmd id if the header is not 0x0146.
 func ParseCZCloseDialog(frame []byte) (CZCloseDialogRequest, error) {
-	if len(frame) < sizeCZCloseDialog {
-		return CZCloseDialogRequest{}, fmt.Errorf("packet: parse CZ_CLOSE_DIALOG: want at least %d bytes, got %d", sizeCZCloseDialog, len(frame))
+	if len(frame) < sizeCZCloseDialog() {
+		return CZCloseDialogRequest{}, fmt.Errorf("packet: parse CZ_CLOSE_DIALOG: want at least %d bytes, got %d", sizeCZCloseDialog(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCLOSEDIALOG {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCLOSEDIALOG() {
 		return CZCloseDialogRequest{}, fmt.Errorf("packet: parse CZ_CLOSE_DIALOG: unexpected cmd 0x%04x", cmd)
 	}
 	return CZCloseDialogRequest{
@@ -758,10 +758,10 @@ func ParseCZCloseDialog(frame []byte) (CZCloseDialogRequest, error) {
 // Encode writes the CZ_CLOSE_DIALOG packet to w. Mirrors the on-wire
 // layout: [2:cmd=0x0146][4:GID uint32] = 6 bytes.
 func (r CZCloseDialogRequest) Encode(w io.Writer) error {
-	var buf [sizeCZCloseDialog]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCLOSEDIALOG)
+	buf := make([]byte, sizeCZCloseDialog())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCLOSEDIALOG())
 	binary.LittleEndian.PutUint32(buf[2:], r.GID)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_CLOSE_DIALOG: %w", err)
 	}
 	return nil
@@ -796,10 +796,10 @@ type CZAckSelectDealTypeRequest struct {
 // Returns a wrapped error naming the byte count if the frame is short,
 // or naming the unexpected cmd id if the header is not 0x00c5.
 func ParseCZAckSelectDealType(frame []byte) (CZAckSelectDealTypeRequest, error) {
-	if len(frame) < sizeCZAckSelectDealtype {
-		return CZAckSelectDealTypeRequest{}, fmt.Errorf("packet: parse CZ_ACK_SELECT_DEALTYPE: want at least %d bytes, got %d", sizeCZAckSelectDealtype, len(frame))
+	if len(frame) < sizeCZAckSelectDealtype() {
+		return CZAckSelectDealTypeRequest{}, fmt.Errorf("packet: parse CZ_ACK_SELECT_DEALTYPE: want at least %d bytes, got %d", sizeCZAckSelectDealtype(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZACKSELECTDEALTYPE {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZACKSELECTDEALTYPE() {
 		return CZAckSelectDealTypeRequest{}, fmt.Errorf("packet: parse CZ_ACK_SELECT_DEALTYPE: unexpected cmd 0x%04x", cmd)
 	}
 	return CZAckSelectDealTypeRequest{
@@ -811,11 +811,11 @@ func ParseCZAckSelectDealType(frame []byte) (CZAckSelectDealTypeRequest, error) 
 // Encode writes the CZ_ACK_SELECT_DEALTYPE packet to w. Mirrors the
 // on-wire layout: [2:cmd=0x00c5][4:NpcID uint32][1:type uint8] = 7 bytes.
 func (r CZAckSelectDealTypeRequest) Encode(w io.Writer) error {
-	var buf [sizeCZAckSelectDealtype]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZACKSELECTDEALTYPE)
+	buf := make([]byte, sizeCZAckSelectDealtype())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZACKSELECTDEALTYPE())
 	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
 	buf[6] = r.Type
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_ACK_SELECT_DEALTYPE: %w", err)
 	}
 	return nil
@@ -875,7 +875,7 @@ func ParseCZPCPurchaseItemList(frame []byte) (CZPCPurchaseItemListRequest, error
 	if len(frame) < minFrame {
 		return CZPCPurchaseItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_PURCHASE_ITEMLIST: want at least %d bytes, got %d", minFrame, len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZPCPURCHASEITEMLIST {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZPCPURCHASEITEMLIST() {
 		return CZPCPurchaseItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_PURCHASE_ITEMLIST: unexpected cmd 0x%04x", cmd)
 	}
 	bodyLen := len(frame) - minFrame
@@ -909,8 +909,8 @@ func (r CZPCPurchaseItemListRequest) Encode(w io.Writer) error {
 		return fmt.Errorf("packet: write CZ_PC_PURCHASE_ITEMLIST: too many entries (%d)", len(r.Entries))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZPCPURCHASEITEMLIST)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZPCPURCHASEITEMLIST())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // bounded by the length check above
 	for i, e := range r.Entries {
 		off := 4 + i*sizeShopBuyEntry
 		binary.LittleEndian.PutUint32(buf[off:off+4], e.ItemID)
@@ -974,20 +974,20 @@ func ParseCZPCSellItemList(frame []byte) (CZPCSellItemListRequest, error) {
 	if len(frame) < minFrame {
 		return CZPCSellItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_SELL_ITEMLIST: want at least %d bytes, got %d", minFrame, len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZPCSELLITEMLIST {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZPCSELLITEMLIST() {
 		return CZPCSellItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_SELL_ITEMLIST: unexpected cmd 0x%04x", cmd)
 	}
 	bodyLen := len(frame) - minFrame
-	if bodyLen%sizeCZPCSellItemListEntry != 0 {
-		return CZPCSellItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_SELL_ITEMLIST: body length %d not aligned to %d-byte entries", bodyLen, sizeCZPCSellItemListEntry)
+	if bodyLen%sizeCZPCSellItemListEntry() != 0 {
+		return CZPCSellItemListRequest{}, fmt.Errorf("packet: parse CZ_PC_SELL_ITEMLIST: body length %d not aligned to %d-byte entries", bodyLen, sizeCZPCSellItemListEntry())
 	}
-	n := bodyLen / sizeCZPCSellItemListEntry
+	n := bodyLen / sizeCZPCSellItemListEntry()
 	if n == 0 {
 		return CZPCSellItemListRequest{}, nil
 	}
 	entries := make([]CZPCSellItemListEntry, n)
 	for i := range n {
-		off := minFrame + i*sizeCZPCSellItemListEntry
+		off := minFrame + i*sizeCZPCSellItemListEntry()
 		entries[i] = CZPCSellItemListEntry{
 			Index:  binary.LittleEndian.Uint16(frame[off : off+2]),
 			Amount: binary.LittleEndian.Uint16(frame[off+2 : off+4]),
@@ -1003,15 +1003,15 @@ func ParseCZPCSellItemList(frame []byte) (CZPCSellItemListRequest, error) {
 // cannot accidentally emit a frame whose length slot disagrees with
 // the trailing bytes.
 func (r CZPCSellItemListRequest) Encode(w io.Writer) error {
-	total := 4 + len(r.Entries)*sizeCZPCSellItemListEntry
+	total := 4 + len(r.Entries)*sizeCZPCSellItemListEntry()
 	if total > 0xffff {
 		return fmt.Errorf("packet: write CZ_PC_SELL_ITEMLIST: too many entries (%d)", len(r.Entries))
 	}
 	buf := make([]byte, total)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZPCSELLITEMLIST)
-	binary.LittleEndian.PutUint16(buf[2:], uint16(total))
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZPCSELLITEMLIST())
+	binary.LittleEndian.PutUint16(buf[2:], uint16(total)) //nolint:gosec // bounded by the length check above
 	for i, e := range r.Entries {
-		off := 4 + i*sizeCZPCSellItemListEntry
+		off := 4 + i*sizeCZPCSellItemListEntry()
 		binary.LittleEndian.PutUint16(buf[off:off+2], e.Index)
 		binary.LittleEndian.PutUint16(buf[off+2:off+4], e.Amount)
 	}
@@ -1045,10 +1045,10 @@ type CZStatusChangeRequest struct {
 // Returns a wrapped error naming the byte count if the frame is short,
 // or naming the unexpected cmd id if the header is not 0x00bb.
 func ParseCZStatusChange(frame []byte) (CZStatusChangeRequest, error) {
-	if len(frame) < sizeCZStatusChange {
-		return CZStatusChangeRequest{}, fmt.Errorf("packet: parse CZ_STATUS_CHANGE: want at least %d bytes, got %d", sizeCZStatusChange, len(frame))
+	if len(frame) < sizeCZStatusChange() {
+		return CZStatusChangeRequest{}, fmt.Errorf("packet: parse CZ_STATUS_CHANGE: want at least %d bytes, got %d", sizeCZStatusChange(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZSTATUSCHANGE {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZSTATUSCHANGE() {
 		return CZStatusChangeRequest{}, fmt.Errorf("packet: parse CZ_STATUS_CHANGE: unexpected cmd 0x%04x", cmd)
 	}
 	return CZStatusChangeRequest{
@@ -1061,11 +1061,11 @@ func ParseCZStatusChange(frame []byte) (CZStatusChangeRequest, error) {
 // layout: [2:cmd=0x00bb][2:statusID uint16][1:amount uint8] = 5 bytes.
 // Used by the e2e test harness to drive stat allocation.
 func (r CZStatusChangeRequest) Encode(w io.Writer) error {
-	var buf [sizeCZStatusChange]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZSTATUSCHANGE)
+	buf := make([]byte, sizeCZStatusChange())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZSTATUSCHANGE())
 	binary.LittleEndian.PutUint16(buf[2:], r.StatusID)
 	buf[4] = r.Amount
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_STATUS_CHANGE: %w", err)
 	}
 	return nil
@@ -1093,10 +1093,10 @@ type CZChooseMenuRequest struct {
 // Returns a wrapped error naming the byte count if the frame is short,
 // or naming the unexpected cmd id if the header is not 0x00b8.
 func ParseCZChooseMenu(frame []byte) (CZChooseMenuRequest, error) {
-	if len(frame) < sizeCZChooseMenu {
-		return CZChooseMenuRequest{}, fmt.Errorf("packet: parse CZ_CHOOSE_MENU: want at least %d bytes, got %d", sizeCZChooseMenu, len(frame))
+	if len(frame) < sizeCZChooseMenu() {
+		return CZChooseMenuRequest{}, fmt.Errorf("packet: parse CZ_CHOOSE_MENU: want at least %d bytes, got %d", sizeCZChooseMenu(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCHOOSEMENU {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZCHOOSEMENU() {
 		return CZChooseMenuRequest{}, fmt.Errorf("packet: parse CZ_CHOOSE_MENU: unexpected cmd 0x%04x", cmd)
 	}
 	return CZChooseMenuRequest{
@@ -1109,11 +1109,11 @@ func ParseCZChooseMenu(frame []byte) (CZChooseMenuRequest, error) {
 // documented above: [2:cmd=0x00b8][4:NpcID][1:Selected] = 7 bytes. Used by tests
 // and the e2e harness to resume a select()/menu() dialog.
 func (r CZChooseMenuRequest) Encode(w io.Writer) error {
-	var buf [sizeCZChooseMenu]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCHOOSEMENU)
+	buf := make([]byte, sizeCZChooseMenu())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZCHOOSEMENU())
 	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
 	buf[6] = byte(r.Selected) //nolint:gosec // int8→byte is the wire format; 0xff means "cancel".
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_CHOOSE_MENU: %w", err)
 	}
 	return nil
@@ -1139,10 +1139,10 @@ type CZInputEditDlgRequest struct {
 // cmd 0x0143 and contain at least 10 bytes. Returns a wrapped error naming the
 // byte count if the frame is short, or naming the unexpected cmd id otherwise.
 func ParseCZInputEditDlg(frame []byte) (CZInputEditDlgRequest, error) {
-	if len(frame) < sizeCZInputEditDlg {
-		return CZInputEditDlgRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLG: want at least %d bytes, got %d", sizeCZInputEditDlg, len(frame))
+	if len(frame) < sizeCZInputEditDlg() {
+		return CZInputEditDlgRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLG: want at least %d bytes, got %d", sizeCZInputEditDlg(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZINPUTEDITDLG {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZINPUTEDITDLG() {
 		return CZInputEditDlgRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLG: unexpected cmd 0x%04x", cmd)
 	}
 	return CZInputEditDlgRequest{
@@ -1153,11 +1153,11 @@ func ParseCZInputEditDlg(frame []byte) (CZInputEditDlgRequest, error) {
 
 // Encode serializes a CZInputEditDlgRequest (used by tests and request builders).
 func (r CZInputEditDlgRequest) Encode(w io.Writer) error {
-	var buf [sizeCZInputEditDlg]byte
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZINPUTEDITDLG)
+	buf := make([]byte, sizeCZInputEditDlg())
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZINPUTEDITDLG())
 	binary.LittleEndian.PutUint32(buf[2:], r.NpcID)
 	binary.LittleEndian.PutUint32(buf[6:], uint32(r.Value)) //nolint:gosec // G115: int32→uint32 preserves the bit pattern on the wire.
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_INPUT_EDITDLG: %w", err)
 	}
 	return nil
@@ -1189,14 +1189,14 @@ type CZInputEditDlgStrRequest struct {
 // empty after NUL trimming, is invalid — rAthena returns without resuming the
 // script (clif.cpp:13405).
 func ParseCZInputEditDlgStr(frame []byte) (CZInputEditDlgStrRequest, error) {
-	if len(frame) < sizeCZInputEditDlgStrMin {
-		return CZInputEditDlgStrRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLGSTR: want at least %d bytes, got %d", sizeCZInputEditDlgStrMin, len(frame))
+	if len(frame) < sizeCZInputEditDlgStrMin() {
+		return CZInputEditDlgStrRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLGSTR: want at least %d bytes, got %d", sizeCZInputEditDlgStrMin(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZINPUTEDITDLGSTR {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZINPUTEDITDLGSTR() {
 		return CZInputEditDlgStrRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLGSTR: unexpected cmd 0x%04x", cmd)
 	}
 	pktLen := int(binary.LittleEndian.Uint16(frame[2:4]))
-	if pktLen < sizeCZInputEditDlgStrMin || pktLen > len(frame) {
+	if pktLen < sizeCZInputEditDlgStrMin() || pktLen > len(frame) {
 		return CZInputEditDlgStrRequest{}, fmt.Errorf("packet: parse CZ_INPUT_EDITDLGSTR: bad packetLength %d (frame %d)", pktLen, len(frame))
 	}
 	value := string(bytes.TrimRight(frame[8:pktLen], "\x00"))
@@ -1223,9 +1223,9 @@ func ParseCZInputEditDlgStr(frame []byte) (CZInputEditDlgStrRequest, error) {
 // regardless, so the round-trip is exact either way.
 func (r CZInputEditDlgStrRequest) Encode(w io.Writer) error {
 	value := append([]byte(r.Value), 0)
-	pktLen := sizeCZInputEditDlgStrMin + len(value)
+	pktLen := sizeCZInputEditDlgStrMin() + len(value)
 	buf := make([]byte, pktLen)
-	binary.LittleEndian.PutUint16(buf[0:], HeaderCZINPUTEDITDLGSTR)
+	binary.LittleEndian.PutUint16(buf[0:], HeaderCZINPUTEDITDLGSTR())
 	binary.LittleEndian.PutUint16(buf[2:], uint16(pktLen)) //nolint:gosec // G115: bounded by CHATBOX_SIZE on the wire.
 	binary.LittleEndian.PutUint32(buf[4:], r.NpcID)
 	copy(buf[8:], value)
@@ -1253,15 +1253,15 @@ type CZDropItemRequest struct {
 }
 
 // ParseCZDropItem decodes a drop-item frame. The frame must be exactly
-// sizeCZDropItem (6) bytes: opcode (2) + index (2) + amount (2). A frame
+// sizeCZDropItem() (6) bytes: opcode (2) + index (2) + amount (2). A frame
 // of any other length — including the legacy 4-byte pre-2010 layout — is
 // rejected. The opcode is NOT validated here because six aliases map to
 // this parser; dispatch has already selected it by opcode.
 func ParseCZDropItem(frame []byte) (CZDropItemRequest, error) {
-	if len(frame) != sizeCZDropItem {
+	if len(frame) != sizeCZDropItem() {
 		return CZDropItemRequest{}, fmt.Errorf(
 			"packet: parse CZ_DROP_ITEM: want %d bytes, got %d",
-			sizeCZDropItem, len(frame),
+			sizeCZDropItem(), len(frame),
 		)
 	}
 	return CZDropItemRequest{
@@ -1271,14 +1271,14 @@ func ParseCZDropItem(frame []byte) (CZDropItemRequest, error) {
 }
 
 // Encode writes the drop-item request. The opcode is written as
-// HeaderCZDROPITEM0363 by convention; this is only used in tests, since a
+// HeaderCZDROPITEM0363() by convention; this is only used in tests, since a
 // live frame always arrives with the client-chosen opcode already in place.
 func (r CZDropItemRequest) Encode(w io.Writer) error {
-	var buf [sizeCZDropItem]byte
-	binary.LittleEndian.PutUint16(buf[0:2], HeaderCZDROPITEM0363)
+	buf := make([]byte, sizeCZDropItem())
+	binary.LittleEndian.PutUint16(buf[0:2], HeaderCZDROPITEM0363())
 	binary.LittleEndian.PutUint16(buf[2:4], r.InventoryIndex)
 	binary.LittleEndian.PutUint16(buf[4:6], r.Amount)
-	if _, err := w.Write(buf[:]); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("packet: write CZ_DROP_ITEM: %w", err)
 	}
 	return nil
@@ -1294,10 +1294,10 @@ type CZPMIgnoreRequest struct {
 
 // ParseCZPMIgnore decodes a fixed 27-byte CZ_PMIgnore frame.
 func ParseCZPMIgnore(frame []byte) (CZPMIgnoreRequest, error) {
-	if len(frame) != sizeCZPMIgnore {
-		return CZPMIgnoreRequest{}, fmt.Errorf("packet: parse CZ_PMIgnore: want %d bytes, got %d", sizeCZPMIgnore, len(frame))
+	if len(frame) != sizeCZPMIgnore() {
+		return CZPMIgnoreRequest{}, fmt.Errorf("packet: parse CZ_PMIgnore: want %d bytes, got %d", sizeCZPMIgnore(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZPMIGNORE {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZPMIGNORE() {
 		return CZPMIgnoreRequest{}, fmt.Errorf("packet: parse CZ_PMIgnore: unexpected cmd 0x%04x", cmd)
 	}
 	name := frame[2:26]
@@ -1316,10 +1316,10 @@ type CZSettingWhisperStateRequest struct {
 
 // ParseCZSettingWhisperState decodes a fixed 3-byte CZ_SETTING_WHISPER_STATE frame.
 func ParseCZSettingWhisperState(frame []byte) (CZSettingWhisperStateRequest, error) {
-	if len(frame) != sizeCZSettingWhisperState {
-		return CZSettingWhisperStateRequest{}, fmt.Errorf("packet: parse CZ_SETTING_WHISPER_STATE: want %d bytes, got %d", sizeCZSettingWhisperState, len(frame))
+	if len(frame) != sizeCZSettingWhisperState() {
+		return CZSettingWhisperStateRequest{}, fmt.Errorf("packet: parse CZ_SETTING_WHISPER_STATE: want %d bytes, got %d", sizeCZSettingWhisperState(), len(frame))
 	}
-	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZSETTINGWHISPERSTATE {
+	if cmd := binary.LittleEndian.Uint16(frame[0:2]); cmd != HeaderCZSETTINGWHISPERSTATE() {
 		return CZSettingWhisperStateRequest{}, fmt.Errorf("packet: parse CZ_SETTING_WHISPER_STATE: unexpected cmd 0x%04x", cmd)
 	}
 	return CZSettingWhisperStateRequest{Type: frame[2]}, nil

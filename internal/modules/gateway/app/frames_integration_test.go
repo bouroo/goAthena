@@ -54,9 +54,9 @@ func TestMap_ConcurrentEnterFirstFrameIsAcceptEnter(t *testing.T) {
 			check := func(c net.Conn, which string) {
 				t.Helper()
 				cmd, frame := nextServerFrame(t, c, 3*time.Second)
-				if cmd != ropacket.HeaderZCACCEPTENTER {
+				if cmd != ropacket.HeaderZCACCEPTENTER() {
 					t.Fatalf("%s: first frame = 0x%04x (%dB), want 0x%04x ZC_ACCEPT_ENTER (13B)",
-						which, cmd, len(frame), ropacket.HeaderZCACCEPTENTER)
+						which, cmd, len(frame), ropacket.HeaderZCACCEPTENTER())
 				}
 				if len(frame) != 13 {
 					t.Fatalf("%s: ZC_ACCEPT_ENTER length = %d, want 13", which, len(frame))
