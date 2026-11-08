@@ -1,0 +1,54 @@
+# The client-facing Service.
+#
+# The login handshake is the only connection a client makes by name: the
+# client is told the char and map endpoints inside AC_ACCEPT_LOGIN, and it
+# follows them there. So the login Service is the one the ingress routes
+# to, and the char/map ports are reached by the addresses the shard
+# advertises.
+#
+# The shard advertises the char and map endpoints from its config
+# (gateway.char_host / gateway.map_host). Inside a cluster those are the
+# Service names, so the addresses it hands the client resolve through the
+# same DNS the ingress uses — which is why the login Service also fronts
+# the char and map ports.
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: goathena
+  name: goathena-login
+spec:
+  selector:
+    app.kubernetes.io/component: zone
+  ports:
+    - name: login
+      port: 6900
+      targetPort: login
+      protocol: TCP
+    - name: char
+      port: 6121
+      targetPort: char
+      protocol: TCP
+    - name: map
+      port: 5121
+      targetPort: game
+      protocol: TCP
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+# The control plane, on its own Service so a metrics scraper and the
+# probes reach it without walking the client-facing path.
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: goathena
+  name: goathena-control
+spec:
+  selector:
+    app.kubernetes.io/component: zone
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

@@ -1,0 +1,20 @@
+# The namespace every goAthena object lives in.
+#
+# Pod Security is set to `restricted`, which the zone shards satisfy: they
+# run as non-root with a read-only root filesystem and every capability
+# dropped (see the Fleet's securityContext).
+#
+# The backing services are upstream images (postgres, valkey, nats, the
+# OTel collector). They need their own users and writable roots, so they
+# cannot satisfy `restricted`. The exemption is granted by a per-pod
+# label below rather than by weakening the namespace, so a shard added
+# here without that label is still held to the restricted profile.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: goathena
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

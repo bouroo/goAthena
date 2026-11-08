@@ -1,0 +1,46 @@
+# goAthena Tier 3 — the dev overlay.
+#
+# The dev cluster is a workstation or a CI cluster: one node, small
+# resources, and the local credentials from the base's Secret. It is the
+# tier to point a client at when developing a map or a script.
+#
+# Apply:
+#   kubectl apply -k deploy/k3s/overlays/dev
+#
+# Agones must be installed first (see deploy/k3s/README.md); the Fleets
+# are CRDs and the apply fails without them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: goathena
+
+resources:
+  - ../../base
+
+# One patch file per object: kustomize refuses a single patch entry that
+# carries several targets.
+patches:
+  - path: patch-postgres.yaml
+    target:
+      kind: Deployment
+      name: goathena-postgres
+  - path: patch-valkey.yaml
+    target:
+      kind: StatefulSet
+      name: goathena-valkey
+  - path: patch-nats.yaml
+    target:
+      kind: Deployment
+      name: goathena-nats
+  - path: patch-otel.yaml
+    target:
+      kind: Deployment
+      name: goathena-otel-collector
+  - path: patch-fleet-prontera.yaml
+    target:
+      kind: Fleet
+      name: goathena-prontera
+  - path: patch-fleet-geffen.yaml
+    target:
+      kind: Fleet
+      name: goathena-geffen
