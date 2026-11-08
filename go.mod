@@ -3,7 +3,7 @@ module github.com/bouroo/goAthena
 go 1.27.3
 
 require (
-	agones.dev/agones v1.60.0
+	agones.dev/agones v1.62.0
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/labstack/echo/v5 v5.4.4
@@ -114,7 +114,6 @@ require (
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/panjf2000/ants/v2 v2.12.1 // indirect
 	github.com/pelletier/go-toml v1.2.0 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/power-devops/perfstat v0.0.0-20260916203055-22a1a467d9f0 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect
 	github.com/prometheus/common v0.71.0 // indirect
