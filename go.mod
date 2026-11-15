@@ -6,7 +6,7 @@ require (
 	agones.dev/agones v1.60.0
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/golang-migrate/migrate/v4 v4.20.1
-	github.com/labstack/echo/v5 v5.4.4
+	github.com/labstack/echo/v5 v5.4.5
 	github.com/nats-io/nats-server/v2 v2.12.2
 	github.com/nats-io/nats.go v1.49.0
 	github.com/panjf2000/gnet/v2 v2.10.0
