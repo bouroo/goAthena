@@ -68,7 +68,7 @@ jobs:
       # deployment tiers run on both. setup-qemu-action registers the
       # binfmt handlers buildx uses for the foreign architecture.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 
